@@ -77,12 +77,12 @@ const tasks = (() => {
     await must(hub, 'dana', 'POST', `pipelines/${pipeline}`, {name: phone ? 'Launch on phone' : 'Launch', goal: 'Launch notes go out.',
       stages: ['Plan', 'Build', 'Ship'].map(name => ({name, owner: 'assignee'}))}, 'make the Launch pipeline');
 
-    // Dana makes the task in the page, for the engineering-lead bot, in the Launch pipeline: it opens once made.
+    // Dana makes the task in the page, for the engineering-team-manager bot, in the Launch pipeline: it opens once made.
     const page = await open(browser, hub, 'dana', {phone, hash: `#/tasks?pipeline=${pipeline}`});
     await page.click('#task-new');
     const form = page.locator('#task-create-form');
     await form.locator('input[name=title]').fill(TITLE);
-    const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-lead'}).getAttribute('value');
+    const owner = await form.locator('select[name=owner] option', {hasText: 'engineering-team-manager'}).getAttribute('value');
     await form.locator('select[name=owner]').selectOption(owner!);
     await form.locator(`select[name=pipeline] option[value="${pipeline}"]`).waitFor({state: 'attached', timeout: t(20000)});
     assert.equal(await form.locator('select[name=pipeline]').inputValue(), pipeline, `${where}: the form files it in the pipeline shown`);
@@ -98,7 +98,7 @@ const tasks = (() => {
     // The sheet draws what the task says. Dana asked for it, so she can close it; she is not its owner, so no Done.
     go(page, '#/task/' + id);
     d = await sheet(page, TITLE);
-    assert.match(d.owner_id, /engineering-lead/, `${where}: owner row names the bot`);
+    assert.match(d.owner_id, /engineering-team-manager/, `${where}: owner row names the bot`);
     assert.match(d.asked, /You/, `${where}: asked-by row names the requester`);
     assert.match(d.created_at, CREATED, `${where}: created time is drawn`);
     assert.match(d.stage, /Plan/, `${where}: a new task is in the pipeline's first stage`);
@@ -115,8 +115,8 @@ const tasks = (() => {
 
     // The bot (the owner) moves it to Ship and finishes it there: in the last stage, done is Done.
     const read = async (who: string) => (await must<{task: TaskRecord}>(hub, who, 'GET', `tasks/${id}`, undefined, `${who} reads the task`)).task;
-    await must(hub, 'engineering-lead', 'POST', `tasks/${id}/move`, {to: 'Ship', version: (await read('engineering-lead')).version}, 'the bot moves it to Ship');
-    await must(hub, 'engineering-lead', 'POST', `tasks/${id}/done`, {version: (await read('engineering-lead')).version}, 'the bot marks it done');
+    await must(hub, 'engineering-team-manager', 'POST', `tasks/${id}/move`, {to: 'Ship', version: (await read('engineering-team-manager')).version}, 'the bot moves it to Ship');
+    await must(hub, 'engineering-team-manager', 'POST', `tasks/${id}/done`, {version: (await read('engineering-team-manager')).version}, 'the bot marks it done');
     assert.equal((await read('dana')).status, 'done', 'the task is done in the hub');
     await page.reload();
     d = await sheet(page, TITLE);
@@ -165,9 +165,9 @@ const needsYou = (() => {
     const where = phone ? 'phone' : 'desktop';
     const read = async (id: string) => (await must<{task: TaskRecord}>(hub, 'dana', 'GET', `tasks/${id}`, undefined, 'read the task')).task;
     const ask = async (title: string, body: Record<string, unknown>, what: string) => {
-      const id = (await must<{task: {id: string}}>(hub, 'engineering-lead', 'POST', 'tasks', {title, body: 'For the beta.', owner: 'engineering-lead'},
+      const id = (await must<{task: {id: string}}>(hub, 'engineering-team-manager', 'POST', 'tasks', {title, body: 'For the beta.', owner: 'engineering-team-manager'},
         'the bot files its task')).task.id;
-      const rid = (await must<{requirement_id: string}>(hub, 'engineering-lead', 'POST', `tasks/${id}/asks`,
+      const rid = (await must<{requirement_id: string}>(hub, 'engineering-team-manager', 'POST', `tasks/${id}/asks`,
         {to: 'dana', version: (await read(id)).version, ...body}, what)).requirement_id;
       assert.ok(rid, `${where}: ${what} is recorded`);
       return async () => (await read(id)).to_leave?.find(r => r.requirement_id === rid);
@@ -317,8 +317,8 @@ const settings = (() => {
 
     go(page, '#/settings/bots');
     // The bots list draws into #set-bots after its skeleton rows load: wait for the bot's row there, not elsewhere on the page.
-    const bots = await drawn(page, '#set-bots', text => text.includes('engineering-lead'), `${where}: the bots tab draws the bot`);
-    assert.match(bots, /engineering-lead/, `${where}: bots tab names the bot`);
+    const bots = await drawn(page, '#set-bots', text => text.includes('engineering-team-manager'), `${where}: the bots tab draws the bot`);
+    assert.match(bots, /engineering-team-manager/, `${where}: bots tab names the bot`);
     assertClean(page, `${where}: bots`);
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);

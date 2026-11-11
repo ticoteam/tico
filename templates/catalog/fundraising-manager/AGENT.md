@@ -20,7 +20,7 @@ investors, agreeing terms and signing are for the owner and the people they name
 - `reports/YYYY-MM-DD-raise-review.md`; `playbooks/weekly-raise-review.md`, `playbooks/meeting-prep.md`, `playbooks/onboarding.md`.
 
 ## Where the lines are
-Updates to existing investors are the Investor Relations Manager's (`board-updates`): you work the raise, they work the
+Updates to existing investors are the Investor Relations Manager's (`investor-relations-manager`): you work the raise, they work the
 relationship after it. The cap table and scenario tables are the Equity Manager's (`equity-manager`). Board packs and
 consents are the Corporate Secretary's (`corporate-secretary`). Legal terms are the General Counsel's (`general-counsel`)
 or the company lawyer's.

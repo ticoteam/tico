@@ -8,7 +8,7 @@ version: 0.2
 created: 2026-10-18T00:00:00.000Z
 company:
   name: "Sample Co"
-  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Product Lead, a Builder, a Support Agent and a Content Marketer. Nothing here is real: there are no customers to email, no website to publish to and no payments."
+  about: "Sample Co is a made-up company for trying Tico. It sells Brightbook, a small online booking app that hair salons and barbers use to take appointments, send reminders and see the week ahead. Five people's worth of work is done by five bots: an Assistant, a Product Lead, a Builder, a Support Agent and a Content Owner. Nothing here is real: there are no customers to email, no website to publish to and no payments."
   signals: [sells_software, sells_to_businesses, publishes_content, has_support_inbox, small_team]
 people:
   - id: you
@@ -17,7 +17,7 @@ people:
     owner: true
 employees:
   - id: assistant
-    template: coo
+    template: assistant
     title: "Assistant"
     department: core
     reports_to: you
@@ -71,7 +71,7 @@ employees:
              order to build them in, how each is tested, and the biggest risk.
           2. Put the plan on this task as one comment, so the owner reads it where they answer.
   - id: support-agent
-    template: support
+    template: support-owner
     title: "Support Agent"
     department: support
     reports_to: you
@@ -92,8 +92,8 @@ employees:
              plainly where Brightbook does not do something yet (text reminders are planned, not built).
           2. Put the three replies on this task as one comment, so the owner reads them where they answer.
   - id: content-marketer
-    template: content
-    title: "Content Marketer"
+    template: content-owner
+    title: "Content Owner"
     department: marketing
     reports_to: you
     start: now

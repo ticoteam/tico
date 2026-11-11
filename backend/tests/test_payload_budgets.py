@@ -77,7 +77,7 @@ def test_payloads_stay_under_their_budgets(api):
                     H.now(),
                 )
                 for slug in [f"bot-{i}" for i in range(53)]
-                + ["coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater"]
+                + ["assistant", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater"]
             ],
         )
         for seq in range(200):

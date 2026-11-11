@@ -17,7 +17,7 @@ holds what does not change from team to team.
 | Legal, safety or a threat of action | the person named in `escalation.md`, at once | no reply until that person decides |
 | Cancellation or downgrade | the retention owner, if the team has one | the facts and the options in the docs; no offer |
 | Feature request | the product owner | "passed on", with the link to any existing request; no promise |
-| Bug that reproduces | whoever fixes bugs (`technical-support` or engineering) | "we are checking", with the ticket reference |
+| Bug that reproduces | whoever fixes bugs (`technical-support-engineer` or engineering) | "we are checking", with the ticket reference |
 | A known issue that repeats | the owner named in `known-issues.md` | the same answer as the last reply, with the status it has today |
 | An angry or very upset customer | the person named in `escalation.md` | a short, direct acknowledgement; a person writes the substance |
 

@@ -50,7 +50,7 @@ impl Hub for HubFixture {
         if args == ["api", "GET", "bots/upgrades"] {
             return Ok(json!({"state": "active", "assignment": {"runner_id": "fixture-runner"}}));
         }
-        if args == ["api", "GET", "bots/engineering-lead"] {
+        if args == ["api", "GET", "bots/engineering-team-manager"] {
             return Ok(json!({"state": "active"}));
         }
         if args.starts_with(&["api", "GET"]) {

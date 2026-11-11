@@ -1,5 +1,5 @@
 """Bookkeeper rehearsal, checks 1-6 (scripts/finance_bookkeeper_rehearsal.py): in-process against the built-in
-Bookkeeper (backend/bookkeeper.py) and the instructions it ships (templates/catalog/bookkeeper). A known gap is an
+Bookkeeper (backend/bookkeeper.py) and the instructions it ships (templates/catalog/finance-owner). A known gap is an
 xfail with strict=True that names it: the run shows it, and the script counts it as not passed. Synthetic fixtures."""
 
 import json
@@ -16,7 +16,7 @@ from backend.tests.helpers.bookkeeper import DEFAULT_RIGHTS, built, check, check
 from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
+TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "finance-owner"
 SPEC_TOOLS = (
     "tico_finance_search",
     "tico_finance_report",
@@ -30,7 +30,7 @@ INSTRUCTIONS = [p for p in sorted(TEMPLATE.rglob("*.md"))] + [TEMPLATE / "card.y
 
 
 def _token(api):
-    """A run's token for bot:bookkeeper, as a claimed job carries it: a computer enrolls, the bot is assigned to it,
+    """A run's token for bot:finance-owner, as a claimed job carries it: a computer enrolls, the bot is assigned to it,
     a person asks it something, and the computer claims the job (the same steps as test_api.setup_attempt, signed in
     as the owner of this environment)."""
 
@@ -76,7 +76,7 @@ def _routines(api):
         return [
             dict(r)
             for r in c.execute(
-                "SELECT trigger_type, name, flow FROM automations WHERE deleted_at IS NULL AND flow LIKE '%bookkeeper%'"
+                "SELECT trigger_type, name, flow FROM automations WHERE deleted_at IS NULL AND flow LIKE '%finance-owner%'"
             )
         ]
 

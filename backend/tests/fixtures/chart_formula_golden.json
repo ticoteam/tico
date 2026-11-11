@@ -113,7 +113,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -124,7 +124,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -246,7 +246,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -398,8 +398,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -473,7 +473,7 @@
           },
           {
             "title": "Insurance Billing Owner",
-            "template": "billing"
+            "template": "billing-specialist"
           }
         ]
       },
@@ -558,7 +558,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -569,7 +569,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -712,7 +712,7 @@
           },
           {
             "id": "events-owner",
-            "template": "events",
+            "template": "event-marketing-manager",
             "title": "Events Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
@@ -832,8 +832,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -888,7 +888,7 @@
           },
           {
             "id": "insurance-billing-owner",
-            "template": "billing",
+            "template": "billing-specialist",
             "title": "Insurance Billing Owner",
             "department": "finance",
             "reports_to": null,
@@ -932,7 +932,7 @@
         "industry": [
           {
             "title": "Contracts Owner",
-            "template": "legal-review"
+            "template": "contracts-manager"
           },
           {
             "title": "Bogus Owner",
@@ -940,7 +940,7 @@
           },
           {
             "title": "Conflict Checks Owner",
-            "template": "compliance"
+            "template": "compliance-manager"
           },
           {
             "title": "Trust Accounts Owner",
@@ -1033,7 +1033,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -1044,7 +1044,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -1166,7 +1166,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -1318,8 +1318,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -1352,7 +1352,7 @@
           },
           {
             "id": "contracts-owner",
-            "template": "legal-review",
+            "template": "contracts-manager",
             "title": "Contracts Owner",
             "department": "legal",
             "reports_to": null,
@@ -1363,7 +1363,7 @@
           },
           {
             "id": "conflict-checks-owner",
-            "template": "compliance",
+            "template": "compliance-manager",
             "title": "Conflict Checks Owner",
             "department": "legal",
             "reports_to": null,
@@ -1467,7 +1467,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -1478,7 +1478,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -1589,7 +1589,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -1741,8 +1741,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -1869,7 +1869,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -1880,7 +1880,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -2002,7 +2002,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -2154,8 +2154,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -2280,7 +2280,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -2291,7 +2291,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -2402,7 +2402,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -2554,8 +2554,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -2697,7 +2697,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -2708,7 +2708,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -2829,7 +2829,7 @@
           },
           {
             "id": "events-owner",
-            "template": "events",
+            "template": "event-marketing-manager",
             "title": "Events Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
@@ -2949,8 +2949,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",
@@ -3084,7 +3084,7 @@
           },
           {
             "id": "reviewer-1",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 1",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -3095,7 +3095,7 @@
           },
           {
             "id": "reviewer-2",
-            "template": "pr-reviewer",
+            "template": "reviewer",
             "title": "Reviewer 2",
             "department": "engineering",
             "reports_to": "engineering-team-manager",
@@ -3206,7 +3206,7 @@
           {
             "id": "cro-owner",
             "template": "cro-owner",
-            "title": "Conversion Rate Optimization Owner",
+            "title": "CRO Owner",
             "department": "marketing",
             "reports_to": "growth-team-manager",
             "team": "Growth",
@@ -3358,8 +3358,8 @@
             "live": true
           },
           {
-            "id": "bookkeeper",
-            "template": "bookkeeper",
+            "id": "finance-owner",
+            "template": "finance-owner",
             "title": "Finance Owner",
             "department": "finance",
             "reports_to": "corporate-team-manager",

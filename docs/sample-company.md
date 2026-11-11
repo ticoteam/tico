@@ -9,7 +9,7 @@ instead of building a team first. Sample Co sells Brightbook, a small booking ap
 | Product Lead | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
 | Builder | ChatGPT | Text-message reminders have a build plan | Plan how to build the reminders (there is no code) |
 | Support Agent | ChatGPT | Every customer question has a reply ready within a day | Draft replies to three made-up customer questions |
-| Content Marketer | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
+| Content Owner | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
 
 BotOps, the Librarian and the Strategy Owner are built in as on every Tico, and follow the company's default model.
 
@@ -17,7 +17,7 @@ These are real bots on the person's own subscriptions, not [demo mode](demo.md).
 puts its result on the task as one comment, and then asks the owner one Yes/No question on the task, **Approve the
 welcome note?** and so on (`tico task ask <id> --to <owner> "Approve the welcome note?" --choices Yes,No`). It is in
 their **Needs you**. Yes and the bot marks the task done; No and it changes the work as asked and asks again. Nothing a
-first task does is sent, posted or published outside the company: the Support Agent and the Content Marketer only
+first task does is sent, posted or published outside the company: the Support Agent and the Content Owner only
 draft.
 
 ## Starting it

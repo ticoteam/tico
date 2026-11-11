@@ -264,7 +264,7 @@ def install(app, store, auth, mutate):
         status: Literal["suggested", "active", "ignored", "cancelled"] | None = None,
         view_as: str | None = None,
     ):
-        """The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each
+        """The subscriptions the caller sees: recurring charges the daily look suggests and the Finance Owner confirms, each
         with its cadence, expected amount, monthly cost, next charge, card, seats and attribution, and the monthly total of
         the active ones. `status` narrows them."""
         actor = as_viewer(request, view_as)

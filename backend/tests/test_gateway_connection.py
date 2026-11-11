@@ -1358,9 +1358,9 @@ def test_a_new_bot_on_the_gateway_default_takes_its_templates_level(api, monkeyp
             {"enabled": ["anthropic"], "model": "tico-medium-1.0", "expected_revision": view["revision"]},
         )
         # The Inbox template says Low; a bot with no template, or one that names its own model, is not touched.
-        made = new_bot(api, "mailwatch", template="inbox")
+        made = new_bot(api, "mailwatch", template="inbox-manager")
         plain = new_bot(api, "plain")
-        own = new_bot(api, "chosen", template="inbox", model="tico-high-1.0", harness="pi", effort="high")
+        own = new_bot(api, "chosen", template="inbox-manager", model="tico-high-1.0", harness="pi", effort="high")
         with api.app.state.store.read() as c:
             models = dict(
                 c.execute(

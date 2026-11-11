@@ -1,6 +1,6 @@
 template: search-ads-owner
 slug: search-ads-owner
-name: Search Ad Owner
+name: Search Ads Owner
 required: false
 bootstrap: false
 lead: false
@@ -21,7 +21,7 @@ owns:
   - "The weekly search ads review: spend, results and cost per result by platform, campaign and segment against each target, and the three changes worth making"
   - "Search terms and negatives: each negative list by class, its spend, and its check against the converting terms"
   - "Campaign structure and bidding: themes, match types, and each bidding strategy with its conversion count and the decision behind it"
-  - "Ad copy and landing page fit: each copy test's one question, its count and its reading, and each page mismatch routed to the Conversion Rate Optimization Owner"
+  - "Ad copy and landing page fit: each copy test's one question, its count and its reading, and each page mismatch routed to the CRO Owner"
   - "Campaign plans for segment Marketing Owners, each answered on its task before anything is set up"
   - "The change log: every bid, budget, keyword, negative, copy or campaign change prepared, applied or declined, and what the numbers did in the two weeks after"
 never:

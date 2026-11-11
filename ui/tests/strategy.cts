@@ -49,8 +49,8 @@ const shot = async (page: Page, name: string, themes: string[] = ['dark', 'light
 const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+const bots = [bot('assistant', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
+  bot('strategy-owner', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:strategy-owner', {reports_to: ''})];
 const kpis = [{id: 'k-margin', name: 'Gross margin per job', unit: '%'}, {id: 'k-jobs', name: 'Jobs per week', unit: ''}];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money, because bots do the office work.',
@@ -169,7 +169,7 @@ async function open(browser: Browser, {role = 'owner', route = '#/strategy', vie
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
     const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
     if (decide) { const body = req.postDataJSON() as Body; sent.push(['POST', '/proposals/' + decide[1], body]); needs.splice(0); return json({proposal: {id: decide[1], status: 'confirmed'}}); }
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+    if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     const goal = p.match(/^\/api\/v2\/goals\/([^/]+)$/);
     if (goal && method === 'POST') { const body = req.postDataJSON() as Body; sent.push(['POST', '/goals/' + goal[1], body]); Object.assign(goals.find(g => g.id === goal[1])!, body); return json({goal: goals.find(g => g.id === goal[1])}); }
     const group = p.match(/^\/api\/v2\/groups\/([^/]+)$/);
@@ -589,7 +589,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
     // against the
     // draft, then "Add to draft" / "No, leave it" with the line that nothing is published (Dev 533).
     {
-      const proposal = {id: 'p-draft', kind: 'strategy_draft', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'bot:goal-manager',
+      const proposal = {id: 'p-draft', kind: 'strategy_draft', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'bot:strategy-owner',
         proposed_at: new Date().toISOString(), reason: 'Margin per job fell to 22% for two months.',
         payload: {source: 'bet_tripped', summary: 'Acme cleans homes in Austin at a fair price.', vision: v1.vision,
           sections: {sell: 'Weekly at $99.', extra: {brand: {title: 'Brand', body: 'Fair, on time.'}}},
@@ -629,7 +629,7 @@ const sectionTitles = (page: Page) => page.locator('[data-section] .strat-sec-he
     {
       const long = Array.from({length: 8}, (_, i) => `Line ${i + 1} of who we serve.`).join('\n');
       const card = (id: string, payload: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({kind: 'proposal', ref: id, owner_id: 'human:ana', proposal: {id, kind: 'strategy_draft', goal_id: null, kpi_id: null,
-        status: 'pending', proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), reason: '', payload, ...extra}});
+        status: 'pending', proposed_by: 'bot:strategy-owner', proposed_at: new Date().toISOString(), reason: '', payload, ...extra}});
       const {page, errors, sent} = await open(browser, {route: '#/goals', needs: [
         card('p-lens', {source: 'lens', lens: 'blue-ocean', sections: {serve: long}}, {lens_name: 'Blue Ocean'}),
         card('p-same', {source: 'briefing', vision: v1.vision}),

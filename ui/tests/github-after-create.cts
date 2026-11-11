@@ -14,9 +14,9 @@ const shots = process.env.TICO_SCREENSHOT_DIR;
 
 // A team that was created: the built-in Assistant and BotOps, and a bot someone made that still needs its setup.
 const BOTS = [
-  {id: 'coo', slug: 'coo', display_name: 'Ace', status: 'active', template: 'assistant', onboarding_state: '', setup_task_id: null, repository_present: false},
+  {id: 'assistant', slug: 'assistant', display_name: 'Ace', status: 'active', template: 'assistant', onboarding_state: '', setup_task_id: null, repository_present: false},
   {id: 'botops', slug: 'botops', display_name: 'BotOps', status: 'active', template: 'botops', onboarding_state: '', setup_task_id: null, repository_present: true},
-  {id: 'support', slug: 'support', display_name: 'Support desk', status: 'active', template: 'support', onboarding_state: 'needs_setup', setup_task_id: null, repository_present: true},
+  {id: 'support', slug: 'support', display_name: 'Support desk', status: 'active', template: 'support-owner', onboarding_state: 'needs_setup', setup_task_id: null, repository_present: true},
 ];
 const RECORD = {names: {company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Ace'},
   answers: {what_we_do: 'Makes lights.', customers: '', team_size: '', work_arrives: [], software_product: '', repetitive_work: '', pains: [], pains_text: '', tools: []},

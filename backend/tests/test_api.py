@@ -86,20 +86,20 @@ def test_schema_rejects_forged_actor_and_missing_fields(api):
     post(
         api,
         "tasks",
-        {"owner": "coo", "title": "Create something", "body": "Do it", "requester": "human:ben"},
+        {"owner": "assistant", "title": "Create something", "body": "Do it", "requester": "human:ben"},
         expected=422,
     )
-    post(api, "tasks", {"owner": "coo", "title": "Missing body"}, expected=422)
+    post(api, "tasks", {"owner": "assistant", "title": "Missing body"}, expected=422)
     r = api.post(
         "/api/v2/tasks",
-        json={"owner": "coo", "title": "Create report", "body": "A report"},
+        json={"owner": "assistant", "title": "Create report", "body": "A report"},
         headers={"Authorization": "Bearer ana-test"},
     )
     assert r.status_code == 422
 
 
 def test_task_and_queue_commit_once_with_concurrent_retries(api):
-    body = {"owner": "coo", "title": "Review the proposal", "body": "Give a recommendation."}
+    body = {"owner": "assistant", "title": "Review the proposal", "body": "Give a recommendation."}
     with ThreadPoolExecutor(max_workers=4) as pool:
         replies = list(pool.map(lambda _: post(api, "tasks", body, key="same-operation"), range(4)))
     assert len({r["id"] for r in replies}) == 1
@@ -111,7 +111,7 @@ def test_task_and_queue_commit_once_with_concurrent_retries(api):
 
 
 def test_task_version_conflict_preserves_first_write(api):
-    task = post(api, "tasks", {"owner": "coo", "title": "Review design", "body": "Recommend improvements."})
+    task = post(api, "tasks", {"owner": "assistant", "title": "Review design", "body": "Recommend improvements."})
     updated = post(api, "tasks/" + task["id"], {"version": 1, "note": "First revision"})
     assert updated["version"] == 2
     post(api, "tasks/" + task["id"], {"version": 1, "note": "Stale revision"}, expected=409)
@@ -122,10 +122,12 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     """The assistant takes chat in one place, each person's own Assistant room (backend/assistant.py,
     tested in test_assistant.py). Every other route still refuses it, and a person's task for it
     still lands in that person's own room."""
-    post(api, "chat/coo", {"text": "Hello"}, expected=403)
-    post(api, "messages", {"to": "coo", "text": "Hello"}, token="ben-test", expected=403)
-    ana = post(api, "tasks", {"owner": "coo", "title": "Ana's review", "body": "Private context."})
-    ben = post(api, "tasks", {"owner": "coo", "title": "Ben's review", "body": "Private context."}, token="ben-test")
+    post(api, "chat/assistant", {"text": "Hello"}, expected=403)
+    post(api, "messages", {"to": "assistant", "text": "Hello"}, token="ben-test", expected=403)
+    ana = post(api, "tasks", {"owner": "assistant", "title": "Ana's review", "body": "Private context."})
+    ben = post(
+        api, "tasks", {"owner": "assistant", "title": "Ben's review", "body": "Private context."}, token="ben-test"
+    )
     assert ana["conversation_id"] != ben["conversation_id"]
     get(
         api, "conversations/" + ana["conversation_id"] + "/messages", "ben-test", expected=404
@@ -133,7 +135,7 @@ def test_the_assistant_chats_only_in_its_own_room_and_people_still_hand_it_work(
     post(
         api,
         "messages",
-        {"to": "coo", "text": "Injected", "conversation_id": ana["conversation_id"]},
+        {"to": "assistant", "text": "Injected", "conversation_id": ana["conversation_id"]},
         token="ben-test",
         expected=403,
     )
@@ -156,10 +158,10 @@ def test_private_task_reference_is_denied(api):
 
 def test_two_runners_claim_only_their_own_bots(api):
     ana, ben = runner(api), runner(api, "ben", "Ben Mac")
-    assign(api, ana, "coo")
+    assign(api, ana, "assistant")
     assign(api, ben, "cpo")
-    ready(api, ana, ["coo", "cpo"])
-    ready(api, ben, ["coo", "cpo"])
+    ready(api, ana, ["assistant", "cpo"])
+    ready(api, ben, ["assistant", "cpo"])
     post(api, "chat/cpo", {"text": "Talk to product"})
     assert claim(api, ana) is None
     attempt = claim(api, ben, key="claim-once")

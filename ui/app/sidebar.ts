@@ -39,7 +39,7 @@ document.querySelectorAll<HTMLElement>('[data-section-toggle]').forEach(button =
 });
 renderNavSections();
 // The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
-// ui/app/assistant-page.ts); BotOps, the Strategy Owner, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
+// ui/app/assistant-page.ts); BotOps, the Strategy Owner, the Librarian and the Rules Owner are its helpers (state.js ASSISTANT_HELPERS),
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
 // and #/bot/<id> opens each for its settings, runs and logs.
 const isHiddenBot = (slug: string) => slug === assistantBot() || isAssistantHelper(slug);
@@ -67,7 +67,7 @@ function orgHang(key: string, boss: string, groupOf: Record<string, string | und
   // stays
   // in its group only when that group hangs under the Strategy Owner too, else it leaves the group for the owner's branch:
   // the owner's own group never moves there, or the chart would loop.
-  if (boss && (key === 'b:goal-manager' || (boss === 'b:goal-manager' && group && !orgGroupUnderStrategyBot(group)))) return boss;
+  if (boss && (key === 'b:strategy-owner' || (boss === 'b:strategy-owner' && group && !orgGroupUnderStrategyBot(group)))) return boss;
   if (group) return boss && groupOf[boss] === group ? boss : 'g:' + group;
   return boss && !groupOf[boss] ? boss : '';
 }
@@ -76,7 +76,7 @@ function orgGroupUnderStrategyBot(id: string): boolean {
   const byId = new Map((S.orgGroups || []).map(g => [g.id, g]));
   let g = byId.get(id);
   for (let hops = 0; g?.parent && byId.has(g.parent) && hops < 20; hops++) g = byId.get(g.parent);
-  return g?.org_parent === 'b:goal-manager';
+  return g?.org_parent === 'b:strategy-owner';
 }
 // Who a group answers to, as a key (`p:<id>` or `b:<bot id>`): whoever its lead (`bot:<id>` or `person:<id>`) reports
 // to, else whoever most of the teammates at its top report to; up the reporting lines (`org_parent`) past anyone inside
@@ -109,7 +109,7 @@ function orgGroupHead(gid: string | undefined, lead = ''): string {
 // the Strategy Owner there too (`org_parent`, backend/strategy_bot.py), and the chart lifts it to the owner with the
 // Head.
 const orgGroupParent = (g: OrgGroup, keys: Set<string>): string => g.parent && keys.has('g:' + g.parent) ? 'g:' + g.parent
-  : g.org_parent === 'b:goal-manager' && keys.has('b:goal-manager') ? 'b:goal-manager' : '';
+  : g.org_parent === 'b:strategy-owner' && keys.has('b:strategy-owner') ? 'b:strategy-owner' : '';
 // The org chart's shape over a tree of nodes by parent key (`by`, changed in place): the top person (orgChartTop) at the
 // root, their own group dissolved into them, and every top-level group under the one it answers to (orgGroupHead), so
 // a department sits under the person who runs it. Org (redesign-org.js rdoTree) and Goals (goals-kpis.js) both draw it.
@@ -762,7 +762,7 @@ $('#org-history').onclick = () => {
 // `reports_to` is untouched, and a helper's reports hang where it would have. The Strategy Owner is an Assistant helper.
 const isHelperBot = (e: Employee) => isBuiltInBot(e.id) || !!e.helper;
 // The order here and on Goals: the Assistant, then the other built-ins, then other helpers.
-const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'bookkeeper', COUNSEL_BOT, 'brand', 'inbox'];
+const HELPER_ORDER = ['botops', 'librarian', 'strategy-owner', 'task-manager', 'finance-owner', RULES_OWNER_BOT, 'design-owner', 'inbox-manager'];
 const helperRank = (e: Employee) => e.id === assistantBot() ? -1 : HELPER_ORDER.includes(e.id) ? HELPER_ORDER.indexOf(e.id) : 99;
 function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
   const out: OrgByParent = {}, bot: Record<string, OrgBotNode> = {}, parentOf: Record<string, string> = {};

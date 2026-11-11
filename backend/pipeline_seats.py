@@ -6,11 +6,11 @@ person on its people OKs from `resolve`, and `ensure_presets` fills a still-empt
 
 - A role is found by its seat's template, never by a name (F23): a seat with that `template` whose `filled_by` is a bot
   that is not archived. A filled seat is closed (`lifecycle.fill_seat` sets `closed_at` with `filled_by`), so this is
-  any seat, open or closed, that a bot fills. Reviewer 1 and Reviewer 2 share `pr-reviewer`: among its filled seats,
+  any seat, open or closed, that a bot fills. Reviewer 1 and Reviewer 2 share `reviewer`: among its filled seats,
   ordered by title then `created_at`, the first is Reviewer 1 and the second Reviewer 2. The Product Owner is the
   first `segment-product-owner` the same way (the first segment's, live at setup).
 - With no such seat, the first active bot whose `bot_settings.template` is the role's, by slug.
-  Reviewer 2 is then the second `pr-reviewer` bot.
+  Reviewer 2 is then the second `reviewer` bot.
 - Every pipeline's manager shares `pipeline-manager`, so a Pipeline Manager is the bot of that template whose slug is
   its chart id (`product-pipeline-manager`, `engineering-pipeline-manager`; a live seat's bot gets it at go-live).
 - Release Owner is `release_schedule_routes.release_manager`: the same bot the release hour runs on. That one must be
@@ -49,8 +49,8 @@ TEMPLATES = {
     PRODUCT_OWNER: "segment-product-owner",
     ENGINEERING_PIPELINE_MANAGER: PIPELINE_MANAGER_TEMPLATE,
     BUILDER: "builder",
-    REVIEWER_1: "pr-reviewer",
-    REVIEWER_2: "pr-reviewer",
+    REVIEWER_1: "reviewer",
+    REVIEWER_2: "reviewer",
     RELEASE_MANAGER: "release-owner",
 }
 # The default chart's row id for each role's seat (backend/company_file/chart_formula.json). A live seat's bot gets

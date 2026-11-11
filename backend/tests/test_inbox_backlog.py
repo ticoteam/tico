@@ -42,7 +42,7 @@ def test_pages_return_every_waiting_message_once_through_ties(api):
         clone(c, "messages", base, 3, read_at=lambda i: H.now(), delivered_at=lambda i: H.now(), body=lambda i: "read")
         clone(c, "messages", base, 3, deleted_at=lambda i: H.now(), body=lambda i: "deleted")
         clone(c, "messages", base, 3, expires_at=lambda i: H.shift(H.now(), seconds=-60), body=lambda i: "expired")
-        clone(c, "messages", base, 3, recipient_id=lambda i: "bot:coo", body=lambda i: "someone else's")
+        clone(c, "messages", base, 3, recipient_id=lambda i: "bot:assistant", body=lambda i: "someone else's")
     with store.read() as c:
         expected = [
             r["id"]

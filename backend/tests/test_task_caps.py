@@ -1,6 +1,6 @@
 """Task caps (redesign/CONTRACT.md §1, backend/task_caps.py): how many tasks a teammate may send a manager a day.
 
-The org here: ops reports to coo, coo to Ana (the owner). A cap on (ops, Ana) limits the tasks ops creates for Ana."""
+The org here: ops reports to assistant, assistant to Ana (the owner). A cap on (ops, Ana) limits the tasks ops creates for Ana."""
 
 from backend import task_caps
 from backend.store import H
@@ -15,9 +15,9 @@ def report(api, bot, boss):
 
 
 def org(api):
-    """ops under coo under Ana, and ops signing in as itself (`ops-test`)."""
-    report(api, "coo", "human:ana")
-    report(api, "ops", "coo")  # a bot names its boss by slug; a person as human:<id>
+    """ops under assistant under Ana, and ops signing in as itself (`ops-test`)."""
+    report(api, "assistant", "human:ana")
+    report(api, "ops", "assistant")  # a bot names its boss by slug; a person as human:<id>
     as_bot(api, "ops", "ops-test")
 
 
@@ -64,7 +64,7 @@ def test_a_zero_cap_blocks_the_pair_and_names_the_manager_to_go_through_while_ow
     org(api)
     put_cap(api, {"sender": "bot:ops", "receiver": "person:ana", "per_day": 0})
     refused = task(api, "ops-test", "Straight to Ana", owner="ana", expected=409)
-    assert refused["cap"] == 0 and refused["via"] == "bot:coo"
+    assert refused["cap"] == 0 and refused["via"] == "bot:assistant"
     task(api, "ops-test", "Ops's own work", owner="ops")  # creator is the owner
 
 
@@ -135,9 +135,9 @@ def test_a_hand_over_adds_a_send_and_never_takes_the_first_one_out_of_the_count(
     shown = api.get(f"/api/v2/tasks/{first['id']}", headers=headers()).json()
     r = api.post(
         f"/api/v2/tasks/{first['id']}/owner",
-        json={"version": (shown.get("task") or shown)["version"], "owner": "coo", "why": "Coo takes it."},
+        json={"version": (shown.get("task") or shown)["version"], "owner": "assistant", "why": "Coo takes it."},
         headers=headers(),
-    )  # Ana hands it to coo
+    )  # Ana hands it to assistant
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
         senders = [

@@ -18,7 +18,7 @@ def cited(api, method, path, body, token, ref="turn", expected=200):
 
 def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
     strategy_bot(api)
-    _, attempt = turn(api, "coo", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
+    _, attempt = turn(api, "assistant", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
     token = attempt["token"]
     # The turn cites the message that started it, so an uncited write is admitted on those words; a citation that is not
     # theirs (or not in their Assistant chat) lends nothing.
@@ -41,7 +41,7 @@ def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
 
 def test_on_its_own_the_strategy_bot_changes_no_group(api):
     strategy_bot(api)
-    as_bot(api, "goal-manager", "gm-test")
+    as_bot(api, "strategy-owner", "gm-test")
     cited(api, "POST", "groups", {"name": "Research"}, "gm-test", ref=None, expected=403)
     assert "Research" not in {row["name"] for row in get(api, "groups")}
 

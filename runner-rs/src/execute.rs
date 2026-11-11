@@ -2078,7 +2078,7 @@ impl Runner {
         let persistent = crate::harness_tools::caps_of(&config).persistent_session;
         let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
-        // A stateless bot (Counsel) keeps nothing from one task to the next: a task resumes only its own session, and a
+        // A stateless bot (the Rules Owner) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
         let fresh_chat = stateless_chat(&attempt);
@@ -3984,7 +3984,7 @@ mod tests {
 
     #[test]
     fn make_page_uses_its_own_provider_session() {
-        let mut turn = json!({"id": "a1", "bot": "coo", "config": {"session": "bot"},
+        let mut turn = json!({"id": "a1", "bot": "assistant", "config": {"session": "bot"},
             "conversation": {"id": "personal", "root_id": "personal", "audience_class": "private"},
             "make_page": {"task": {"id": "t1"}}});
         assert_eq!(session_key(&turn), "make-page:a1");
@@ -4129,7 +4129,7 @@ mod tests {
         assert_eq!(session_key(&botops), "conversation:c2");
         // A Strategy Owner on `session: bot`: its goals work keeps the bot thread, while the owner's chat, handed
         // `session: task` by the server (backend/rooms.py session_config), keys every follow-up on that chat alone.
-        let strategy_turn = |config: Value, conversation: &str| json!({"bot": "goal-manager", "config": config, "task": null, "conversation": {"id": conversation}});
+        let strategy_turn = |config: Value, conversation: &str| json!({"bot": "strategy-owner", "config": config, "task": null, "conversation": {"id": conversation}});
         assert_eq!(
             session_key(&strategy_turn(json!({"session": "bot"}), "c-goals")),
             "bot"
@@ -4274,7 +4274,7 @@ mod tests {
 
     #[test]
     fn a_stateless_chat_is_told_apart_by_its_task_not_its_session_key() {
-        let turn = |config: Value, task: Value| json!({"bot": "tico-counsel", "config": config, "task": task, "conversation": {"id": "c1"}});
+        let turn = |config: Value, task: Value| json!({"bot": "rules-owner", "config": config, "task": task, "conversation": {"id": "c1"}});
         let stateless = json!({"stateless": true});
         let on_bot = json!({"stateless": true, "session": "bot"});
         // A chat message has no task: a new session each time, none saved, no process reused.
@@ -8457,11 +8457,11 @@ for line in sys.stdin:
         let (runner, dir) = runner_at("http://127.0.0.1:1", "make-page-scratch");
         let env = crate::env::Env::new();
         let config = json!({"session": "bot"});
-        let main = crate::sessions::local_path(&runner.config, "coo", &config);
+        let main = crate::sessions::local_path(&runner.config, "assistant", &config);
         std::fs::create_dir_all(&main).unwrap();
         std::fs::write(main.join("private.txt"), "PRIVATE-SHARED-CHECKOUT").unwrap();
         for id in ["make-first", "make-failed"] {
-            let mut attempt = json!({"id": id, "bot": "coo", "config": config,
+            let mut attempt = json!({"id": id, "bot": "assistant", "config": config,
                 "make_page": {"task": {"id": "t1"}}, "worktrees": [{"path": main.display().to_string()}]});
             let lost = AtomicBool::new(false);
             let mut place = runner.enter_lanes(&attempt, &lost).await.unwrap();

@@ -976,9 +976,9 @@ def _late_enough(inv: Any, today: str, stage: int) -> None:
 
 
 def invoice_send(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """Send a draft invoice: Dr AR / Cr its income lines, marked sent. When the customer has an email and the Bookkeeper
+    """Send a draft invoice: Dr AR / Cr its income lines, marked sent. When the customer has an email and the Finance Owner
     has a mailbox that can send, the invoice email is frozen on commit (delivery.issue) for this exact text and
-    document, then needs its send preview and approval; the Bookkeeper reports back (`invoice_delivery`). Otherwise the result carries the document
+    document, then needs its send preview and approval; the Finance Owner reports back (`invoice_delivery`). Otherwise the result carries the document
     for whoever delivers it (`delivery: "caller"`). The email's intent is resolved here (Plan.resolved), so an ask for it
     is void and asked again if its address, text, document or mailbox changes before it is decided."""
     V.only(p, ("invoice_id", delivery.MAIL))
@@ -1064,9 +1064,9 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remind the customer that a sent invoice is unpaid, once for each stage (1, 7, 30, 60 or 90 days late). The text
     is fixed: the number, what is left, the due date and the payment link when there is one; no free text. The reminder
     is recorded on commit under a Tico send approval (delivery.issue) for that text and the customer's addresses; the
-    shared queue dispatches it and the Bookkeeper reports back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
+    shared queue dispatches it and the Finance Owner reports back (`invoice_delivery`). A paid or draft invoice, an invoice with no due date, one
     not yet past due or not yet at the stage's days late, a stage already reminded, a customer with no email and no
-    Bookkeeper mailbox are refused with the reason, before any stage is used. The days late are the action's own day's
+    Finance Owner mailbox are refused with the reason, before any stage is used. The days late are the action's own day's
     (ctx.today), checked again when the approval is decided (actions.approval_decided)."""
     V.only(p, ("invoice_id", "stage", delivery.MAIL))
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
@@ -1087,7 +1087,9 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, f"{customer['name']} has no email on file, so the reminder cannot be sent")
     box = delivery.mailbox(ctx.c)
     if not box:
-        raise FinanceError(NOT_AVAILABLE, "the Bookkeeper has no mailbox that can send, so a reminder cannot be sent")
+        raise FinanceError(
+            NOT_AVAILABLE, "the Finance Owner has no mailbox that can send, so a reminder cannot be sent"
+        )
     link = f" Pay here: {inv['payment_link']}" if inv["payment_link"] else ""
     text = (
         f"Invoice {inv['number']} for {_money(left)} {ctx.book.base_currency} was due {inv['due_date']} and is "
@@ -1150,7 +1152,7 @@ def invoice_remind(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def invoice_delivery(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """How a sent invoice email went, reported by the Bookkeeper after `mail send`: delivered, or failed with the reason.
+    """How a sent invoice email went, reported by the Finance Owner after `mail send`: delivered, or failed with the reason.
     `stage` names a reminder; left out, the invoice's own email. A failure raises one Needs-you for the finance admin and
     the email stays waiting, so its retry sends the same text under the same approval."""
     V.only(p, ("invoice_id", "stage", "delivered", "reason"))

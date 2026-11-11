@@ -143,7 +143,7 @@ def task_problems(actor, owner, title, body, pipeline=None):
     title, body = str(title or "").strip(), str(body or "")
     general = str(pipeline or "").strip().lower() in ("", "general")
     target = owner_from_registry(owner)
-    # Not in the registry is no refusal here: a template name (`--owner marketing-lead`) still reaches the one live bot
+    # Not in the registry is no refusal here: a template name (`--owner growth-team-manager`) still reaches the one live bot
     # built from that template on the server, which this client cannot see. cmd_task_dry_run says so.
     if not title:
         problems.append("give it a title that says what you are asking for")
@@ -2048,7 +2048,7 @@ def parser():
     s = rules.add_parser(
         "read",
         help="one rule, with its due dates and the quote it cites; with --from, add a document "
-        "for Counsel to read (a file id or a link)",
+        "for the Rules Owner to read (a file id or a link)",
     )
     s.add_argument("id", help="a rule id, or with --from a file id or a link")
     s.add_argument("--from", dest="source", metavar="SOURCE", help="document: the From, by name or id")
@@ -2057,7 +2057,9 @@ def parser():
     )
     s.add_argument("--note", help="document: what the document is for")
     s.set_defaults(fn="rules read")
-    s = rules.add_parser("ask", help="a can-I question: the rules that apply, cited, and Counsel's answer on a task")
+    s = rules.add_parser(
+        "ask", help="a can-I question: the rules that apply, cited, and the Rules Owner's answer on a task"
+    )
     s.add_argument("question")
     s.set_defaults(fn="rules ask")
     s = rules.add_parser("suggested", help="the suggestions waiting for a person to accept or skip")
@@ -2108,7 +2110,7 @@ def parser():
         dest="file_version",
         type=int,
         metavar="N",
-        help="external: the version of --file the quote is in (Counsel passes the one its task names)",
+        help="external: the version of --file the quote is in (the Rules Owner passes the one its task names)",
     )
     s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
     s.add_argument("--reviewer")

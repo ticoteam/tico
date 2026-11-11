@@ -206,7 +206,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
                 "--person",
                 "ben",
                 "--bot",
-                "coo",
+                "assistant",
             ],
             env=environment,
             capture_output=True,
@@ -224,7 +224,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         # The live meeting opened private, with Ben and the bot let in.
         live = get(api, f"live-meetings/{output['live_id']}")
         assert live["visibility"] == "private"
-        assert "coo" in json.dumps(live["bots"])
+        assert "assistant" in json.dumps(live["bots"])
 
         # The drafted item is one task for the bot, private, carrying the words it came from.
         sent, typed = output["items"]
@@ -232,7 +232,7 @@ def test_recorder_sends_one_action_item_to_a_bot_and_files_the_meeting(api, tmp_
         assert sent["task_id"] and sent["task_url"].endswith(f"/#/task/{sent['task_id']}")
         with api.app.state.store.read() as c:
             tasks = c.execute("SELECT id,owner_id,body FROM tasks WHERE title='Update the launch plan'").fetchall()
-        assert [(row["id"], row["owner_id"]) for row in tasks] == [(sent["task_id"], "bot:coo")]
+        assert [(row["id"], row["owner_id"]) for row in tasks] == [(sent["task_id"], "bot:assistant")]
         body = tasks[0]["body"]
         assert f"“{COMMITMENT}”" in body and "Transcript around it:" in body
         assert "sent by" in body and "from Tico Recorder" in body

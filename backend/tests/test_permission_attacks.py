@@ -125,7 +125,7 @@ def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages
     assert call(api, "post", clear, attempt["token"], cited).status_code == 403  # Cara does not manage ops
     finish(api, botops, attempt)
     # A human-created task carries its requester’s full management rights.
-    call(api, "post", "bots/register", "ana-test", {"slug": "built", "template": "issue-triage"})
+    call(api, "post", "bots/register", "ana-test", {"slug": "built", "template": "qa-owner"})
     with api.app.state.store.transaction() as c:
         H.task_create(c, "human:ana", "Build the bot", "Please.", "bot:botops")
     setup = claim(api, botops, "botops")

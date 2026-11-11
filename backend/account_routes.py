@@ -38,7 +38,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
 
-    @app.post("/api/v2/goal-manager/turn-on")
+    @app.post("/api/v2/strategy-owner/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":

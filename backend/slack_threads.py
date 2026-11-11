@@ -295,7 +295,7 @@ def request_link(store, who, thread_id, channel_ref, history=False, auth=None):
     the same 404 as a missing one."""
     ref = str(channel_ref or "").strip()[:200]
     if not ref:
-        raise Problem("invalid", "Give a channel name like #customer-success, or its id", 422)
+        raise Problem("invalid", "Give a channel name like #success-owner, or its id", 422)
     core = _core()
     with store.transaction() as c:
         thread = _thread(c, thread_id) if _can_see(c, core, auth or _auth(store), who, thread_id) else None

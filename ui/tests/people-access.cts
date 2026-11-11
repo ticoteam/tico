@@ -17,7 +17,7 @@ type Person = {id: string; name: string; email: string; title?: string; team?: s
   create_bots?: boolean; add_people?: boolean; sign_in?: boolean};
 interface PageWin { ticoTheme?: {get: () => unknown; set: (value: unknown) => void} }
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
-  assistant_name: 'Ace', assistant_bot: 'coo', public_url: 'https://initech.test',
+  assistant_name: 'Ace', assistant_bot: 'assistant', public_url: 'https://initech.test',
   runner_url: 'https://initech.test', github_owner: '', local: false, release: '',
   onboarding_needed: false, providers_configured: true};
 

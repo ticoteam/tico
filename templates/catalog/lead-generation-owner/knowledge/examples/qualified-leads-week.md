@@ -61,5 +61,5 @@ and role can be asked at sign-up. Check: the same rate, on the same definition, 
 - CRM export of leads with source tag, stage, owner and first-touch time, 2 to 8 Nov 2026, pulled 9 Nov.
 - Hand-off tasks created 2 to 8 Nov, from the task list.
 - `knowledge/lead-method.md`, read 9 Nov.
-- Source tag convention, from the marketing-ops owner, read 3 Nov.
+- Source tag convention, from the marketing-operations-manager owner, read 3 Nov.
 ```

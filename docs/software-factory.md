@@ -17,11 +17,11 @@ those stages.
 | 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
 | 2 | Product and Engineering Pipeline Managers | `pipeline-manager` | Each manages one pipeline: picks up what is late or stuck and decides what happens next |
 | 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
-| 4 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
-| 5 | Reviewer 2 | `pr-reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
+| 4 | Reviewer 1 | `reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
+| 5 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
 | 6 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
 | 7 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 8 | Technical Writer | `docs-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
+| 8 | Technical Writer | `technical-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
 The **Product Owner** (`segment-product-owner`) decides *what* to build: it triages feature ideas, writes the spec and

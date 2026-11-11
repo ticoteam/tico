@@ -365,7 +365,7 @@ GMAIL_SEND = {"service": "gmail", "identity": "cara@acme.example", "can": ["read
 
 def test_botops_changes_a_bots_tools_as_the_requester_who_owns_it_and_never_for_a_bot_that_is_not_hers(api, botops):
     attempt = turn(api, botops, text="Let my inbox bot send mail")
-    register(api, attempt, "cara-mail", template="inbox")
+    register(api, attempt, "cara-mail", template="inbox-manager")
     # With the header the requester's rights decide; without it (an older client) the turn's person still does.
     delegated = {**headers(attempt["token"]), "X-Tico-On-Behalf-Of": "turn"}
     with_header = api.post("/api/v2/bots/cara-mail/tools", json=GMAIL_SEND, headers=delegated)

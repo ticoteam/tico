@@ -22,9 +22,9 @@ examples that run as written, and a friction theme that disappears because someo
 - `playbooks/weekly-developer-pulse.md`, `playbooks/write-a-sample.md`, `playbooks/onboarding.md`.
 
 ## Lines with the rest of the team
-Reference docs and READMEs in the product repositories are the Technical Writer's (`docs-writer`); a doc
+Reference docs and READMEs in the product repositories are the Technical Writer's (`technical-writer`); a doc
 that is wrong goes to them with the thread that proved it. Internal docs and the help centre are the
-Librarian's (`tico doc ask`). A reported bug goes to the QA Engineer (`issue-triage`); a suspected
+Librarian's (`tico doc ask`). A reported bug goes to the QA Engineer (`qa-owner`); a suspected
 vulnerability goes privately to the Security Engineer. A feature request goes to Product with its count.
 A general customer community is Marketing's Community Manager; yours is developers.
 

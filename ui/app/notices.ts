@@ -328,7 +328,7 @@ const assistantShownName = () => assistantName();
 const namedRoster = (rows: Employee[]): Employee[] => rows.map(row => {
   const e: Employee = row.id ? row : {...row, id: row.name ?? '', slug: row.slug || (row.name ?? '')};
   return e.id === assistantBot() ? {...e, display_name: assistantShownName()}
-    : e.id === 'goal-manager' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e;
+    : e.id === 'strategy-owner' && strategyDefaultish(String(e.display_name || '').trim()) ? {...e, display_name: strategyDefaultName()} : e;
 });
 // Small compatibility hook for separately loaded UI modules. It exposes only deployment mode,
 // never identity or credentials.

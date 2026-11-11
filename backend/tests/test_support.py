@@ -353,7 +353,7 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
 REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
 
 
-def as_bot(api, slug="coo"):
+def as_bot(api, slug="assistant"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
@@ -670,20 +670,20 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     api = environment()
     drafts_only(api)
     as_bot(api)
-    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
+    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-assistant")["result"]["tools"]}
     assert {"tico_support_report", "tico_support_send"} <= tools
     err, drafted = call(
-        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
+        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-assistant"
     )
     assert not err, drafted
     assert "must OK it" in drafted["next"] and hq.seen == []
-    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert err and hq.seen == []
     decide(api, drafted["ok"])
-    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert not err, sent
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")  # what the person read
-    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 
@@ -726,7 +726,7 @@ def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  
     drafts_only(api)
     approval = draft(api, as_bot(api)).json()
     approver, _ = decide(api, approval["id"])
-    assert approver != "bot:coo" and approver.startswith("human:")
+    assert approver != "bot:assistant" and approver.startswith("human:")
 
 
 def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
@@ -1014,7 +1014,7 @@ def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, mo
 
     api = environment()
     as_bot(api)
-    who = Identity("bot:coo", "bot", agent="hermes")
+    who = Identity("bot:assistant", "bot", agent="hermes")
     entered, release = threading.Event(), threading.Event()
 
     def slow(request):  # the first send is still out when the retry arrives
@@ -1054,11 +1054,11 @@ def test_a_bot_whose_credential_or_self_has_ended_sends_nothing_by_the_rule(envi
     assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
     with api.app.state.store.transaction() as c:
         if ending == "credential":
-            c.execute("UPDATE agents SET revoked_at=? WHERE bot=?", ("2026-01-02T00:00:00Z", "coo"))
+            c.execute("UPDATE agents SET revoked_at=? WHERE bot=?", ("2026-01-02T00:00:00Z", "assistant"))
         else:
-            c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("coo",))
+            c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("assistant",))
     with pytest.raises(Problem) as ended:
-        api.app.state.support.report(Identity("bot:coo", "bot", agent="hermes"), _payload())
+        api.app.state.support.report(Identity("bot:assistant", "bot", agent="hermes"), _payload())
     assert ended.value.code == ("revoked" if ending == "credential" else "paused")
     assert hq.seen == [] and not consumed(api, approval["id"])
     assert grants(api) == [(approval["id"], task_asks.WAITING, None)]  # its earlier draft still waits for a person
@@ -1103,7 +1103,7 @@ def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_pe
 
     api = environment()
     as_bot(api)
-    who = Identity("bot:coo", "bot", agent="hermes")
+    who = Identity("bot:assistant", "bot", agent="hermes")
     entered, release = threading.Event(), threading.Event()
 
     def slow(request):  # the first send is still out when the queued report arrives
@@ -1158,7 +1158,7 @@ def test_a_report_the_privacy_check_refuses_waits_for_a_person(environment, hq):
     def refuses(c):
         raise Problem("privacy", "This report may not leave the install from here.", 403)
 
-    who = Identity("bot:coo", "bot", agent="hermes")
+    who = Identity("bot:assistant", "bot", agent="hermes")
     asked = api.app.state.support.report(who, _payload(), check=refuses)
     assert asked["status"] == "pending" and "sent" not in asked
     assert hq.seen == [] and grants(api) == [(asked["id"], task_asks.WAITING, None)]

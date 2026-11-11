@@ -1,4 +1,4 @@
-"""The Video Producer's pipeline script (templates/catalog/video-producer/software/pipeline.py) with `hub` stubbed: a
+"""The Video Owner's pipeline script (templates/catalog/video-owner/software/pipeline.py) with `hub` stubbed: a
 stage waits for its mover's approval of each file, the owner is found from pipeline.yaml or the command, a self-moved
 stage runs until its project budget (plus any raise the owner approved) and is done on its `.done` file, a file is
 used only when it is approved or its stage is self-moved, and a failed `tico file approved` stops the pipeline instead of
@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-TEMPLATE = Path(__file__).resolve().parents[2] / "templates/catalog/video-producer"
+TEMPLATE = Path(__file__).resolve().parents[2] / "templates/catalog/video-owner"
 loader = importlib.machinery.SourceFileLoader("pipeline", str(TEMPLATE / "software/pipeline.py"))
 pipeline = importlib.util.module_from_spec(importlib.util.spec_from_loader("pipeline", loader))
 loader.exec_module(pipeline)

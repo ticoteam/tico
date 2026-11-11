@@ -21,7 +21,7 @@ One line each, with its evidence and date:
 - Main branch checks green on the release commit (`gh run list`), and that commit is still the head of the default branch.
   If the branch moved, the checks run on the new head or the commit is named again.
 - No open issue labelled blocker or for this milestone (`gh issue list -R <repo> --milestone <m>`).
-- The QA Owner's test plan for this release exists and its results are recorded (ask `issue-triage` if not).
+- The QA Owner's test plan for this release exists and its results are recorded (ask `qa-owner` if not).
 - Database migrations listed, each with whether it can be reversed.
 - Feature flags that change state with this release, and who turns each on.
 - Rollback plan, judged with `skills/judge-whether-a-release-can-roll-back/SKILL.md`: the previous version, how it is restored,

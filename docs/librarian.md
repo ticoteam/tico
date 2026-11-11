@@ -283,7 +283,7 @@ CLI: `tico market define`, `segment add|tree`, `size add|accept|reject|params|li
 
 ## Built-in
 
-Like the assistant, BotOps and the Brand Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
+Like the assistant, BotOps and the Design Owner, the Librarian is required in setup (`required: true`, `bootstrap: true`): every new team gets
 it and it becomes active once a computer is enrolled. It cannot be archived or deleted by anyone (`409 system_bot`); pausing and
 renaming stay allowed, and Settings > Bots shows it as **Built-in**.
 

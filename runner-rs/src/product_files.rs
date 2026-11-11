@@ -22,7 +22,7 @@ use crate::fetchrepo::FETCH_RETRY_S;
 use crate::util::{log, text_of};
 
 /// Registrations from before the catalog carry no template: these slugs are their own (runner_support/catalog_job.py BOOTSTRAP_TEMPLATES).
-const BOOTSTRAP_SLUGS: &[&str] = &["coo", "botops", "librarian", "goal-manager"];
+const BOOTSTRAP_SLUGS: &[&str] = &["assistant", "botops", "librarian", "strategy-owner"];
 const ASK_TIMEOUT: Duration = Duration::from_secs(300);
 
 static REFRESHED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
@@ -204,8 +204,11 @@ mod tests {
     #[test]
     fn only_a_templated_bot_or_a_built_in_slug_is_sent_to_the_catalog() {
         assert!(could_be_built_in("botops", &json!({})));
-        assert!(could_be_built_in("coo", &Value::Null));
-        assert!(could_be_built_in("sales-1", &json!({"template": "sales"})));
+        assert!(could_be_built_in("assistant", &Value::Null));
+        assert!(could_be_built_in(
+            "sales-1",
+            &json!({"template": "inbound-sales-owner"})
+        ));
         assert!(!could_be_built_in("ops", &json!({"runtime": "claude"})));
     }
 }

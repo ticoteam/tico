@@ -1,18 +1,18 @@
 """The bills address (docs/bookkeeper.md): the install's one bills email (Finance's own setting, written only through
 `finance.actions.set_bills_email` and read with `finance.reads.bills_email`), and the path that turns a PDF or image
-emailed to it into a file the Bookkeeper enters as a bill.
+emailed to it into a file the Finance Owner enters as a bill.
 
 Mail reaches Tico through a Tico address (backend/inbound.py). When the bills email is that inbox's address (or
 the message was sent to it), each PDF or image attachment is kept once per (delivery, sha256) inside the inbound ingest
 transaction, so a re-delivered page never makes a second row. The inbound loop then fetches the bytes from HQ (outside
-any transaction), files them in the Bookkeeper's Library and hands them to Finance as an unmatched receipt (`attach`,
-subject `unmatched`, as the Bookkeeper, under the stable key `bills-email:<row id>`, so a retry lands once). Finance
-lists it in the Bookkeeper's queue until a bill takes the file (`bill_create` with origin `email` and the file in
+any transaction), files them in the Finance Owner's Library and hands them to Finance as an unmatched receipt (`attach`,
+subject `unmatched`, as the Finance Owner, under the stable key `bills-email:<row id>`, so a retry lands once). Finance
+lists it in the Finance Owner's queue until a bill takes the file (`bill_create` with origin `email` and the file in
 `attachments`, which raises `finance.bill.received` and takes the file out of the unmatched receipts). A bill needs a
-vendor and lines, which only reading the file gives, so the Bookkeeper makes the draft, not this path.
+vendor and lines, which only reading the file gives, so the Finance Owner makes the draft, not this path.
 
 With no bills email set, or one no inbox receives, nothing is kept here and uploads still work. A file Finance did not
-take (`needs_entry`) is listed by the Bookkeeper's hourly check until Finance holds it (`reconcile`: attached anywhere,
+take (`needs_entry`) is listed by the Finance Owner's hourly check until Finance holds it (`reconcile`: attached anywhere,
 or kept as an unmatched receipt, makes it `filed`). A fetch that fails is tried again with backoff; after MAX_TRIES it
 is `failed`, listed in one check, then `reported`: never listed or woken on again."""
 
@@ -39,12 +39,12 @@ CREATE TABLE IF NOT EXISTS bills_inbound(
  tries INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS bills_inbound_state ON bills_inbound(state, updated_at);
 """
-ACTOR = "bot:bookkeeper"
+ACTOR = "bot:finance-owner"
 READABLE = ("application/pdf", "image/png", "image/jpeg", "image/webp", "image/heic")
 SHA256 = re.compile(r"[0-9a-f]{64}")
 PER_MESSAGE = 10  # attachments one email contributes
 PER_DRAIN = 5  # bills one inbound tick fetches
-MAX_TRIES = 5  # a fetch that keeps failing stops at `failed`, listed for the Bookkeeper once
+MAX_TRIES = 5  # a fetch that keeps failing stops at `failed`, listed for the Finance Owner once
 BACKOFF_MINUTES = (1, 10, 60, 360)  # the wait after the 1st, 2nd, ... failed fetch before the next try
 STATES = ("waiting", "filed", "needs_entry", "failed", "reported")
 
@@ -159,7 +159,7 @@ def reconcile(c):
 
 
 def for_bookkeeper(c: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
-    """Bills from the address the Bookkeeper enters by hand: Finance did not take them as they came, or their bytes
+    """Bills from the address the Finance Owner enters by hand: Finance did not take them as they came, or their bytes
     could not be fetched (listed once, see `listed`)."""
     return [
         dict(r)
@@ -200,7 +200,7 @@ def labels(c, file_ids):
 
 
 def _hand_over(c, row, file_id):
-    """Hand the file to Finance as an unmatched receipt, as the Bookkeeper, under the row's own key:
+    """Hand the file to Finance as an unmatched receipt, as the Finance Owner, under the row's own key:
     (state, action id, code)."""
     from .finance import actions as FA
 
@@ -216,13 +216,13 @@ def _hand_over(c, row, file_id):
 
 
 def file_bill(c, files, row, blob_id, digest, size):
-    """File fetched bytes in the Bookkeeper's Library and hand them to Finance, in the caller's transaction."""
+    """File fetched bytes in the Finance Owner's Library and hand them to Finance, in the caller's transaction."""
     current = c.execute("SELECT state FROM bills_inbound WHERE id=?", (row["id"],)).fetchone()
     if not current or current["state"] != "waiting":
         return None  # another tick filed it first
     made, _, _ = files.add_version(
         c,
-        bot="bookkeeper",
+        bot="finance-owner",
         actor=ACTOR,
         scope="bot",
         task=None,

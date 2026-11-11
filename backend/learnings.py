@@ -35,7 +35,7 @@ MAX_ITEMS = 600  # per night; the oldest beyond it are dropped and counted
 PER_RECIPIENT = 40
 WORKERS = 6
 QUESTION_SET = "learnings-route"
-HELPERS = ("botops", "goal-manager")  # with the assistant: they work for people, they are not the org chart
+HELPERS = ("botops", "strategy-owner")  # with the assistant: they work for people, they are not the org chart
 LIBRARIAN = "librarian"
 LIBRARIAN_PROFILE = (
     "Librarian: how the company works (processes, policies, FAQ, docs) and the market "

@@ -19,8 +19,8 @@ interface Goal { id: string; status: string | null; status_source: string | null
 interface PageWin { __sameLoad?: boolean }
 
 const bot = (name: string, display_name: string, org_parent: string, over?: object) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Owner', 'p:ana', {reports_to: ''})];
+const bots = [bot('assistant', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
+  bot('strategy-owner', 'Strategy Owner', 'p:ana', {reports_to: ''})];
 const people = [{id: 'ana', name: 'Ana Silva', org_parent: ''}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana'},
   {id: 'cara', name: 'Cara Diaz', org_parent: 'p:ana'}];
 const SIGNAL_COLOUR = {on_track: 'green', at_risk: 'yellow', off_track: 'red'};
@@ -67,7 +67,7 @@ const judged = (g: Goal) => g.kpis.some(k => ['red', 'yellow', 'green'].includes
       if (p === '/api/v2/status') return json({bots: []});
       if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: [], proposals: []});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ben', items: []});
-      if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+      if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
       if (p === '/api/v2/strategy') return json({current: null, bets: [], label: 'Bets', label_one: 'Bet', may_edit: false, goals_by_bet: {}, health_by_bet: {}});
       const add = p.match(/^\/api\/v2\/goals\/([^/]+)\/checkins$/);
       if (add && req.method() === 'POST') {

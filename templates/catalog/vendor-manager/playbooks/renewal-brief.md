@@ -24,7 +24,7 @@ the next step is on the task; the brief is published; and the owner has been ask
 Confirm the end date, the notice period and its unit, how notice must be given (email, letter, portal) and whether it must
 be received or only sent, the price and any uplift clause, the minimum term, and what happens to the team's data on exit.
 If the terms need a summary, ask the Contracts Manager within the requested work:
-`tico task create --owner legal-review`.
+`tico task create --owner contracts-manager`.
 
 ## 2. Gather the evidence
 

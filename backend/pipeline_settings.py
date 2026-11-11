@@ -1474,7 +1474,7 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
       gets them at its next start. Growth and Success Monitoring are made with them, only where their factory's
       Experiments pipeline is (live).
     - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
-      Owner, the Bookkeeper): never with the Task Manager standing in. `ensure_private` makes them when that bot is
+      Owner, the Finance Owner): never with the Task Manager standing in. `ensure_private` makes them when that bot is
       made.
     - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with two exceptions:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
@@ -1523,7 +1523,7 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
 
 def ensure_private(conn: "sqlite3.Connection") -> list[str]:
     """Legal and Finance (pipeline_presets_more.PRIVATE), made the moment their owner bot is: a bot made
-    (settings_admin.create_bot) and the Bookkeeper's ensure call this. It is the whole `ensure_presets` pass, the same
+    (settings_admin.create_bot) and the Finance Owner's ensure call this. It is the whole `ensure_presets` pass, the same
     one every start runs, so the factories keep their order (Corporate after the others). Returns the private ids it
     made."""
     return [pid for pid in ensure_presets(conn) if pid in more.PRIVATE]

@@ -74,7 +74,7 @@ async function open(browser: Browser, {phone = false}: {phone?: boolean} = {}) {
     if (p === '/api/me') return json({id: 'ana', name: 'Ana Lima', role: 'owner', registered: true});
     if (p === '/api/employees') return json([
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}},
-      {name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}}]);
+      {name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: [], my_access: {see: true, read: true, write: true}}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Lima', email: 'ana@acme.example'}], org_groups: []});
     if (p === '/api/v2/events') return route.abort();
     if (p === '/api/v2/threads/rail') return json({pinned: [], threads: [thread], catch_up: 0, next_cursor: null, dms: {}});
@@ -119,7 +119,7 @@ let browser: Browser | null = null;
     }
     // The Assistant passing on a person's words: a normal message from "Ana's Assistant", with the Assistant's face.
     assert.equal(await msgRow(page, 'r1').locator('.th-who').innerText(), "Ana's Assistant");
-    assert.equal(await msgRow(page, 'r1').locator('.th-av [data-av="coo"]').count(), 1, "the Assistant's face");
+    assert.equal(await msgRow(page, 'r1').locator('.th-av [data-av="assistant"]').count(), 1, "the Assistant's face");
     // A system line has no sender at all; a built-in leads with its name; an automation's name links to it.
     assert.equal(await line(page, 's1').locator('.src-name').count(), 0, 'a system line names no one');
     assert.equal(await line(page, 's1').innerText().then(t => t.trim().startsWith('Updated to v0.5.160.')), true);
@@ -181,7 +181,7 @@ let browser: Browser | null = null;
     const kinds = await page.evaluate(() => [
       {sender_id: 'keeper', refs: {task: 't'}}, {sender_id: 'keeper', refs: {}}, {sender_id: 'keeper', refs: {source: 'system:update'}},
       {sender_id: 'keeper', refs: {source: 'task-roundup'}}, {sender_id: 'keeper', refs: {source: 'automation:x'}},
-      {sender_id: 'human:ana', refs: {}}, {sender_id: 'bot:ops', refs: {}}, {sender_id: 'bot:coo', refs: {for: 'human:ana'}},
+      {sender_id: 'human:ana', refs: {}}, {sender_id: 'bot:ops', refs: {}}, {sender_id: 'bot:assistant', refs: {for: 'human:ana'}},
     ].map(m => [rowSource(m).kind, rowSource(m).name]));
     assert.deepEqual(kinds, [['task_update', 'Task update'], ['system', ''], ['system', ''], ['builtin', 'Task roundup'], ['automation', 'Automation'],
       ['person', 'You'], ['bot', 'Ops'], ['assistant_for', "Ana's Assistant"]]);

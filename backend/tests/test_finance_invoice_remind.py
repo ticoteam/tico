@@ -18,9 +18,9 @@ DUE = "2026-08-31"
 def _mailbox(c) -> None:
     """The Bookkeeper's stored gmail tool that can send (what a real install is given)."""
     tools = [{"service": "gmail", "identity": BOX, "can": ["read", "send"]}]
-    BS.write(c, "bookkeeper", {"team": "eng", "tools": tools})
+    BS.write(c, "finance-owner", {"team": "eng", "tools": tools})
     row = MA.ensure_mailbox(c, BOX, kind="shared", created_by=OWNER)
-    MA.grant(c, OWNER, row["id"], "bot", "bookkeeper", "read_write")
+    MA.grant(c, OWNER, row["id"], "bot", "finance-owner", "read_write")
     MA.grant(c, OWNER, row["id"], "person", "ana", "read_write")
 
 

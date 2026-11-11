@@ -140,10 +140,10 @@ def on_live(api, bot, thread_id):
 
 
 def test_a_message_naming_nobody_reaches_only_the_live_followers(api):
-    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:assistant"))
     # Bots in a chat follow it at mentions: a message naming nobody wakes none of them, and nothing asks a model.
     quiet = say(api, thread["id"], "Who can look at the budget?")
-    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:assistant"))
     on_live(api, "bot:cpo", thread["id"])
     message = say(api, thread["id"], "Anyone?")
     row = delivery(api, message["id"], "bot:cpo")
@@ -640,7 +640,7 @@ def capped_thread(api, monkeypatch, rounds=4, limit=2):
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     thread = new_thread(api, audience="company")
-    posted = [bot_post(api, "bot:coo", thread["id"], f"@ops round {n}") for n in range(rounds)]
+    posted = [bot_post(api, "bot:assistant", thread["id"], f"@ops round {n}") for n in range(rounds)]
     assert [delivery(api, m["id"], "bot:ops")["state"] for m in posted[limit:]] == ["capped"] * (rounds - limit)
     return thread, posted
 

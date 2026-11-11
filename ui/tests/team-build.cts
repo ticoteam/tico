@@ -25,20 +25,20 @@ const item = (template: string, name: string, match = '') => ({template, name, i
 const agent = (id: string, name: string, supported: boolean) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
   connect_id: supported ? id : null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''});
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
-  {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
+  {role: 'Head of Engineering', pick: item('engineering-team-manager', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
     bot: {slug: 'ana-eng-lead', name: 'Rhea', icon: ''}},
   {role: 'Security engineer', pick: item('security-engineer', 'Security Engineer', 'strong'),
-    alternatives: [item('software-architect', 'Software Architect', 'good'), item('pr-reviewer', 'PR Reviewer')], on_team: false, checked: true},
+    alternatives: [item('software-architect', 'Software Architect', 'good'), item('reviewer', 'PR Reviewer')], on_team: false, checked: true},
   {role: 'DevOps engineer', pick: item('devops-engineer', 'DevOps Engineer'), alternatives: [], on_team: false, checked: true},
   {role: 'Developer advocate', pick: item('developer-advocate', 'Developer Advocate'),
-    alternatives: [item('software-architect', 'Software Architect', 'good'), item('docs-writer', 'Docs Writer')],
+    alternatives: [item('software-architect', 'Software Architect', 'good'), item('technical-writer', 'Docs Writer')],
     on_team: false, checked: false},
   {role: 'Second pair of hands', pick: agent('claude', 'Claude Code', true),
     alternatives: [agent('codex', 'Codex', true), agent('devin', 'Devin', false)], on_team: false, checked: false},
 ]});
 // The briefing changes and the recommender now suggests Software Architect for DevOps, which the Security role already holds.
 const reranked = () => ({...suggestion(), roles: suggestion().roles.map((role, i) => i !== 2 ? role
-  : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('pr-reviewer', 'PR Reviewer')]})});
+  : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('reviewer', 'PR Reviewer')]})});
 const until = async (test: () => boolean, ms = 4000) => {
   const end = Date.now() + ms;
   while (!test()) { if (Date.now() > end) throw new Error('timed out waiting'); await new Promise(r => setTimeout(r, 25)); }
@@ -196,7 +196,7 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
   await until(() => calls.at(-1)![0] === 'hire');
   assert.deepEqual(calls.at(-1)![1], {team: 'engineering', reports_to: '', picks: [
     {role: 'Security engineer', template: 'software-architect'},
-    {role: 'DevOps engineer', template: 'pr-reviewer'},
+    {role: 'DevOps engineer', template: 'reviewer'},
     {role: 'Developer advocate', template: 'developer-advocate'},
   ]});
   await dialog.waitFor({state: 'detached'});

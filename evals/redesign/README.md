@@ -6,7 +6,7 @@ fails as `not built yet: <wave>`, and a check the CONTRACT cannot back fails as 
 the gaps).
 
 The org is Acme: Dana (owner), Omar and Priya (people; Omar is a peer of the Engineering Lead, Priya reports to Dana),
-the bots engineering-lead, builder-claude, builder-openai and release-manager. Emails are @acme.example. No real names
+the bots engineering-team-manager, builder-claude, builder-openai and release-manager. Emails are @acme.example. No real names
 belong in this directory.
 
 Run from the repo root:

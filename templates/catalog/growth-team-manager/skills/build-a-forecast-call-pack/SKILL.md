@@ -7,7 +7,7 @@ description: "Build the forecast part of the weekly summary or a forecast call: 
 When to use: the weekly summary or a forecast call needs the period's numbers, or a person asks what the forecast really is.
 
 Steps:
-1. Take the totals from the latest roll-up that `sales-ops` published. Write the report's name, its read date and the period it covers.
+1. Take the totals from the latest roll-up that `sales-operations-manager` published. Write the report's name, its read date and the period it covers.
 2. Write commit, best case and pipeline using the team's own definitions in `knowledge/pipeline-rules.md`. Forecast category sets differ between companies, so do not assume one.
 3. Give the gap to the period's target in one line, if `tico goal list` shows a goal. If there is none, say so. Do not invent a target.
 4. Check each commit deal for a buyer step with a date and a named signer. A commit deal missing either one goes on the inspect list.

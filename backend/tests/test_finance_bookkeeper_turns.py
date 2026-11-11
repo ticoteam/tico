@@ -1,4 +1,4 @@
-"""Scripted turns of the built-in Bookkeeper (slug `bookkeeper`; templates/catalog/bookkeeper/AGENT.md and playbooks).
+"""Scripted turns of the built-in Bookkeeper (slug `finance-owner`; templates/catalog/finance-owner/AGENT.md and playbooks).
 
 Each test is one accounting job from spec section 11. The Bookkeeper runs with its own run token and only its
 tico_finance_* tools (the `call` helper of test_mcp.py, the same MCP door a bot uses), against a fake Mercury. Each call
@@ -250,9 +250,9 @@ def test_attach_files_only_a_library_file_the_bot_may_read(api):
     mercury(api)
     err, feed = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = feed["results"][0]
-    _library_file(api, "file-mine", "bookkeeper")
+    _library_file(api, "file-mine", "finance-owner")
     _library_file(api, "file-theirs", "writer")
-    _library_file(api, "file-gone", "bookkeeper")
+    _library_file(api, "file-gone", "finance-owner")
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_files SET state='deleted' WHERE id='file-gone'")
 
@@ -276,7 +276,7 @@ def test_the_bot_reads_a_file_with_hub_file_read(api):
     offered to the bot, and the instructions name no command the hub does not have (`tico file get` was one)."""
     token = hire(api)
     names = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
-    agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper" / "AGENT.md").read_text()
+    agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "finance-owner" / "AGENT.md").read_text()
     assert "tico_file_read" in names and "tico file read" in agent and "tico file get" not in agent
 
 

@@ -102,7 +102,7 @@ CONTENT = {
         {
             "key": "business",
             "rank": 1,
-            "goal": "bot:sales-lead",
+            "goal": "bot:growth-team-manager",
             "version": 2,
             "statement": "Business installs are the margin; homes are the volume and the brand.",
             "why": "One storefront or facade job is worth many home kits, and business sites renew their scene license every "

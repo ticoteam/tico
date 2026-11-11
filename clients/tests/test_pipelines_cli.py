@@ -645,14 +645,14 @@ def test_a_new_pipeline_names_its_holders_and_is_never_made_over_one_that_is_the
         {
             "id": "support",
             "name": "Support",
-            "manager": "support-lead",
+            "manager": "success-team-manager",
             "prefix": "S",
             "stages": ["Triage", "Doing:me", "Check:bot:x1"],
         },
     )
     path, body = saved(api)
     assert path == "pipelines/support" and "settings_version" not in body
-    assert body["manager_id"] == "bot:support-lead" and body["prefix"] == "S"
+    assert body["manager_id"] == "bot:success-team-manager" and body["prefix"] == "S"
     assert [(s["name"], s["owner"]) for s in body["stages"]] == [
         ("Triage", "assignee"),
         ("Doing", "human:ana"),

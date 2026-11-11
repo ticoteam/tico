@@ -173,7 +173,7 @@ def test_someone_elses_change_is_not_found(api):
 
 def test_a_message_citing_the_assistant_is_listed_however_its_refs_are_spaced(api):
     with api.app.state.store.transaction() as c:
-        msg = H.say(c, "human:ben", "bot:coo", "Ask Ops about the reset", kind="say")
+        msg = H.say(c, "human:ben", "bot:assistant", "Ask Ops about the reset", kind="say")
         c.execute("UPDATE messages SET refs=? WHERE id=?", ('{"via":"assistant"}', msg["id"]))
     listed = [c for c in get(api, "assistant/changes?days=30", "ben-test")["changes"] if c["id"] == msg["id"]]
     assert listed and listed[0]["undoable"] is False

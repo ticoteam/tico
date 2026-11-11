@@ -1537,10 +1537,10 @@ class Store:
                         if (
                             conversation["kind"] == "chat"
                             and not conversation["task_id"]
-                            and "bot:coo" in participants
+                            and "bot:assistant" in participants
                             and len(humans) == 1
                         ):
-                            scope, owner, room = "personal", humans[0], "coo"
+                            scope, owner, room = "personal", humans[0], "assistant"
                         c.execute(
                             "UPDATE conversations SET scope=?,owner_id=?,room_key=? WHERE id=?",
                             (scope, owner, room, conversation["id"]),
@@ -1601,7 +1601,13 @@ class Store:
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
                         mode = str(
                             config.get("thread_mode")
-                            or ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal")
+                            or (
+                                "personal"
+                                if row["bot"] == "assistant"
+                                else "shared"
+                                if row["bot"] == "cpo"
+                                else "personal"
+                            )
                         )
                         BS.write(c, row["bot"], config)
                         c.execute(
@@ -2127,7 +2133,7 @@ class Store:
                 from .org_rule_check import ensure as ensure_org_rule_check
 
                 ensure_org_rule_check(c)
-                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                # The Rules Owner's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
                 from .counsel import ensure as ensure_rule_reads
 
                 ensure_rule_reads(c)
@@ -2618,7 +2624,7 @@ class Store:
                 operator = seed_operator(slug, team, people, owner)
                 mode = str(
                     entry.get("thread_mode")
-                    or ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal")
+                    or ("personal" if slug == "assistant" else "shared" if slug == "cpo" else "personal")
                 )
                 c.execute(
                     "INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo,"

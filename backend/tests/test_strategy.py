@@ -420,7 +420,7 @@ def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_version(api):
     log(api, kpi["id"], 10)
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
     assert "Evidence:" in tasks[0]["body"]
 
 
@@ -429,7 +429,7 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
     goal, kpi = goal_with_kpi(api)
     ready(api, wrong_if={"kind": "kpi", "kpi_id": kpi["id"], "direction": "below", "threshold": 30})
     with api.app.state.store.transaction() as c:
-        H.task_create(c, H.KEEPER, "Bet 1: may be wrong", "From strategy v0.", "bot:goal-manager", lint=False)
+        H.task_create(c, H.KEEPER, "Bet 1: may be wrong", "From strategy v0.", "bot:strategy-owner", lint=False)
     publish(api)
     log(api, kpi["id"], 20)
     with api.app.state.store.transaction() as c:

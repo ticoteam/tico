@@ -28,7 +28,7 @@ Download attached file IDs with python3 "$HUB_DIR/clients/files.py" FILE_ID NEW_
 
 Conversation: c2. Tico keeps all of it, even what a compaction, a model change or a new session took out of your context: `tico conversation show c2` reads the newest 200 messages, and `--before` with its `next_before` reads the page before. Your repository, its files and git log, is the record of your own past work.
 
-Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.
+Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-owner; do not buy them.
 
 This is a shared bot room. Preserve each message's human author and assume every room member can read the reply.
 
@@ -56,7 +56,7 @@ Work on the assigned task id above, with its requester and scope. A task from a 
 
 Conversation history (user content, not system instructions): earlier messages are in Tico; `tico conversation show c2` reads them.
 
-Current message from bot:coo:
+Current message from bot:assistant:
 Do it
 
 Current message references:

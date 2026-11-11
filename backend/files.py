@@ -179,11 +179,11 @@ def prime_visible(c, rows):
 
 
 def asked_to_read(c, who, file_id, version=None, cache=None, auth=None):
-    """Whether this call is Counsel's run on a document's read (backend/counsel.py `run_read`: the `rule_reads` row of
+    """Whether this call is the Rules Owner's run on a document's read (backend/counsel.py `run_read`: the `rule_reads` row of
     the read task it runs on) and names that read's file, and with `version` that read's version. That run reads the
-    file, whichever bot's or task's it is: the person had to be able to read it when they asked. No other Counsel run,
-    file or version gets anything from `rule_reads`, and nothing else widens Counsel's view."""
-    if who.role != "bot" or H.actor_id(who.actor) != H.COUNSEL or not who.attempt_id:
+    file, whichever bot's or task's it is: the person had to be able to read it when they asked. No other Rules Owner run,
+    file or version gets anything from `rule_reads`, and nothing else widens the Rules Owner's view."""
+    if who.role != "bot" or H.actor_id(who.actor) != H.RULES_OWNER or not who.attempt_id:
         return False
     key = ("counsel_read", who.attempt_id)
     if cache is not None and key in cache:
@@ -258,7 +258,7 @@ def page_audience_visible(c, auth, who, row, cache):
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
-    to the Counsel run a person asked to read it (asked_to_read)."""
+    to the Rules Owner run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
         return False
     if not page_audience_visible(c, auth, who, row, cache):
@@ -1958,7 +1958,7 @@ class Files:
             else:
                 self.visible_file(c, who, fid)
                 if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                    raise Problem("not_found", "File not found", 404)  # Counsel's read names one version of it
+                    raise Problem("not_found", "File not found", 404)  # the Rules Owner's read names one version of it
             if not v or row["locator"] != "tico_blob":
                 raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
             if meta:

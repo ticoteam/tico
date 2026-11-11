@@ -102,16 +102,16 @@ def kind_of(me):
             else "botops"
             if actor == "bot:botops"
             else "counsel"
-            if actor == "bot:" + COUNSEL_BOT
+            if actor == "bot:" + RULES_OWNER_BOT
             else "bot"
         )
     return None
 
 
-# Counsel (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
+# The Rules Owner (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
 # the document it reads, authorized physical mail, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
 # to call. The server still decides every call; this keeps those tools out of its list and refuses them if it asks.
 COUNSEL = "counsel"  # its kind of caller, the role offered_to names
 
 
-COUNSEL_BOT = "tico-counsel"  # its slug (backend/hubdb.py COUNSEL)
+RULES_OWNER_BOT = "rules-owner"  # its slug (backend/hubdb.py COUNSEL)

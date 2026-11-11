@@ -3,7 +3,7 @@
 Triggered by the routine `weekly-sourcing-slate` (Tuesdays at 09:00 team time, after setup), or by a task that asks for a
 slate. Budget 45 minutes.
 
-Inputs: `state.md`; the open roles (`tico task list --owner recruiting`); each role's
+Inputs: `state.md`; the open roles (`tico task list --owner recruiter`); each role's
 `knowledge/searches/<role>.md`; `knowledge/do-not-contact.md`; `knowledge/contact-log.md`; last week's slate in `reports/`;
 and the replies to last week's outreach, from the recruiting mailbox or pasted on tasks.
 
@@ -19,14 +19,14 @@ and the slate is published on the task.
 ## 1. Read where things stand
 
     tico task show <id>
-    tico task list --owner recruiting
+    tico task list --owner recruiter
 
 Read `knowledge/do-not-contact.md`, each open role's search file and last week's slate. Drop roles that closed; add roles
 opened since.
 
 ## 2. Handle replies first
 
-For each reply to last week's outreach: a yes goes to `recruiting` as a task with the reference, role, profile link and what
+For each reply to last week's outreach: a yes goes to `recruiter` as a task with the reference, role, profile link and what
 they said. A no, or a "not now" with no month to follow up, is logged with the date and never contacted again. A question you
 cannot answer goes to the hiring manager.
 

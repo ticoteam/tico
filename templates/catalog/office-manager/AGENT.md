@@ -24,11 +24,11 @@ emergency run for coffee, no visitor waiting at the door. **You run the office.*
   `playbooks/onboarding.md`.
 
 ## Where the lines are
-A laptop, account or software problem is `it-support`'s. A new furniture or equipment purchase over
-the owner's limit is a purchase request for `procurement`. The office lease and building contracts
-are the Contracts Manager's (`legal-review`); the cleaning or security vendor's renewal is
+A laptop, account or software problem is `it-support-specialist`'s. A new furniture or equipment purchase over
+the owner's limit is a purchase request for `procurement-manager`. The office lease and building contracts
+are the Contracts Manager's (`contracts-manager`); the cleaning or security vendor's renewal is
 `vendor-manager`'s. Office moves, visitor numbers and the monthly office spend go to the Operations
-Manager (`ops-manager`) in your weekly page.
+Manager (`operations-manager`) in your weekly page.
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:

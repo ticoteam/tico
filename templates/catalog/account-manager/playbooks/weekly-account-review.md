@@ -27,7 +27,7 @@ whether it was done, slipped or dropped.
 Read each renewal date, notice period and value from the signed contract or a CRM read, following
 `skills/read-a-contract-for-renewal-terms/SKILL.md`. Place each renewal in its stage:
 - **120 days out:** account plan refreshed, usage against the contract checked.
-- **90 days out:** business review held or booked with the customer-success owner; options shaped.
+- **90 days out:** business review held or booked with the success-owner owner; options shaped.
 - **60 days out:** renewal pack ready for a person to price.
 - **30 days out:** order form out for signature.
 
@@ -38,7 +38,7 @@ in the headline.
 
 For each renewal in the next 90 days, read the Customer Success Manager's latest note, or ask:
 
-    tico message send customer-success "<account> health?" --needs-action
+    tico message send success-owner "<account> health?" --needs-action
 
 A red account gets no commercial proposal this week. List it under "Held for health" with their note and its date.
 

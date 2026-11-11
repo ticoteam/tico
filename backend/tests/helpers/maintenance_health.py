@@ -4,7 +4,7 @@ import json
 from backend.store import H
 
 
-def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
+def turn(api, runner_id, result, minutes_ago, bot="assistant", state=None):
     """A finished turn on `runner_id` with the runner's result (backend/execution.py stores it as result)."""
     with api.app.state.store.transaction() as c:
         at = H.shift(H.now(), minutes=-minutes_ago)

@@ -141,7 +141,7 @@ team chart, messaging icons beside humans open their matching bot's messages. A 
 Team row, unless explicitly marked as a helper. Shared mailboxes such as `shared@acme.example` can stay on the roster for mail routing with
 `hidden: true`, so they do not appear in the tree.
 
-Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox`
+Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox-manager`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
 Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Tools). Each mailbox has its
 own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail

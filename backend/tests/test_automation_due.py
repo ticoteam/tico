@@ -18,7 +18,7 @@ from backend.tests.helpers.api import assign, get, headers, post, ready, runner 
 from backend.tests.helpers.automation_runs import FIND, make, sql
 from backend.tests.helpers.automation_due import drain, runs_of, tick
 
-OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}
+OPEN = {"id": "open", "type": "action", "do": "create_task", "args": {"title": "Payroll", "owner": "assistant"}}
 
 
 def due(api, trigger, steps=(OPEN,), owner="person:ana", at=datetime(2030, 1, 1, tzinfo=timezone.utc)):
@@ -77,12 +77,12 @@ def test_a_saved_flow_keeps_the_keys_it_was_stored_under_and_one_from_before_the
     stored = json.loads(sql(api, "SELECT flow FROM automations WHERE id=?", (aid,))[0]["flow"])
     assert stored["trigger"]["first_due"] == "2030-03-01" and "first_due_on" not in stored["trigger"]
     assert stored["owner"] == "person:ana" and "owner_id" not in stored
-    assert stored["steps"][0]["args"]["owner"] == "coo"
+    assert stored["steps"][0]["args"]["owner"] == "assistant"
     assert get(api, f"automations/{aid}")["trigger"]["first_due"] == "2030-03-01"
     tick(api, datetime(2030, 2, 15, 0, 0, 30, tzinfo=timezone.utc))
     drain(api)
     assert runs_of(api, aid) == ["due:2030-03-01"]
-    assert sql(api, "SELECT owner_id FROM tasks WHERE title='Payroll'")[0]["owner_id"] == "bot:coo"
+    assert sql(api, "SELECT owner_id FROM tasks WHERE title='Payroll'")[0]["owner_id"] == "bot:assistant"
 
 
 # ------------------------------------------------------------------------------------------- the runs
@@ -146,7 +146,7 @@ def test_a_step_due_overrides_the_occurrence_due_day(api):
         "id": "open",
         "type": "action",
         "do": "create_task",
-        "args": {"title": "Payroll", "owner": "coo", "due": "2030-04-02"},
+        "args": {"title": "Payroll", "owner": "assistant", "due": "2030-04-02"},
     }
     due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[step])
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
@@ -468,7 +468,7 @@ def test_a_failed_run_under_changed_dates_neither_counts_nor_moves_the_cursor(ap
 
 
 def test_a_retry_after_a_later_step_failed_keeps_the_task_its_first_attempt_made(api, monkeypatch):
-    second = {"id": "second", "type": "action", "do": "create_task", "args": {"title": "Second", "owner": "coo"}}
+    second = {"id": "second", "type": "action", "do": "create_task", "args": {"title": "Second", "owner": "assistant"}}
     aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[OPEN, second])
     real = hubdb.task_create
     failed = []
@@ -493,14 +493,18 @@ TWO_RULES = {
     "id": "gate",
     "type": "filter",
     "rules": [
-        {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}], "next": "rule"},
-        {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll review", "owner": "coo"}}]},
+        {
+            "when": [],
+            "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "assistant"}}],
+            "next": "rule",
+        },
+        {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll review", "owner": "assistant"}}]},
     ],
 }
 ONE_RULE = {
     "id": "gate",
     "type": "filter",
-    "rules": [{"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}]}],
+    "rules": [{"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "assistant"}}]}],
 }
 DUE_MARCH = {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}
 
@@ -543,10 +547,10 @@ DECIDES = {
     "rules": [
         {
             "when": [{"field": "due.repeats", "op": "is", "value": "once"}],
-            "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "coo"}}],
+            "then": [{"do": "create_task", "args": {"title": "Payroll", "owner": "assistant"}}],
             "next": "rule",
         },
-        {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll review", "owner": "coo"}}]},
+        {"when": [], "then": [{"do": "create_task", "args": {"title": "Payroll review", "owner": "assistant"}}]},
     ],
 }
 
@@ -596,8 +600,8 @@ TWO_TASKS = {
         {
             "when": [],
             "then": [
-                {"do": "create_task", "args": {"title": "Legal review", "owner": "coo"}},
-                {"do": "create_task", "args": {"title": "Finance review", "owner": "coo"}},
+                {"do": "create_task", "args": {"title": "Legal review", "owner": "assistant"}},
+                {"do": "create_task", "args": {"title": "Finance review", "owner": "assistant"}},
             ],
         }
     ],
@@ -637,7 +641,7 @@ def test_a_retry_of_one_rule_with_two_tasks_opens_no_more_tasks(api, monkeypatch
 
 
 def test_a_legacy_task_pair_is_not_doubled_when_a_step_is_inserted_before_the_retry(api, monkeypatch):
-    later = {"id": "later", "type": "action", "do": "create_task", "args": {"title": "Later", "owner": "coo"}}
+    later = {"id": "later", "type": "action", "do": "create_task", "args": {"title": "Later", "owner": "assistant"}}
     pre = {"id": "pre", "type": "filter", "rules": []}
     aid = due(api, DUE_MARCH, steps=[TWO_TASKS, later])
     real = hubdb.task_create

@@ -55,7 +55,7 @@ the spend over the conversions in cents, null when there are none.
 
 Receipts (`GET /api/v2/finance/receipts?status=`, `tico_finance_search` `kind: receipt`) are Library files filed to Finance as receipts. Tico reads a receipt's amount, date and vendor from the file's indexed text (text, Markdown, HTML and CSV files; a PDF or an image has none until someone sets it with `receipt_read`), with no model call. A read receipt is suggested on the bank or card row it matches: the same amount (or a total with a tip of up to 30%), the same merchant, and a date within five days. A row never holds two suggestions. `receipt_match` accepts (attaching the file to the row) or refuses a suggestion, and `receipt_match_undo` puts an accept back. Auto-attach is off unless the book sets `receipt_auto_attach_at`. The briefing's "Needs you" line counts the card charges with no receipt and the matches to check. Tico never writes receipts to QuickBooks or Xero.
 
-Subscriptions (`GET /api/v2/finance/subscriptions?status=`, `tico_finance_search` `kind: subscription`, the `subscriptions` report and the `subscriptions_monthly` metric) are the recurring charges a book pays: one row per vendor paid from one card or money account. The daily look (`subscriptions.detect`, run once a day from the scheduler's Finance upkeep) suggests a monthly one when the vendor charged in each of the three calendar months before this one, at amounts within 25% of each other and on the same day of the month within 5 days, and an annual one when two charges are 11 to 13 months apart. It posts nothing to QuickBooks or Xero. A person with finance.book, the Bookkeeper included, confirms it with `subscription_confirm` (`subscription_id`, `status` active, ignored or cancelled, and optionally `amount`, `cadence`, `seats`); `subscription_undo` puts back the fields from before the latest confirmation. An active subscription's charge at least 10% above its expected amount is a price increase in Watch, and an active subscription on an idle bot's card is unused, as any monthly charge is. An ignored subscription raises no Watch finding and is never suggested again; a cancelled one's charges keep Watch's usual checks. A suggested or active subscription with no charge for two periods past its next charge is cancelled by the look, and one the look cancelled is suggested again when the vendor charges again. A reader sees a subscription when they see everything, own its attribution (or manage an owner), or see its latest charge's line. `monthly` is an annual amount over twelve.
+Subscriptions (`GET /api/v2/finance/subscriptions?status=`, `tico_finance_search` `kind: subscription`, the `subscriptions` report and the `subscriptions_monthly` metric) are the recurring charges a book pays: one row per vendor paid from one card or money account. The daily look (`subscriptions.detect`, run once a day from the scheduler's Finance upkeep) suggests a monthly one when the vendor charged in each of the three calendar months before this one, at amounts within 25% of each other and on the same day of the month within 5 days, and an annual one when two charges are 11 to 13 months apart. It posts nothing to QuickBooks or Xero. A person with finance.book, the Finance Owner included, confirms it with `subscription_confirm` (`subscription_id`, `status` active, ignored or cancelled, and optionally `amount`, `cadence`, `seats`); `subscription_undo` puts back the fields from before the latest confirmation. An active subscription's charge at least 10% above its expected amount is a price increase in Watch, and an active subscription on an idle bot's card is unused, as any monthly charge is. An ignored subscription raises no Watch finding and is never suggested again; a cancelled one's charges keep Watch's usual checks. A suggested or active subscription with no charge for two periods past its next charge is cancelled by the look, and one the look cancelled is suggested again when the vendor charges again. A reader sees a subscription when they see everything, own its attribution (or manage an owner), or see its latest charge's line. `monthly` is an annual amount over twelve.
 
 `vendor_merge {into, merge}` folds names and vendor contacts into `into` (a vendor). `merge` takes name keys (as a row reads
 them) or contact ids; every name a merged contact went by moves to `into`, and a native book archives the merged contact.
@@ -144,7 +144,7 @@ Sales tax and 1099 workpapers (`/api/v2/finance/tax/`) are filed as a whole, so 
 or an Everything grant) can read them, CSV included. Anyone else is refused rather than shown partial totals. So is an
 Everything viewer when a line behind the workpaper sits on a private account they lack full detail for: a sales tax
 remittance line, or a 1099 vendor's expense or bill line. Payroll that feeds neither workpaper does not block them. The
-Bookkeeper reads the workpapers once it is granted Everything, which the owner is asked to do at setup. A sales tax
+Finance Owner reads the workpapers once it is granted Everything, which the owner is asked to do at setup. A sales tax
 jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor contact as
 `authority_id`, `due_day` 1 to 28), and a quarter's tax is remitted with `tax_remit` (`jurisdiction`, `period` such as
 `2026-Q3`, optional `amount`): a bill to that authority, tagged with the quarter, counted as remitted by what is paid on it (partial payments count). Without `amount` the owed figure is read off the workpaper, so that needs full view.
@@ -167,8 +167,8 @@ jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor cont
   existed counts. The threshold is $2,000 for 2026 and later, $600 before. Only whether a TIN is on file shows; the TIN
   stays in the vault.
 
-Due dates are seeded once, when Finance is set up and the Bookkeeper exists, and again when a jurisdiction is added:
-the 1099-NEC (January 31) and each jurisdiction's quarterly return. Each is an external rule owned by the Bookkeeper,
+Due dates are seeded once, when Finance is set up and the Finance Owner exists, and again when a jurisdiction is added:
+the 1099-NEC (January 31) and each jurisdiction's quarterly return. Each is an external rule owned by the Finance Owner,
 with a routine that opens its task 30 days (1099) or 14 days (sales tax) before it.
 
 ## Testing Finance without Mercury
@@ -215,4 +215,4 @@ Card fill is not offered: `tico_finance_card_fill` is in no tool list (`hubtools
 command. A call by its name still runs and returns "Card fill is not available yet"; it never takes or returns card
 details.
 
-See also [Bookkeeper](bookkeeper.md).
+See also [Finance Owner](bookkeeper.md).

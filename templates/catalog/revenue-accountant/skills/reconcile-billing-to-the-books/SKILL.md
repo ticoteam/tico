@@ -24,4 +24,4 @@ Checks before you finish:
 
 Example (invented, for illustration): "Billing invoiced 84,300; ledger revenue postings 84,060; difference 240. Matched 61 of 62
 invoices. Unmatched: invoice 4471, 240, posted in the ledger as October (wrong period; billed 2026-09-30). Proposed entry: move
-240 to September. Owner: Bookkeeper."
+240 to September. Owner: Finance Owner."

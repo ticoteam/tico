@@ -62,7 +62,7 @@ async function open(browser: import('playwright').Browser, {route = '#/updates',
   if (messageBot) {
     employees.push(
       {name: 'counsel', display_name: 'Counsel', reports_to: 'eng-lead', org_parent: 'b:eng-lead', team: 'eng', status: 'active', can_chat: true},
-      {name: 'tico-counsel', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
+      {name: 'rules-owner', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
     );
     humans.people.push({id: 'legal-mailbox', name: 'Legal mailbox', email: 'legal@acme.example', inbox_bot: 'counsel', org_parent: ''});
     messaging.bots.push({bot: 'counsel', name: 'Counsel', sources: [{kind: 'slack', id: 'slack:CLEGAL', name: '#legal'}]},
@@ -127,7 +127,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await sources.locator('a').first().getAttribute('href'), '#/messaging?bot=counsel&source=email%3Alegal%40acme.example');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': sources are not duplicated in a separate section');
       assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
-      for (const helper of ['botops', 'tico-counsel', 'mail-sorter'])
+      for (const helper of ['botops', 'rules-owner', 'mail-sorter'])
         assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
       assert.deepEqual(await page.evaluate(() => ({
         recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
@@ -137,10 +137,10 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       })), {recruiting: true, audience: true, financeHelper: false, budgetParent: 'bot:eng-lead'}, tag + ': chart pickers and spending keep Counsel on the team');
       await page.evaluate(() => { location.hash = '#/strategy/org'; });
       await page.locator('.rd-org [data-rdo-ref="bot:counsel"]').waitFor();
-      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:tico-counsel"]').count(), 0);
+      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:rules-owner"]').count(), 0);
       await page.evaluate(() => { location.hash = '#/strategy/goals'; });
       await page.locator('#goal-tree [data-owner="bot:counsel"]').waitFor();
-      assert.equal(await page.locator('#goal-tree [data-owner="bot:tico-counsel"]').count(), 0);
+      assert.equal(await page.locator('#goal-tree [data-owner="bot:rules-owner"]').count(), 0);
       // Removing the manager leaves the bot at the root, still with its mailbox beneath it.
       await page.evaluate(() => {
         const bot = botRow('counsel'); bot.reports_to = ''; bot.org_parent = ''; bot.team = ''; renderTree();
@@ -211,7 +211,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
       assert.deepEqual(shown, ['Company', 'Strategy', 'Growth', 'Updates', 'Tasks', 'Automations', 'Tools', 'Library', 'Docs', 'Files', 'Skills', 'Meetings', 'Contacts', 'Rules'], tag + ': the rail, with no Strategy Owner entry');
-      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
+      assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
       assert.equal(await page.locator('#side a[data-nav="strategy"].cur').count(), 1, tag + ': Strategy is current');

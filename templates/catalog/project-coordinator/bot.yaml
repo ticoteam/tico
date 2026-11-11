@@ -1,0 +1,33 @@
+name: project-coordinator               # the slug: it matches the repository bot-project-coordinator and the label owner:project-coordinator
+display_name: "Project Coordinator"
+labels: [owner:project-coordinator]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# The first routine is declared but not armed (`enabled: false`). It runs on Tico's
+# `meeting.ready` event: one task per imported team meeting, carrying the notes and transcript.
+# The bot arms it with `tico automation update <id> --enable` when Setup starts; setup-done allows normal work.
+# `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: meeting-notes
+    title: Meeting notes draft
+    "on": meeting.ready               # quoted: an unquoted `on` is read as a boolean by YAML
+    template: playbooks/write-up-a-meeting.md
+    labels: [priority:p3]
+    enabled: false
+
+# Tico itself (meetings, tasks, goals, docs) needs no entry: every run has it. Bots read team
+# meetings and never private ones. Add a Slack entry only when the work calls for summaries
+# posted to an internal channel; requested internal posting uses the granted Tools.
+# tools:
+#   - service: slack
+#     identity: the team workspace
+#     can: [read, post]
+#     channels: [team]
+#     dms: false
+#     env: SLACK_BOT_TOKEN
+#     note: "posts a requested summary to one internal channel; never a DM, never a customer channel"
+tools: []

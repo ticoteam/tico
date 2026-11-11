@@ -15,7 +15,7 @@ from backend.tests.helpers.kpis import goal_with_kpi, log
 from backend.tests.helpers.strategy_bot_level import level
 
 OWNER = "human:ana"
-REVIEW = "goal-manager:goals-review"
+REVIEW = "strategy-owner:goals-review"
 
 
 def via_assistant(api, confirmed=False, via="assistant"):
@@ -33,7 +33,7 @@ def review_routine(api):
         routines.create(
             c,
             H.KEEPER,
-            "goal-manager",
+            "strategy-owner",
             {"title": "Weekly goals review", "cron": "0 9 * * 1", "timezone": "America/Los_Angeles", "enabled": False},
             key="goals-review",
         )
@@ -152,7 +152,7 @@ def test_only_the_owner_turns_the_regular_checks_off_and_off_they_hold_still(api
             routines.no_input(
                 c,
                 api.app.state.store.settings,
-                {"id": strategy_bot.PASS, "bot": "goal-manager", "routine_key": "kpi-pass", "playbook": ""},
+                {"id": strategy_bot.PASS, "bot": "strategy-owner", "routine_key": "kpi-pass", "playbook": ""},
                 None,
             )
             == "regular checks are off"
@@ -460,7 +460,7 @@ def test_with_regular_checks_off_a_due_kpi_pass_is_skipped(api):
     store = api.app.state.store
     with store.transaction() as c:
         routines.create(
-            c, H.KEEPER, "goal-manager", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"}, key="kpi-pass"
+            c, H.KEEPER, "strategy-owner", {"title": "KPI pass", "cron": "0 7 * * *", "timezone": "UTC"}, key="kpi-pass"
         )
         aid = routines.row(c, strategy_bot.PASS)["automation"]
     assert aid

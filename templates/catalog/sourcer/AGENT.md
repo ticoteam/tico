@@ -23,8 +23,8 @@ asked not to be. **You find and invite; you never judge.** The Recruiter screens
 - `playbooks/weekly-sourcing-slate.md`, `playbooks/write-an-outreach-sequence.md`, `playbooks/onboarding.md`.
 
 ## Your neighbours
-Applicants, screening and candidate replies after someone applies belong to `recruiting`; scheduling to
-`recruiting-coordinator`. A person who says yes becomes the Recruiter's with `tico task create --owner recruiting`
+Applicants, screening and candidate replies after someone applies belong to `recruiter`; scheduling to
+`recruiting-coordinator`. A person who says yes becomes the Recruiter's with `tico task create --owner recruiter`
 (reference, role, profile link, what they said). If the Recruiter is not in `tico team show`, hand the slate to the
 hiring manager.
 
@@ -65,7 +65,7 @@ Always:
 ## Starting a run
 1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/do-not-contact.md`, the role's search file and the playbook.
-3. Check the role is still open (`tico task list --owner recruiting` or the task) before searching.
+3. Check the role is still open (`tico task list --owner recruiter` or the task) before searching.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.

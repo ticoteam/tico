@@ -149,10 +149,10 @@ def test_a_bot_may_not_sync_and_nothing_is_fetched_for_it(api, monkeypatch):
     monkeypatch.setattr(G, "fetch_image", lambda url, transport=None: fetched.append(url))
     with api.app.state.store.transaction() as c:  # a signed-in agent, as a Hermes bot is
         c.execute(
-            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('coo','hermes','x',?,'human:ana')",
+            "INSERT INTO agents(bot,harness,token_hash,created_at,created_by) VALUES('assistant','hermes','x',?,'human:ana')",
             (H.now(),),
         )
-    api.app.state.store.settings.test_identities["coo-test"] = Identity("bot:coo", "bot", agent="hermes")
+    api.app.state.store.settings.test_identities["coo-test"] = Identity("bot:assistant", "bot", agent="hermes")
     image = {
         "role": "bot",
         "text": "See",
@@ -327,13 +327,15 @@ def test_account_sync_preserves_moved_bots_and_history(api):
     response = api.patch(f"/api/v2/groups/{gid}", json={"remove": {"bots": ["grok-designer"]}}, headers=headers())
     assert response.status_code == 200
     post(
-        api, "bots/grok-designer/definition", {"reports_to": "coo", "expected_revision": revision(api, "grok-designer")}
+        api,
+        "bots/grok-designer/definition",
+        {"reports_to": "assistant", "expected_revision": revision(api, "grok-designer")},
     )
     post(api, "bots/scout/definition", {"reports_to": "human:cara", "expected_revision": revision(api, "scout")})
     again = sync(api, designer(section="Design"), designer(grok_id="scout-id", name="Scout", messages=[]))
     assert all(not bot["created"] and bot["messages_added"] == 0 for bot in again["bots"])
     rows = {b["slug"]: b for b in get(api, "bots")}
-    assert rows["grok-designer"]["reports_to"] == "coo"
+    assert rows["grok-designer"]["reports_to"] == "assistant"
     assert rows["scout"]["reports_to"] == "human:cara"
     assert rows["grok-designer"]["agent"]["section"] == "Design"  # source metadata still syncs
     assert team() != gid  # moved out by a person: a later sync leaves it there

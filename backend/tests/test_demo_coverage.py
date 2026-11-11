@@ -117,7 +117,7 @@ def _page_has_demo_data(api, name):
 
 
 def _full_page_audience_editor_has_a_restricted_example(api):
-    pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
+    pages = api.get('/api/v2/pages?bot=growth-team-manager').json()['pages']
     assert pages
     shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
@@ -161,7 +161,7 @@ def _demo_task_has_an_editor_for_the_live_task_page(api):
 
 
 def _task_pages_have_demo_data(api):
-    pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
+    pages = api.get("/api/v2/pages?bot=growth-team-manager").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
@@ -169,7 +169,7 @@ def _task_pages_have_demo_data(api):
 
 
 def _a_demo_task_has_a_page_made_by_its_person(api):
-    pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
+    pages = api.get("/api/v2/pages?bot=assistant").json()["pages"]
     made = next(p for p in pages if p["updated_by"] == "human:ana")
     pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
@@ -184,7 +184,7 @@ def _a_demo_task_has_a_page_made_by_its_person(api):
 
 def _mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
-    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert (grant["grantee_id"], grant["level"]) == ("contracts-manager", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
 
 

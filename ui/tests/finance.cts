@@ -52,7 +52,7 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'eng'},
   {id: 'erin', name: 'Erin Tester', role: 'member'}];
 const emps = [['eng-lead', 'Engineering Lead', 'eng'], ['builder', 'Builder', 'platform'], ['mkt-lead', 'Marketing Lead', 'mkt'],
-  ['writer', 'Writer', 'content'], ['bookkeeper', 'Bookkeeper', '']].map(([name, display_name, team]) =>
+  ['writer', 'Writer', 'content'], ['finance-owner', 'Finance Owner', '']].map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
 const teams = [{id: 'eng', name: 'Engineering', parent: '', lead: 'human:cara'}, {id: 'platform', name: 'Platform', parent: 'eng', lead: 'bot:eng-lead'},
   {id: 'web', name: 'Web', parent: 'eng', lead: 'bot:eng-lead'},
@@ -69,13 +69,13 @@ const MATES = [
     what: 'pnl_lines', whose: 'company', whose_team: null, account_ids: ['a-6100'], new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
   mate('bot:writer', 'bot', 'content', 'own_expenses', {reports_to: 'bot:mkt-lead', grants: [{id: 'g2', subject_kind: 'teammate', subject: 'bot:writer',
     what: 'expenses', whose: 'team', whose_team: 'content', account_ids: [], new_members: false, granted_by: 'bot:mkt-lead', expires_at: null, status: 'active', live: true}]}),
-  mate('bot:bookkeeper', 'bot', '', 'own_expenses', {rights: ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards'],
-    grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:bookkeeper', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
+  mate('bot:finance-owner', 'bot', '', 'own_expenses', {rights: ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards'],
+    grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:finance-owner', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
       new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
   mate('human:erin', 'person', null, 'own_expenses'),
 ];
 function access(viewer: string, apGrant = false, apRights: string[] = []) {
-  const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
+  const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:finance-owner']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
   if (viewer === 'ana') return {...base, teammates: MATES.map(m => ({...m, may_grant: m.teammate !== 'human:ana'})), can_view_as: true, can_edit_defaults: true, finance_approver: null};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
@@ -237,7 +237,7 @@ const SOURCES = {groups: [
 const doc = (kind: string, id: string, number: string, contact: FinContact, status: string, total: number, due: string, extra: Record<string, unknown> = {}): FinDoc => ({id, kind, number, [kind === 'bill' ? 'vendor' : 'customer']: contact,
   date: '2026-10-20', due_date: due, status, currency: 'USD', total, paid: 0, remaining: ['draft', 'paid', 'void'].includes(status) ? 0 : total,
   aging: ['draft', 'paid', 'void'].includes(status) ? null : 'current', days_late: 0, memo: '', entry_id: null, attachments: 0,
-  created_by: 'bot:bookkeeper', created_at: '2026-10-20T09:00:00Z',
+  created_by: 'bot:finance-owner', created_at: '2026-10-20T09:00:00Z',
   ...(kind === 'bill' ? {origin: 'email', approved_by: null, approved_at: null, pay_on: null} : {sent_at: '2026-10-15', written_off: 0, payment_link: null}), ...extra});
 const BILLS = [
   doc('bill', 'bill-1', 'INV-2291', {id: 'v-figma', name: 'Figma'}, 'draft', 180000, '2026-11-03', {attachments: 1}),
@@ -262,11 +262,11 @@ const INVOICES = [
 const docDetail = (r: FinDoc) => ({...r, terms_days: 30, view_version: 'v1',
   lines: [{id: 'dl-' + r.id, account: r.kind === 'bill' ? {id: 'a-6100', code: '6100', name: 'Software'} : {id: 'a-4200', code: '4200', name: 'Services'},
     amount: r.total, description: 'Seats', tags: {}}],
-  attachments: r.attachments ? [{id: 'att-1', file_id: 'file-1', created_by: 'bot:bookkeeper', created_at: '2026-10-20T09:00:00Z'}] : [],
+  attachments: r.attachments ? [{id: 'att-1', file_id: 'file-1', created_by: 'bot:finance-owner', created_at: '2026-10-20T09:00:00Z'}] : [],
   // Part came in on a bank row; the rest was marked paid and its bank row has not arrived (from_kind expected).
-  settlements: r.paid ? [{id: 's-1', from_kind: 'feed', from_id: 'f9', amount: 60000, settled_on: '2026-10-25', entry_id: 'e9', voided_at: null, created_by: 'bot:bookkeeper'},
+  settlements: r.paid ? [{id: 's-1', from_kind: 'feed', from_id: 'f9', amount: 60000, settled_on: '2026-10-25', entry_id: 'e9', voided_at: null, created_by: 'bot:finance-owner'},
     {id: 's-2', from_kind: 'expected', from_id: 'm1', amount: r.paid - 60000, settled_on: '2026-10-29', entry_id: 'e10', voided_at: null, created_by: 'human:ana'}] : [],
-  actions: r.id === 'bill-1' ? [{action_id: 'act-b1', kind: 'bill_approve', status: 'needs_approval', actor: 'bot:bookkeeper', approval_id: 'ap-1',
+  actions: r.id === 'bill-1' ? [{action_id: 'act-b1', kind: 'bill_approve', status: 'needs_approval', actor: 'bot:finance-owner', approval_id: 'ap-1',
     approval_to: 'human:ana', rule_id: 'r-1', created_at: '2026-10-20T09:01:00Z'}] : [],
   ...(r.kind === 'bill' ? {schedule: r.pay_on && !r.payment ? {pay_on: r.pay_on, money_account_id: 'm2', action_id: null} : null} : {})});
 const CONTACTS = [{id: 'v-figma', name: 'Figma', kind: 'vendor'}, {id: 'v-northwind', name: 'Northwind Design', kind: 'vendor'},
@@ -908,7 +908,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       // the rail opens on the owner.
       assert.deepEqual(await page.locator('.fin-acc-t tbody tr').evaluateAll(rs => rs.map(r => r.dataset.finMate || '# ' + (r as HTMLElement).innerText.trim())),
         ['human:ana', '# Engineering', 'human:cara', '# Platform', 'bot:eng-lead', 'bot:builder', '# Web', '# Marketing', 'bot:mkt-lead', '# Content', 'bot:writer',
-          '# No team', 'human:erin', '# Helpers', 'bot:bookkeeper'], tag + ': the Access order');
+          '# No team', 'human:erin', '# Helpers', 'bot:finance-owner'], tag + ': the Access order');
       // A manager's default names the one team it covers; one spanning several teams stays generic.
       const dflt = async (who: string) => (await page.locator(`tr[data-fin-mate="${who}"] .fin-s`).innerText()).trim();
       assert.equal(await dflt('human:cara'), 'Engineering expenses', tag + ': a manager of one team');
@@ -922,7 +922,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-grant]').waitFor();
       assert.equal(await page.locator('#fin-rail .fin-rail-title .muted').count(), 0, tag + ': no subtitle under the name');
       assert.match(await page.locator('#fin-rail').innerText(), /Team\s+Marketing › Content[\s\S]*Kind\s+Bot[\s\S]*Reports to\s+Marketing Lead/i, tag + ': team, kind and manager as rows');
-      assert.match(await page.locator('#fin-private').innerText(), /Payroll\s+· Totals only · Full detail: Bookkeeper/, tag + ': the private line\'s policy');
+      assert.match(await page.locator('#fin-private').innerText(), /Payroll\s+· Totals only · Full detail: Finance Owner/, tag + ': the private line\'s policy');
       await page.locator('#fin-rail select[name="what"]').selectOption('bs_lines');
       await page.locator('#fin-rail select[name="line"] option[value="a-1010"]').waitFor({state: 'attached'});
       assert.ok(reads.filter(r => r === '/api/v2/finance/balance-sheet').length >= 2, tag + ': Access reads the balance sheet lines itself');
@@ -932,7 +932,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('[data-fin-approver]').selectOption('human:cara');
       await page.waitForFunction(() => !document.querySelector<HTMLSelectElement>('[data-fin-approver]')!.disabled);
       assert.deepEqual(actions(writes).at(-1), {kind: 'finance_approver_set', payload: {approver: 'human:cara'}}, tag + ': names one person');
-      assert.equal(await page.locator('[data-fin-approver] option[value="bot:bookkeeper"]').count(), 0, tag + ': never a bot');
+      assert.equal(await page.locator('[data-fin-approver] option[value="bot:finance-owner"]').count(), 0, tag + ': never a bot');
       await page.locator('[data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');

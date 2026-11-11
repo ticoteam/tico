@@ -142,7 +142,7 @@ def test_an_llm_wait_inside_a_path_resumes_on_that_path():
                         "p",
                         [],
                         [
-                            {"id": "w", "type": "llm", "as": "bot:coo", "prompt": "p", "out": "o"},
+                            {"id": "w", "type": "llm", "as": "bot:assistant", "prompt": "p", "out": "o"},
                             {"id": "s", "type": "action", "do": "note", "args": {"text": "{{o.text}}"}},
                         ],
                     )

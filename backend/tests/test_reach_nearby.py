@@ -4,7 +4,7 @@ the writes that are never refused. Acme is the fictional company here.
 The chart: cpo reports to Ben; product-design reports to cpo; finance reports to cpo too (product-design's peer); ops
 reports to product-design; doc-updater has no manager and is on the Product team with cpo and product-design. A bot
 with no manager counts as reporting to the owner, Ana: doc-updater and Scout, which is on no team, are peers that way.
-Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
+Cara is a person nobody here reports to. assistant is the Assistant, a built-in helper."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -233,8 +233,8 @@ def test_a_stage_hand_off_a_helper_and_a_person_are_never_refused(api):
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
         assert (H.task(c, copy["id"])["stage_id"], H.task(c, copy["id"])["owner_id"]) == ("copy-edit", "bot:scout")
-    # The Assistant (coo) and BotOps are off the chart: anyone reaches them.
-    task(api, "pd-test", "bot:coo", title="For the Assistant")
+    # The Assistant (assistant) and BotOps are off the chart: anyone reaches them.
+    task(api, "pd-test", "bot:assistant", title="For the Assistant")
     assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
     # A person is never limited, even writing to a bot nowhere near them.
     task(api, "ben-test", "bot:scout", title="Ben to Scout")
@@ -451,7 +451,7 @@ def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_n
 def test_the_built_in_helpers_are_reached_and_the_health_monitor_is_not_exempt(api):
     chart(api)
     found = ctx(api)
-    for slug in ("botops", "tico-counsel", "bookkeeper", "task-manager"):
+    for slug in ("botops", "rules-owner", "finance-owner", "task-manager"):
         assert reach.decide(found, "bot:product-design", "bot:" + slug).why == "helper", slug
     assert not reach.decide(found, "bot:health-monitor", "human:cara").allowed
 

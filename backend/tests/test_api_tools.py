@@ -55,7 +55,7 @@ def test_the_migration_makes_a_computer_tool_per_service_key_and_keeps_every_gra
     grants = (
         ("g1", "c-close", "bot:ops", None),
         ("g2", "c-close", "human:cara", "2026-10-02T00:00:00Z"),
-        ("g3", "c-own", "bot:coo", None),
+        ("g3", "c-own", "bot:assistant", None),
         ("g4", "c-model", "computers", None),
     )
     for gid, cid, subject, revoked in grants:

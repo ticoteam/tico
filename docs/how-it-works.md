@@ -136,7 +136,7 @@ and, for the owner and admins, **SQL**. Tasks has You and a view of each pipelin
 and Closed behind
 the archive button; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
-**Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner and the Brand Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
+**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
@@ -647,8 +647,8 @@ again deletes them after a confirm. Set a profile in **Settings → Bots → Edi
 `tico_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
 with a line each); the bot's owner, operator, a person it reports up to, or BotOps may. The profile also shows on every bot read.
 
-Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
-`sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `pr-reviewer` that
+Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `social-media-manager` and
+`sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
 another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a

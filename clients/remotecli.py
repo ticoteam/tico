@@ -288,16 +288,16 @@ def market_spend(client, args, tool):
 
 
 def counsel_held(args):
-    """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
+    """The Rules Owner runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
     from clients import hubtools
 
-    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
+    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.RULES_OWNER_BOT:
         return
     fn = getattr(args, "fn", None)
     entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None
     if entry and hubtools.COUNSEL not in hubtools.offered_to(entry):
-        raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
+        raise SystemExit(f"{fn} is not available to the Rules Owner: it has no credentials and sends nothing")
 
 
 # The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`tico tasks list` sets cmd to "tasks"), and the
@@ -1363,7 +1363,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "bookkeeper")
+    reserved = ("assistant", "botops", "librarian", "strategy-owner", "task-manager", "finance-owner")
     return catalog.free_slug(
         args.name or card.get("name") or args.template,
         lambda slug: (

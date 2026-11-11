@@ -595,7 +595,7 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
     routes that is the person's name). Nothing is met and the task does not move. The OK route gives it."""
     from backend import task_asks as K
 
-    X.bot(c, "coo")
+    X.bot(c, "assistant")
     email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
     asked = K.ask_ok(
         c, "bot:builder", ANA, "Send this email?", shows=["email:e1"], subject="hq_reply:TK-1", content=email
@@ -605,7 +605,7 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
     stage = E.task(c, task_id)["stage_id"]
     with pytest.raises(H.Refused, match="task_requirement: " + K.FROM_PREVIEW):
         H.task_answer(c, ANA, task_id, rid, "ok")  # a plain ok, even from the person it is asked of
-    for other in ("bot:builder", "bot:coo"):
+    for other in ("bot:builder", "bot:assistant"):
         # The task filed for it is private to its parties: a bot not asked does not even find it.
         with _refused("task_requirement|not-found"):
             H.task_answer(c, other, task_id, rid, "ok", seen_version=E.task(c, task_id)["version"])

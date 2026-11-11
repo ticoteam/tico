@@ -19,9 +19,9 @@ CONTENT = {
     "company": {"monthly": 1.4},
     "groups": {"marketing": {"monthly": 1.6}, "engineering": {"monthly": 1.7}},
     "near_group": "support",
-    "bots": {"sales": {"daily": 3.0}, "firmware": {"weekly": 2.5}, "video-producer": {"monthly": 2.0}},
+    "bots": {"inbound-sales-owner": {"daily": 3.0}, "firmware": {"weekly": 2.5}, "video-owner": {"monthly": 2.0}},
     # The first with enough spend to stay near after rounding is near its limit (none in the near group).
-    "near_bots": ("content", "botops", "pricing", "release-notes", "community"),
+    "near_bots": ("content-owner", "botops", "pricing-analyst", "release-notes-writer", "community-manager"),
     "near": 0.86,
     # The longest window with this much spend in it holds a near limit (else the day): for a group, for a bot.
     "floors": {
@@ -31,7 +31,7 @@ CONTENT = {
     # Runs a bot may start (backend/turn_budgets.py): the team default and two bots' own.
     "runs_team": {"turns_per_hour": 60, "turns_per_day": 500},
     "runs_bots": {
-        "support": {"turns_per_hour": 120, "turns_per_day": 1200},
+        "support-owner": {"turns_per_hour": 120, "turns_per_day": 1200},
         "sdr": {"turns_per_hour": 20, "turns_per_day": 150},
     },
     # What bots may put on a person (backend/ask_ingest.py): the team default, and Ana's own with the checks On.

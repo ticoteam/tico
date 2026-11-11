@@ -64,8 +64,8 @@ def test_a_spending_bot_sees_only_its_own_budget_and_no_company_lines(books):
         assert got["lines"][0].startswith("Budget: Coder ads · $500. Spent $250 (50%). Pace $"), got
         assert not any(line.startswith(("Cash", "Burn", "Unattributed", "Watch")) for line in got["lines"]), got
         # A bot with no budget and no slice gets no lines, so its turn is handed no Finance block.
-        assert BR.brief(c, "bot:bookkeeper", at=AT)["lines"] == []
-        assert BR.for_turn(c, "bot:bookkeeper") is None
+        assert BR.brief(c, "bot:finance-owner", at=AT)["lines"] == []
+        assert BR.for_turn(c, "bot:finance-owner") is None
 
 
 def test_a_budget_pacing_past_its_amount_reads_over_budget(books):

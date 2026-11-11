@@ -80,7 +80,7 @@ def test_remove_is_suggested_only_for_installs_coverage_calls_unused_never_unkno
     unused_bot = installed(api, "Bot", ops)
     installed(api, "Bot", finance, staged=False)  # no receipt: unknown
     installed(api, "Bot", cpo, age=10)  # under 30 days: unknown
-    installed(api, "Bot", bot_id(api, "coo"), harness="codex")  # its harness does not report every use: unknown
+    installed(api, "Bot", bot_id(api, "assistant"), harness="codex")  # its harness does not report every use: unknown
     installed(api, "Human", "cara")  # staged, but her helper does not report: unknown
     unused_person = installed(api, "Human", "ben", reporting=True)
     used = installed(api, "Human", "ana", reporting=True)

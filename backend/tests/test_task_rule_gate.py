@@ -472,7 +472,7 @@ def test_a_warned_answer_with_no_note_carries_the_line_without_editing_the_task(
 
 
 def strategy_rule(api, if_broken="block"):
-    return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["goal-manager"]}, "if_broken": if_broken})
+    return rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["strategy-owner"]}, "if_broken": if_broken})
 
 
 def test_the_strategy_bots_merged_ask_a_rule_covers_is_refused_and_files_nothing(ruled):

@@ -363,7 +363,7 @@ def test_missing_role_waits_then_template_holder_gets_delivery_only_turn(install
     with install.transaction() as c:
         assert suggestions.pending(c, "ops") == []
         assert receipt(install)["status"] == "new"
-        BS.update(c, "ops", {"template": "goal-manager"})
+        BS.update(c, "ops", {"template": "strategy-owner"})
         assert update_step.plan_request(c, "ops", updates.today()) == "deliver"
         row = queue(c)
         message = updates.send_request(c, row, delivery=True)
@@ -453,7 +453,7 @@ def test_bound_retry_unbinds_a_role_that_moved_to_another_bot(install, http):
     with install.transaction() as c:
         batch = queue(c)
         updates.send_request(c, batch)
-        BS.update(c, "ops", {"template": "goal-manager"})
+        BS.update(c, "ops", {"template": "strategy-owner"})
         BS.update(c, "finance", {"template": "botops"})
         assert suggestions.pending(c, "ops", batch["id"]) == []
         assert [r["id"] for r in suggestions.pending(c, "finance")] == [item()["id"]]

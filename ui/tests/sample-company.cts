@@ -12,12 +12,12 @@ declare var S: {config: {update: {current: string; latest: string; available: bo
 
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
-  assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
+  assistant_bot: 'assistant', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   onboarding_needed: true, providers_configured: false, version: '0.2.0', runner_compat: {version: '0.2.0', min_runner: '0.1.0'}};
-const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Product Lead'], ['builder', 'Builder'],
-  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Marketer'], ['goal-manager', 'Strategy Owner'],
+const SAMPLE_BOTS = ([['assistant', 'Assistant'], ['botops', 'BotOps'], ['head-of-product', 'Product Lead'], ['builder', 'Builder'],
+  ['support-agent', 'Support Agent'], ['content-marketer', 'Content Owner'], ['strategy-owner', 'Strategy Owner'],
   ['librarian', 'Librarian']] as [string, string][]).map(([slug, display_name]) => ({id: slug, slug, display_name,
-  status: 'active', template: slug, onboarding_state: ['coo', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
+  status: 'active', template: slug, onboarding_state: ['assistant', 'botops'].includes(slug) ? '' : 'onboarded', setup_task_id: null,
   repository_present: false}));
 
 (async () => {
@@ -56,9 +56,9 @@ const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-prod
       }
       if (p === '/api/v2/setup/company/preview') {
         previews.push(request.postDataJSON() as Record<string, unknown>);
-        return json({fingerprint: 'a'.repeat(64), company_name: 'Acme Finance', builtins: ['coo', 'botops'],
-          employees: [{id: 'coo', title: 'Assistant', start: 'now', reports_to: 'human:owner'}],
-          seats: [{id: 'bookkeeping', title: 'Acme <Bookkeeper>', template: 'bookkeeping', reports_to: 'finance-lead'}],
+        return json({fingerprint: 'a'.repeat(64), company_name: 'Acme Finance', builtins: ['assistant', 'botops'],
+          employees: [{id: 'assistant', title: 'Assistant', start: 'now', reports_to: 'human:owner'}],
+          seats: [{id: 'bookkeeping', title: 'Acme <Bookkeeper>', template: 'finance-owner', reports_to: 'finance-owner'}],
           deferred: ['tool_connections']});
       }
       if (p === '/api/v2/setup/company/import') {
@@ -68,7 +68,7 @@ const SAMPLE_BOTS = ([['coo', 'Assistant'], ['botops', 'BotOps'], ['head-of-prod
           company_import: {fingerprint: 'a'.repeat(64), deferred: ['tool_connections'], seats: 1,
                            people: [{id: 'dana', name: 'Dana', title: 'Controller', seats: [], invited_at: null}]},
           company_import_failed: null, seats: {bookkeeping: 's-1'},
-          bots: [{...SAMPLE_BOTS[0], id: 'coo', slug: 'coo', display_name: 'Assistant', status: 'active'}]};
+          bots: [{...SAMPLE_BOTS[0], id: 'assistant', slug: 'assistant', display_name: 'Assistant', status: 'active'}]};
         return json({...record, home: 'human:owner'});
       }
       if (p === '/api/v2/setup/getting-started/state') return json({tour: true, checklist: false, cards: [], skipped: []});

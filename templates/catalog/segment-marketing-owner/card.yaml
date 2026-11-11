@@ -51,7 +51,7 @@ onboarding:
     why: "Sets the spend limit for every ask and idea."
   - ask: "Where do this segment's sign-ups and customers come from, and who sends the monthly export? (Default: the sign-up export on the task, and the segment field in the CRM where it is connected.)"
     why: "Sets the sources. I never ask for a login."
-  - ask: "Which claims may this segment's copy make, and who reads the weekly review? (Default: `tico brand show --section claims`, with the Brand Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)"
+  - ask: "Which claims may this segment's copy make, and who reads the weekly review? (Default: `tico brand show --section claims`, with the Design Owner for new claims; the Growth Team Manager (`growth-team-manager`), Tuesdays at 09:00.)"
     why: "Copy is checked against these before it goes anywhere."
 first_routine:
   title: "Weekly segment growth review"

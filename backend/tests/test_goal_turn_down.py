@@ -37,7 +37,7 @@ def proposals(api, status="all"):
 def test_a_no_in_chat_is_stored_as_turned_down_with_the_owners_words_and_changes_nothing_else(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it without a number.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it without a number.")
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert out["status"] == "rejected"
     assert out["decision_note"] == "No, leave it without a number."
@@ -55,7 +55,7 @@ def test_a_no_in_chat_is_stored_as_turned_down_with_the_owners_words_and_changes
 def test_a_bare_no_is_stored_with_no_reason(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No.")
+    r, attempt = turn(api, "assistant", "ana-test", "No.")
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert (out["status"], out["decision_note"]) == ("rejected", "")
 
@@ -63,7 +63,7 @@ def test_a_bare_no_is_stored_with_no_reason(api):
 def test_a_reply_that_is_not_a_no_records_nothing(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "Yes, but make it 50")
+    r, attempt = turn(api, "assistant", "ana-test", "Yes, but make it 50")
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "not_a_no"
     assert proposals(api) == []
@@ -72,7 +72,7 @@ def test_a_reply_that_is_not_a_no_records_nothing(api):
 def test_another_persons_assistant_cannot_turn_the_owners_suggestion_down(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ben-test", "No, leave it.")
+    r, attempt = turn(api, "assistant", "ben-test", "No, leave it.")
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "forbidden"
     assert proposals(api) == []
@@ -83,7 +83,7 @@ def test_without_the_owners_cited_turn_the_write_is_a_card_as_before(api):
     owner's behind the run (the one that started it is older than the citable thirty minutes), it is a Confirm card."""
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE messages SET created_at=? WHERE id=?",
@@ -99,7 +99,7 @@ def test_without_the_owners_cited_turn_the_write_is_a_card_as_before(api):
 def test_a_no_cited_from_more_than_thirty_minutes_ago_is_refused(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it.")
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE messages SET created_at=? WHERE id=?",
@@ -113,7 +113,7 @@ def test_a_no_cited_from_more_than_thirty_minutes_ago_is_refused(api):
 def test_a_why_is_not_turned_down_in_chat_so_a_waiting_one_is_left_alone(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No.")
+    r, attempt = turn(api, "assistant", "ana-test", "No.")
     refused = turn_down(
         api,
         attempt,
@@ -132,7 +132,7 @@ def test_a_why_is_not_turned_down_in_chat_so_a_waiting_one_is_left_alone(api):
 def test_a_kind_that_is_not_a_goal_suggestion_is_refused(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", "No.")
+    r, attempt = turn(api, "assistant", "ana-test", "No.")
     refused = turn_down(api, attempt, {**suggestion(g["id"]), "kind": "strategy_draft"}, expected=403)["error"]
     assert refused["code"] == "forbidden"
     assert proposals(api) == []
@@ -147,7 +147,7 @@ def test_a_no_is_recorded_when_the_assistant_does_not_act_without_asking(api):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     autonomous_actions(api, False)
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it without a number.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it without a number.")
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
     assert get(api, "goals/" + g["id"])["goal"]["title"] == "Get 100 companies to try Tico"
@@ -159,7 +159,7 @@ def test_with_autonomous_actions_off_a_reply_that_is_not_a_no_still_records_noth
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
     autonomous_actions(api, False)
-    r, attempt = turn(api, "coo", "ana-test", "Yes, but make it 50")
+    r, attempt = turn(api, "assistant", "ana-test", "Yes, but make it 50")
     assert turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]["code"] == "not_a_no"
     assert proposals(api) == []
 
@@ -174,7 +174,7 @@ def test_a_no_worded_differently_retires_the_waiting_card_it_refers_to(api):
     with api.app.state.store.transaction() as c:
         card = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=waiting)
         elsewhere = G.propose(c, G.AUTO_ACTOR, "goal_kpi", other["id"], payload=waiting)
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it without a number.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it without a number.")
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert out["id"] == card["id"]
     assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
@@ -186,7 +186,7 @@ def test_a_no_worded_differently_retires_the_waiting_card_it_refers_to(api):
 def test_a_yes_that_opens_with_no_is_not_a_no(api, words):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", words)
+    r, attempt = turn(api, "assistant", "ana-test", words)
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=403)["error"]
     assert refused["code"] == "not_a_no"
     assert proposals(api) == []
@@ -204,7 +204,7 @@ def test_a_yes_that_opens_with_no_is_not_a_no(api, words):
 def test_a_no_that_opens_like_a_yes_word_is_still_a_no(api, words):
     strategy_bot(api)
     g = goal(api, "Get 100 companies to try Tico", owner="ops")
-    r, attempt = turn(api, "coo", "ana-test", words)
+    r, attempt = turn(api, "assistant", "ana-test", words)
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert (out["status"], out["decision_note"]) == ("rejected", words)
 
@@ -225,7 +225,7 @@ def test_a_no_to_one_measure_leaves_another_measure_on_the_same_goal_waiting(api
     with api.app.state.store.transaction() as c:
         tried = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 100))
         signups = G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Weekly signups", 20))
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it.")
     out = turn_down(api, attempt, suggestion(g["id"]))["proposal"]
     assert out["id"] == tried["id"] and out["status"] == "rejected"
     assert [p["id"] for p in proposals(api, "pending")] == [signups["id"]]
@@ -237,7 +237,7 @@ def test_two_waiting_cards_on_the_same_measure_turn_nothing_down_and_ask_which_o
     with api.app.state.store.transaction() as c:
         G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 100))
         G.propose(c, G.AUTO_ACTOR, "goal_kpi", g["id"], payload=measure("Companies that tried Tico", 50))
-    r, attempt = turn(api, "coo", "ana-test", "No, leave it.")
+    r, attempt = turn(api, "assistant", "ana-test", "No, leave it.")
     refused = turn_down(api, attempt, suggestion(g["id"]), expected=409)["error"]
     assert refused["code"] == "conflict" and "which one" in refused["detail"]
     assert len(proposals(api, "pending")) == 2 and not proposals(api, "rejected")

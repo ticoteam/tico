@@ -151,7 +151,7 @@ def test_only_the_owner_the_strategy_bot_and_for_market_lenses_the_librarian_sta
         start(api, "where-to-play", {"segments": ["Landlords"]}, token=token, expected=403)
     start(api, token=lib, expected=403)  # the Librarian runs market lenses only
     assert start(api, "where-to-play", {"segments": ["Landlords"]}, token=lib)["created_by"] == "bot:librarian"
-    assert start(api, token=strategy_token)["created_by"] == "bot:goal-manager"
+    assert start(api, token=strategy_token)["created_by"] == "bot:strategy-owner"
     # a draft run is the owner's own click
     start(api, on="draft", token=strategy_token, expected=403)
     start(api, "where-to-play", {}, on="draft", token=lib)  # market lenses ignore `on`
@@ -277,7 +277,7 @@ def test_a_strategy_bot_run_files_exactly_one_strategy_draft_proposal_and_never_
     run = start(api, token=strategy_token)
     assert run["status"] == "done" and run["proposal_id"]
     pending = [p for p in get(api, "goal-proposals")["proposals"] if p["kind"] == "strategy_draft"]
-    assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:goal-manager"
+    assert [p["id"] for p in pending] == [run["proposal_id"]] and pending[0]["proposed_by"] == "bot:strategy-owner"
     payload = pending[0]["payload"]
     assert payload["source"] == "lens" and payload["lens"] == "blue-ocean" and pending[0]["lens_name"] == "Blue Ocean"
     assert payload["summary"].startswith("Acme runs rentals") and payload["sections"] == {"not": "No per-seat pricing."}

@@ -346,7 +346,7 @@
     "operator": "ana"
    },
    {
-    "id": "coo",
+    "id": "assistant",
     "name": "Assistant",
     "operator": "ana"
    }
@@ -420,7 +420,7 @@
     "grants": [
      {
       "id": "g3",
-      "subject": "bot:coo",
+      "subject": "bot:assistant",
       "granted_by": "human:ana",
       "parent_id": null,
       "can_revoke": true
@@ -456,7 +456,7 @@
     "ana"
    ],
    "bots": [
-    "coo",
+    "assistant",
     "release"
    ]
   }

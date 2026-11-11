@@ -15,7 +15,7 @@ from backend.tests.helpers.api import api_settings, restrict
 def seed(c):
     bots = {
         slug: {"name": slug, "runtime": "fake", "status": "active"}
-        for slug in ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
+        for slug in ("assistant", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
     }
     H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
     c.execute(
@@ -87,7 +87,7 @@ def with_strategy_bot(api, level=1):
     from backend.tests.helpers.goal_asks import goal_manager
 
     goal_manager(api, level)
-    return bot(api, "goal-manager")
+    return bot(api, "strategy-owner")
 
 
 def propose_why(api, goal_id, why, token, reason="The vision is about rental owners."):

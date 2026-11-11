@@ -21,7 +21,7 @@ from backend.tests.helpers.company import bot as bot_token
 from backend.tests.helpers import engine as X
 
 ANA, BEN, CARA = "human:ana", "human:ben", "human:cara"
-LEGAL_BOT, BOOKKEEPER = "bot:legal-owner", "bot:bookkeeper"
+LEGAL_BOT, BOOKKEEPER = "bot:legal-owner", "bot:finance-owner"
 
 
 def _bot(c, slug, template):
@@ -65,7 +65,7 @@ def test_legal_and_finance_wait_for_their_owner_bots(company):
 
         _bot(c, "legal-owner", "legal-owner")
         assert PS.ensure_private(c) == ["legal"]
-        _bot(c, "bookkeeper", "bookkeeper")
+        _bot(c, "finance-owner", "finance-owner")
         assert PS.ensure_private(c) == ["finance"]
         assert PS.ensure_private(c) == []
         for pid, owner, prefix, stages in (
@@ -119,7 +119,7 @@ def test_a_task_filed_into_it_is_private_with_its_readers(c):
     assert row["owner_id"] == LEGAL_BOT and row["stage_id"] == "legal-intake"
     for who in (CARA, LEGAL_BOT, ANA):
         assert H.task_private_readable(c, who, row), who
-    for who in (BEN, "bot:coo"):
+    for who in (BEN, "bot:assistant"):
         assert not H.task_private_readable(c, who, row), who
 
 
@@ -213,7 +213,7 @@ def test_non_readers_see_nothing_of_it_but_the_pipeline(api):
     with api.app.state.store.transaction() as c:
         _legal(c)
         made = _file(c, title="Zebra indemnity clause")
-    coo = bot_token(api, "coo")
+    coo = bot_token(api, "assistant")
     for token in ("ben-test", coo):  # an Admin and a bot not on it
         assert get(api, "tasks?pipeline=legal", token=token)["tasks"] == []
         assert get(api, "tasks?q=Zebra", token=token)["tasks"] == []
@@ -231,7 +231,7 @@ def test_non_readers_see_nothing_of_it_but_the_pipeline(api):
         row = H.task(c, made["id"])
         auth.task_row(c, Identity(LEGAL_BOT, "bot"), row)
         with pytest.raises(Exception):
-            auth.task_row(c, Identity("bot:coo", "bot"), row)
+            auth.task_row(c, Identity("bot:assistant", "bot"), row)
 
 
 def test_an_automation_hears_of_it_only_when_its_owner_reads_it(c, monkeypatch):
@@ -239,7 +239,7 @@ def test_an_automation_hears_of_it_only_when_its_owner_reads_it(c, monkeypatch):
     public = H.task_create(c, CARA, "Order chairs", "Six.", CARA, lint=False, private=False)
     assert H._automation_hears(c, "person:ana", made["id"])
     assert not H._automation_hears(c, "person:ben", made["id"])
-    assert not H._automation_hears(c, "bot:coo", made["id"])
+    assert not H._automation_hears(c, "bot:assistant", made["id"])
     assert not H._automation_hears(c, "group:everyone", made["id"])
     assert H._automation_hears(c, "person:ben", public["id"])
     # hook() hands the check to the automations.
@@ -315,8 +315,8 @@ def test_a_manager_keeps_its_edits_on_a_private_pipeline_with_tasks(c):
 def test_the_bookkeepers_own_tasks_land_in_finance_and_a_persons_do_not(c):
     from backend import bookkeeper as B
 
-    _bot(c, "bookkeeper", "bookkeeper")
-    c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot='bookkeeper'")
+    _bot(c, "finance-owner", "finance-owner")
+    c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot='finance-owner'")
     assert B.filing(c, B.ACTOR) == (None, None)  # no Finance yet: General
     PS.ensure_private(c)
     assert B.filing(c, B.ACTOR) == ("finance", "finance-review")

@@ -1,7 +1,7 @@
 {
   "id": "physical-mail",
   "version": 1,
-  "owner": "finance-lead",
+  "owner": "finance-owner",
   "summary": "One scanned letter that reached the company's mailing address, as read by the Gateway: what kind it is, so it goes to the right person (backend/postal_mail.py). Legal mail goes to the owner at any confidence, junk is archived only at its threshold, and anything else short of its threshold goes to the Assistant.",
   "state": ["letter"],
   "questions": {

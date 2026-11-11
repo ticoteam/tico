@@ -20,8 +20,8 @@ async function run(browser: import('playwright').Browser, viewport: {width: numb
   page.on('pageerror', e => errors.push(e.message));
   const at = (n: number) => new Date(Date.UTC(2026, 9, 18, 12, n)).toISOString();
   const earlier = [
-    {id: 'a1', sender_id: 'human:ana', recipient_id: 'bot:coo', kind: 'say', body: 'Fix the login redirect bug', created_at: at(0)},
-    {id: 'a2', sender_id: 'bot:coo', recipient_id: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created_at: at(1)},
+    {id: 'a1', sender_id: 'human:ana', recipient_id: 'bot:assistant', kind: 'say', body: 'Fix the login redirect bug', created_at: at(0)},
+    {id: 'a2', sender_id: 'bot:assistant', recipient_id: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created_at: at(1)},
   ];
   let server: unknown[] = earlier.slice();
   await page.route('**/*', async route => {
@@ -33,14 +33,14 @@ async function run(browser: import('playwright').Browser, viewport: {width: numb
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: server.slice()}));
     if (p === '/api/v2/conversations/c1/snapshot') return json({messages: server.slice(), execution: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/assistant/messages') {
       const text = (route.request().postDataJSON() as {text: string}).text;
-      const message = {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:coo', kind: 'say', body: text, created_at: at(9),
+      const message = {id: 'm1', sender_id: 'human:ana', recipient_id: 'bot:assistant', kind: 'say', body: text, created_at: at(9),
                        conversation_id: 'c1', refs: {topic_changed: true}};
       server = [...server, message];
       return json({message});

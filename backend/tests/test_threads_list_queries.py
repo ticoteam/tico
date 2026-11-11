@@ -105,7 +105,7 @@ def repeated(trace, top=40):
 
 def test_the_list_reads_the_same_statements_however_many_threads_and_bots_it_lists(api, monkeypatch):  # noqa: F811
     desks = add_bots(api, 0, 4)
-    seed_bot_dms(api, ["bot:coo", "bot:ops", "bot:finance", "bot:doc-updater"] + desks)
+    seed_bot_dms(api, ["bot:assistant", "bot:ops", "bot:finance", "bot:doc-updater"] + desks)
     seed_homes(api, desks)
     seed_group_dm(api)
     seed_mixed(api, 0, 10)

@@ -8,7 +8,7 @@ group: engineering
 pack: engineering
 icon: developer_board
 suggest: common
-team_templates: [builder, pr-reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
+team_templates: [builder, reviewer, qa-owner, security-owner, infrastructure-owner, release-owner]
 tags:
 - github
 - delivery

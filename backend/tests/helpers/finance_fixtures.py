@@ -42,7 +42,7 @@ GROUPS = {
 }
 
 
-BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"), "bookkeeper": ("eng", "human:ben")}
+BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan"), "finance-owner": ("eng", "human:ben")}
 
 
 def _seed(c: sqlite3.Connection) -> None:

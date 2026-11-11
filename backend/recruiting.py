@@ -64,7 +64,8 @@ TOOL_LABELS = {
     "chat": "Chat",
 }
 BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
-# Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
+# Words of rank, not of the work: "Support lead" and "Engineering lead" share no job. The catalog names a job by what
+# it owns ("QA Owner") and a head by the team it runs ("Engineering Team Manager"), so "owner" and "team" are rank too.
 RANKS = frozenset(
     stem
     for word in (
@@ -80,6 +81,8 @@ RANKS = frozenset(
         "officer",
         "staff",
         "principal",
+        "owner",
+        "team",
     )
     for stem, _ in R._words(word)
 ) | {
@@ -92,6 +95,7 @@ RANKS = frozenset(
     "iii",
     "iv",
 }  # short ranks and levels: "VP, Product Marketing", "Designer II"
+MANAGER = frozenset(stem for stem, _ in R._words("manager"))
 # Words naming a kind of job, not its work, as written: "Rust engineer" and "QA Engineer" share no work, and neither do
 # "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
 ROLE_WORDS = frozenset(
@@ -130,16 +134,15 @@ SHORT = (
     (r"information technology", "it"),
     (r"search engine optimi[sz]ation", "seo"),
     (r"site reliability", "sre"),
-    (r"sales development", "sdr"),
 )
 
 
 LETTERS = frozenset(short for _, short in SHORT)
 
 
-# A job's other names, said as the catalog says the job: "CMO" is the Chief Marketing Officer, "SDET" the QA Engineer,
-# "PPC Specialist" the Paid Media Manager, "Content Writer" the Content Marketer's work, "Communications" PR's. Applied
-# before SHORT, to a title and a template's name alike.
+# A job's other names, said as the catalog says the job: "CMO" is the Chief Marketing Officer, "SDET" the QA Owner,
+# "PPC Specialist" the Search Ads Owner, "SDR" the Outbound Sales Owner, "Software Engineer" the Builder, "Content
+# Writer" the Content Owner's work, "Communications" PR's. Applied before SHORT, to a title and a template's name alike.
 ALIASES = tuple(
     (re.compile(pattern), short)
     for pattern, short in (
@@ -147,19 +150,33 @@ ALIASES = tuple(
         (r"\bcto\b", "chief technology officer"),
         (r"\bcfo\b", "chief finance officer"),
         (r"\bcoo\b", "chief operations officer"),
+        # The CRO Owner optimizes conversion rate; a title's CRO is the Chief Revenue Officer.
+        (r"\bcro (?=owners?\b)", "conversion rate "),
         (r"\bcro\b", "chief revenue officer"),
         (r"\bpmm\b", "product marketing manager"),
         (r"\bsoftware (?:development )?engineer in test\b|\bsdets?\b", "qa engineer"),
+        # A plain software engineer builds the change: the Builder. One with a field ("Software Engineer, Security")
+        # keeps it and is that field's engineer.
+        (
+            r"^(?:(?:senior|sr\.?|staff|principal|junior|jr\.?)\s+)?software (?:development )?(?:engineer|developer)s?"
+            r"(?:\s+(?:i|ii|iii|iv))?$",
+            "builder",
+        ),
+        (r"\b(?:sales development|business development) (?:representatives?|reps?)\b|\b[sb]drs?\b", "outbound sales"),
+        (r"\bsales development\b", "outbound sales"),
         (r"\bsoftware development\b", "software"),
         (r"\b(?<!qa )test(?:ing|ers?)?\b", "qa \\g<0>"),
         (r"\bappsec\b", "application security"),
         (r"\brelease (?:engineer|manager)s?\b", "release owner"),
         (r"\b(?:developer relations|devrel)(?:\s+(?:engineer|manager|lead|specialist)s?)?\b", "developer advocate"),
         (
-            r"\b(?:ppc|sem|paid search|paid social|paid acquisition|user acquisition|performance marketing)\b",
-            "paid media",
+            r"\b(?:ppc|sem|paid search|paid media|paid acquisition|user acquisition|performance marketing)\b",
+            "search ads",
         ),
+        (r"\bpaid social\b", "social ads"),
         (r"\bmarketers?\b", "marketing"),
+        # The Marketing Owner is a segment's product marketer.
+        (r"\bproduct marketing\b", "marketing"),
         (r"\b(?:content|copy|blog)\s*writers?\b|\bcopywriters?\b", "content writing"),
         (r"\bcommunications?\b", "pr \\g<0>"),
         (r"\b(?<!code )(?:online )?reviews?\b", "reputation \\g<0>"),
@@ -175,7 +192,8 @@ ALIASES = tuple(
             r"\b(?:build|ci(?:/cd)?|continuous (?:integration|delivery|deployment)|platform|infrastructure|cloud)\b(?= engineer)",
             "devops \\g<0>",
         ),
-        (r"\bcode review(?:ers?|\s+engineers?)\b", "senior software engineer"),
+        (r"\bcode review(?:ers?|\s+engineers?)\b", "reviewer"),
+        (r"\b(?:customer )?(?:support|service) (?:reps?|representatives?|agents?)\b", "support owner"),
         (r"\b(?:documentation|docs) (?:engineer|writer|specialist)s?\b", "technical writer"),
     )
 )
@@ -262,7 +280,7 @@ FIELDS = {
     "product": "product",
     "legal": "legal",
     "finance": "finance",
-    "marketing": "marketing growth",
+    "marketing": "marketing growth sales",
     "sales": "sales revenue",
     "engineering": "engineering technology",
 }
@@ -367,6 +385,7 @@ def _title(title):
         "work": work,
         "specific": work - GENERIC,
         "stems": {s for s, _ in named} - RANKS,
+        "ranks": {s for s, _ in named} & RANKS,
         "heads": bool(words & HEAD_WORDS),
         "kind": _kind(title),
         "pins": pins,
@@ -382,8 +401,9 @@ def _ranked(card):
 
 
 # A department whose cards are also the jobs of another pinned department: Corporate's Legal Owner is a legal job, so
-# "Legal Owner" finds it and not the Legal Operations Manager.
-UMBRELLA = {"corporate": {"legal", "finance"}}
+# "Legal Owner" finds it and not the Legal Operations Manager. The Growth Team Manager runs marketing and sales as one
+# team, so "Head of Sales" is Marketing's head.
+UMBRELLA = {"corporate": {"legal", "finance"}, "marketing": {"sales"}}
 
 
 def _in_pins(department, pins):
@@ -404,7 +424,7 @@ def _fit(card, t):
         # rank on the work itself ("Release Engineer" is the Release Owner, "Social Media Coordinator" the Social
         # Media Manager), never on a field ("Product Designer" is not the Product Manager) nor a head's, and only in the
         # departments its words name ("Software Development Engineer" is not the Learning and Development Specialist;
-        # "Brand Designer" may be Marketing's Brand Owner).
+        # "Brand Designer" may be Marketing's Design Owner).
         return 0
     if t["heads"] and card.get("lead"):
         # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of People,
@@ -433,7 +453,7 @@ def _best_card(cards, title, team=""):
 
 
 def _ranked_fits(cards, title, team=""):
-    """Every card that is the job the title names, best first, as (key, card); the key's first five are how well the
+    """Every card that is the job the title names, best first, as (key, card); the key's first six are how well the
     name fits (see _best_card), on which a tie is as good a fit."""
     t = _title(title)
     common = R._common(cards)
@@ -463,8 +483,12 @@ def _ranked_fits(cards, title, team=""):
         # A head's card for a head's title, and for another only when no other card is as good ("Marketing manager" is
         # the Head of Marketing's work, "Engineering Manager" the Engineering Manager's).
         role = (2 if t["heads"] else 0) if card.get("lead") else 1
+        # Among names as good, the one of the title's rank: "Product Lead" is the Product Lead, not the Product Owner.
+        # "Manager" is the rank of every kind of job ("Customer Success Manager" is the Success Owner), so it settles
+        # nothing.
+        same_rank = len(name & t["ranks"] - MANAGER)
         key = (
-            (same_kind, exact, shared, plain, role, len(name & t["stems"]), score),
+            (same_kind, exact, shared, plain, same_rank, role, len(name & t["stems"]), score),
             card["department"] == group,
             -len(card["name"]),
             card["template"],
@@ -828,7 +852,7 @@ def candidates(auth, onboarding, c, who, seat_id):
     best = fits[0][1] if fits else None
     # Strong: as good a fit by name as the template the description is drafted from ("Head of Sales" is the Sales
     # Manager's job, not the Sales Engineer's, though both say "Sales").
-    strong = {card["template"] for key, card in fits if key[0][:5] == fits[0][0][0][:5]}
+    strong = {card["template"] for key, card in fits if key[0][:6] == fits[0][0][0][:6]}
     # The department the job is in: the pinned template's, else the template that is the job's, else the one the
     # title's words point to.
     department = pinned["department"] if pinned else best["department"] if best else _department_hint(row["title"])

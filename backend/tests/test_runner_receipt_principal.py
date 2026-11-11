@@ -32,10 +32,10 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
     as_member(api, "ben@acme.example")
     t = task(api, private=True)
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"], capabilities=["make_page"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"], capabilities=["make_page"])
     with api.app.state.store.transaction() as c:
-        BS.update(c, "coo", {"capture_stream": "on"})
+        BS.update(c, "assistant", {"capture_stream": "on"})
     message = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
     claim_key = "receipt-claim"
     claimed = post(api, "jobs/claim", {"next_run": True}, machine["token"], claim_key)
@@ -113,7 +113,7 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
     assert post(api, path, body, machine["token"], key) == first
     # Even on the same computer a new assignment generation cannot recover the former generation's receipts.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assignments SET generation=generation+1 WHERE bot='coo'")
+        c.execute("UPDATE assignments SET generation=generation+1 WHERE bot='assistant'")
     post(api, path, body, machine["token"], key, expected=403)
 
 

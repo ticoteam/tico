@@ -35,7 +35,7 @@ async function whileLoading(browser: import('playwright').Browser) {
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: []}));
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }   // the slow, empty load
@@ -72,7 +72,7 @@ async function afterHashNav(browser: import('playwright').Browser) {
   const errors: string[] = [], sends: string[] = [], served: string[] = [], streams: import('playwright').Route[] = [];
   page.on('pageerror', e => errors.push(e.message));
   const now = () => new Date().toISOString();
-  let server = [{id: 'old', sender_id: 'bot:coo', body: 'Welcome back', created_at: '2026-01-01T00:00:00Z'}], sentAt = 0;
+  let server = [{id: 'old', sender_id: 'bot:assistant', body: 'Welcome back', created_at: '2026-01-01T00:00:00Z'}], sentAt = 0;
   let releaseCurrent!: () => void;
   const currentHeld = new Promise<void>(done => releaseCurrent = done);
   await page.route('**/*', async route => {
@@ -84,7 +84,7 @@ async function afterHashNav(browser: import('playwright').Browser) {
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: server.slice()}));
     if (p === '/api/v2/events') { streams.push(route); return; }          // held until the test sends a change

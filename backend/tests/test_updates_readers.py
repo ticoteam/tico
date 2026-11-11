@@ -24,7 +24,7 @@ def draft(store, author, body):
             (H.new_id(), author, DAY, H.now()),
         )
     seen = []
-    posted = updates.write_draft(store, author, lambda system, user: seen.append(user) or {"body": body}, "coo")
+    posted = updates.write_draft(store, author, lambda system, user: seen.append(user) or {"body": body}, "assistant")
     return posted, seen[0]
 
 
@@ -96,7 +96,7 @@ def test_a_draft_that_drew_on_meetings_is_read_only_by_meeting_readers(api, monk
     again, facts = draft(store, "human:ben", "- Synthetic redraft bullet")
     assert again["id"] == ben["id"] and NOTE not in facts and flag(store, ben["id"]) == 0
     with store.transaction() as c:
-        updates.post(c, "human:ben", "- Synthetic flagged bullet", day=DAY, drafted_by="coo", meetings=True)
+        updates.post(c, "human:ben", "- Synthetic flagged bullet", day=DAY, drafted_by="assistant", meetings=True)
     post(api, "updates", {"body": "- Synthetic own bullet", "replace_draft": True}, token="ben-test")
     assert flag(store, ben["id"]) == 0
     assert get(api, "updates/" + ben["id"], token=tokens["bot"])["update"]["body"] == "- Synthetic own bullet"
@@ -109,8 +109,8 @@ def test_a_bot_managers_request_names_a_flagged_report_without_its_text(api, mon
         updates, "direct_reports", lambda c, author, chart=None: ["human:ben", "human:cara"] if author == "ops" else []
     )
     with api.app.state.store.transaction() as c:
-        updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="coo", meetings=True)
-        updates.post(c, "human:cara", "- Synthetic plain report", day=DAY, drafted_by="coo")
+        updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="assistant", meetings=True)
+        updates.post(c, "human:cara", "- Synthetic plain report", day=DAY, drafted_by="assistant")
         text = updates.request_text(c, "ops", "daily", DAY)
         posted = updates.post(c, "ops", "- Synthetic manager bullet", day=DAY)
         ben = updates._label(c, "human:ben")
@@ -125,8 +125,8 @@ def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_
     for column in ("slides", "drafted_by", "edited_by", "inputs"):
         c.execute(f"ALTER TABLE updates ADD COLUMN {column} TEXT")
     rows = [
-        ("d", "human:ben", "coo", None),
-        ("e", "human:cara", "coo", "human:cara"),
+        ("d", "human:ben", "assistant", None),
+        ("e", "human:cara", "assistant", "human:cara"),
         ("o", "human:ana", None, None),
         ("b", "ops", None, None),
     ]
@@ -140,7 +140,7 @@ def test_the_migration_flags_every_existing_assistant_drafted_person_update(tmp_
     assert dict(c.execute("SELECT id, meetings FROM updates")) == {"d": 1, "e": 1, "o": 0, "b": 0}
     c.execute(
         "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,drafted_by,meetings) "
-        "VALUES('n','human:dan','daily','n','h','- b','t','t','coo',0)"
+        "VALUES('n','human:dan','daily','n','h','- b','t','t','assistant',0)"
     )
     updates.ensure_schema(c)
     assert c.execute("SELECT meetings FROM updates WHERE id='n'").fetchone()[0] == 0, "it runs once, not on every start"
@@ -156,8 +156,10 @@ def test_a_member_with_no_email_posts_over_a_flagged_draft_in_their_own_words(ap
     )
     store = api.app.state.store
     with store.transaction() as c:
-        ben = updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="coo", meetings=True)
-        cara = updates.post(c, "human:cara", "- Synthetic carried draft", day=DAY, drafted_by="coo", meetings=True)
+        ben = updates.post(c, "human:ben", "- Synthetic flagged report", day=DAY, drafted_by="assistant", meetings=True)
+        cara = updates.post(
+            c, "human:cara", "- Synthetic carried draft", day=DAY, drafted_by="assistant", meetings=True
+        )
     get(api, "updates/" + cara["id"], token="cara-test", expected=404)
     mine = post(api, "updates", {"body": "- Synthetic words from Cara"}, token="cara-test")["update"]
     assert mine["id"] == cara["id"] and flag(store, cara["id"]) == 0 and mine["inputs"] == []
@@ -167,6 +169,8 @@ def test_a_member_with_no_email_posts_over_a_flagged_draft_in_their_own_words(ap
     assert flag(store, ben["id"]) == 1, "a meeting reader's edit keeps the flag"
 
     with store.transaction() as c:
-        updates.post(c, "human:ben", "- Synthetic later flagged", day="2026-09-30", drafted_by="coo", meetings=True)
+        updates.post(
+            c, "human:ben", "- Synthetic later flagged", day="2026-09-30", drafted_by="assistant", meetings=True
+        )
     assert get(api, "updates/tree?scope=all", token="cara-test")["day"] == DAY
     assert get(api, "updates/tree?scope=all", token="ana-test")["day"] == "2026-09-30"

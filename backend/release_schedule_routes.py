@@ -33,7 +33,7 @@ AT = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 TITLE = "Release: "
 # Starter templates (templates/catalog): the Release Owner comes from release-owner. release-notes is a writer, not
 # the Release Owner (D1).
-RELEASE_OWNER, WRITER = "release-owner", "docs-writer"
+RELEASE_OWNER, WRITER = "release-owner", "technical-writer"
 
 
 def zone() -> tzinfo:

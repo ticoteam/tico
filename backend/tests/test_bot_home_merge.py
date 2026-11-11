@@ -200,11 +200,10 @@ def test_a_shared_room_home_keeps_its_legacy_readers(api):
 
 def test_assistant_rooms_and_other_rows_stay(api):
     with store(api).transaction() as c:
-        coo = room(c, "human:ana", "coo")
         assistant = H.open_conversation(
             c,
             "human:ana",
-            ["human:ana", "bot:coo"],
+            ["human:ana", "bot:assistant"],
             kind="chat",
             subject="Assistant",
             scope=rooms.PERSONAL,
@@ -218,12 +217,12 @@ def test_assistant_rooms_and_other_rows_stay(api):
     summary = merge(api)
     assert summary["rooms"] == 0, summary
     with store(api).read() as c:
-        for cid in (coo, assistant, dm):
+        for cid in (assistant, dm):
             row = threads.thread_row(c, cid)
             assert not row["closed_at"], cid
             assert bot_home_merge.home_for(c, cid) is None
         assert seqs(c, closed)
-        assert threads.home(c, "bot:coo", create=False) is None
+        assert threads.home(c, "bot:assistant", create=False) is None
 
 
 def test_a_second_run_changes_nothing(api, ops_rooms):
@@ -320,8 +319,8 @@ def test_a_persons_chat_with_a_moved_bot_is_its_home_on_every_route(api, ops_roo
     with store(api).transaction() as c:
         assert rooms.personal_room(c, "human:ana", "ops")["id"] == home
         assert rooms.work_room(c, auth, "ops", "human:ana")["id"] == home
-        assert threads.home(c, "bot:coo", create=False) is None
-        assert rooms.personal_room(c, "human:ana", "coo")["id"] != home
+        assert threads.home(c, "bot:assistant", create=False) is None
+        assert rooms.personal_room(c, "human:ana", "assistant")["id"] != home
     sent = api.post("/api/v2/chat/ops", json={"text": "Hello from Ana"}, headers=headers("ana-test"))
     assert sent.status_code == 200, sent.text
     assert sent.json()["conversation"]["id"] == home

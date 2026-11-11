@@ -23,7 +23,7 @@ from . import routines
 from .store import H, P, Problem, readiness_document
 from . import bot_settings as BS
 
-TEMPLATES = frozenset({"inbox"})
+TEMPLATES = frozenset({"inbox-manager"})
 LINE = re.compile(r"^Mailbox:[ \t]*(\S+@\S+)[ \t]*$", re.M)
 WORDS = re.compile(r"\bmailbox\b[\s:=\-]*(?:is\s+|of\s+)?<?([\w.+%-]+@[\w-]+(?:\.[\w-]+)+)", re.I)
 DONE = "message-bots-linked"  # bots the start-up pass linked once: an owner who unlinks one is not overruled

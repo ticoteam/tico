@@ -331,7 +331,7 @@ checkout's Git metadata. `publish` dispatches Release validation with the frozen
 event, main branch, exact run title, candidate SHA and successful conclusion, checks main still equals the frozen
 commit and tags it. Main moving at any checkpoint refuses the release. It then waits for the GitHub release to be
 published and files one task, "Release notes for vX.Y.Z", for the Technical Writer (`--writer <bot>`, default
-`docs-writer`) with the release's commit range. The command needs `gh` and a `tico` login that can create tasks.
+`technical-writer`) with the release's commit range. The command needs `gh` and a `tico` login that can create tasks.
 The command does not replace the release's publishing approval, evidence checklist or rollout.
 
 Run `publish` in the background while validation runs. A validation run that ends canceled is rerun by `publish` (same
@@ -806,7 +806,7 @@ Setup, once:
   `name`, `url`, `key_env` and whether it is the `canary` (see `knowledge/rollout.example.json`).
 
 A bot created before this template change does not get these files on its own: copy `playbooks/rollout.md`,
-`software/rollout.py` and the `.claude/settings.json` line that allows it from `templates/catalog/release-notes`.
+`software/rollout.py` and the `.claude/settings.json` line that allows it from `templates/catalog/release-notes-writer`.
 
 ## What installations do
 

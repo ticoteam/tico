@@ -12,6 +12,6 @@ def managers(c):
     now = H.now()
     c.execute(
         "INSERT INTO pipelines(id,name,manager_id,preset,created_at,updated_at) "
-        "VALUES('outage-engineering','Outage engineering','bot:coo','engineering',?,?)",
+        "VALUES('outage-engineering','Outage engineering','bot:assistant','engineering',?,?)",
         (now, now),
     )

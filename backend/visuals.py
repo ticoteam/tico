@@ -639,7 +639,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
     # A delegated token keeps both principals; serving checks the same pair as the ordinary file read.
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
-    # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
+    # The Rules Owner sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
     # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
     from .counsel import is_counsel
 
@@ -779,8 +779,8 @@ def token_reader(c, auth, actor):
     from .auth import Identity
     from .store import H, Problem
 
-    if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
-        return None  # Counsel reads no visual: its grant is its run's, which a token does not carry
+    if not isinstance(actor, str) or actor == H.bot_actor(H.RULES_OWNER):
+        return None  # the Rules Owner reads no visual: its grant is its run's, which a token does not carry
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)

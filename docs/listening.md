@@ -22,7 +22,7 @@ destinations:
   content:
     category: content
     threshold: 0.75
-    receiver: bot:content
+    receiver: bot:content-owner
     what: a question a useful article could answer
 ```
 
@@ -71,7 +71,7 @@ shipped one, Health names both versions so the company's own questions can be re
 
 ## Save, decide and resolve
 
-These are internal v2 APIs and may change between releases. Only the Listening bot (`bot:listening`) and the Team owner can save
+These are internal v2 APIs and may change between releases. Only the Listening bot (`bot:social-media-manager`) and the Team owner can save
 runs and make decisions. Receivers and configured readers can read their own destinations. Use a bot's run credential or the owner's
 personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.md)). The bodies below contain fictional data.
 

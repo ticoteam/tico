@@ -1,7 +1,7 @@
 {
   "id": "topic-change",
   "version": 1,
-  "owner": "engineering-lead",
+  "owner": "engineering-team-manager",
   "summary": "A person's new message in their direct chat with a bot, against the chat's last 3 turns: does it start a new topic, unrelated to the recent conversation? Asked by the server before the message is sent (backend/topic_change.py); only a confident new_topic clears the bot's session first.",
   "state": ["recent", "message"],
   "questions": {

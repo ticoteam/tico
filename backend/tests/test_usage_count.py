@@ -59,7 +59,7 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
     # The owner's own request just now is a person using the app; no bot has finished a turn.
     assert first["active_people"] is True and first["active_bots"] is False and first["first_result"] is False
     assert len(first["install_id"]) == 36 and first["version"] == "0.2.13"
-    for bot in ("coo", "botops", "librarian", "goal-manager"):  # every built-in bot answering
+    for bot in ("assistant", "botops", "librarian", "strategy-owner"):  # every built-in bot answering
         complete_a_bot_turn(api, H.now(), bot=bot)
     with api.app.state.store.read() as read:
         second = c.payload(read, "0.2.13")

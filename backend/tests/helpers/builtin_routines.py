@@ -5,10 +5,10 @@ import yaml
 from backend import routines
 
 
-COO = {"coo": {"name": "Coo", "status": "active", "template": "assistant"}}
+COO = {"assistant": {"name": "Coo", "status": "active", "template": "assistant"}}
 
 
-SWEEP = "coo:daily-sweep"
+SWEEP = "assistant:daily-sweep"
 
 
 def _write_assistant_routines(api):

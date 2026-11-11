@@ -1,7 +1,7 @@
 {
   "id": "thread-rank",
   "version": 1,
-  "owner": "engineering-lead",
+  "owner": "engineering-team-manager",
   "summary": "A thread with new messages: how important is it for the company's people to read, from 1 (noise) to 10 (read now). Asked by the server on its own timer, at most once an hour per thread (backend/thread_rank.py); the Important view in Threads orders by the level, then newest first.",
   "state": ["thread"],
   "questions": {

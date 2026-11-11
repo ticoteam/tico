@@ -1,0 +1,26 @@
+name: learning-and-development-specialist                     # the slug: it matches the repository bot-learning-and-development-specialist and the label owner:learning-and-development-specialist
+display_name: "Learning and Development Specialist"
+labels: [owner:learning-and-development-specialist]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-training-tracker
+    title: Weekly training tracker
+    cron: "0 9 * * 4"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-training-tracker.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []
+# There is deliberately no learning-platform entry: completion records arrive as exports on tasks, and a human
+# enrolls people and buys courses within the requested budget and Tools.

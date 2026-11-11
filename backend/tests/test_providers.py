@@ -87,7 +87,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     configs = {
         "ops": ({"runtime": "codex", "model": "gpt-6.1-sol", "reasoning_effort": "high", "effort": "low"}, "max"),
         "cpo": ({}, ""),
-        "coo": ({"effort": "xhigh"}, "low"),
+        "assistant": ({"effort": "xhigh"}, "low"),
         "inbox": ({}, "medium"),
     }
     with api.app.state.store.transaction() as c:
@@ -102,7 +102,7 @@ def test_the_bot_list_says_the_effort_a_bot_runs_at_and_nothing_when_it_has_none
     assert said == {
         "ops": ("codex", "gpt-6.1-sol", "high"),
         "cpo": ("claude", "claude-opus-5-5", ""),
-        "coo": ("claude", "claude-opus-5-5", "xhigh"),
+        "assistant": ("claude", "claude-opus-5-5", "xhigh"),
         "inbox": ("claude", "claude-opus-5-5", "medium"),
     }
     # A team with no provider: nothing resolves, so no effort is said either.

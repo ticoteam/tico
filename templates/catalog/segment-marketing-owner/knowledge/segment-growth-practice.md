@@ -46,11 +46,11 @@ A customer with no segment field is counted in a no-segment row and never droppe
 ## Message and claims
 
 - Each claim in copy is checked against `tico brand show --section claims` before the copy goes to a channel Owner or outside the team (`skills/test-a-segment-message/SKILL.md`).
-- The Brand Owner (`brand`) adds a missing claim with its evidence. Until then the claim is not used.
+- The Design Owner (`design-owner`) adds a missing claim with its evidence. Until then the claim is not used.
 
 ## Sources
 
 - 2026-11-06: docs/growth.md in the Tico repository. The CAC formula, the Unknown row, "blank is not zero", the Marketing task steps and the rule that a channel's owner changes its stage and budget.
 - 2026-11-06: clients/hubcli.py command help. `tico growth cohort set`, `tico growth channel update --stage` (values idea, testing, scaling, paused), `tico kpi log` period flags, `tico brand check` and `tico brand show --section claims`.
-- 2026-11-06: the marketing-lead playbook `weekly-meeting.md`. The capacity rule (six Live tests across the team, two new per channel owner) and the growth meeting's Monday 08:00 timing.
+- 2026-11-06: the growth-team-manager playbook `weekly-meeting.md`. The capacity rule (six Live tests across the team, two new per channel owner) and the growth meeting's Monday 08:00 timing.
 - Team defaults in this file (the seven-day read rule, the 20% no-segment line, two open asks per owner, the three split methods' order) were set for this template on 2026-11-06 and are not from Tico's docs.

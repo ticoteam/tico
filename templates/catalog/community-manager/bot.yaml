@@ -1,0 +1,34 @@
+name: community-manager                     # the slug: it matches the repository bot-community-manager and the label owner:community-manager
+display_name: "Community Manager"
+labels: [owner:community-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-community-digest
+    title: Weekly community digest
+    cron: "0 11 * * 5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-community-digest.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+# Optional, uncomment when connected. A community on Slack is read through one channel list; a public
+# forum needs no access. Reading grants no posting right (docs/slack-gateway.md).
+# tools:
+#   - service: slack
+#     identity: "the team's community workspace"
+#     can: [read]
+#     channels: [general, help]
+#     dms: false
+#     env: SLACK_BOT_TOKEN
+#     note: "reads the listed community channels; never posts, reacts or messages a member"
+tools: []

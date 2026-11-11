@@ -36,25 +36,32 @@ def old_install(tmp_path, *, routines=True):
     with store.transaction() as c:
         H.sync_registry(
             c,
-            {"coo": {"name": "coo", "runtime": "fake", "status": "active"}},
+            {"assistant": {"name": "assistant", "runtime": "fake", "status": "active"}},
             {"people": [{"id": "ana", "email": "ana@acme.example"}]},
         )
         c.execute(
             "INSERT OR REPLACE INTO registry_metadata VALUES('people',?)",
             (json.dumps({"people": [{"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),),
         )
-        if c.execute("INSERT OR IGNORE INTO bot_config(bot) VALUES('coo')").rowcount:
-            BS.write(c, 'coo', {})
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot) VALUES('assistant')").rowcount:
+            BS.write(c, 'assistant', {})
         if routines:
             c.execute(
                 "INSERT INTO schedules(id, bot, cron, title, playbook, next_due_at) VALUES(?,?,?,?,?,?)",
-                ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.", "2026-11-02T09:00:00Z"),
+                (
+                    "sch_notes",
+                    "assistant",
+                    "0 9 * * *",
+                    "Morning notes",
+                    "Post yesterday's work.",
+                    "2026-11-02T09:00:00Z",
+                ),
             )
             c.execute(
                 "INSERT INTO rules(id, scope_kind, scope_id, event, then_outcome, created_by, created_at, updated_at) "
-                "VALUES('rule_comment','bot','coo','comment','wake','human:ana','2026-10-01','2026-10-01')"
+                "VALUES('rule_comment','bot','assistant','comment','wake','human:ana','2026-10-01','2026-10-01')"
             )
-            usage_limits.save_own(c, "coo", {"hourly_usd": 0.35}, None)
+            usage_limits.save_own(c, "assistant", {"hourly_usd": 0.35}, None)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (M.CUTOVER,))
         c.execute("DELETE FROM redesign_migrated")
     close(store)
@@ -91,7 +98,7 @@ def test_a_database_a_server_left_with_a_wal_is_read_from_a_copy_and_neither_fil
     live = sqlite3.connect(settings.db_path)
     live.execute("PRAGMA wal_autocheckpoint=0")
     live.execute(
-        "INSERT INTO schedules(id, bot, cron, title, playbook) VALUES('sch_wal','coo','0 8 * * *','In the wal','x')"
+        "INSERT INTO schedules(id, bot, cron, title, playbook) VALUES('sch_wal','assistant','0 8 * * *','In the wal','x')"
     )
     live.commit()
     for name in ("hub.db", "hub.db-wal"):
@@ -127,7 +134,10 @@ def test_an_old_install_moves_once_on_its_first_start_with_no_setting(tmp_path):
     assert read(store, "SELECT deleted_at FROM schedules WHERE id='sch_notes'")[0]["deleted_at"]
     assert not read(store, "SELECT 1 FROM rules WHERE id='rule_comment'")
     with store.read() as c:
-        assert (usage_limits.own(c, "coo")["per_30m_usd"], usage_limits.own(c, "coo")["hourly_usd"]) == (0.2, None)
+        assert (usage_limits.own(c, "assistant")["per_30m_usd"], usage_limits.own(c, "assistant")["hourly_usd"]) == (
+            0.2,
+            None,
+        )
     with store.read() as c:
         record = M.state(c)
     assert record["state"] == "done" and record["told"]
@@ -189,7 +199,7 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
         "CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"
         "CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT, "
         "last_fired_at TEXT, next_due_at TEXT);"
-        "INSERT INTO schedules(id, bot) VALUES('s1', 'coo'), ('s2', 'coo');"
+        "INSERT INTO schedules(id, bot) VALUES('s1', 'assistant'), ('s2', 'assistant');"
     )
     c.commit()
     c.close()
@@ -217,8 +227,8 @@ GONE_ROUTES = (
     ("GET", "settings/redesign"),
     ("PUT", "settings/redesign"),
     ("GET", "routines"),
-    ("GET", "bots/coo/routines"),
-    ("POST", "bots/coo/routines"),
+    ("GET", "bots/assistant/routines"),
+    ("POST", "bots/assistant/routines"),
     ("POST", "routines/sch_1"),
     ("POST", "routines/sch_1/delete"),
     ("POST", "routines/sch_1/run"),
@@ -269,7 +279,7 @@ def test_a_paused_bots_routine_keeps_its_switch_and_runs_again_when_the_bot_is_b
     settings = old_install(tmp_path)
     store = Store(settings)
     with store.transaction() as c:
-        c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='paused' WHERE slug='assistant'")
     close(store)
     store = start(settings)
     [routine] = read(store, "SELECT automation FROM redesign_migrated WHERE kind='routine'")
@@ -280,7 +290,7 @@ def test_a_paused_bots_routine_keeps_its_switch_and_runs_again_when_the_bot_is_b
     assert not read(store, runs, (aid,))
     assert read(store, "SELECT next_due_at FROM automations WHERE id=?", (aid,))[0]["next_due_at"] > "2026-11-02T09:01"
     with store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='active' WHERE slug='assistant'")
     automations.tick(store, at=datetime(2026, 11, 3, 9, 1, tzinfo=timezone.utc))  # back: the next one runs
     assert len(read(store, runs, (aid,))) == 1
     close(store)

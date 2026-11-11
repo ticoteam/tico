@@ -77,7 +77,7 @@ def test_a_bot_leaves_another_bot_a_note_and_sees_only_its_own(api):
     attempt = claim(api, r)
     left = note(api, "Ops check: all green.", to="cpo", token=attempt["token"])
     assert left["from"] == "bot:ops" and left["to"] == "bot:cpo"
-    note(api, "Something only ana sent to coo.", to="coo")
+    note(api, "Something only ana sent to assistant.", to="assistant")
     mine = get(api, "notes", token=attempt["token"])["notes"]
     assert [n["text"] for n in mine] == ["Ops check: all green."]
 

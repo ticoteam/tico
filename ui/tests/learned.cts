@@ -29,7 +29,7 @@ async function open(browser: Browser, me: Record<string, unknown>, learned: unkn
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json(me);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}, {id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([bot('coo', 'Assistant'), bot('goal-manager', 'Chief')]);
+    if (p === '/api/employees') return json([bot('assistant', 'Assistant'), bot('strategy-owner', 'Chief')]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
@@ -64,7 +64,7 @@ const chat = (over: Record<string, unknown>) => ({available: true, state: 'activ
         company: {vision: 'Every team runs on bots', description: '', priorities: [{id: 'g1', title: 'Ship the desktop app', status: 'green'}],
           entries: [entry('c1', 'company', 'Launches matter more than hiring news', true), entry('c2', 'company', 'Partners before press', false)]}};
       // The owner's chat is their Assistant like everyone else's (backend/assistant.py chat_bot).
-      const {page, errors, writes} = await open(browser, owner, learned, chat({bot: 'coo', name: 'Assistant', room_id: 'assistant1'}));
+      const {page, errors, writes} = await open(browser, owner, learned, chat({bot: 'assistant', name: 'Assistant', room_id: 'assistant1'}));
       await page.goto('https://tico-ui.test/#/assistant');
       await page.locator('#chat-composer .p-text').waitFor();
       await page.locator('#main .asst-learned').click();
@@ -96,7 +96,7 @@ const chat = (over: Record<string, unknown>) => ({available: true, state: 'activ
     // A member: their own layer only, named for their Assistant; with nothing taught yet it says how to teach it.
     {
       const member = {id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true};
-      const {page, errors} = await open(browser, member, {personal: [], company: null}, chat({bot: 'coo', name: 'Assistant'}));
+      const {page, errors} = await open(browser, member, {personal: [], company: null}, chat({bot: 'assistant', name: 'Assistant'}));
       await page.goto('https://tico-ui.test/#/assistant/learned');
       await page.locator('#learned-personal').waitFor();
       assert.equal(await page.locator('#learned-company').count(), 0, 'member: no company layer');

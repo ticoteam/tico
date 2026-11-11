@@ -1,6 +1,6 @@
 template: social-ads-owner
 slug: social-ads-owner
-name: Social Ad Owner
+name: Social Ads Owner
 required: false
 bootstrap: false
 lead: false

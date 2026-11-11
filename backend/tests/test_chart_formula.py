@@ -141,7 +141,7 @@ def test_the_live_seats_are_the_pipeline_managers_the_stage_owners_and_the_finan
     # Every default pipeline starts with its Pipeline Manager live, and Product and Engineering with each stage owner:
     # the first segment's Product Owner, the Builder, both reviewers and the Release Owner; plus the QA Owner. The
     # Finance and Legal Owners run their own pipelines.
-    expected = SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "legal-owner", "creators-product-owner"}
+    expected = SOFTWARE_LIVE | PIPELINE_MANAGERS | {"finance-owner", "legal-owner", "creators-product-owner"}
     assert live_ids(F.build(HOTMIC)) == expected
 
 
@@ -164,7 +164,7 @@ def test_a_chart_with_no_segment_has_one_product_owner_and_no_segment_seats():
         ("product-owner", "Product Owner", "segment-product-owner", True),
     ]
     assert "segment-marketing-owner" not in {seat["template"] for seat in result["employees"]}
-    assert live_ids(result) == SOFTWARE_LIVE | PIPELINE_MANAGERS | {"bookkeeper", "legal-owner", "product-owner"}
+    assert live_ids(result) == SOFTWARE_LIVE | PIPELINE_MANAGERS | {"finance-owner", "legal-owner", "product-owner"}
 
 
 def test_the_six_pipeline_seats_use_the_templates_the_pipelines_find_them_by():
@@ -195,8 +195,8 @@ def test_a_live_seat_taken_off_the_chart_is_gone_and_nothing_is_uncovered_by_it(
 
 def test_the_finance_owner_is_the_bookkeeper_under_the_corporate_team_manager():
     seat = by_title(F.build(HOTMIC), "Finance Owner")
-    assert seat["id"] == "bookkeeper"
-    assert seat["template"] == "bookkeeper"
+    assert seat["id"] == "finance-owner"
+    assert seat["template"] == "finance-owner"
     assert seat["department"] == "finance"
     assert seat["team"] == "Corporate"
     assert seat["reports_to"] == "corporate-team-manager"
@@ -214,7 +214,7 @@ def test_the_fixed_seats_keep_the_ids_the_formula_gives_them():
         "success-team-manager",
         "corporate-team-manager",
         "legal-owner",
-        "bookkeeper",
+        "finance-owner",
         "partnerships-owner",
         "release-owner",
         "qa-owner",
@@ -229,8 +229,8 @@ def test_the_bookkeeper_helper_reads_back_as_a_built_in_in_a_company_file():
         "people": [{"id": "chris", "name": "Chris", "role": "Owner", "owner": True}],
         "employees": [
             {
-                "id": "bookkeeper",
-                "template": "bookkeeper",
+                "id": "finance-owner",
+                "template": "finance-owner",
                 "title": "Finance Owner",
                 "department": "finance",
                 "reports_to": "corporate-team-manager",
@@ -245,8 +245,8 @@ def test_the_bookkeeper_helper_reads_back_as_a_built_in_in_a_company_file():
         "tools": {"mode": "defaults", "connect": []},
     }
     draft = yamlfile.from_yaml(yaml.safe_dump(doc, sort_keys=False))
-    bot = next(bot for bot in draft["bots"] if bot["id"] == "bookkeeper")
-    assert (bot["template"], bot["dept"], bot["core"], bot["start"]) == ("bookkeeper", "finance", True, True)
+    bot = next(bot for bot in draft["bots"] if bot["id"] == "finance-owner")
+    assert (bot["template"], bot["dept"], bot["core"], bot["start"]) == ("finance-owner", "finance", True, True)
 
 
 # ---------------------------------------------------------------------------------------------- titles and ids
@@ -284,7 +284,10 @@ def test_titles_that_slug_alike_get_ids_that_differ():
 
 def test_a_long_title_is_cut_so_its_number_still_fits():
     long_title = "Word " * 30  # an industry Owner's title is not capped on the way in
-    industry = [{"title": long_title, "template": "billing"}, {"title": long_title, "template": "billing"}]
+    industry = [
+        {"title": long_title, "template": "billing-specialist"},
+        {"title": long_title, "template": "billing-specialist"},
+    ]
     inputs = {"segments": [], "channels": [], "initiatives": [], "industry": industry}
     titles = [seat["title"] for seat in F.build(inputs)["employees"] if seat["team"] == "Other"]
     assert len(titles) == 2 and all(len(title) <= D.LIMITS["title"] for title in titles)
@@ -293,11 +296,11 @@ def test_a_long_title_is_cut_so_its_number_still_fits():
 
 def test_fixed_seats_claim_their_titles_and_ids_before_initiatives_and_industry_owners():
     bets = [named_bet(1, "Support"), named_bet(2, "Finance"), named_bet(3, "SEO")]
-    industry = [{"title": "Support Owner", "template": "billing"}]
+    industry = [{"title": "Support Owner", "template": "billing-specialist"}]
     result = F.build({"segments": [], "channels": [], "initiatives": bets, "industry": industry})
     seat = {row["title"]: row for row in result["employees"]}
     assert (seat["Support Owner"]["id"], seat["Support Owner"]["team"]) == ("support-owner", "Success")
-    assert (seat["Finance Owner"]["id"], seat["Finance Owner"]["team"]) == ("bookkeeper", "Corporate")
+    assert (seat["Finance Owner"]["id"], seat["Finance Owner"]["team"]) == ("finance-owner", "Corporate")
     assert seat["SEO Owner"]["id"] == "seo-owner"
     assert (seat["Support Owner 2"]["id"], seat["Support Owner 2"]["team"]) == ("support-owner-2", "Other")
     assert seat["Finance Owner 2"]["id"] == "finance-owner-2"
@@ -423,7 +426,7 @@ def test_unknown_channels_are_dropped_and_the_picked_ones_follow_the_list_order(
 
 
 def test_no_picked_channel_is_the_default_list():
-    default = ["Conversion Rate Optimization Owner", "SEO Owner", "Social Ads Owner", "Search Ads Owner"]
+    default = ["CRO Owner", "SEO Owner", "Social Ads Owner", "Search Ads Owner"]
     for picked in ([], ["bogus"]):
         seats = F.build({"segments": [], "channels": picked, "initiatives": [], "industry": []})
         assert [s["title"] for s in seats["employees"] if s["id"] in CHANNEL_IDS] == default
@@ -433,7 +436,7 @@ def test_a_channel_seat_has_the_channels_own_id():
     seats = F.build({"segments": [], "channels": ["email", "seo"], "initiatives": [], "industry": []})
     assert [(s["id"], s["template"]) for s in seats["employees"] if s["id"] in CHANNEL_IDS] == [
         ("seo-owner", "seo-owner"),
-        ("email-owner", "email-marketing"),
+        ("email-owner", "email-owner"),
     ]
 
 
@@ -472,8 +475,8 @@ def test_removed_is_a_list_of_seat_ids_and_a_string_is_refused():
 def test_industry_owners_are_kept_up_to_three_and_their_topic_reads_in_the_reason():
     industry = [
         {"title": "Scheduling Owner", "template": "scheduling-bookings"},
-        {"title": "Insurance Billing Owner", "template": "billing"},
-        {"title": "HR Owner", "template": "people-lead"},
+        {"title": "Insurance Billing Owner", "template": "billing-specialist"},
+        {"title": "HR Owner", "template": "head-of-people"},
         {"title": "Court Filings Owner", "template": "paralegal"},
         {"title": "Made Up Owner", "template": "not-a-card"},
     ]
@@ -490,7 +493,7 @@ def test_industry_owners_are_kept_up_to_three_and_their_topic_reads_in_the_reaso
 
 def test_an_industry_owner_takes_no_built_in_card():
     built_in = {role["slug"] for role in D.ROLES if role["core"]}
-    assert {"coo", "botops", "goal-manager", "librarian"} <= built_in
+    assert {"assistant", "botops", "strategy-owner", "librarian"} <= built_in
     assert not (F.INDUSTRY_TEMPLATES & built_in)
     industry = [{"title": "%s Owner" % slug.title(), "template": slug} for slug in sorted(built_in)]
     seats = F.build({"segments": [], "channels": [], "initiatives": [], "industry": industry})["employees"]

@@ -29,13 +29,19 @@ def test_shared_logins_uses_preloaded_names(api, monkeypatch):
     monkeypatch.setattr("backend.harnesses.harness_caps", lambda runtime, *a, **k: {"one_turn_per_login": True})
     readiness = {
         "runtimes": {"fake": {"profiles": {"work": {"detail": "x"}}}},
-        "bots": {"coo": {"runtime": "fake", "profile": "work"}, "cpo": {"runtime": "fake", "profile": "work"}},
+        "bots": {"assistant": {"runtime": "fake", "profile": "work"}, "cpo": {"runtime": "fake", "profile": "work"}},
     }
     with api.app.state.store.read() as c:
         names = display_names(c)
         rows = views.shared_logins(
-            c, rid, readiness, {"coo", "cpo"}, {"coo": {"read": True}, "cpo": {"read": True}}, names=names
+            c, rid, readiness, {"assistant", "cpo"}, {"assistant": {"read": True}, "cpo": {"read": True}}, names=names
         )
         assert rows == [
-            {"runtime": "fake", "profile": "work", "display_name": "Work ChatGPT", "count": 2, "bots": ["coo", "cpo"]}
+            {
+                "runtime": "fake",
+                "profile": "work",
+                "display_name": "Work ChatGPT",
+                "count": 2,
+                "bots": ["assistant", "cpo"],
+            }
         ]

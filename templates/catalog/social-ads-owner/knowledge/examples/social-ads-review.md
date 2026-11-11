@@ -32,7 +32,7 @@ Platform counts are shown side by side and never added. Export check: the rows s
 ## Three changes, prepared for review
 
 1. **Replace "unboxing v3" in HB prospecting with two new variants.** Variant A makes a price claim: "Under $2 a cup on the 250 g plan." Its basis: the price list dated 2026-10-30 ($48 a month for 250 g), the brew guide (10 g a cup, so 25 cups a bag, $1.92 a cup), and three public cafe menus checked 2026-10-28 that list filter coffee at $3.20 to $3.60. Variant B tests the morning-routine hook with no price claim. Keep "unboxing v3" live until the first new variant is approved and running; pausing it is next week's change. Evidence: $2,140 spent, $52.20 a trial against $48, click-through down from 1.3 to 0.9 per cent. Expected effect: a lower cost per trial if the price claim is the stronger idea. Earliest read: seven days after launch, or the day both variants reach 30 trials if later. At this spend, about 2026-11-20.
-2. **LinkedIn cafe demos: cut the daily budget from $200 to $160.** That is a 20 per cent step, within the team default. It stays until cost per demo is under $140 for two weeks. Evidence: $1,420 spent, $157.78 a demo against $140, link click-through 0.6 per cent. Expected effect: fewer demos, and a lower cost per demo if the trend holds. The $40 a day is not moved to another segment; that is the marketing lead's (`marketing-lead`) call. Check on 2026-11-16: cost per demo over the last 14 days.
+2. **LinkedIn cafe demos: cut the daily budget from $200 to $160.** That is a 20 per cent step, within the team default. It stays until cost per demo is under $140 for two weeks. Evidence: $1,420 spent, $157.78 a demo against $140, link click-through 0.6 per cent. Expected effect: fewer demos, and a lower cost per demo if the trend holds. The $40 a day is not moved to another segment; that is the marketing lead's (`growth-team-manager`) call. Check on 2026-11-16: cost per demo over the last 14 days.
 3. **Exclude trial starters from Meta HB site visitors.** The audience keeps serving people who have already started a trial, which the frequency of 6.1 shows. Prepared now. Applied only after the CRM list is matched to the exclusion; that export is due 2026-11-06. Expected effect: frequency under 5, the same cost per trial, and fewer impressions on people who have already converted. Check two weeks after it is applied; if applied on 2026-11-06, that is 2026-11-20.
 
 ## Waiting
@@ -45,7 +45,7 @@ Platform counts are shown side by side and never added. Export check: the rows s
 
 ## Needs a human
 
-- TikTok changed its trial event on 2026-10-29. Trial counts before and after the change are not comparable until `marketing-ops` confirms that the event fires once per trial. Routed to `marketing-ops` as a proposal.
+- TikTok changed its trial event on 2026-10-29. Trial counts before and after the change are not comparable until `marketing-operations-manager` confirms that the event fires once per trial. Routed to `marketing-operations-manager` as a proposal.
 
 ## Could not read
 

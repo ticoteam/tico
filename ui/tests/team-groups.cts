@@ -131,7 +131,7 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
     if (p === '/api/employees') return json(bots);
     if (p === '/api/issues') return json([]);
     if (p === '/api/runs') return json([]);
-    if (p === '/api/v2/templates') return json({cards: [{template: 'bookkeeping', slug: 'bookkeeping', name: 'Bookkeeper',
+    if (p === '/api/v2/templates') return json({cards: [{template: 'finance-owner', slug: 'bookkeeping', name: 'Bookkeeper',
       summary: 'Keeps the ledger.', instructions: '# Bookkeeper\n\nKeep the ledger.', model: 'fixture-model'}]});
     if (p === '/api/v2/bots' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'bots', body]);
@@ -224,7 +224,7 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
       });
       return json({});
     }
-    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
+    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'assistant', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -696,7 +696,7 @@ async function teamAdd(browser: Browser) {
   await page.waitForFunction((id: string) => location.hash === '#/bot/' + id, LEDGER_ID);
   assert.deepEqual(recruits, [['POST', 'recruit', 'seat1', {}]]);
   assert.deepEqual(calls.filter(c => c[1] === 'hire'),
-    [['POST', 'hire', 'seat1', {template: 'bookkeeping', model: '', name: 'Ledger'}]]);
+    [['POST', 'hire', 'seat1', {template: 'finance-owner', model: '', name: 'Ledger'}]]);
   assert.deepEqual(calls.find(c => c[0] === 'hired with')!, ['hired with', 'Keeps the books and closes each month.']);
   calls.length = 0;
   assert.equal(await page.locator('#tree a.node.seat').count(), 0, 'the filled seat leaves the chart');

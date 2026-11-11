@@ -308,7 +308,7 @@ def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(
     auth = api.app.state.auth
     email = person + "@acme.example"
     botops = Identity("human:" + person, role, email=email, via="botops")
-    assistant = Identity("human:" + person, role, email=email, via="assistant", task_actor="bot:coo")
+    assistant = Identity("human:" + person, role, email=email, via="assistant", task_actor="bot:assistant")
     seen = set()
     with api.app.state.store.read() as c:
         for e in ENTRIES:

@@ -388,7 +388,7 @@ def test_botops_lists_a_seats_candidates_but_the_pick_is_the_persons_tap(api, bo
     from backend.tests.helpers.recruiting import providers
 
     providers(api, "anthropic", "openai")
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo"})
+    seat = post(api, "seats", {"title": "Support lead", "reports_to": "assistant"})
     ana = turn(api, botops, person="ana-test", text="Hire a support lead")
     found = act(api, ana, "POST", f"seats/{seat['id']}/recruit", {})
     assert found.status_code == 200 and found.json()["candidates"], found.text
@@ -407,7 +407,7 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
     routes answers with her card (or the plain refusal), never BotOps' own 403 or an unconfirmed change."""
     local(api)
     row = jira(api)
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo"})
+    seat = post(api, "seats", {"title": "Support lead", "reports_to": "assistant"})
     put(api, "usage/limits/ops", {"daily_usd": 10})
     put(api, "access/rules", {"botops_direct": False})
     revision = get(api, "providers")["revision"]
@@ -421,7 +421,7 @@ def test_a_client_that_sends_no_header_gets_the_same_card_or_refusal(api, botops
         ("POST", "enrollments", {"operator": "ana"}),
         ("POST", "system/update", {"version": "9.9.9"}),
         ("PUT", "access/rules", {"botops_manages_bots": False}),
-        ("POST", f"seats/{seat['id']}/hire", {"template": "support"}),
+        ("POST", f"seats/{seat['id']}/hire", {"template": "support-owner"}),
         ("PUT", "providers", {"enabled": ["openai"], "expected_revision": revision}),
         ("PUT", "usage/limits/ops", {"daily_usd": 50}),
         ("POST", "access/people/cara", {"role": "admin"}),

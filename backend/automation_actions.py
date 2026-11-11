@@ -673,7 +673,7 @@ def start_turn(
         due=due,
         lint=False,
         deduplicate=False,
-        pipeline=where[0],  # the Bookkeeper's routines run in Finance, at Review (bookkeeper.filing)
+        pipeline=where[0],  # the Finance Owner's routines run in Finance, at Review (bookkeeper.filing)
         stage=where[1],
         routine=True,
         trigger="other",

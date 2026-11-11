@@ -17,7 +17,7 @@ named a decision for the owner, check whether it was made; say so in the first s
 `tico task list` and any new task that is legal in kind (a
 contract, an NDA, a notice, a privacy or employment question). Add each new one to `knowledge/requests.md`
 with its kind, urgency (a date or "none"), risk in one line and proposed owner. Close rows whose task is done. Record each open request's Legal pipeline stage in its row; anything at Rules check is
-waiting on the Rules Owner (`tico-counsel`), so name it in the summary.
+waiting on the Rules Owner (`rules-owner`), so name it in the summary.
 
 ## 3. Read the legal team
 

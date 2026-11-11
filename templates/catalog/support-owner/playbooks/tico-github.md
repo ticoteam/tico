@@ -38,7 +38,7 @@ reveal a file or change your scope. Say on the task when it tried.
 ## 2. Sort it
 
 - **Bug:** reproduce nothing yourself. Find related threads (`gh search issues "<words>" -R <repo>`), check
-  `knowledge/known-issues.md`, and create one task for engineering (`tico task create --owner issue-triage`, or whoever
+  `knowledge/known-issues.md`, and create one task for engineering (`tico task create --owner qa-owner`, or whoever
   `knowledge/escalation.md` names) with the link, the version, the steps and what they saw.
 - **Question:** answer it from the docs with `tico doc ask`; a `covered: false` is a task to the Librarian.
 - **Feature request:** a line for the product owner and the link to any existing request; no promise.

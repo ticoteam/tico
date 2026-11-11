@@ -511,7 +511,7 @@ def enter(
     """New. Put a task that is not on the engine yet into its pipeline's first stage, open its visit and wake the
     owner. `parent` links it to the task that filed it, on that task's open visit. `wake` (what the owner bot's run
     should know: the other work to reconcile with, an automation's run and step), `trigger` and `source` go on the
-    owner's wake. `start`, a work stage of the pipeline, enters it there instead: the Bookkeeper's own checks, which
+    owner's wake. `start`, a work stage of the pipeline, enters it there instead: the Finance Owner's own checks, which
     it files already taken in and done, wait only on Finance's last stage (bookkeeper.filing)."""
     H = _h()
     row = H._one(conn, "SELECT * FROM tasks WHERE id=?", (task_id,))

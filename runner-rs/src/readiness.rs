@@ -1906,8 +1906,7 @@ pub(crate) mod probe_tests {
     /// the inputs, so a probe runs (runner.rs maintain).
     #[test]
     fn the_probe_inputs_change_with_a_profiles_folder_or_how_it_is_shared() {
-        let assignments =
-            json!([{"profile": "acme", "bot": "sales", "config": {"runtime": "claude"}}]);
+        let assignments = json!([{"profile": "acme", "bot": "inbound-sales-owner", "config": {"runtime": "claude"}}]);
         let inputs = |dir: &str, share: bool| {
             let data = json!({"profiles": {"acme": {"dir": dir, "share_operator": share}}, "default_profile": "acme"}).as_object().unwrap().clone();
             probe_inputs(

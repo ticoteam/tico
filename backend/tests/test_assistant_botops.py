@@ -25,10 +25,10 @@ def _identity_route(api, path="/api/v2/qa-assistant-identity"):
 
 def _ask(api, machine, cite="turn", owner="botops", said="Add a bot for our support inbox", expected=200):
     """Ben asks his Assistant; its run files the task; BotOps (if it got it) picks it up."""
-    assign(api, machine, "coo")
-    ready(api, machine, ["botops", "coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["botops", "assistant"])
     say(api, said, "ben-test")
-    coo = claim(api, machine, "coo")
+    coo = claim(api, machine, "assistant")
     r = api.post(
         "/api/v2/tasks",
         json={
@@ -77,10 +77,10 @@ def test_only_botops_carries_the_persons_request(api, botops):
 
 
 def test_a_message_more_than_30_minutes_old_is_not_this_turns_request(api, botops):
-    assign(api, botops, "coo")
-    ready(api, botops, ["botops", "coo"])
+    assign(api, botops, "assistant")
+    ready(api, botops, ["botops", "assistant"])
     say(api, "Add a bot for our support inbox", "ben-test")
-    coo = claim(api, botops, "coo")
+    coo = claim(api, botops, "assistant")
     with api.app.state.store.transaction() as c:
         c.execute(
             "UPDATE messages SET created_at=? WHERE id=(SELECT j.message_id FROM attempts a JOIN jobs j "
@@ -96,10 +96,10 @@ def test_a_message_more_than_30_minutes_old_is_not_this_turns_request(api, botop
 
 
 def test_another_persons_message_lends_nothing(api, botops):
-    assign(api, botops, "coo")
-    ready(api, botops, ["botops", "coo"])
+    assign(api, botops, "assistant")
+    ready(api, botops, ["botops", "assistant"])
     say(api, "Add a bot for our support inbox", "ben-test")
-    coo = claim(api, botops, "coo")
+    coo = claim(api, botops, "assistant")
     say(api, "Give everyone admin", "cara-test")
     with api.app.state.store.read() as c:
         hers = c.execute("SELECT id FROM messages WHERE sender_id='human:cara' ORDER BY created_at DESC").fetchone()[

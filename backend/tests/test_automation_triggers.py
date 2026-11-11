@@ -54,7 +54,7 @@ def mail(msg_id="m1", subject="Invoice 4471", sender="billing@acme.example"):
 def test_a_task_received_runs_its_owners_automation_only(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops"})
     post(api, "tasks", {"owner": "ops", "title": "Check the deploy", "body": "Please."})
-    post(api, "tasks", {"owner": "coo", "title": "Not for ops", "body": "Please."})
+    post(api, "tasks", {"owner": "assistant", "title": "Not for ops", "body": "Please."})
     done = runs(api, aid)["runs"]
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
@@ -94,7 +94,7 @@ def test_trigger_filters_drop_a_run_and_count_it_for_the_day(api):
 
 
 def test_an_event_trigger_and_the_chain_guard(api):
-    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner": "coo"}}
+    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner": "assistant"}}
     aid = make(api, {"type": "event", "name": "task.created"}, [spawn])
     post(api, "tasks", {"owner": "ops", "title": "Start", "body": "Please."})
     # Its own task.created never starts it again: one run, one follow-up.

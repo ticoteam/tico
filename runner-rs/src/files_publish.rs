@@ -826,7 +826,8 @@ mod tests {
         .unwrap();
         let (url, seen) = hub(vec![]).await;
         let client = Client::new(&url, "t", 5, 0).unwrap();
-        let attempt = json!({"id": "make-1", "bot": "coo", "make_page": {"task": {"id": "t1"}}});
+        let attempt =
+            json!({"id": "make-1", "bot": "assistant", "make_page": {"task": {"id": "t1"}}});
         after_turn(&state, &client, &attempt, &path, false, &[]).await;
         let queued: i64 = state
             .with(|c| c.query_row("SELECT count(*) FROM file_outbox", [], |r| r.get(0)))
@@ -834,9 +835,17 @@ mod tests {
         assert_eq!(queued, 0);
         assert!(seen.lock().unwrap().is_empty());
         assert_eq!(
-            prepare(&state, "coo", "ordinary", &path, &json!({}), false, &[])
-                .unwrap()
-                .0,
+            prepare(
+                &state,
+                "assistant",
+                "ordinary",
+                &path,
+                &json!({}),
+                false,
+                &[]
+            )
+            .unwrap()
+            .0,
             0
         );
         drop(scratch);
@@ -844,7 +853,7 @@ mod tests {
         after_turn(
             &state,
             &client,
-            &json!({"id": "ordinary", "bot": "coo"}),
+            &json!({"id": "ordinary", "bot": "assistant"}),
             &dir,
             false,
             &[],

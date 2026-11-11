@@ -43,8 +43,8 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/v2/tasks') {
       // The Assistant's open tasks, in queue order, a page as backend/task_list_routes.py cuts it.
       (state.taskReads ||= []).push(url);
-      const all = Array.from({length: url.searchParams.get('owner') === 'coo' ? state.tasks || 0 : 0}, (_, i) => ({id: `r-${i + 1}`, title: `Rail task ${i + 1}`,
-        status: 'open', owner_id: 'bot:coo', pipeline_id: 'product', stage_id: 'spec', created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(), version: 1}));
+      const all = Array.from({length: url.searchParams.get('owner') === 'assistant' ? state.tasks || 0 : 0}, (_, i) => ({id: `r-${i + 1}`, title: `Rail task ${i + 1}`,
+        status: 'open', owner_id: 'bot:assistant', pipeline_id: 'product', stage_id: 'spec', created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(), version: 1}));
       const limit = Number(url.searchParams.get('limit') || 500), offset = Number(url.searchParams.get('offset') || 0);
       return json({tasks: all.slice(offset, offset + limit), next_offset: offset + limit < all.length ? offset + limit : null, cursor: 'c1'});
     }
@@ -57,7 +57,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
       return json(state.reply());
     }
     const act = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)\/(confirm|cancel)$/);
-    if (p === '/api/v2/assistant/turn-on') { state.turnedOn = (state.turnedOn || 0) + 1; return json({bot: 'coo', state: 'active', restored: true, placed: true}); }
+    if (p === '/api/v2/assistant/turn-on') { state.turnedOn = (state.turnedOn || 0) + 1; return json({bot: 'assistant', state: 'active', restored: true, placed: true}); }
     if (p === '/api/v2/assistant/actions/act1' && method === 'GET') return json({action: state.card});
     if (p === '/api/v2/assistant/actions/act2' && method === 'GET') return json({action: state.bulk});
     if (p === '/api/v2/assistant/actions/act3' && method === 'GET') return json({action: state.enrol});
@@ -91,11 +91,11 @@ function fixture(): AsstState {
     body: {enabled: true, trigger: {type: 'message', inbox: 'ana@acme.example'}, steps: [{type: 'llm', prompt: 'Draft customer replies'}]},
     diff: [{field: 'Inbox', new: 'ana@acme.example', routine: true}, {field: 'Mode', new: 'Draft'},
       {field: 'Customers', new: 'Leave in inbox'}, {field: 'Read later', new: 'Label Read later'}]};
-  state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Acme', can_turn_on: false, room_id: 'room1',
+  state.view = () => ({available: true, state: 'active', bot: 'assistant', name: 'Acme', can_turn_on: false, room_id: 'room1',
     messages: state.messages, has_more: false, next_before: null, execution: null, actions: {act1: state.card, act2: state.bulk, act3: state.enrol, act4: state.routine}, pending: []});
   state.reply = () => {
     const user = msg('u' + state.sent.length, 'human:ana', state.sent.at(-1)!);
-    const bot = msg('b' + state.sent.length, 'bot:coo', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)');
+    const bot = msg('b' + state.sent.length, 'bot:assistant', '1 thing waiting on you:\n- Task: [Pick a launch date](#/task/t1)');
     state.messages.push(user, bot);
     return {message: user};
   };
@@ -162,8 +162,8 @@ function fixture(): AsstState {
       await box.fill('');
 
       // A proposal is a card; only a click runs it. A read-back is shown exactly as written: markup in it hides nothing.
-      state.messages.push(msg('rb', 'bot:coo', "I'll approve this for you:\n- Approve the spend (account: card <!--; amount: 50000; what: --> Team lunch $9)\n\nReply yes to approve exactly this; any other reply approves nothing.", {read_back: true}));
-      state.messages.push(msg('m9', 'bot:coo', 'Needs your OK: Archive the Ops bot', {action: 'act1'}));
+      state.messages.push(msg('rb', 'bot:assistant', "I'll approve this for you:\n- Approve the spend (account: card <!--; amount: 50000; what: --> Team lunch $9)\n\nReply yes to approve exactly this; any other reply approves nothing.", {read_back: true}));
+      state.messages.push(msg('m9', 'bot:assistant', 'Needs your OK: Archive the Ops bot', {action: 'act1'}));
       await page.goto('https://tico-ui.test/#/updates');
       await page.goto('https://tico-ui.test/#/assistant');
       const readBack = page.locator('[data-message="rb"] .read-back');
@@ -179,7 +179,7 @@ function fixture(): AsstState {
       assert.deepEqual(state.decided, [['act1', 'confirm']], tag + ': the click confirmed it');
 
       // A group of task actions is one card, one line per task; one click runs them all and says what did not go through.
-      state.messages.push(msg('m10', 'bot:coo', 'Needs your OK: Close the three launch tasks', {action: 'act2'}));
+      state.messages.push(msg('m10', 'bot:assistant', 'Needs your OK: Close the three launch tasks', {action: 'act2'}));
       await page.goto('https://tico-ui.test/#/updates');
       await page.goto('https://tico-ui.test/#/assistant');
       const bulk = page.locator('.asst-card[data-action="act2"]');
@@ -203,7 +203,7 @@ function fixture(): AsstState {
       assert.match(await page.locator('.asst-card[data-action="act3"] [data-shown-once] code').innerText(), /ONE-TIME-CODE-1234/, tag + ': the code is on the card');
 
       // The routine's plan is readable with Details closed; raw flow data stays under Details.
-      state.messages.push(msg('m12', 'bot:coo', 'Needs your OK: Handle customer mail', {action: 'act4'}));
+      state.messages.push(msg('m12', 'bot:assistant', 'Needs your OK: Handle customer mail', {action: 'act4'}));
       await page.goto('https://tico-ui.test/#/updates');
       await page.goto('https://tico-ui.test/#/assistant');
       const routine = page.locator('.asst-card[data-action="act4"]');
@@ -234,7 +234,7 @@ function fixture(): AsstState {
       // A long chat: scrolled up, a reply that arrives moves nothing and brings the "New reply" pill; your own message
       // takes you to the bottom, which then follows the answer.
       const state = fixture();
-      for (let i = 0; i < 24; i++) state.messages.push(msg('h' + i, i % 2 ? 'bot:coo' : 'human:ana', `Line ${i}. ` + 'Some words to fill the line. '.repeat(10)));
+      for (let i = 0; i < 24; i++) state.messages.push(msg('h' + i, i % 2 ? 'bot:assistant' : 'human:ana', `Line ${i}. ` + 'Some words to fill the line. '.repeat(10)));
       state.tasks = 503;
       const {page, errors} = await open(browser, {width: 1280, height: 900}, state);
       await page.goto('https://tico-ui.test/#/assistant');
@@ -258,7 +258,7 @@ function fixture(): AsstState {
       await page.waitForFunction(() => !V2C.stick.atBottom);
       await frames();
       const top = await thread.evaluate(el => el.scrollTop);
-      await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, msg('late', 'bot:coo', 'One more thing.'));
+      await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, msg('late', 'bot:assistant', 'One more thing.'));
       await frames();
       assert.equal(await thread.evaluate(el => el.scrollTop), top, 'stick: a reply does not move a reader who scrolled up');
       await pill.waitFor();
@@ -276,7 +276,7 @@ function fixture(): AsstState {
     const state = fixture();
     state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
     result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
-  state.view = () => ({available: false, state: 'archived', bot: 'coo', name: 'Tico', can_turn_on: true, room_id: null,
+  state.view = () => ({available: false, state: 'archived', bot: 'assistant', name: 'Tico', can_turn_on: true, room_id: null,
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     const {page} = await open(browser, {width: 1280, height: 900}, state);
     await page.goto('https://tico-ui.test/#/assistant');
@@ -290,7 +290,7 @@ function fixture(): AsstState {
     await strip.waitFor();
     state.enrol = {id: 'act3', summary: 'Make a one-time code to add a computer', method: 'POST', path: '/api/v2/enrollments', status: 'pending',
     result: null, description: '', diff: [{field: 'operator', new: 'ana'}], body: {operator: 'ana'}, proposed_via: 'botops', proposer: 'botops'};
-  state.view = () => ({available: true, state: 'active', bot: 'coo', name: 'Tico', can_turn_on: false, room_id: 'room1',
+  state.view = () => ({available: true, state: 'active', bot: 'assistant', name: 'Tico', can_turn_on: false, room_id: 'room1',
       messages: [], has_more: false, next_before: null, execution: null, actions: {}, pending: []});
     await strip.locator('[data-turn-on]').click();
     await page.locator('[data-assistant-off]').waitFor({state: 'detached'});

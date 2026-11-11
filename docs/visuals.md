@@ -18,9 +18,9 @@ Every bot's instructions carry this line, word for word:
 
 > Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer
 > clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed
-> graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.
+> graphics or edited video, file a task for bot:designer or bot:video-owner; do not buy them.
 
-- **Design and Video Producer** (`designer`, `video-producer`) get the first sentence only, since the second sends
+- **Design and Video Owner** (`designer`, `video-owner`) get the first sentence only, since the second sends
   that work to them.
 - **The shared rules** say the same under "Visuals in replies" (`policies/shared-rules.md`), and add how to attach
   one: `--visual <file>` and `--title <caption>` on the reply or comment.

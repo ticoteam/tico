@@ -10,7 +10,7 @@ const {html, uiFile} = require('./support/page.cts') as import('./support/page.c
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
-  assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', github_owner: '', local: false,
+  assistant_bot: 'assistant', public_url: 'https://initech.test', runner_url: 'https://initech.test', github_owner: '', local: false,
   release: '', onboarding_needed: false, providers_configured: true};
 type SetupPerson = {id: string; name: string; title: string; seats: string[]; invited_at: string | null; person?: string};
 type SetupRecord = {names: {company_name: string}; completed: string | null; needed: boolean; bots: unknown[];

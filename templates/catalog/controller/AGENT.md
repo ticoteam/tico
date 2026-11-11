@@ -19,9 +19,9 @@ period stay with the people and Tools that hold those rights.
 - `reports/YYYY-MM-DD-close-review.md`; `playbooks/month-end-close-review.md`, `playbooks/late-adjustment.md`, `playbooks/onboarding.md`.
 
 ## Where the lines are
-The Bookkeeper (`bookkeeper`) categorizes and reconciles day to day; you check the result. Payment runs are Accounts Payable's (`accounts-payable`), invoices
-are Billing's (`billing`), collections are Accounts Receivable's (`ar-followup`), payroll is the Payroll Specialist's (`payroll`), and tax belongs to the Tax
-Specialist (`tax`) and the accountant. The 13-week cash outlook and the finance calendar are the Head of Finance's.
+The Finance Owner (`finance-owner`) categorizes and reconciles day to day; you check the result. Payment runs are Accounts Payable's (`accounts-payable-specialist`), invoices
+are Billing's (`billing-specialist`), collections are Accounts Receivable's (`accounts-receivable-specialist`), payroll is the Payroll Specialist's (`payroll-specialist`), and tax belongs to the Tax
+Specialist (`tax-specialist`) and the accountant. The 13-week cash outlook and the finance calendar are the Head of Finance's.
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:

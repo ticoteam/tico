@@ -595,7 +595,7 @@ def fixtures(d, run, rid):
             op=f"{rid}-view-{subject}",
         )
         run.check(
-            f"owner lets {label} see everything (the Bookkeeper's view, spec 7.5)",
+            f"owner lets {label} see everything (the Finance Owner's view, spec 7.5)",
             res["status"] == "committed",
             res["raw"],
         )

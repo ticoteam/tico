@@ -137,8 +137,8 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
             refs=RT.stamp({}, "schedule", "morning", purpose="  sort   inbox "),
         )
     assert turn(api, claim(api, r))["purpose"] == "sort inbox"
-    assert RT.purpose_for("pr-reviewer", "pr_checks") == "handle PR checks"
-    assert RT.purpose_for("pr-reviewer", "status_or_relation") == "react to task change"
+    assert RT.purpose_for("reviewer", "pr_checks") == "handle PR checks"
+    assert RT.purpose_for("reviewer", "status_or_relation") == "react to task change"
     assert RT.purpose_for("pr-reviewer-sol", "pr_checks") == "review PR"
     assert RT.purpose_for("reviewer-2", "status_or_relation") == "review PR"
     assert RT.purpose_for("ops", "other") == RT.purpose_for("ops", None) == "unknown"
@@ -147,7 +147,7 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
 def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
     with api.app.state.store.transaction() as c:
         for i, (bot, kind) in enumerate(
-            [("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None), ("ops", "other")]
+            [("ops", "comment"), ("reviewer", "pr_checks"), ("ops", None), ("ops", "other")]
         ):
             c.execute(
                 "INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind) VALUES(?,?,?,'task',?)",

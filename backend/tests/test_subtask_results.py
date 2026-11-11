@@ -18,13 +18,13 @@ def done(api, tid, by, note):
 
 
 def test_nested_sub_tasks_wake_only_the_task_that_filed_them_once_each(api):
-    machine = task_bot(api, lanes=True, others=("coo", "finance", "cpo"))
+    machine = task_bot(api, lanes=True, others=("assistant", "finance", "cpo"))
     with api.app.state.store.transaction() as c:
-        lead = H.task_create(c, "human:ana", "Deliver the import", "Plan and delegate.", "bot:coo", lint=False)
+        lead = H.task_create(c, "human:ana", "Deliver the import", "Plan and delegate.", "bot:assistant", lint=False)
     planning = start(api, machine, lead["id"], "lead-task")
     with api.app.state.store.transaction() as c:
         build = H.task_create(
-            c, "bot:coo", "Implement the import", "Build and review.", "bot:ops", parent_id=lead["id"], lint=False
+            c, "bot:assistant", "Implement the import", "Build and review.", "bot:ops", parent_id=lead["id"], lint=False
         )
     finish(api, machine, planning)
     builder = start(api, machine, build["id"], "builder-task")
@@ -49,7 +49,7 @@ def test_nested_sub_tasks_wake_only_the_task_that_filed_them_once_each(api):
         assert not queued(api, "ops"), "a comment on a sub-task is not news that wakes its filer"
         done(api, review["id"], "bot:" + who, "Review recorded.")
         finish(api, machine, checking)
-        assert not queued(api, "coo"), "review progress never wakes the task above the builder"
+        assert not queued(api, "assistant"), "review progress never wakes the task above the builder"
     # Both reviews ended: the builder is woken once, in its own task's lane, with how each ended.
     back = start(api, machine, build["id"], "builder-task")
     assert "The tasks this one filed have ended" in back["message"]["body"]
@@ -61,7 +61,7 @@ def test_nested_sub_tasks_wake_only_the_task_that_filed_them_once_each(api):
     up = start(api, machine, lead["id"], "lead-task")
     assert "Implement the import: Done" in up["message"]["body"]
     with api.app.state.store.read() as c:
-        filed = [k for k, _ in X.wakes(c, lead["id"], "bot:coo") if ":filed:" in k]
+        filed = [k for k, _ in X.wakes(c, lead["id"], "bot:assistant") if ":filed:" in k]
     assert len(filed) == 1 and filed[0].endswith(":filed:" + build["id"])
 
 

@@ -33,14 +33,14 @@ interface Created {url: string; body: Record<string, string>}
   for (const helper of ['errors.js','dom.js']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app',helper),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app/recruit.js'),'utf8'),context);
   context.recruitSeat=async (id: string)=>{opened.push(id);};
-  const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support'});
+  const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support-owner'});
   assert.equal(typeof submitHandlerAtShow,'function','submission is intercepted before the form is shown');
   let prevented = false;
   form.onsubmit!({preventDefault(){prevented=true;}});
   assert.equal(prevented,true,'a valid prefilled form cannot default-submit while the catalog is pending');
   assert.equal(results.innerHTML,'','pending submission does not offer candidates');
   assert.equal(created.length,0,'pending submission cannot create a bot');
-  resolveCatalog({cards:[{slug:'support',template:'support',name:'Support Agent',summary:'Answer support tickets',instructions:'Template rules'}]});
+  resolveCatalog({cards:[{slug:'support',template:'support-owner',name:'Support Agent',summary:'Answer support tickets',instructions:'Template rules'}]});
   await opening;
   assert.equal(created.length,0,'opening an external handoff cannot create a bot');
   prevented=false;

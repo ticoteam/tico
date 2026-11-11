@@ -18,12 +18,12 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT OR IGNORE INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Owner','','active',?)",
+            "VALUES('strategy-owner','strategy-owner','Strategy Owner','','active',?)",
             (H.now(),),
         )
-        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('goal-manager','ana')").rowcount:
-            BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
-    return as_bot(api, "goal-manager")
+        if c.execute("INSERT OR IGNORE INTO bot_config(bot,owner_id) VALUES('strategy-owner','ana')").rowcount:
+            BS.write(c, 'strategy-owner', {"runtime": "fake", "host": "keeper"})
+    return as_bot(api, "strategy-owner")
 
 
 def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
@@ -31,7 +31,7 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     software = next(model for model in models if model["model"] == "software")
     assert software["name"] == "Software company"
     assert {seat["team"] for seat in software["seats"]} >= {"engineering", "product"}
-    assert any(seat["template"] == "engineering-lead" for seat in software["seats"])
+    assert any(seat["template"] == "engineering-team-manager" for seat in software["seats"])
     assert all(set(model) == {"model", "name", "about", "seats"} for model in models)
     assert all("bots" not in model and "people" not in model and "tasks" not in model for model in models)
     from clients import hubtools
@@ -65,9 +65,9 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
     post(api, "seats/draft", {"title": "Customer support lead"})
     assert asked == []
-    again = post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "coo", "redraft": True})
+    again = post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "assistant", "redraft": True})
     assert again["source"] == "model" and again["description"].startswith("Leads our support desk.")
-    assert asked == [("Customer support lead", get(api, "bots/coo")["display_name"])]
+    assert asked == [("Customer support lead", get(api, "bots/assistant")["display_name"])]
     for broken in (lambda *_: (_ for _ in ()).throw(TimeoutError("slow")), lambda *_: "Too short."):
         monkeypatch.setattr(recruiting, "_rewrite_call", broken)
         assert post(api, "seats/draft", {"title": "Customer support lead", "redraft": True}) == drafted
@@ -78,7 +78,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     asked.clear()
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
     as_member(api, "ben@acme.example")
-    for reports_to in ("coo", "nobody-here", "human:ana"):
+    for reports_to in ("assistant", "nobody-here", "human:ana"):
         post(
             api,
             "seats/draft",
@@ -94,7 +94,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     with api.app.state.store.read() as c:
         cara = H.human(c, "cara")["name"]
     assert asked == [("Customer support lead", "")] * 3 + [("Customer support lead", cara)]
-    bot = as_bot(api, "coo")
+    bot = as_bot(api, "assistant")
     assert api.post("/api/v2/seats/draft", headers=bot, json={"title": "Customer support lead"}).status_code == 403
 
 
@@ -119,49 +119,49 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     # A title that is a template's job drafts from that template at once, without the model, two-letter work included.
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (
-        ("QA engineer", "issue-triage"),
+        ("QA engineer", "qa-owner"),
         ("Security engineer", "security-engineer"),
-        ("Marketing manager", "marketing-lead"),
-        ("Customer support lead", "support-lead"),
-        ("Head of People", "people-lead"),
+        ("Marketing manager", "segment-marketing-owner"),
+        ("Customer support lead", "support-owner"),
+        ("Head of People", "head-of-people"),
         ("Developer Advocates", "developer-advocate"),
-        ("Head of HR", "people-lead"),
-        ("HR generalist", "people-hr"),
-        ("Head of engineering", "engineering-lead"),
-        ("Director of marketing", "marketing-lead"),
-        ("Head of Human Resources", "people-lead"),
-        ("Head of Legal Operations", "legal-ops"),
+        ("Head of HR", "head-of-people"),
+        ("HR generalist", "hr-generalist"),
+        ("Head of engineering", "engineering-team-manager"),
+        ("Director of marketing", "growth-team-manager"),
+        ("Head of Human Resources", "head-of-people"),
+        ("Head of Legal Operations", "legal-operations-manager"),
         ("Developer relations", "developer-advocate"),
-        ("PR manager", "pr"),
-        ("VP Engineering", "engineering-lead"),
-        ("Head of Compliance", "compliance"),
-        ("Head of Customer Success", "customer-success"),
+        ("PR manager", "pr-manager"),
+        ("VP Engineering", "engineering-team-manager"),
+        ("Head of Compliance", "compliance-manager"),
+        ("Head of Customer Success", "success-team-manager"),
         ("Account Director", "account-manager"),
-        ("Human Resources Generalist", "people-hr"),
-        ("Financial Planning Analyst", "spend-watcher"),
-        ("SRE", "incident-scribe"),
-        ("SDR", "sdr-research"),
-        ("Site Reliability Manager", "incident-scribe"),
-        ("Sales Development Specialist", "sdr-research"),
-        ("Public relations manager", "pr"),
-        ("Senior Software Developer", "pr-reviewer"),
-        ("QA engineer (contract)", "issue-triage"),
+        ("Human Resources Generalist", "hr-generalist"),
+        ("Financial Planning Analyst", "fpa-analyst"),
+        ("SRE", "site-reliability-engineer"),
+        ("SDR", "outbound-sales-owner"),
+        ("Site Reliability Manager", "site-reliability-engineer"),
+        ("Sales Development Specialist", "outbound-sales-owner"),
+        ("Public relations manager", "pr-manager"),
+        ("Senior Software Developer", "builder"),
+        ("QA engineer (contract)", "qa-owner"),
         ("Security engineer - remote", "security-engineer"),
-        ("Manager, Engineering", "engineering-lead"),
+        ("Manager, Engineering", "engineering-team-manager"),
         ("Engineer, Security", "security-engineer"),
-        ("Manager, Customer Success", "customer-success"),
-        ("VP, Product Marketing", "product-marketing"),
+        ("Manager, Customer Success", "success-owner"),
+        ("VP, Product Marketing", "growth-team-manager"),
         ("Sr. Security Engineer", "security-engineer"),
-        ("Vice President, Product Marketing", "product-marketing"),
-        ("Manager (Engineering)", "engineering-lead"),
-        ("Analyst (Pricing)", "pricing"),
+        ("Vice President, Product Marketing", "growth-team-manager"),
+        ("Manager (Engineering)", "engineering-team-manager"),
+        ("Analyst (Pricing)", "pricing-analyst"),
         ("Software Engineer, Security", "security-engineer"),
         ("Software Engineer (Security)", "security-engineer"),
-        ("Software Engineer, Site Reliability", "incident-scribe"),
-        ("Engineer (QA) - Remote, US", "issue-triage"),
-        ("Support Representative", "support"),
-        ("Customer Support Rep", "support"),
-        ("Customer Service Agent", "support"),
+        ("Software Engineer, Site Reliability", "site-reliability-engineer"),
+        ("Engineer (QA) - Remote, US", "qa-owner"),
+        ("Support Representative", "support-owner"),
+        ("Customer Support Rep", "support-owner"),
+        ("Customer Service Agent", "support-owner"),
         ("Director of Revenue Recognition", "revenue-accountant"),
         ("Employee Relations Manager", "hr-business-partner"),
     ):
@@ -194,11 +194,11 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
 
     # Applicants: no template is "strong" for a Rust engineer on "Engineer" alone; the QA Engineer is for a QA engineer.
-    rust = post(api, "seats", {"title": "Rust engineer", "reports_to": "coo"})
+    rust = post(api, "seats", {"title": "Rust engineer", "reports_to": "assistant"})
     assert "strong" not in {c["match"] for c in post(api, f"seats/{rust['id']}/recruit", {})["candidates"]}
-    qa = post(api, "seats", {"title": "QA engineer", "reports_to": "coo"})
+    qa = post(api, "seats", {"title": "QA engineer", "reports_to": "assistant"})
     first = post(api, f"seats/{qa['id']}/recruit", {})["candidates"][0]
-    assert first["template"] == "issue-triage" and first["match"] == "strong"
+    assert first["template"] == "qa-owner" and first["match"] == "strong"
 
 
 def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_job_by_any_of_its_names(api):
@@ -207,46 +207,46 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
     Partner); a job of a kind may be a template named by rank on the work ("Release Engineer" is the Release Owner)."""
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (
-        ("CMO", "marketing-lead"),
-        ("Chief Marketing Officer", "marketing-lead"),
-        ("CTO", "engineering-lead"),
-        ("Head of Growth", "marketing-lead"),
-        ("PMM", "product-marketing"),
-        ("Senior Product Marketer", "product-marketing"),
-        ("Content Writer", "content"),
-        ("Copywriter", "content"),
-        ("Blog Writer", "content"),
-        ("Social Media Coordinator", "listening"),
-        ("Events Coordinator", "events"),
-        ("Field Marketing Manager", "events"),
-        ("Lifecycle Marketing Manager", "email-marketing"),
-        ("Retention Marketing Manager", "email-marketing"),
-        ("Marketing Ops Specialist", "marketing-ops"),
-        ("Performance Marketing Manager", "paid-media"),
-        ("Paid Social Manager", "paid-media"),
-        ("PPC Specialist", "paid-media"),
-        ("Communications Manager", "pr"),
-        ("Online Reviews Manager", "reputation"),
-        ("SDET", "issue-triage"),
-        ("Software Engineer in Test", "issue-triage"),
-        ("Test Engineer", "issue-triage"),
+        ("CMO", "growth-team-manager"),
+        ("Chief Marketing Officer", "growth-team-manager"),
+        ("CTO", "engineering-team-manager"),
+        ("Head of Growth", "growth-team-manager"),
+        ("PMM", "segment-marketing-owner"),
+        ("Senior Product Marketer", "segment-marketing-owner"),
+        ("Content Writer", "content-owner"),
+        ("Copywriter", "content-owner"),
+        ("Blog Writer", "content-owner"),
+        ("Social Media Coordinator", "social-media-manager"),
+        ("Events Coordinator", "event-marketing-manager"),
+        ("Field Marketing Manager", "event-marketing-manager"),
+        ("Lifecycle Marketing Manager", "email-owner"),
+        ("Retention Marketing Manager", "email-owner"),
+        ("Marketing Ops Specialist", "marketing-operations-manager"),
+        ("Performance Marketing Manager", "search-ads-owner"),
+        ("Paid Social Manager", "social-ads-owner"),
+        ("PPC Specialist", "search-ads-owner"),
+        ("Communications Manager", "pr-manager"),
+        ("Online Reviews Manager", "reputation-manager"),
+        ("SDET", "qa-owner"),
+        ("Software Engineer in Test", "qa-owner"),
+        ("Test Engineer", "qa-owner"),
         ("AppSec Engineer", "security-engineer"),
         ("Build Engineer", "devops-engineer"),
         ("CI/CD Engineer", "devops-engineer"),
         ("Release Engineer", "release-owner"),
         ("Developer Relations Engineer", "developer-advocate"),
         ("DevRel", "developer-advocate"),
-        ("Documentation Engineer", "docs-writer"),
-        ("Code Reviewer", "pr-reviewer"),
-        ("Software Engineer", "pr-reviewer"),
-        ("Tax accountant", "tax"),
+        ("Documentation Engineer", "technical-writer"),
+        ("Code Reviewer", "reviewer"),
+        ("Software Engineer", "builder"),
+        ("Tax accountant", "tax-specialist"),
         ("Key account manager", "account-manager"),
-        ("Software Development Engineer", "pr-reviewer"),
-        ("Code Review Engineer", "pr-reviewer"),
+        ("Software Development Engineer", "builder"),
+        ("Code Review Engineer", "reviewer"),
         ("Product Security Engineer", "security-engineer"),
         ("Product Security Engineer II", "security-engineer"),
         ("Product Security Engineers", "security-engineer"),
-        ("Affiliate Marketing Manager", "affiliates"),
+        ("Affiliate Marketing Manager", "affiliates-owner"),
     ):
         assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
     for title in (
@@ -254,7 +254,7 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         "Partner Marketing Manager",
         "Marketing Coordinator",
         "Digital Marketing Manager",
-        "Brand Designer",  # the Brand Owner is built in, so no card is hired for it
+        "Brand Designer",  # the Design Owner is built in, so no card is hired for it
         "Backend Engineer",
         "Go Developer",
         "Data Scientist",
@@ -271,18 +271,18 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
     when no template is the job, after the ones that are; no head's template leads a job of a kind."""
 
     def found(title, description=""):
-        seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": description})
+        seat = post(api, "seats", {"title": title, "reports_to": "assistant", "description": description})
         return post(api, f"seats/{seat['id']}/recruit", {})
 
     sales = found("Head of Sales")
-    assert [c["template"] for c in sales["candidates"] if c["match"] == "strong"] == ["sales-lead"]
+    assert [c["template"] for c in sales["candidates"] if c["match"] == "strong"] == ["growth-team-manager"]
     assert sales["agents"] == [] and sales["agents_at"] == 1
 
     rust = found("Rust engineer")
     assert [a["id"] for a in rust["agents"]] == ["claude", "codex"] and rust["agents_at"] == 0
     assert {a["match"] for a in rust["agents"]} == {"strong"} and {a["source"] for a in rust["agents"]} == {"cloud"}
     assert rust["candidates"][0]["department_id"] == "engineering"
-    assert rust["candidates"][0]["template"] != "engineering-lead"
+    assert rust["candidates"][0]["template"] != "engineering-team-manager"
     assert all(c["match"] != "strong" for c in rust["candidates"])
 
     security = found("Security engineer")
@@ -297,7 +297,7 @@ def test_strong_is_the_template_that_is_the_job_and_a_coding_job_has_the_cloud_a
 
     # A cloud agent's add builds from the top template: one that fits, or Engineering's first for a coding seat.
     def top(title):
-        seat = post(api, "seats", {"title": title, "reports_to": "coo", "description": ""})
+        seat = post(api, "seats", {"title": title, "reports_to": "assistant", "description": ""})
         with api.app.state.store.read() as c:
             row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()
             card = recruiting.top_card(
@@ -581,15 +581,21 @@ def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
         c.execute(lifecycle.SCHEMA)
         c.execute(
             "INSERT INTO seats(id,title,description,reports_to,created_at,created_by,updated_at,updated_by) "
-            "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')",
+            "VALUES('s-old','Role','Keeps the books.','assistant',?,'human:ana',?,'human:ben')",
             (H.now(), H.now()),
         )
         lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")
         chart = lifecycle.create_seat(
-            api.app.state.auth, c, owner, "Analyst", "From the chart model.", "coo", description_by=recruiting.CHART
+            api.app.state.auth,
+            c,
+            owner,
+            "Analyst",
+            "From the chart model.",
+            "assistant",
+            description_by=recruiting.CHART,
         )
-    mine = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers email."})
+    mine = post(api, "seats", {"title": "Support lead", "reports_to": "assistant", "description": "Answers email."})
     assert get(api, f"seats/{mine['id']}")["description_by"] == "person"
     assert get(api, "seats/s-old")["description_by"] == "person"
     shown = get(api, f"seats/{chart['id']}")
@@ -605,7 +611,7 @@ def test_recruit_answers_at_once_with_up_to_eight_applicants_best_first_each_wit
         "seats",
         {
             "title": "Customer support lead",
-            "reports_to": "coo",
+            "reports_to": "assistant",
             "description": "Answers customer email and chat and keeps the help center current.",
         },
     )
@@ -642,7 +648,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
         "seats",
         {
             "title": "Support lead",
-            "reports_to": "coo",
+            "reports_to": "assistant",
             "description": "Runs customer support and reports weekly on response times.",
         },
     )
@@ -660,7 +666,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
 
-    below = post(api, "seats", {"title": "Support agent", "reports_to": "coo"})
+    below = post(api, "seats", {"title": "Support agent", "reports_to": "assistant"})
     with api.app.state.store.transaction() as c:  # a seat may report to another seat (the chart import makes these)
         c.execute("UPDATE seats SET reports_to=? WHERE id=?", ("seat:" + seat["id"], below["id"]))
 
@@ -671,7 +677,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     bot = get(api, f"bots/{slug}")
     assert (bot["stage"], bot["reports_to"], bot["display_name"], hired["name"]) == (
         "onboarding",
-        "coo",
+        "assistant",
         "Support Desk",
         "Support Desk",
     )
@@ -715,7 +721,7 @@ def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_neve
         "seats",
         {
             "title": "Head of Marketing",
-            "reports_to": "coo",
+            "reports_to": "assistant",
             "description": "Leads marketing and sets the content plan.",
         },
     )
@@ -723,7 +729,7 @@ def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_neve
         api,
         "seats",
         {
-            "title": "Content Marketer",
+            "title": "Content Owner",
             "reports_to": "seat:" + head["id"],
             "description": "Writes the blog and the newsletter.",
         },
@@ -733,30 +739,30 @@ def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_neve
     assert "reports_now" not in get(api, f"seats/{head['id']}")
 
     hired = fill(api, writer)
-    assert hired["reports_to"] == "coo" and bot_line(api, hired) == "coo"
+    assert hired["reports_to"] == "assistant" and bot_line(api, hired) == "assistant"
     assert get(api, f"bots/{hired['slug']}")["stage"] == "onboarding"
 
     manager = fill(api, head)
     assert bot_line(api, hired) == manager["bot"]  # the writer moves under the Head of Marketing bot
-    assert bot_line(api, manager) == "coo"
+    assert bot_line(api, manager) == "assistant"
     assert get(api, "seats")["seats"] == []
 
     # A chain of open seats hired bottom-up ends with each bot under the one above.
-    top = post(api, "seats", {"title": "Head of Sales", "reports_to": "coo", "description": "Leads sales."})
+    top = post(api, "seats", {"title": "Head of Sales", "reports_to": "assistant", "description": "Leads sales."})
     middle = post(
         api, "seats", {"title": "Sales Lead", "reports_to": "seat:" + top["id"], "description": "Leads the sales team."}
     )
     bottom = post(api, "seats", {"title": "Sales Rep", "reports_to": "seat:" + middle["id"], "description": "Sells."})
     lowest = fill(api, bottom)
-    assert bot_line(api, lowest) == "coo"
+    assert bot_line(api, lowest) == "assistant"
     highest = fill(api, top)
     middling = fill(api, middle)
     assert bot_line(api, middling) == highest["bot"]
     assert bot_line(api, lowest) == middling["bot"]  # moved when the seat above it filled
-    assert bot_line(api, highest) == "coo"
+    assert bot_line(api, highest) == "assistant"
 
     # A bot moved by hand under an open manager keeps that manager when the seat fills.
-    head = post(api, "seats", {"title": "Head of Support", "reports_to": "coo", "description": "Leads support."})
+    head = post(api, "seats", {"title": "Head of Support", "reports_to": "assistant", "description": "Leads support."})
     writer = post(
         api,
         "seats",
@@ -769,7 +775,7 @@ def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_neve
     assert bot_line(api, hired) == "human:ben"
 
     # An open manager moved under its own hire does not circle when it fills.
-    head = post(api, "seats", {"title": "Head of Finance", "reports_to": "coo", "description": "Leads finance."})
+    head = post(api, "seats", {"title": "Head of Finance", "reports_to": "assistant", "description": "Leads finance."})
     writer = post(
         api, "seats", {"title": "Bookkeeper", "reports_to": "seat:" + head["id"], "description": "Keeps the books."}
     )
@@ -782,20 +788,22 @@ def test_seats_filled_under_open_manager_seats_keep_each_bot_on_a_line_that_neve
     )
     manager = fill(api, head)  # filling must not close a circle
     assert bot_line(api, manager) == hired["bot"]
-    assert bot_line(api, hired) == "coo"
+    assert bot_line(api, hired) == "assistant"
     with api.app.state.store.read() as c:  # walk up from the manager: no bot twice, ends at the top
         line, seen = manager["bot"], []
         while H.bot(c, line):
             assert line not in seen, "the bot hierarchy has a circle"
             seen.append(line)
             line = c.execute("SELECT reports_to FROM bot_config WHERE bot=?", (line,)).fetchone()[0] or ""
-        assert seen == [manager["bot"], hired["bot"], "coo"]
+        assert seen == [manager["bot"], hired["bot"], "assistant"]
 
 
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):
     providers(api, "anthropic", "openai")
     strategy_token = strategy_bot(api)
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers customer email."})
+    seat = post(
+        api, "seats", {"title": "Support lead", "reports_to": "assistant", "description": "Answers customer email."}
+    )
     pick = post(api, f"seats/{seat['id']}/recruit", {})["candidates"][0]
     # A template that is not a starter: BotOps builds its repository, so a team with no BotOps cannot hire it.
     real = recruiting._recruitable
@@ -828,7 +836,7 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
     # The pick's own rule, behind the route's: a bot, or anyone acting for a person without their confirmation.
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM seats WHERE id=?", (seat["id"],)).fetchone()
-        for who in (Identity("bot:goal-manager", "bot"), Identity("human:ana", "owner", via="botops")):
+        for who in (Identity("bot:strategy-owner", "bot"), Identity("human:ana", "owner", via="botops")):
             with pytest.raises(Problem, match="Only a person picks"):
                 recruiting._may_hire(api.app.state.auth, c, who, row)
     refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": pick["template"]})
@@ -838,14 +846,18 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
 
 def test_a_seat_set_up_with_a_template_hires_only_that_template_and_a_removed_one_pins_nothing(api):
     providers(api, "anthropic", "openai")
-    seat = post(api, "seats", {"title": "Rust engineer", "reports_to": "coo", "description": "Writes the Rust core."})
+    seat = post(
+        api, "seats", {"title": "Rust engineer", "reports_to": "assistant", "description": "Writes the Rust core."}
+    )
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET template='security-engineer' WHERE id=?", (seat["id"],))
 
     # Another Recruit template is refused, plainly, and nothing is created.
     with api.app.state.store.read() as c:
         before = {r["slug"] for r in c.execute("SELECT slug FROM bots")}
-    refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": "engineering-lead"})
+    refused = api.post(
+        f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": "engineering-team-manager"}
+    )
     assert refused.status_code == 422 and "set up with" in refused.text, refused.text
     with api.app.state.store.read() as c:
         assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
@@ -854,7 +866,7 @@ def test_a_seat_set_up_with_a_template_hires_only_that_template_and_a_removed_on
     assert hired["template"] == "security-engineer" and hired["seat"] == seat["id"]
 
     # A pinned template removed from the catalog no longer pins the seat: any applicant may be hired.
-    gone = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers customers."})
+    gone = post(api, "seats", {"title": "Support lead", "reports_to": "assistant", "description": "Answers customers."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET template='retired-template' WHERE id=?", (gone["id"],))
     offered = post(api, f"seats/{gone['id']}/recruit", {})["candidates"]
@@ -867,7 +879,7 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     department is the template's own, so only an engineering seat that codes lists the cloud agents, after it."""
 
     def pinned(title, template):
-        seat = post(api, "seats", {"title": title, "reports_to": "coo"})
+        seat = post(api, "seats", {"title": title, "reports_to": "assistant"})
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE seats SET template=? WHERE id=?", (template, seat["id"]))
         return post(api, f"seats/{seat['id']}/recruit", {})
@@ -878,6 +890,6 @@ def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineeri
     assert [(a["id"], a["match"]) for a in rust["agents"]] == [("claude", "good"), ("codex", "good")]
 
     # The title says engineer, but the template is Marketing's: the seat is Marketing's, so no agents.
-    marketing = pinned("Rust engineer", "marketing-lead")
-    assert [c["template"] for c in marketing["candidates"]] == ["marketing-lead"]
+    marketing = pinned("Rust engineer", "growth-team-manager")
+    assert [c["template"] for c in marketing["candidates"]] == ["growth-team-manager"]
     assert marketing["department"] == "marketing" and marketing["agents"] == []

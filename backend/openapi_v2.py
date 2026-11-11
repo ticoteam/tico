@@ -1772,7 +1772,7 @@ STABLE = [
         "CompanyHistory",
     ),
     (
-        "/api/v2/goal-manager/turn-on",
+        "/api/v2/strategy-owner/turn-on",
         "post",
         "Goals",
         "turnOnGoalManager",
@@ -5403,7 +5403,7 @@ STABLE.extend(
             "get",
             "Finance",
             "listFinanceSubscriptions",
-            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Finance Owner confirms, each "
             "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
             "monthly total of the active ones. status narrows them",
             "FinanceSubscriptions",
@@ -8659,7 +8659,7 @@ STABLE.extend(
             'post',
             'Rules',
             'readRuleDocument',
-            'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it',
+            'Add a document for the Rules Owner to read: a file you can read, or a public link (saved as a file version); the Rules Owner suggests the rules in it',
             None,
         ),
         (
@@ -8667,7 +8667,7 @@ STABLE.extend(
             'post',
             'Rules',
             'askRules',
-            'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task',
+            'A can-I question: the active rules that share words with it, cited, and the Rules Owner\'s answer on a task',
             None,
         ),
         (

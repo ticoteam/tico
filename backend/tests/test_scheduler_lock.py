@@ -33,12 +33,12 @@ def seed(store):
     rows = []
     for i in range(TASKS):
         status = "open"  # a row made by hand may only start open (tasks_enter_only)
-        owner = "bot:coo" if i % 3 else "ana"
+        owner = "bot:assistant" if i % 3 else "ana"
         due = None
         if i % 50 == 0:
             # due tomorrow (inside the day of slack), or long past and owned by a paused bot
             due = stamp(AT + timedelta(hours=10)) if i % 100 else "2026-09-01"
-            owner = "bot:coo" if i % 100 else "bot:finance"
+            owner = "bot:assistant" if i % 100 else "bot:finance"
         rows.append(
             (
                 str(uuid.uuid4()),
@@ -67,7 +67,7 @@ def seed(store):
 def routine(c, key, title, due=None):
     """A routine of the COO's, seeded the way Tico seeds one: its schedule automation, due at `due` when given."""
     aid = routines.create(
-        c, H.KEEPER, "coo", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
+        c, H.KEEPER, "assistant", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
     )["automation"]
     if due:
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (due, aid))
@@ -174,6 +174,8 @@ def test_split_tick_still_fires_each_occurrence_once(api):
         ]
         assert sorted(runs) == sorted(made)
         assert (
-            c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:coo' AND title LIKE 'Morning %'").fetchone()[0]
+            c.execute(
+                "SELECT count(*) FROM tasks WHERE owner_id='bot:assistant' AND title LIKE 'Morning %'"
+            ).fetchone()[0]
             == 3
         )

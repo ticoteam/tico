@@ -1,0 +1,49 @@
+name: strategy-owner               # the slug: it matches the repository bot-strategy-owner and the label owner:strategy-owner
+display_name: "Strategy Owner"
+labels: [owner:strategy-owner]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first two routines are declared paused (`enabled: false`), like a starter bot's first routine. The server
+# arms `kpi-pass` itself once a KPI exists (it skips its runs while the owner has regular checks off), and starts
+# `goals-review`, the Monday note, while the Strategy Owner is above Passive. Every install starts at level 2
+# (backend/strategy_bot.py). The server seeds them once, when the Strategy Owner is built in; from then on Tico's rows are
+# the routines (docs/routines.md). Set the timezone to the team's own.
+routines:
+  - id: kpi-pass
+    title: KPI pass
+    cron: "0 6 * * *"
+    timezone: America/Los_Angeles
+    template: playbooks/kpi-pass.md
+    labels: [priority:p2]
+    enabled: false
+  - id: goals-review
+    title: Weekly goals review
+    cron: "0 9 * * 1"
+    timezone: America/Los_Angeles
+    template: playbooks/weekly-goals-review.md
+    labels: [priority:p3]
+    enabled: false
+  # Runs when the Librarian posts a weekly market briefing that touches a bet (backend/market_briefing.py). Not paused:
+  # with no bet touched the event never fires, and the playbook stops at once if the briefing names none.
+  - id: market-briefing
+    title: Briefing touches a bet
+    "on": market.briefing          # quoted: YAML reads a bare `on` as true
+    timezone: America/Los_Angeles
+    template: playbooks/market-briefing.md
+    labels: [priority:p3]
+
+# What this bot may touch. The KPI sources are tools the owner declares here (an analytics project, an API, a
+# read-only database) and grants a stored Credential for; `env:` names the variable, never the value. Without a declared tool a
+# KPI can only be computed from Tico itself (`tico sql`). The bot never edits this file: it files a task for
+# the owner to add a source.
+# tools:
+#   - service: posthog
+#     identity: the team project
+#     can: [read]
+#     env: POSTHOG_API_KEY
+#     note: "reads events to compute activation and signup KPIs; never writes"
+tools: []

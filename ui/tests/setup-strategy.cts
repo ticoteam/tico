@@ -36,7 +36,7 @@ const shot = async (page: Page, name: string) => {
   await page.setViewportSize(was!);
 };
 
-const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Assistant', assistant_bot: 'coo',
+const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Assistant', assistant_bot: 'assistant',
   public_url: 'https://acme.example', runner_url: 'https://acme.example', local: false, release: '', onboarding_needed: true,
   version: '0.4.0', runner_compat: {version: '0.4.0', min_runner: '0.1.0'}};
 const SITE = 'Acme cleans homes and small offices in Austin at about half the usual price.';

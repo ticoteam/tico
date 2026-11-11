@@ -1,4 +1,4 @@
-// The Strategy Owner's own Settings tab (#/bot/goal-manager/settings, ui/app/settings-strategy-bot.ts): the owner sees the regular checks, on, and the three levels with
+// The Strategy Owner's own Settings tab (#/bot/strategy-owner/settings, ui/app/settings-strategy-bot.ts): the owner sees the regular checks, on, and the three levels with
 // their sentences, Suggests actions current (the level every install starts at); picking another shows its sentence
 // again and changes nothing until Confirm, and Cancel leaves it as it was. Turning the regular checks off saves at
 // once. Only the owner has the card: an admin or a member has none, and nobody has a tab or a chat for it. The card and
@@ -24,7 +24,7 @@ const LEVELS = [
   {level: 3, name: 'Acts on its own', sentence: 'It also decides on its own: it makes, moves up, reassigns and closes bot tasks, each with an Undo.', ready: true},
 ];
 
-const SETTINGS = '#/bot/goal-manager/settings';
+const SETTINGS = '#/bot/strategy-owner/settings';
 type StrategyState = {regular_checks: boolean; level: number; level_chosen: boolean; level_changed_by: string; level_changed_by_name: string;
   level_changed_at: string; level_history: unknown[]; levels: typeof LEVELS; name: string; asked_today: Record<string, unknown>};
 async function open(browser: import('playwright').Browser, {role = 'owner', name = 'Strategy Owner', hash = SETTINGS, viewport = {width: 1440, height: 900}}:
@@ -45,7 +45,7 @@ async function open(browser: import('playwright').Browser, {role = 'owner', name
     const config = {version: '0.1.0', app_name: 'Tico'};
     if (p === '/api/me') return json({id: role === 'owner' ? 'ana' : 'cara', role, name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
-    if (p === '/api/employees') return json([{name: 'goal-manager', display_name: name, status: 'active', host: 'keeper', can_chat: true,
+    if (p === '/api/employees') return json([{name: 'strategy-owner', display_name: name, status: 'active', host: 'keeper', can_chat: true,
       can_manage: role === 'owner', users: [{id: 'ana', name: 'Ana'}], schedules: [], revision: 1}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});

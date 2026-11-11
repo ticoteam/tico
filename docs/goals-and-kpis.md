@@ -119,10 +119,10 @@ Every colour is stored with who set it: `status_by`, and `status_source` (`auto`
 
 ## The Strategy Owner
 
-The Strategy Owner (`goal-manager`) is a built-in bot, created for every team like the Librarian, and on every install. Its slug is `goal-manager`, which keeps its KPI readings, goal history and old messages its own.
+The Strategy Owner (`strategy-owner`) is a built-in bot, created for every team like the Librarian, and on every install. Its slug is `strategy-owner`, which keeps its KPI readings, goal history and old messages its own.
 It appears in **Settings** as **Built-in** and in its panel beside the Strategy tabs, Goals among them; like the other
 built-ins it is not on the [team chart](org-chart.md); nobody archives it, and only the team owner edits it. A team from before it existed gets it on update once a
-computer and a model exist. Its template is `templates/catalog/goal-manager/`; its playbooks are the product.
+computer and a model exist. Its template is `templates/catalog/strategy-owner/`; its playbooks are the product.
 
 There is no On/Off switch. How much it does is the [level](strategy-bot.md) the owner picks, and a new install starts at
 **Suggests actions**. Its first job is the team's [strategy](strategy.md): it proposes the Strategy page to the owner and, when a
@@ -306,7 +306,7 @@ red; humans set the goals), its routines as the server has them (when each runs 
 last run with the first line of its result. Nobody chats with the Strategy Owner directly, the owner included. To change one of your goals, ask your
 [Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your yes, plain or by number. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Owner's own
 suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card. For a wording, KPI, KPI definition, target, flag or Why suggestion, you can also agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your yes confirms it, and it leaves **Needs you**. A no in that chat turns it down, unless it is a Why line. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
-/api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
+/api/v2/strategy-owner/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
 One tree, built like the team chart: the team on top, then each group and every human and every bot that is not archived.
 A group sits under whoever runs it, and each person or bot under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's

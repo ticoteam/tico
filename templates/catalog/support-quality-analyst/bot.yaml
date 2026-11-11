@@ -1,0 +1,33 @@
+name: support-quality-analyst                     # the slug: it matches the repository bot-support-quality-analyst and the label owner:support-quality-analyst
+display_name: "Support Quality Analyst"
+labels: [owner:support-quality-analyst]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-reply-review
+    title: Weekly reply review
+    cron: "0 10 * * 5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-reply-review.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+# Sent replies arrive as tasks (Support Agent's sent replies, or exports a human attaches) until an
+# owner connects a source. Optional, uncomment what setup says is connected. Read only, always:
+# reviewing a reply never touches the ticket it came from.
+# tools:
+#   - service: gmail
+#     identity: "support@example.com"
+#     can: [read]
+#     env: GOOGLE_SA_KEY
+#     note: "reads sent support threads to sample replies; never drafts, files, labels or sends"
+tools: []

@@ -496,7 +496,7 @@ it. Collection never reads a task, message, doc, meeting or ticket body. You can
 keys and tokens (`sk-`, `ghp_`, `gho_`, `xox[abpr]-`, `AKIA`, bearer tokens, JWTs, long base64 or hex runs), IPv4 and IPv6
 addresses, URL query strings, your team's domain and every hostname that is not one of the product's own (`tico.team`, GitHub,
 the model providers), and the names and emails of your bots and humans, which become labels (`bot-3`, `person-1`) that are the same
-all through one bundle and mean nothing outside it. A name or slug is relabeled as a word from four characters; a shorter one (`coo`)
+all through one bundle and mean nothing outside it. A name or slug is relabeled as a word from four characters; a shorter one (`assistant`)
 is relabeled only as an exact `bot:<slug>` or `human:<id>` reference, and an email is always relabeled or redacted. It is built when you press **Review and edit** (or Send) and what you previewed is what
 is sent: Send names the preview by its SHA-256 and your Tico sends those exact bytes. Untick the box and none of it is sent. A local preview already built remains in memory for at most 15 minutes. Edited previews expire too; refreshing is an explicit action and never happens silently on send. HQ keeps follow-up attachments with their messages until the ticket is deleted.
 

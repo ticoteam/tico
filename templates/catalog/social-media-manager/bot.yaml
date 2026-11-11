@@ -1,0 +1,32 @@
+name: social-media-manager                     # the slug: it matches the repository bot-social-media-manager and the label owner:social-media-manager
+display_name: "Social Media Manager"
+labels: [owner:social-media-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: low
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# One sweep to start with. A second earns its place once someone has read a week of the first.
+routines:
+  - id: weekday-morning-sweep
+    title: Weekday morning sweep
+    cron: "0 8 * * 1-5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekday-sweep.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value. Store a Credential in Tico and grant it to this bot;
+# the runner delivers it during a run. Declaring access here does not create a grant. A browser access also names
+# `sites:`, so the tool can refuse every other host.
+# tools:
+#   - service: browser
+#     identity: "the team browser profile"
+#     can: [read]
+#     sites: ["news.example.com"]
+#     note: "reads public search results; never clicks, types or submits"
+tools: []

@@ -16,7 +16,7 @@ from backend.store import H
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401
 
 TASKS, ROOMS, MESSAGES = 6000, 6000, 300_000
-BOTS = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
+BOTS = ("assistant", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 PEOPLE = ("human:ana", "human:ben", "human:cara")
 
 

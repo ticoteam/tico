@@ -7,7 +7,7 @@ description: Fill the team's own NDA template for an outbound request, list ever
 When to use: when a requester asks for the team's NDA to go to a party.
 
 Steps:
-1. Find the template named in `knowledge/templates.md`, with its file and version date. If it is not listed, stop and send the request to `legal-review`.
+1. Find the template named in `knowledge/templates.md`, with its file and version date. If it is not listed, stop and send the request to `contracts-manager`.
 2. Take the party's legal name, notice address and purpose exactly as the requester gave them. Record the source: the task, its message and the date.
 3. Fill each blank in the template. Do not change any clause text. List every blank filled, with its value and source.
 4. Ask the requester once, on the task, for any value still missing. Never guess a legal entity name or an address.

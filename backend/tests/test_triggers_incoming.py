@@ -342,7 +342,7 @@ def test_replay_runs_a_stored_call_again_once_per_request_and_not_after_it_expir
 
 def test_who_may_read_a_stored_body(api):
     as_bot(api, "ops")
-    as_bot(api, "coo")
+    as_bot(api, "assistant")
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     routine(api)
     big = json.dumps({"rows": ["x" * 40] * 800}).encode()  # pretty-printed: over two parts
@@ -377,10 +377,10 @@ def test_who_may_read_a_stored_body(api):
     from backend import hubdb as H
 
     with api.app.state.store.transaction() as c:
-        H.notice(c, "human:ben", "bot:coo", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+        H.notice(c, "human:ben", "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     get(api, path, token="coo-test", expected=404)
     with api.app.state.store.transaction() as c:
-        H.notice(c, H.KEEPER, "bot:coo", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+        H.notice(c, H.KEEPER, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
     assert get(api, path, token="coo-test")["delivery"]["part"] == 1
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE trigger_bodies SET expires_at='2000-01-01T00:00:00.000000Z'")
@@ -390,7 +390,7 @@ def test_who_may_read_a_stored_body(api):
 
 def test_a_bot_makes_and_manages_its_own_triggers_only(api):
     as_bot(api, "ops")
-    as_bot(api, "coo")
+    as_bot(api, "assistant")
     made = post(api, "triggers", {"name": "Ops hook"}, token="ops-test")["trigger"]
     assert made["id"] == "ops-hook" and made["url"].count("/") > 4
     post(api, "triggers/ops-hook", {"hourly": 600, "keep_days": 30}, token="ops-test")

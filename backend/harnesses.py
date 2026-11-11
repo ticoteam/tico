@@ -143,7 +143,7 @@ def backfill_config(config, slug=None, runtime=None):
         config["runtime"] = runtime_of(harness)
         changed = True
     # A bot on a runtime's second host (Antigravity) falls back to that runtime's own CLI.
-    if slug == "coo" and harness and runtime_of(harness) != harness and "fallback" not in config:
+    if slug == "assistant" and harness and runtime_of(harness) != harness and "fallback" not in config:
         from .providers import PROVIDER_BY_RUNTIME, recommended
 
         config["fallback"] = {

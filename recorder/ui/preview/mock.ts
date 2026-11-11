@@ -61,7 +61,7 @@ interface PreviewState {
   const owners = [
     { actor: 'bot:librarian', name: 'Librarian', bot: true },
     { actor: 'bot:head-of-engineering', name: 'Head of Engineering', bot: true },
-    { actor: 'bot:marketing-lead', name: 'Marketing Lead', bot: true },
+    { actor: 'bot:growth-team-manager', name: 'Marketing Lead', bot: true },
     { actor: 'human:dana', name: 'Dana Reyes', bot: false },
     { actor: 'human:sam', name: 'Sam Okafor', bot: false },
     { actor: 'human:mara', name: 'Mara Novak', bot: false },
@@ -372,8 +372,8 @@ interface PreviewState {
     adding: () => {
       scenes.live();
       const p = state.meetings.m2!.people;
-      p.rows.push({ kind: 'bot', name: 'Marketing Lead', actor: 'bot:marketing-lead', pending: true });
-      p.candidates = p.candidates.filter((c) => c.actor !== 'bot:marketing-lead');
+      p.rows.push({ kind: 'bot', name: 'Marketing Lead', actor: 'bot:growth-team-manager', pending: true });
+      p.candidates = p.candidates.filter((c) => c.actor !== 'bot:growth-team-manager');
       p.error = 'Not added: Server returned HTTP 403 (forbidden). Check the connection or retry.';
     },
     mentions: () => {

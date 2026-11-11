@@ -48,11 +48,11 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ben', role: 'human', name: 'Ben', email: 'ben@example.test', cloud: true});
     if (p === '/api/humans') return json({people: [{id: 'ben', name: 'Ben'}]});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant'}, {name: 'botops', display_name: 'BotOps'}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant'}, {name: 'botops', display_name: 'BotOps'}]);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations/room1/snapshot') return json({messages: state.messages, execution: null, has_more: false, next_before: null});
-    if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant',
+    if (p === '/api/v2/assistant' && method === 'GET') return json({available: true, state: 'active', bot: 'assistant', name: 'Assistant',
       can_turn_on: false, room_id: 'room1', messages: state.messages, has_more: false, next_before: null, execution: state.execution || null, actions: {},
       pending: state.card?.status === 'pending' ? [state.card] : []});
     if (p === '/api/v2/assistant/actions/act9' && method === 'GET') return json({action: state.card});
@@ -67,7 +67,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
       const body = JSON.parse(route.request().postData()!);
       state.sent.push(body);
       const user = msg('u' + state.sent.length, 'human:ben', body.text!, new Date().toISOString());
-      const bot = msg('b' + state.sent.length, 'bot:coo', "I can't fix that one. [Talk to the Tico team](#/support)", new Date().toISOString());
+      const bot = msg('b' + state.sent.length, 'bot:assistant', "I can't fix that one. [Talk to the Tico team](#/support)", new Date().toISOString());
       state.messages.push(user, bot);
       return json({message: user});
     }
@@ -76,7 +76,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
       const body = {text: field('text'), page: JSON.parse(field('page') || 'null'), files: [...raw.matchAll(/filename="([^"]+)"/g)].map(m => m[1]!)};
       state.uploaded = (state.uploaded || []).concat([body]);
       const user = msg('f' + state.uploaded.length, 'human:ben', body.text!, new Date().toISOString());
-      state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
+      state.messages.push(user, msg('g' + state.uploaded.length, 'bot:assistant', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
       return json({message: user});
     }
     const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: state.supportOff !== true, tickets: state.tickets, unread: state.unreadCount ?? state.tickets.filter(t => t.unread).length});
@@ -125,14 +125,14 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
   try {
     // A computer. A Tico team ticket is open (it stays out of Ask), then Ben asked, BotOps left a card and asked a question, and the
     // Assistant answered after both; the launch questions came last.
-    let state: AskState = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:coo', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
+    let state: AskState = {messages: [msg('a1', 'human:ben', 'Where is the launch plan?', ago(15)), msg('a2', 'bot:assistant', 'In Docs.', ago(10))], sent: [], read: [], decided: [], answers: [],
       tickets: [{id: 'sup_1', status: 'answered', unread: true, title: 'Board will not load', message: 'Board will not load', created_at: ago(30),
                  messages: [{body: 'Try a hard reload.', from: 'staff', created_at: ago(20)}]}],
       card: {id: 'act9', summary: 'Add Cara as an admin', method: 'POST', path: '/api/v2/people', status: 'pending', result: null,
              description: 'Add Cara as an admin', diff: [], body: {}, proposed_via: 'botops', created_at: ago(13)},
       picked: [],
       needs: [need('r9', 't9', 'bot:botops', 'Which inbox should the bot answer?', ago(12)),
-              need('r4', 't4', 'bot:coo', 'OK the launch post', now, {kind: 'ok', may: ['ok', 'no', 'give']})]};
+              need('r4', 't4', 'bot:assistant', 'OK the launch post', now, {kind: 'ok', may: ['ok', 'no', 'give']})]};
     let {page, errors} = await open(browser, {width: 1280, height: 900}, state);
     assert.equal(await page.locator('#nav-assistant, #nav-botops, #help-open, #mobile-support').count(), 0, 'no BotOps or Assistant rows, no old Help link in the rail');
     const fab = page.locator('#ask-row'), panel = page.locator('#ask-panel');
@@ -278,9 +278,9 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
 
     // A phone: the dot in the middle of the tab bar opens a full page above the tab bar, and closes it.
     const ask = (id: string, who: string, body: string): AskNeed => need(id, 't-' + id, who, body, now);
-    state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:coo', 'Try a reload.', ago(4))],
+    state = {messages: [msg('p1', 'human:ben', 'Our key is sk-live1234567890abcdef, board blank', ago(5)), msg('p2', 'bot:assistant', 'Try a reload.', ago(4))],
       sent: [], read: [], decided: [], answers: [], tickets: [], card: null,
-      needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:coo', 'Ship the launch post today?')]};
+      needs: [ask('m8', 'bot:botops', 'Which inbox should the bot answer?'), ask('m7', 'bot:assistant', 'Ship the launch post today?')]};
     ({page, errors} = await open(browser, {width: 390, height: 844}, state));
     const tab = page.locator('#mobile-ask');
     // The Ask tab is the row too, words and all: the dot, or a close mark in its place while the sheet is open.
@@ -334,7 +334,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     // A turn at work with no words yet: its label, how long it has run and its newest step, never the tool's arguments.
     // Once it replies, the reply instead.
     state = {messages: [msg('w1', 'human:ben', 'Help me clear out my task list', ago(5))], sent: [], read: [], decided: [], answers: [], tickets: [], needs: [],
-      execution: {job_id: 'j1', message_id: 'w1', bot_id: 'coo', state: 'running', label: 'Working', text: '', started_at: ago(4.3), parts: [
+      execution: {job_id: 'j1', message_id: 'w1', bot_id: 'assistant', state: 'running', label: 'Working', text: '', started_at: ago(4.3), parts: [
         {kind: 'tool', text: 'Ran hub hub task list', at: ago(4)}, {kind: 'tool', text: 'Ran hub task bulk close', at: ago(1)}]}};
     ({page, errors} = await open(browser, {width: 1280, height: 900}, state));
     await page.locator('#ask-row').click();
@@ -360,7 +360,7 @@ async function flight(page: import('playwright').Page, dot: string, act: () => P
     assert.equal(await page.locator('#ask-panel [data-ask-thread] [data-kept]').count(), 1, 'a message\'s time ticking leaves the thread be');
     assert.equal(await stamp.innerText(), '7m ago');
     state.execution = {...state.execution!, state: 'completed', label: 'Complete', parts: []};
-    state.messages.push(msg('w2', 'bot:coo', 'Closed 12 tasks.'));
+    state.messages.push(msg('w2', 'bot:assistant', 'Closed 12 tasks.'));
     await page.evaluate(() => ASK.refresh());
     await page.locator('#ask-panel').getByText('Closed 12 tasks.').waitFor();
     assert.equal(await working.count(), 0, 'no working line once it replied');

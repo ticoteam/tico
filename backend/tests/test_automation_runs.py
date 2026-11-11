@@ -30,8 +30,13 @@ def test_a_run_cut_off_after_an_effect_goes_on_from_its_save_and_does_not_do_it_
     aid = make(
         api,
         [
-            {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Acme follow up", "owner": "coo"}},
-            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "Done"}},
+            {
+                "id": "spawn",
+                "type": "action",
+                "do": "create_task",
+                "args": {"title": "Acme follow up", "owner": "assistant"},
+            },
+            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "Done"}},
         ],
     )
     rid = queued(api, aid)
@@ -57,7 +62,7 @@ def test_a_run_saves_after_each_step_with_an_effect(api, monkeypatch):
         api,
         [
             {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Acme check"}},
-            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "Done"}},
+            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "Done"}},
         ],
     )
     rid = queued(api, aid)
@@ -102,13 +107,13 @@ def test_a_bots_turn_started_by_an_automation_cannot_start_it_again(api):
     aid = make(
         api,
         [{"id": "work", "type": "bot_turn", "bot": "ops", "prompt": "Handle it"}],
-        trigger={"type": "task_received", "to": "bot:coo"},
+        trigger={"type": "task_received", "to": "bot:assistant"},
     )
     post(api, f"automations/{aid}/run", {})
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=r["token"])
-    # In its turn the bot hands coo a task: a task coo received, the automation's own trigger.
-    post(api, "tasks", {"owner": "coo", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
+    # In its turn the bot hands assistant a task: a task assistant received, the automation's own trigger.
+    post(api, "tasks", {"owner": "assistant", "title": "Acme hand-off", "body": "Please."}, token=attempt["token"])
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
@@ -727,7 +732,7 @@ def test_a_resumed_run_gets_back_the_turn_it_started_and_its_own_hold_never_caps
         api,
         [
             {"id": "look", "type": "bot_turn", "bot": "ops", "prompt": "Look"},
-            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "Done"}},
+            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "Done"}},
         ],
         spend_cap={"per_30m": 0.2},
     )

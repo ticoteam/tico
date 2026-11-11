@@ -5095,7 +5095,7 @@ class Execution:
         # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
         if run_backoff.take_compact(c, row["bot_id"], conv["id"], aid):
             config = {**config, "compact_first": True}
-        # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
+        # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
         # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
@@ -6416,7 +6416,7 @@ class Execution:
         row = self.attempt(c, who, aid, active=False)
         from . import counsel
 
-        revoked = row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid)
+        revoked = row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid)
         seq = row["last_seq"]
         from .login_waits import stored
 
@@ -6648,7 +6648,7 @@ class Execution:
         row = self.attempt(c, who, aid, final=True)
         from . import counsel
 
-        if row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid):
+        if row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid):
             body = body.model_copy(update={"text": counsel.REMOVED_PAGE})
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
@@ -7311,7 +7311,7 @@ class Execution:
         automations.turn_done(c, row, body.outcome, body.text)  # an automation that started this turn is charged it
         from . import counsel
 
-        # Counsel's completed turn on a document's read task finishes that task.
+        # The Rules Owner's completed turn on a document's read task finishes that task.
         counsel.turn_done(c, row, "stopped" if stopped else body.outcome, work_task_id(msg, conv), body.text)
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if

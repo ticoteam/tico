@@ -52,7 +52,7 @@ def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_a
     with store.transaction() as c:
         assert BK.rules_digest(c, api.app.state.auth, H.now())["words"] == "No new posting rules"
     assert checks(api) == []
-    rule = {"id": "rul_1", "name": "Acme Supplies to Supplies", "created_by": "bot:bookkeeper", "active": True}
+    rule = {"id": "rul_1", "name": "Acme Supplies to Supplies", "created_by": "bot:finance-owner", "active": True}
     monkeypatch.setattr(FR, "new_posting_rules", lambda c, since: [rule])
     with store.transaction() as c:
         made = BK.rules_digest(c, api.app.state.auth, H.now())

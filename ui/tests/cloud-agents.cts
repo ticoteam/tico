@@ -290,7 +290,7 @@ const pulseIsOpacityOnly = (page: Page) => page.evaluate(() => {
     {
       const rust: Seat & {can_edit: boolean} = {id: 's-rust', kind: 'seat', stage: 'recruiting', title: 'Rust engineer', description: '', team: 'eng',
         reports_to: 'human:ana', created_at: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: '', can_edit: true};
-      const template = {template: 'pr-reviewer', name: 'Senior Software Engineer', icon: '', department: 'Engineering',
+      const template = {template: 'reviewer', name: 'Senior Software Engineer', icon: '', department: 'Engineering',
         department_id: 'engineering', line: 'Reviews every open pull request.', tags: [], owns: [], prerequisites: [], match: 'good',
         source: 'template'};
       const agents = AGENTS.filter(a => a.supported).map(a => ({...a, source: 'cloud', match: 'strong'}));

@@ -225,7 +225,7 @@ function settingsEditBot(slug = '', inline = false) {
     (settingsIsAdmin() || machine.accepts_member_bots)).map(machine =>
     `<option value="${esc(machine.id)}" data-operator="${esc(machine.owner_id)}">${esc(machine.label)} · ${esc(settingsPersonName(machine.owner_id))}</option>`).join('');
   // The Strategy Owner's name is the owner's alone, as the whole built-in bot is (backend/auth.py `bot_manager`).
-  const ownerNamesIt = !!e && e.id === 'goal-manager' && S.me?.role !== 'owner';
+  const ownerNamesIt = !!e && e.id === 'strategy-owner' && S.me?.role !== 'owner';
   // A built-in bot's slug is fixed (the server refuses its rename); any other bot's slug is renamed with its definition.
   const fixedSlug = !!e && isBuiltInBot(e.id);
   dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="bot-editor-title" tabindex="-1">${editing ? 'Settings' : 'Add bot'}</h2><span class="spacer"></span>${inline ? '' : '<button class="ghost" type="button" data-bot-close aria-label="Close" title="Close (Esc)">✕</button>'}</div>

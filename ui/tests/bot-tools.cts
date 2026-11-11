@@ -318,14 +318,14 @@ const railOrder = (page: Page) => page.evaluate(() => [...(document.querySelecto
       // An escape waits for a person, on a bot placed on a computer too: it says what the check matched, shows the
       // refused words and task under More, and Resume bot sits beside the warning.
       const since = iso(-10 * 60e3);
-      const review = {what: 'task note', found: 'bot-coo/', preview: 'Paste this into bot-coo/tools.yaml: token=[hidden]', task: {id: 't9', title: 'Set up the tool'}};
+      const review = {what: 'task note', found: 'bot-assistant/', preview: 'Paste this into bot-assistant/tools.yaml: token=[hidden]', task: {id: 't9', title: 'Set up the tool'}};
       const {page, errors, context, cleared} = await open(browser, {width: 1440, height: 900}, {}, {bots: bots.map(b => ({...b, host: 'runner'})),
         status: {bot: 'cmo', state: 'quarantined', bot_state: 'quarantined', changed_at: since, focus: 'escape: the task note reaches outside the hub',
           quarantine: {since, auto: false, resumes_at: null, review}}});
       await page.goto('https://tico-ui.test/#/bot/cmo/more');
       const card = page.locator('#bot-quarantine');
       await card.waitFor();
-      assert.match(await card.innerText(), /Paused for review[\s\S]*a task note that named another bot's folder \(bot-coo\/\)[\s\S]*the checks stay on/);
+      assert.match(await card.innerText(), /Paused for review[\s\S]*a task note that named another bot's folder \(bot-assistant\/\)[\s\S]*the checks stay on/);
       assert.match(await card.locator('.bot-quarantine-text').innerText(), /token=\[hidden\]/);
       assert.equal(await card.locator('a[href="#/task/t9"]').innerText(), 'Set up the tool');
       assert.doesNotMatch(await page.locator('#main').innerText(), /outside the hub|escape:/);

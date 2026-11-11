@@ -52,7 +52,7 @@ async function open(browser: import('playwright').Browser, options: import('play
     if (p === '/api/v2/seats') return json({seats: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
-    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'coo', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
+    if (p === '/api/v2/assistant') return json({available: true, state: 'active', bot: 'assistant', name: 'Assistant', can_turn_on: false, room_id: 'asst', messages: [], earlier: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     let m;
     if (method !== 'GET' && fail.has(p)) {

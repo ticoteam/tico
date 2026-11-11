@@ -202,7 +202,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
 
     # Listening: the first post is judged, the rest stay unjudged for after the cap.
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     post(
         api,
         "listening/runs",
@@ -526,7 +526,7 @@ def test_the_listening_judge_leaves_a_post_unjudged_when_jev_is_down_and_waits_a
     from backend.tests.helpers.listening import _bots, _post, _token
 
     _bots(api)
-    listening = _token(api, "listening")
+    listening = _token(api, "social-media-manager")
     jev = FakeJudge()
     jev.fail = DOWN
     api.app.state.judge = jev
@@ -577,7 +577,7 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
     second = S.send(gateway, "and the NDA too", channel=S.DM, kind="message", user="U2")
     assert len(gateway.engine.calls) == calls, "at the cap the decision model is not asked"
     assert second["decision"]["routed_by"] == "spend_cap" and "monthly decision spend" in second["decision"]["reason"]
-    assert [r["bot"] for r in second["decision"]["recipients"]] == ["coo"]
+    assert [r["bot"] for r in second["decision"]["recipients"]] == ["assistant"]
 
 
 def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gateway, hub):
@@ -644,7 +644,7 @@ def test_slack_stops_a_big_fleet_at_the_cap_partway_and_routes_to_the_assistant(
     result = S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message")
     assert len(engine.calls) == 1, "the second call would start over the cap"
     assert result["state"] == "routed" and result["decision"]["routed_by"] == "spend_cap"
-    assert [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
+    assert [r["bot"] for r in result["decision"]["recipients"]] == ["assistant"]
     with hub.read() as c:
         audit = json.loads(c.execute("SELECT detail FROM events WHERE action='judge.call'").fetchone()[0])
         assert audit["error"] == "spend_cap" and audit["cost_usd"] == 0.25

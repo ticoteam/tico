@@ -172,8 +172,8 @@ const address = (page: import('playwright').Page) => page.evaluate(() => locatio
       for (const [old, want] of [['#/settings/system', '#/automations/system-jobs'], ['#/settings/rules', '#/automations/system-jobs'],
         ['#/settings/rules?task=t1', '#/automations/system-jobs'], ['#/settings/routines', '#/automations/system-jobs'],
         ['#/settings/recurring', '#/automations/system-jobs'], ['#/settings/system/set-system-card', '#/automations/system-jobs'],
-        ['#/settings/system/set-task-manager-card', '#/bot/task-manager/settings'], ['#/settings/strategy-bot', '#/bot/goal-manager/settings'],
-        ['#/settings/system/set-strategy-bot-card', '#/bot/goal-manager/settings'], ['#/settings/ceo', '#/bot/goal-manager/settings'],
+        ['#/settings/system/set-task-manager-card', '#/bot/task-manager/settings'], ['#/settings/strategy-bot', '#/bot/strategy-owner/settings'],
+        ['#/settings/system/set-strategy-bot-card', '#/bot/strategy-owner/settings'], ['#/settings/ceo', '#/bot/strategy-owner/settings'],
         ['#/settings/system/set-release-card', '#/settings/bots'], ['#/settings/releases', '#/settings/bots']]) {
         await page.evaluate(h => { location.hash = h; }, '#/settings/general');
         await page.waitForFunction(() => location.hash === '#/settings/general');

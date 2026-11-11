@@ -643,7 +643,7 @@ def opening(background=False):
     person, in place of the personal lines that open the chat. runner-rs/src/prompt.rs is the reference; the CI test checks
     each line against it."""
     shared = [
-        "You are coo, an AI teammate at Acme. Tico is the company's operating system: its tasks, conversations, approvals, "
+        "You are assistant, an AI teammate at Acme. Tico is the company's operating system: its tasks, conversations, approvals, "
         "and schedules all live there. Your repository is your durable workspace.",
         "Read AGENT.md and state.md, then carry out the requested work in this turn.",
         "Do not end the turn with only a plan or progress update. Continue until the work is complete or genuinely blocked; "
@@ -701,7 +701,7 @@ def opening(background=False):
         "they ask; approve only after `tico approval read-back` and their plain yes, and only with their setting on "
         "(AGENT.md, Approvals).",
         "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: "
-        "`tico task create --owner goal-manager --request-id turn`.",
+        "`tico task create --owner strategy-owner --request-id turn`.",
         "For research, Market and Docs setup or library work ask the Librarian: "
         "`tico task create --owner librarian --request-id turn`.",
         "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops "
@@ -787,7 +787,7 @@ def run_sample(case, sample, args, outdir):
         "EVAL_CANNED": str(work / "canned.json"),
         "EVAL_STATE": str(work / "state.json"),
         "HUB_DIR": str(work / "hubdir"),
-        "TICO_BOT": "coo",
+        "TICO_BOT": "assistant",
     }
     # The Tico MCP server (`tico`), as runner-rs/src/hosts/claude.rs gives it: the same state and canned files as the CLI.
     servers = (

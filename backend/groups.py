@@ -15,7 +15,7 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
 
 Built-in bots (the Assistant, BotOps, the Librarian, the Strategy Owner) and helpers are not made members by hand: they sit
 in the Built-in group (`BUILT_IN`), which Tico keeps (it cannot be renamed, moved or deleted) and the org chart shows
-collapsed. The chart's Finance Owner is the Bookkeeper, and the company file puts it in its own team's group (`move_bot`).
+collapsed. The chart's Finance Owner is the Finance Owner, and the company file puts it in its own team's group (`move_bot`).
 """
 
 import json
@@ -33,12 +33,12 @@ SYSTEM_BOTS = (
     "assistant",
     "botops",
     "librarian",
-    "goal-manager",
+    "strategy-owner",
     "health-monitor",
     "task-manager",
-    "bookkeeper",
-    H.COUNSEL,
-    H.BRAND_OWNER,
+    "finance-owner",
+    H.RULES_OWNER,
+    H.DESIGN_OWNER,
     "updates-owner",
     "automations-owner",
 )

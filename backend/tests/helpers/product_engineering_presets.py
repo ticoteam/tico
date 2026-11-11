@@ -13,8 +13,8 @@ ROLE_BOTS = {
     "pm": "segment-product-owner",  # the Product Owner
     EPM: "pipeline-manager",
     "builder": "builder",
-    "rev-b": "pr-reviewer",
-    "rev-a": "pr-reviewer",
+    "rev-b": "reviewer",
+    "rev-a": "reviewer",
     "rm": "release-owner",
 }
 
@@ -51,5 +51,5 @@ def _team(c):
     _seat(c, "Product Owner", "segment-product-owner", "pm")
     _seat(c, "Engineering Pipeline Manager", "pipeline-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
-    _seat(c, "Reviewer 2", "pr-reviewer", "rev-b")
-    _seat(c, "Reviewer 1", "pr-reviewer", "rev-a")
+    _seat(c, "Reviewer 2", "reviewer", "rev-b")
+    _seat(c, "Reviewer 1", "reviewer", "rev-a")

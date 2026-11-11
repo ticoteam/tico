@@ -246,7 +246,7 @@ def test_a_notice_to_the_assistant_goes_to_the_owners_own_room_with_what_arrived
                     "id": "t",
                     "type": "action",
                     "do": "wake_bot",
-                    "args": {"bot": "coo", "text": "New mail: {{message.subject}}"},
+                    "args": {"bot": "assistant", "text": "New mail: {{message.subject}}"},
                 }
             ]
         ),
@@ -255,7 +255,7 @@ def test_a_notice_to_the_assistant_goes_to_the_owners_own_room_with_what_arrived
     with api.app.state.store.read() as c:
         told = c.execute(
             "SELECT m.body, v.scope, v.owner_id FROM messages m JOIN conversations v "
-            "ON v.id=m.conversation_id WHERE m.recipient_id='bot:coo' AND m.kind='notice' "
+            "ON v.id=m.conversation_id WHERE m.recipient_id='bot:assistant' AND m.kind='notice' "
             "ORDER BY m.created_at DESC"
         ).fetchone()
     assert (told["scope"], told["owner_id"]) == ("personal", "human:ana")

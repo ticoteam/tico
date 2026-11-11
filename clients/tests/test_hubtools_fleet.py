@@ -106,10 +106,10 @@ def test_reports_to_for_a_bot_sends_its_revision():
 def test_org_order_reads_and_sets_and_botops_sets_as_the_requester():
     fn = hubtools.BY_NAME["tico_org_order"]["fn"]
     api = _Groups()
-    fn(api, {"manager": "engineering-lead"})
+    fn(api, {"manager": "engineering-team-manager"})
     fn(api, {"manager": "human:ana", "set": ["bot:cmo", "ben"]})
     assert [call for call in api.calls if call[1] != "me"] == [
-        ("GET", "org/order/engineering-lead", None),
+        ("GET", "org/order/engineering-team-manager", None),
         ("PUT", "org/order/human:ana", {"reports": ["bot:cmo", "ben"]}, False),
     ]
     botops = _Groups("bot:botops")

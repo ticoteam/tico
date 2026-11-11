@@ -215,7 +215,7 @@ def groups(world):
             {
                 "name": "Engineering",
                 "lead": OMAR_REF,
-                "add": {"bots": ["engineering-lead", "builder-claude", "builder-openai"], "people": [OMAR_ID]},
+                "add": {"bots": ["engineering-team-manager", "builder-claude", "builder-openai"], "people": [OMAR_ID]},
             },
             who=DANA,
         ),
@@ -241,7 +241,7 @@ def connection(world):
             **row,
             **(
                 {"tools": [{"service": "acme-billing", "identity": "Acme billing account", "can": ["read", "refund"]}]}
-                if slug == "engineering-lead"
+                if slug == "engineering-team-manager"
                 else {}
             ),
         }
@@ -296,13 +296,13 @@ def pages(world):
 
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
-        c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
-        bot_settings.update(c, "engineering-lead", {"display_name": "Engineering Lead"})
+        c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-team-manager'")
+        bot_settings.update(c, "engineering-team-manager", {"display_name": "Engineering Lead"})
     made = _ok(
         world.api(
             "post",
             "/api/v2/tasks",
-            {"title": "Q3 launch", "body": "Plan the Q3 launch.", "owner": "engineering-lead"},
+            {"title": "Q3 launch", "body": "Plan the Q3 launch.", "owner": "engineering-team-manager"},
             who=DANA,
         ),
         "task",
@@ -343,7 +343,7 @@ def pages(world):
             "funnel.csv",
         )
 
-    if world.turn("engineering-lead", act=act) is None:
+    if world.turn("engineering-team-manager", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
 
 
@@ -356,7 +356,7 @@ VENDOR_TERMS = (
 
 @seed("counsel")
 def counsel(world):
-    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "tico-counsel"), and a vendor's
+    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "rules-owner"), and a vendor's
     terms in Files, uploaded by Dana under the Engineering Lead, for Rules › External › Add document. No model runs: a
     test claims Counsel's run on its read task with the hub's runner token (real_hub_server.py prints it) and writes
     its suggestions itself, through the API as that run."""
@@ -368,12 +368,12 @@ def counsel(world):
     with world.store.transaction() as c:
         c.execute(
             "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')",
-            (H.COUNSEL, H.COUNSEL),
+            (H.RULES_OWNER, H.RULES_OWNER),
         )
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES(?, '', ?)", (H.COUNSEL, DANA_ID))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES(?, '', ?)", (H.RULES_OWNER, DANA_ID))
         c.execute(
             "INSERT OR REPLACE INTO agents(bot, harness, token_hash, created_at, created_by) VALUES(?,?,?,?,?)",
-            (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID),
+            (H.RULES_OWNER, "test", "x-counsel", H.now(), "human:" + DANA_ID),
         )
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")
@@ -382,7 +382,7 @@ def counsel(world):
         )
         world.app.state.files.add_version(
             c,
-            bot="engineering-lead",
+            bot="engineering-team-manager",
             actor="human:" + DANA_ID,
             scope="bot",
             task=None,
@@ -396,12 +396,12 @@ def counsel(world):
             digest=digest,
             size=len(data),
         )
-    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:" + H.COUNSEL, "bot", agent="test")
+    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:" + H.RULES_OWNER, "bot", agent="test")
     # Counsel on the world's computer, ready, so a read task's run can be claimed and started.
     _ok(
         world.api(
             "post",
-            f"/api/v2/bots/{H.COUNSEL}/assignment",
+            f"/api/v2/bots/{H.RULES_OWNER}/assignment",
             {"runner_id": world.runner["runner_id"], "expected_generation": 0},
             who=DANA,
         ),
@@ -414,7 +414,7 @@ def counsel(world):
             {
                 "version": "test",
                 "platform": "test",
-                "readiness": {slug: True for slug in [*world.bot_slugs, H.COUNSEL]},
+                "readiness": {slug: True for slug in [*world.bot_slugs, H.RULES_OWNER]},
             },
             who=world.runner["token"],
         ),
@@ -477,11 +477,11 @@ def directory(world):
 
 @seed("priya-leads")
 def priya_leads(world):
-    """Priya is the engineering manager on the chart: engineering-lead reports to her, so she is above the bots under it
+    """Priya is the engineering manager on the chart: engineering-team-manager reports to her, so she is above the bots under it
     (builder-claude, builder-openai) and reads their private tasks, as a manager does (docs/tasks.md). Written the way the
     harness places bots on the chart (harness.py), since the bot definition route does not take a hand-set reports_to."""
     with world.store.transaction() as c:
-        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-lead'")
+        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-team-manager'")
 
 
 # ---------------------------------------------------------------------------------------------- Tools
@@ -623,16 +623,18 @@ def tools(world):
 
 @seed("assistant")
 def assistant(world):
-    """The Assistant (bot coo) on the install, as onboarding makes it, and the template routines it has never had: its
+    """The Assistant (bot assistant) on the install, as onboarding makes it, and the template routines it has never had: its
     daily sweep (backend/onboarding.py ensure_builtin_routines, the same call as the startup path). Dana owns it, so her
     Automations list shows the sweep; the routine is an automation at once (redesign_migration.adopt)."""
     from backend import bot_settings as BS
     from .harness import DANA_ID
 
     with world.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('coo', 'coo', 'Coo', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES('coo', '', ?)", (DANA_ID,))
-        BS.write(c, "coo", {"name": "Coo", "status": "active", "template": "assistant"})
+        c.execute(
+            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('assistant', 'assistant', 'Coo', 'active')"
+        )
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, team, owner_id) VALUES('assistant', '', ?)", (DANA_ID,))
+        BS.write(c, "assistant", {"name": "Coo", "status": "active", "template": "assistant"})
         made = world.app.state.onboarding.ensure_builtin_routines(c)
-    if made != [("coo", "daily-sweep")]:
+    if made != [("assistant", "daily-sweep")]:
         raise RuntimeError(f"the Assistant's daily sweep was not made: {made}")

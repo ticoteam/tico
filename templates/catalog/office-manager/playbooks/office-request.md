@@ -22,12 +22,12 @@ so in the first line and tell the Operations Manager now; do not wait for the we
 
 Skill: `skills/triage-an-office-request/SKILL.md`. Route by type:
 
-- IT (laptops, accounts, Wi-Fi password, software): hand to `it-support` with `tico task create --owner
-  it-support` and tell the requester.
+- IT (laptops, accounts, Wi-Fi password, software): hand to `it-support-specialist` with `tico task create --owner
+  it-support-specialist` and tell the requester.
 - A fix in the building: the fixer from `knowledge/fixers.md`. Building-owned items (heating, lifts,
   doors) go to the landlord or building manager.
 - A purchase: under the limit, prepare it for the owner; over it, a purchase request to
-  `procurement`.
+  `procurement-manager`.
 - A preference (a new snack, a plant): add it to the supplies list proposal, not an order.
 
 ## 3. Prepare the action

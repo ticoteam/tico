@@ -53,7 +53,7 @@ FEATURES = (
         "Message bots: mail and calendar",
         (("messaging.md", None), ("mail.md", None), ("mail-service.md", None)),
         lambda c, s, shell: _rows(c, "SELECT 1 FROM mail_mailboxes LIMIT 1"),
-        {"templates": ["inbox"]},
+        {"templates": ["inbox-manager"]},
     ),
     Feature(
         "slack_gateway",
@@ -65,8 +65,8 @@ FEATURES = (
         "listening",
         "Listening",
         (("listening.md", None),),
-        lambda c, s, shell: _rows(c, "SELECT 1 FROM bots WHERE slug='listening' AND state='active'"),
-        {"templates": ["listening"]},
+        lambda c, s, shell: _rows(c, "SELECT 1 FROM bots WHERE slug='social-media-manager' AND state='active'"),
+        {"templates": ["social-media-manager"]},
     ),
     Feature(
         "live_meetings",

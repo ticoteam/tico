@@ -54,7 +54,7 @@ function settingsVisualsLine() {
 // ----------------------------------------------------------------- settings
 // People stay deliberately compact. Bot ownership, model, and physical placement are separate
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
-// Teams come from the team's data; a name reads as its words (`customer-success` is Customer Success).
+// Teams come from the team's data; a name reads as its words (`success-owner` is Customer Success).
 const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
@@ -137,7 +137,7 @@ const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
 // System's cards left Settings: its jobs are Automations' System jobs, Releases, Task Manager and the Strategy Owner are
 // those built-in bots' Settings, Screening is Security. The router asks for an old address's new home (or '' to stay).
-const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-task-manager-card': 'task-manager', 'set-strategy-bot-card': 'goal-manager'};
+const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-task-manager-card': 'task-manager', 'set-strategy-bot-card': 'strategy-owner'};
 function settingsMovedOut(tab: string, card = '') {
   if (tab === 'strategy-bot') card = 'set-strategy-bot-card';
   else if (tab === 'releases') card = 'set-release-card';

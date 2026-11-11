@@ -478,7 +478,7 @@ def _free_title(conn, owner, title):
 
 
 def manager_ready(conn):
-    row = H.bot(conn, G.GOAL_MANAGER)
+    row = H.bot(conn, G.STRATEGY_OWNER)
     return bool(row) and row.get("state") not in ("archived", "quarantined")
 
 

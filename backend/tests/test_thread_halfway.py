@@ -159,11 +159,11 @@ def test_a_flat_timeline_leaves_out_an_archived_sub_thread(api):
 
 # ----------------------------------------------------------------------------- no routing (D14)
 def test_a_message_naming_nobody_is_routed_to_nobody(api):
-    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:assistant"))
     asked = say(api, thread["id"], "Who can look at the budget?")
     plain = say(api, thread["id"], "@ops thanks")
     # Bots follow a chat at mentions: a message naming nobody reaches none of them; an @mention reaches its bot.
-    assert all(delivery(api, asked["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    assert all(delivery(api, asked["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:assistant"))
     assert delivery(api, plain["id"], "bot:ops")["reason"] == "mention"
     by_id = {m["id"]: m for m in timeline(api, thread["id"], "ben-test")["messages"]}
     assert by_id[asked["id"]]["routed"] is None and by_id[plain["id"]]["routed"] is None
@@ -258,7 +258,7 @@ def test_bot_status_goes_live_only_to_the_roots_readers(api):
 
 
 def test_at_most_five_bots_oldest_wait_first(api):
-    bots = ("ops", "cpo", "coo", "finance", "product-design", "doc-updater")
+    bots = ("ops", "cpo", "assistant", "finance", "product-design", "doc-updater")
     machine_for(api, bots)
     thread = new_thread(api, members=("human:ben", *("bot:" + b for b in bots)))
     for bot in bots:

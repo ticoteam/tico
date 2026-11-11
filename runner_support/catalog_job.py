@@ -25,12 +25,17 @@ DEFAULT_NAMES = {
     "company_name": "the company",
     "app_name": "Tico",
     "assistant_name": "Assistant",
-    "assistant_bot": "coo",
+    "assistant_bot": "assistant",
 }
 # The two bots the runner sets up from the catalog itself, and the template each one comes from.
 # Everybody else is BotOps's to create in a turn (`tico bot create`); BotOps cannot create itself,
 # and the assistant is who the person talks to, so neither can wait for a bot that does not exist.
-BOOTSTRAP_TEMPLATES = {"coo": "assistant", "botops": "botops", "librarian": "librarian", "goal-manager": "goal-manager"}
+BOOTSTRAP_TEMPLATES = {
+    "assistant": "assistant",
+    "botops": "botops",
+    "librarian": "librarian",
+    "strategy-owner": "strategy-owner",
+}
 FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
 
 

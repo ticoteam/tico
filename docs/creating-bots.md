@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Brand Owner are Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Design Owner are Built-in bots; they cannot be archived or deleted.
 
-The 124 role templates, in eleven groups with a Leadership extra, are described in
+The 108 role templates, in eleven groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -191,7 +191,7 @@ skill of that name is left alone unless you say to replace it. Nothing stays lin
 ## Message bots
 
 A message bot is assigned to one human on the roster. **Settings → Bots → Add from template** (and
-the Finish setup cards) show a human picker when the template is `inbox`. The chosen address is
+the Finish setup cards) show a human picker when the template is `inbox-manager`. The chosen address is
 appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
 `bot.yaml` from that line. The bot is created `planned`, with its gmail Tool at `read` and `draft`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
@@ -265,7 +265,7 @@ The runner checks these before it will run the bot, and the preflight script
 - **`AGENT.md` must not be the untouched template**, and it must contain an `## Owns` section with
   at least one non-empty bullet. Preflight fails otherwise.
 - **`state.md` must exist**, and **`bot.yaml` must parse with `name:` equal to the slug**
-  (`name: sales` in `bot-sales`).
+  (`name: sales` in `bot-inbound-sales-owner`).
 - **`runtime:` and `model:` in the file must match the server, or be left out.** A mismatch reads
   as "Configuration differs from server" and the bot does not run. The simplest repository omits
   both and lets Settings decide.
@@ -762,8 +762,8 @@ files and what to run. A branch that tracks another local branch is not pushed a
 ## 9. More than one environment
 
 The same slug can exist in two environments, and they are different bots: separate repositories,
-separate tasks, separate credentials, separate history. `bot-sales` in one environment's workspace
-has nothing to do with `bot-sales` in another's. Paths in instructions should therefore be written
+separate tasks, separate credentials, separate history. `bot-inbound-sales-owner` in one environment's workspace
+has nothing to do with `bot-inbound-sales-owner` in another's. Paths in instructions should therefore be written
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 

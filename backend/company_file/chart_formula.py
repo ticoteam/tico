@@ -173,7 +173,7 @@ REASON_LENGTH = cast(int, D.LIMITS["reason"])
 STATEMENT_LENGTH = cast(int, D.LIMITS["statement"])
 ROLES = cast(list[dict[str, object]], D.ROLES)
 ROLE_DEPARTMENT = {str(role["slug"]): str(role["department"]) for role in ROLES}
-# An industry Owner takes no built-in card (core: coo, botops, goal-manager, librarian) and no card the catalog marks
+# An industry Owner takes no built-in card (core: assistant, botops, strategy-owner, librarian) and no card the catalog marks
 # required; the company's own setup supplies those.
 INDUSTRY_TEMPLATES = frozenset(str(role["slug"]) for role in ROLES if not role.get("core") and not role.get("required"))
 slugify = cast(Callable[[str], str], D.slugify)

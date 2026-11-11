@@ -200,7 +200,7 @@ SETUP_FILES = {
         "knowledge/briefs.md",
     ],
     "builder": ["knowledge/standards.md", "knowledge/patterns.md"],
-    "pr-reviewer": ["knowledge/standards.md", "knowledge/patterns.md"],
+    "reviewer": ["knowledge/standards.md", "knowledge/patterns.md"],
     "qa-owner": ["knowledge/thresholds.md", "knowledge/suites.md"],
     "release-owner": [
         "knowledge/thresholds.md",

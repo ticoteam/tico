@@ -585,7 +585,7 @@ def _check_manage(c, auth, who, scope, ctx=None):
 
 # ----------------------------------------------------------------------------- views
 def _cite_visible(c, auth, who, row, memo):
-    """Whether a cite of this file shows its quote to `who`: they may read the file now. Counsel reads it as the people
+    """Whether a cite of this file shows its quote to `who`: they may read the file now. The Rules Owner reads it as the people
     its run answers would (counsel.cite_readers), so a quote never enters a run whose asker could not read the file."""
     from . import counsel
     from . import files as F
@@ -880,7 +880,7 @@ def add_rule(c, auth, who, body):
     ctx = _ctx(c)
     given = scope_in(c, body.get("who") or {}, flags=True)
     if who.role == "bot" and not _has(given):
-        # Counsel names no Who when no department is named: the suggestion is stored with none, and the owner sets it
+        # The Rules Owner names no Who when no department is named: the suggestion is stored with none, and the owner sets it
         # when they accept (decide_rule refuses an accept with no Who).
         scope = given
     else:

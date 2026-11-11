@@ -8,13 +8,13 @@ const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
-const writer = {id: 's-writer', kind: 'seat', stage: 'recruiting', title: 'Content Marketer', description: 'Writes the blog.',
+const writer = {id: 's-writer', kind: 'seat', stage: 'recruiting', title: 'Content Owner', description: 'Writes the blog.',
   team: '', reports_to: 'seat:s-head', created_at: '2026-10-24T00:00:00Z', org_parent: 's:s-head', can_edit: true,
   reports_now: {name: 'Ana', until: 'Head of Marketing'}};
 const head = {id: 's-head', kind: 'seat', stage: 'recruiting', title: 'Head of Marketing', description: 'Leads marketing.',
   team: '', reports_to: 'human:ana', created_at: '2026-10-24T00:00:00Z', org_parent: 'p:ana'};
 const seats = [writer, head];
-const candidate = {template: 'content', slug: 'content', name: 'Content Marketer', line: 'Writes the blog.',
+const candidate = {template: 'content-owner', slug: 'content', name: 'Content Owner', line: 'Writes the blog.',
   summary: 'Writes the blog.', owns: ['The drafts'], never: [], onboarding: [], prerequisites: [], tags: [],
   model_name: '', model: '', instructions: ''};
 const found = {seat: writer, candidates: [candidate], agents: [], models: [], agents_at: 0};

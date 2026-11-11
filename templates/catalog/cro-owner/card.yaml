@@ -1,6 +1,6 @@
 template: cro-owner
 slug: cro-owner
-name: Conversion Rate Optimization Owner
+name: CRO Owner
 required: false
 bootstrap: false
 lead: false

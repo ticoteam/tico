@@ -11,11 +11,11 @@ Steps:
 2. Check safety first. A gas smell, water leak, electrics, a broken lock, a blocked exit, or fire equipment out of date is
    unsafe. Say so in the first line of the reply, tell the Operations Manager now, and do not wait for the weekly page.
 3. Route it:
-   - a laptop, account, Wi-Fi password or software problem goes to `it-support` (`tico task create --owner it-support`);
+   - a laptop, account, Wi-Fi password or software problem goes to `it-support-specialist` (`tico task create --owner it-support-specialist`);
    - a fault in the building goes to the fixer named in `knowledge/fixers.md`; building-owned items (heating, lifts,
      doors) go to the landlord or building manager;
    - a purchase under the owner's limit is prepared for that owner; over it, it becomes a purchase request to
-     `procurement`;
+     `procurement-manager`;
    - a preference (a snack, a plant) goes on the supplies proposal, not into an order.
 4. Give the request a fixer and a promised date. If the fixer has not given a date, write "not given" and ask once. "Reported"
    is not a status.
@@ -31,5 +31,5 @@ Checks before you finish:
 - Nothing was ordered, booked or sent that the task did not ask for.
 
 Example (invented, for illustration): "Meeting room 2 screen shows no input, reported by Sofia on 2026-09-19. Not unsafe.
-Routed to it-support. Fixer: it-support, promised 2026-09-24. On 2026-09-25 the promise had passed, so the chase went to
-it-support on the task. Reply to Sofia on 2026-09-19: it-support has it, and a date is promised for 2026-09-24."
+Routed to it-support-specialist. Fixer: it-support-specialist, promised 2026-09-24. On 2026-09-25 the promise had passed, so the chase went to
+it-support-specialist on the task. Reply to Sofia on 2026-09-19: it-support-specialist has it, and a date is promised for 2026-09-24."

@@ -227,17 +227,17 @@ def test_the_bookkeeper_confirms_with_its_book_right_and_the_owner_can_undo_it(b
         _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
         SUB.detect(c, WATCH_AT)
         sid = str(only_row(c)["id"])
-        FA.grant_defaults(c, "bot:bookkeeper", at=AT)
+        FA.grant_defaults(c, "bot:finance-owner", at=AT)
         done = act(
             c,
-            "bot:bookkeeper",
+            "bot:finance-owner",
             "subscription_confirm",
             {"subscription_id": sid, "status": "active", "amount": 5_200},
             at=WATCH_AT,
         )
         assert done.status == "committed", done
         active = only_row(c)
-        assert (active["status"], active["amount"], active["confirmed_by"]) == ("active", 5_200, "bot:bookkeeper")
+        assert (active["status"], active["amount"], active["confirmed_by"]) == ("active", 5_200, "bot:finance-owner")
         undone = act(c, OWNER, "subscription_undo", {"subscription_id": sid}, at=WATCH_AT)
         assert undone.status == "committed", undone
         back = only_row(c)
@@ -271,9 +271,9 @@ def test_a_bookkeeper_confirmed_repeat_that_lapses_then_charges_again_is_suggest
         _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
         SUB.detect(c, WATCH_AT)
         sid = str(only_row(c)["id"])
-        FA.grant_defaults(c, "bot:bookkeeper", at=AT)
+        FA.grant_defaults(c, "bot:finance-owner", at=AT)
         kept = act(
-            c, "bot:bookkeeper", "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT
+            c, "bot:finance-owner", "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT
         )
         assert kept.status == "committed", kept
         assert SUB.detect(c, LAPSED_AT)["cancelled"] == 1

@@ -39,7 +39,7 @@ issue on file: missed deliveries, outages, support tickets, invoice disputes.
 ## 4. Gaps
 
 Vendors with no owner, no contract on file, no tier, or holding team data with no security review on file. One line
-each. Where `security-compliance` keeps a review list, check it there.
+each. Where `security-and-compliance-analyst` keeps a review list, check it there.
 
 ## 5. Write the page
 

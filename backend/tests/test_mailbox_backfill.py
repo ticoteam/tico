@@ -156,7 +156,7 @@ def test_a_company_with_no_inbox_bots_upgrades_to_almost_nothing(api):
     """TIDY: people sign in, nobody has an inbox bot or a gmail entry; a person's automation on their own email."""
     with tx(api) as c:
         roster(c, [{"id": "ana", "email": ANA, "primary_for": ["*"]}, {"id": "ben", "email": BEN}])
-        for slug in ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater"):
+        for slug in ("assistant", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater"):
             config(c, slug)
         automation(c, "person:ana", {"trigger": {"type": "message", "inbox": ANA}, "steps": []})
         assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
@@ -201,7 +201,7 @@ def test_a_bot_s_mail_automation_keeps_the_mailbox_it_heard(api):
                 {"id": "cara", "email": CARA},
             ],
         )
-        coo = H.resolve_bot(c, "coo")["id"]
+        coo = H.resolve_bot(c, "assistant")["id"]
         c.execute("UPDATE bot_config SET owner_id='ana' WHERE bot=?", (coo,))
         automation(c, "bot:" + coo, {"trigger": {"type": "message", "inbox": ANA}, "steps": []})
         automation(c, "bot:" + coo, {"trigger": {"type": "message", "inbox": CARA}, "steps": []})  # never heard

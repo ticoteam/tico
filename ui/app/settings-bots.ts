@@ -483,15 +483,15 @@ async function settingsCatalogPicker() {
     try {
       const hints = [];
       for (const card of chosen) {
-        if (card.template === 'inbox' && !catalogPerson(state, card)) {
+        if (card.template === 'inbox-manager' && !catalogPerson(state, card)) {
           status.innerHTML = '<span class="err">Choose whose mailbox the message bot reads.</span>';
           submit.disabled = false; return;
         }
         const person = catalogPerson(state, card);
-        const slug = card.template === 'inbox' && person ? `${person.id}-inbox`
+        const slug = card.template === 'inbox-manager' && person ? `${person.id}-inbox`
           : card.template === 'assistant' ? assistantBot() : card.slug;
         const named = catalogName(state, card);
-        const display = card.template === 'inbox' && person && named === (card.name || card.slug)
+        const display = card.template === 'inbox-manager' && person && named === (card.name || card.slug)
           ? `${person.name || person.id} message bot` : named;
         const added = await post('/v2/bots', {
           slug, display_name: display, description: card.summary || '',

@@ -388,7 +388,7 @@ until BotOps has built it.
 1. Read the cards from this checkout's `templates/catalog/`.
 2. Take the template from the bot's server-side config, and use it only if its card says
    `bootstrap: true` or the bot's config says `materialize: true` (only the wizard writes that). A registration made before templates existed carries no template, so a bot
-   named `coo` falls back to the assistant template and one named `botops` to the botops template.
+   named `assistant` falls back to the assistant template and one named `botops` to the botops template.
 3. Read the names from `GET /api/v2/config` and the answers from `GET /api/v2/setup` with
    this computer's own credential. Both are read fresh, because the wizard is answered after the
    computer is enrolled.
@@ -438,10 +438,9 @@ and a computer is enrolled). Its routines start paused: the server arms the dail
 weekly goals review (the Monday note) is started too, since every install starts at **Suggests actions**; choosing
 **Passive** pauses it ([Your Strategy Owner](strategy-bot.md)).
 
-The Brand Owner (`brand`) keeps the brand book and the Brand card. It is built the same way (a required, bootstrap card; a
-team from before it existed gets it on update once a model is chosen and a computer is enrolled) and sits outside the chart
-like the others. A team that already hired a bot under the slug `brand` (a Brand Manager)
-keeps that bot as it is and gets no second one. Its monthly brand audit starts off and goes on, once, when it runs
+The Design Owner (`design-owner`) owns design: the brand book, the Brand card and the look of what the team makes. It is
+built the same way (a required, bootstrap card; a team from before it existed gets it on update once a model is chosen
+and a computer is enrolled) and sits outside the chart like the others. Its monthly brand audit starts off and goes on, once, when it runs
 `tico bot setup-done` at the end of its setup; one a person turned off stays off.
 
 A team that set the assistant aside before it was built in (v0.2.1 to v0.2.9 let the wizard skip it) keeps it archived
@@ -546,7 +545,7 @@ the same template is one of the two command line routes; Tico gives it a slug of
 
 ## Adding a template
 
-Tico ships 125 role templates, by group, each with a card. `templates/catalog/` holds 139 folders in all: those 125, four built-in bots (`assistant`, `botops`, `goal-manager`, `librarian`), seven helper bots (`bookkeeper`, `brand`, `inbox`, `task-manager`, `tico-counsel`, `updates-owner`, `automations-owner`), and three retired templates kept for existing installs (`bookkeeping`, `cro`, `lead-generation`). [Starter bots](starter-bots.md) lists the 125.
+Tico ships 108 role templates, by group, each with a card. `templates/catalog/` holds 119 folders in all: those 108, four built-in bots (`assistant`, `botops`, `strategy-owner`, `librarian`) and seven helper bots (`finance-owner`, `design-owner`, `inbox-manager`, `task-manager`, `rules-owner`, `updates-owner`, `automations-owner`). [Starter bots](starter-bots.md) lists the 108.
 
 `templates/catalog/<template>/` is one template. The folder name is what `--template` takes.
 
@@ -566,7 +565,7 @@ Tico ships 125 role templates, by group, each with a card. `templates/catalog/` 
   materializes it itself and no BotOps task is filed for it. Both are true for all four Built-in bots:
   Assistant, BotOps, Librarian and Strategy Owner.
 - `recommend_when` says who a card is for. The team builder reads only `sells_to_businesses` and `sells_to_consumers` (a business-only card is suggested last to a team that sells only to consumers); the rest
-  (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox` card (the message bot) needs a
+  (`publishes_content`, `has_pipeline`, `uses_github`, ...) are descriptive and harmless. The `inbox-manager` card (the message bot) needs a
   human's mailbox chosen whenever it is switched on.
 - The release ships `templates/catalog` as `.yaml` and `.md` files only, which is all the server
   reads. The full folder is materialized from the checkout on the computer, so a template only works

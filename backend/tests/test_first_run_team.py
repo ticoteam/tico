@@ -47,13 +47,13 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     """Create, parked, woken only by a person, ready by the bot itself and completed by a person above it; and the member
     limit ignores parked bots."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
-    real_starters(api, "support", "chief-of-staff", "issue-triage")
+    real_starters(api, "support", "chief-of-staff", "qa-owner")
     computer = machine(api)
     who = signed_in()
     selected = {
         "chief-of-staff": {"template": "chief-of-staff", "display_name": "Chief of Staff", "instructions": ""},
         "support": {
-            "template": "support",
+            "template": "support-owner",
             "display_name": "Help desk",
             "instructions": "",
             "reports_to": "chief-of-staff",
@@ -63,7 +63,9 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     record = build_team(api)  # what picking a candidate for each seat makes (bot-lifecycle-spec.md)
     rows = {row["slug"]: row for row in record["bots"]}
     assert rows["support"]["onboarding_state"] == rows["chief-of-staff"]["onboarding_state"] == "needs_setup"
-    assert rows["botops"]["onboarding_state"] == rows["coo"]["onboarding_state"] == ""  # built in: they work at once
+    assert (
+        rows["botops"]["onboarding_state"] == rows["assistant"]["onboarding_state"] == ""
+    )  # built in: they work at once
     assert (
         rows["support"]["setup_task_id"] is None and rows["support"]["reports_to"] == rows["chief-of-staff"]["id"]
     )  # stored by id
@@ -71,7 +73,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
 
     # Exposed with the template and its version; placed on the computer and active, its routine seeded off.
     listed = {b["slug"]: b for b in api.get("/api/v2/bots", headers=who).json()}
-    assert listed["support"]["onboarding_state"] == "needs_setup" and listed["coo"]["onboarding_state"] == ""
+    assert listed["support"]["onboarding_state"] == "needs_setup" and listed["assistant"]["onboarding_state"] == ""
     detail = api.get("/api/v2/bots/support", headers=who).json()
     assert (detail["template"], detail["template_version"], detail["state"]) == (
         "support",
@@ -124,7 +126,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
 
     # Parked bots do not count toward a member's limit until they are onboarded.
-    real_starters(api, "issue-triage")
+    real_starters(api, "qa-owner")
     assert api.put("/api/v2/access/limits", json={"member_bot_limit": 1}, headers=signed_in()).status_code == 200
     as_person(api, "quinn")
     model = api.get("/api/v2/models", headers=signed_in()).json()["default"]
@@ -145,7 +147,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
             },
         )
 
-    for slug, template in (("help", "support"), ("closer", "issue-triage"), ("chief-two", "chief-of-staff")):
+    for slug, template in (("help", "support"), ("closer", "qa-owner"), ("chief-two", "chief-of-staff")):
         assert create(slug, template).status_code == 200, slug  # parked: three of them, with a limit of one
     assert create("plain").status_code == 200  # and the one that counts still fits
     over = create("plain-two")
@@ -171,7 +173,7 @@ def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     real_starters(api, "support")
     machine(api)
-    selected = {"support": {"template": "support", "display_name": "Help desk", "instructions": ""}}
+    selected = {"support": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}
     assert draft(api, selected=selected).status_code == 200
     build_team(api)
 
@@ -189,7 +191,7 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
     real_starters(api, "support")
     machine(api)
-    selected = {"support": {"template": "support", "display_name": "Help desk", "instructions": ""}}
+    selected = {"support": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}
     assert draft(api, selected=selected).status_code == 200
     build_team(api)
 
@@ -214,7 +216,13 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     api = environment(seed={}, catalog_dir=CATALOG)
     who = signed_in()
     departments = ["sales", "marketing", "support", "finance", "operations"]
-    templates = ["sales-lead", "marketing-lead", "support-lead", "finance-lead", "ops-manager"]
+    templates = [
+        "growth-team-manager",
+        "growth-team-manager",
+        "success-team-manager",
+        "finance-owner",
+        "operations-manager",
+    ]
     selected = {slug: {"template": slug, "display_name": slug, "instructions": ""} for slug in templates}
     body = {
         "names": {"company_name": "Fresh Synthetic Co"},
@@ -261,7 +269,7 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
             group.pop("order", None)
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
     assert all("order" not in group for group in legacy["org_groups"].values())
-    selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
+    selected = {"finance-owner": {"template": "finance-owner", "display_name": "Finance", "instructions": ""}}
     assert (
         api.put(
             "/api/v2/setup", json={"answers": {"departments": ["finance"]}, "selected": selected}, headers=who

@@ -126,7 +126,7 @@ files an insight when it changes by a real amount; the first read is only a base
     tico market watch add organization/<slug> https://<their site>/changelog --kind changelog
     tico market watch add organization/<slug> https://<their site>/careers --kind careers
 
-Use the address you read in step 3, never a guess: a page you could not open is not watched. Kinds are `pricing`,
+Use the address you read in step 3, never a guess: a page you could not open is not watched. Kinds are `pricing-analyst`,
 `careers`, `changelog`, `docs`, `home` and `other`. At most 200 pages are watched at once; `tico market watch list`
 shows them and `tico market watch stop <id>` ends one.
 

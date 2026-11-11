@@ -29,7 +29,7 @@ def seeded(api):
             ("ana", "ana-test", "inbox"),
             ("ben", "ben-test", "finance"),
             ("cara", "cara-test", "ops"),
-            ("cara", "cara-test", "coo"),
+            ("cara", "cara-test", "assistant"),
         )
     ]
     meetings = [

@@ -14,17 +14,17 @@ def _seed(api, tmp_path):
     store = api.app.state.store
     with store.transaction() as c:
         M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
-        if not H.bot(c, "listening"):
+        if not H.bot(c, "social-media-manager"):
             c.execute(
                 "INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
-                ("listening", "listening", "Listening", "high", "active", H.now()),
+                ("social-media-manager", "social-media-manager", "Social Media Manager", "high", "active", H.now()),
             )
-        if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
+        if not c.execute("SELECT 1 FROM bot_config WHERE bot='social-media-manager'").fetchone():
             c.execute(
                 "INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) VALUES (?,?,?,?,?,?)",
-                ("listening", "marketing", "ana", "Listening", "cmo", "emp-listening"),
+                ("social-media-manager", "marketing", "ana", "Social Media Manager", "cmo", "bot-social-media-manager"),
             )
-            BS.write(c, "listening", {"runtime": "grok", "model": "grok-4.6", "host": "keeper"})
+            BS.write(c, "social-media-manager", {"runtime": "grok", "model": "grok-4.6", "host": "keeper"})
 
 
 def _librarian(api):

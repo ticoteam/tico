@@ -4,7 +4,7 @@ from backend.store import H
 from backend import bot_settings as BS
 
 
-BASE = ("coo", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
+BASE = ("assistant", "ops", "cpo", "product-design", "finance", "inbox", "doc-updater")
 
 
 def add_bots(api, extra):

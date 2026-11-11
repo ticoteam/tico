@@ -33,6 +33,6 @@ def draft_then_tell(**extra):
         **extra,
         "steps": [
             {"id": "draft", "type": "llm", "as": "bot:ops", "prompt": "Draft a reply", "out": "reply"},
-            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "coo", "text": "{{reply.text}}"}},
+            {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "{{reply.text}}"}},
         ],
     }

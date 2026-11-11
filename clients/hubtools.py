@@ -51,7 +51,7 @@ from clients.commands.tools import query_search, repo_list, repo_review, repo_up
 from clients.commands.webhooks import webhook_options
 from clients.commands._requester import (
     COUNSEL,
-    COUNSEL_BOT,
+    RULES_OWNER_BOT,
     KINDS,
     PEOPLE,
     REQUESTER,
@@ -100,7 +100,7 @@ __all__ = [
     "COMPUTER_DETAIL_CHARS",
     "COMPUTER_PAGE",
     "COUNSEL",
-    "COUNSEL_BOT",
+    "RULES_OWNER_BOT",
     "COUNSEL_TOOLS",
     "FINANCE_CHARS",
     "FINANCE_MAX_CHARS",

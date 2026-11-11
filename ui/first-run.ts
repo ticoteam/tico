@@ -25,7 +25,7 @@ const frOwner = (): string => (S.me?.id ? 'human:' + S.me.id : '');
 const frHome = (state: FrState): string => state.record.home || frOwner();
 const frPeople = () => (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.me?.id ? [{id: S.me.id, name: S.me.name}] : []));
 const frPersonName = (id: string | undefined) => frPeople().find(p => p.id === id)?.name || id;
-// The bot a card is created as: the assistant's card is named `coo` but the team's own bot is `assistantBot()`.
+// The bot a card is created as: the assistant's card is named `assistant` but the team's own bot is `assistantBot()`.
 const frBotSlug = (card: CatalogCard): string => (card.template === 'assistant' ? assistantBot() : card.slug);
 
 function frCollect(state: FrState, key: string) {
@@ -90,7 +90,7 @@ function frProblem(state: FrState): string {
       if (!next || next.required) break;
     }
   }
-  const inbox = cat.cards.find(card => card.template === 'inbox');
+  const inbox = cat.cards.find(card => card.template === 'inbox-manager');
   // catalogMissingMailbox is true only when an inbox card exists, so inbox is set on that side.
   return catalogMissingMailbox(cat) ? `Choose whose mailbox ${catalogName(cat, inbox!)} reads.` : '';
 }

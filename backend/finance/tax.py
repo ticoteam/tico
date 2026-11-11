@@ -1,5 +1,5 @@
 """Tax tracking (spec §11): sales tax jurisdictions, their remittances and quarterly due dates, the 1099-NEC due date, and the
-two workpapers with their CSV exports. Each due date is an external rule owned by the Bookkeeper, seeded once when Finance
+two workpapers with their CSV exports. Each due date is an external rule owned by the Finance Owner, seeded once when Finance
 is set up, and a remittance is a bill to the jurisdiction's tax authority contact. A workpaper is filed as a whole, so only
 someone who sees everything can read one, and it is refused whole rather than shown partial: to anyone who does not see
 everything, and to a viewer who lacks full detail on a private account that a line behind the workpaper sits on. A
@@ -38,7 +38,7 @@ _D: Any = _rule_due
 _RR: Any = _rule_due_routine
 
 Result = dict[str, object]
-ACTOR = "bot:bookkeeper"  # the Bookkeeper (backend/bookkeeper.py): it owns the due dates and their routines
+ACTOR = "bot:finance-owner"  # the Finance Owner (backend/bookkeeper.py): it owns the due dates and their routines
 ACCOUNT_BASE = "2300"  # a new jurisdiction's liability account takes the first free code from here, clear of the
 # card lines from 2100 (banking.CARDS); a jurisdiction added before keeps its code
 DEFAULT_DUE_DAY = 20  # a sales tax return falls due on this day of the month after its quarter
@@ -122,7 +122,7 @@ def _year(ctx: Ctx, year: int | None) -> int:
 # ------------------------------------------------------------------------------------------------ planners
 def tax_jurisdiction_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A sales tax jurisdiction: a liability account for the tax it collects, the authority contact its remittances go to,
-    and the day its quarterly return falls due. Its due date is seeded for the Bookkeeper as the apply runs."""
+    and the day its quarterly return falls due. Its due date is seeded for the Finance Owner as the apply runs."""
     V.only(p, ("code", "name", "authority_id", "due_day"))
     code = V.text(p, "code", 20)
     name = V.text(p, "name", 120)
@@ -206,7 +206,7 @@ PLANNERS = {"tax_jurisdiction_add": tax_jurisdiction_add, "tax_remit": tax_remit
 def _seed(
     c: sqlite3.Connection, at: str, key: str, text: str, source: str, kind: str, repeats: str, first: date, days: int
 ) -> None:
-    """One outside obligation: its external rule, a due date owned by the Bookkeeper, and the routine that opens its task."""
+    """One outside obligation: its external rule, a due date owned by the Finance Owner, and the routine that opens its task."""
     rule_id: str = _OR.seed_external(c, Identity(actor=ACTOR, role="bot"), text, source, kind)
     due_id: str = _D.add(c, ACTOR, rule_id, first.isoformat(), repeats, _D.default_zone(), ACTOR)
     _RR.sync(c, ACTOR, _D.one(c, due_id), text, days)
@@ -215,8 +215,8 @@ def _seed(
 
 def seed_dues(c: sqlite3.Connection, at: str) -> list[str]:
     """Seed the outside obligations Finance tracks, each once: the 1099-NEC (due January 31) and each sales tax
-    jurisdiction's quarterly return. Nothing is seeded before Finance is set up or before the Bookkeeper exists to own
-    them; the Bookkeeper's own set-up calls this again. Returns the keys it seeded now."""
+    jurisdiction's quarterly return. Nothing is seeded before Finance is set up or before the Finance Owner exists to own
+    them; the Finance Owner's own set-up calls this again. Returns the keys it seeded now."""
     book = SL.book(c)
     if book is None or _H.bot(c, ACTOR) is None:
         return []

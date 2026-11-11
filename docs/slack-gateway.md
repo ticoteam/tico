@@ -94,8 +94,8 @@ Stored answer for one routed message, as the message's `refs.routing` carries it
 ```json
 {"routed_by": "judge", "model": "judge-latest",
  "recipients": [{"bot": "legal", "confidence": 0.92}],
- "candidates": [{"bot": "legal", "confidence": 0.92}, {"bot": "coo", "confidence": 0.3}, {"bot": "cmo", "confidence": 0.0}],
- "scores": {"cmo": 0.0, "content-social": 0.0, "coo": 0.3, "cto": 0.0, "legal": 0.92, "seo": 0.0},
+ "candidates": [{"bot": "legal", "confidence": 0.92}, {"bot": "assistant", "confidence": 0.3}, {"bot": "cmo", "confidence": 0.0}],
+ "scores": {"cmo": 0.0, "content-social": 0.0, "assistant": 0.3, "cto": 0.0, "legal": 0.92, "seo": 0.0},
  "asks": 0.9, "reply_to_last": 0.1, "names_bot": 0.1,
  "thresholds": {"route": 0.6, "ask": 0.5, "max": 3},
  "fallback": false, "dropped": [], "reason": "",

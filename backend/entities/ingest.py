@@ -9,7 +9,7 @@ What each source makes (spec §7):
   An automated sender (no-reply address, list mail, bulk mail) makes its organization only, never a person.
 - Meetings: a person for each outside attendee of a live team meeting, with their organization. A private or
   participants-only meeting makes nothing.
-- Counsel: none here. A rule's source is an organization entity itself (track 5, org_rules.source_entity_id).
+- The Rules Owner: none here. A rule's source is an organization entity itself (track 5, org_rules.source_entity_id).
 - Company page: a reader on the board or investors list is a person who advises self or invests in it.
 
 Each step is safe inside the action that caused it: safely() runs it in a savepoint, logs a failure, and returns None,

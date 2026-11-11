@@ -48,7 +48,7 @@ from . import bot_settings as BS
 MIN_RUNNER_VERSION = (0, 2, 0)
 DOC_BOT = "doc-updater"  # the documentation agent: docs questions and doc PR reviews
 # the Strategy Owner (backend/strategy_bot.py SLUG): of people, only the owner chats with it
-STRATEGY_BOT = "goal-manager"
+STRATEGY_BOT = "strategy-owner"
 
 
 def runner_version_supported(value):

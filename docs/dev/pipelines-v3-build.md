@@ -642,7 +642,7 @@ With many PRs the first unmet one, in link order, gives the line.
 - **GitHub down for days:** the metadata waits, the stage turns Late after its expected time and the manager bot looks once,
   then a person's list at 3 times the expected time (rig case `github-down-for-days`).
 - **The Release Owner** is the bot the release schedule names, else the first active bot made from `release-owner`.
-  `release-notes` is the Release Notes Writer and never stands in.
+  `release-notes-writer` is the Release Notes Writer and never stands in.
 
 ## Tests and the rig
 

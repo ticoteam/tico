@@ -217,7 +217,7 @@ def test_sidebar_pages_and_cards_follow_the_saved_widgets(api):
     put(api, "bots/ops/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "tasks"}]}, "cara-test")
     assert [p["item"] for p in place(api, "bot:ops")["pins"]] == ["page:" + mail]
     # The Assistant's sidebar is each person's own: no pages there.
-    put(api, "bots/coo/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "page:" + ops}]}, expected=422)
+    put(api, "bots/assistant/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "page:" + ops}]}, expected=422)
 
 
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):

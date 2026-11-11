@@ -116,14 +116,14 @@ def test_a_cell_company_takes_its_target_through_its_own_updater(hosted, monkeyp
 
 def test_a_target_waits_for_no_bot_turn_at_most_the_idle_wait_then_updates_once(api, hosted, monkeypatch):  # noqa: F811
     hosted.hq.target = TARGET
-    execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())  # a bot turn runs
+    execution.CLAIMED_BUSY["mac"] = (frozenset({"assistant"}), frozenset(), time.monotonic())  # a bot turn runs
     assert hosted.tick(T0) == "waiting" and hosted.updater.started == []
     assert api.get("/api/v2/config", headers=headers()).json()["update"]["scheduled"] == "0.4.11"
     health = api.get("/api/v2/health", headers=headers()).json()
     version = next(c for c in health["checks"] if c["id"] == "version")
     assert version["summary"] == "Tico will update this server to v0.4.11 when idle."
     assert hosted.tick(T0 + 60) == "waiting" and hosted.updater.started == []
-    execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())
+    execution.CLAIMED_BUSY["mac"] = (frozenset({"assistant"}), frozenset(), time.monotonic())
     assert hosted.tick(T0 + HU.IDLE_WAIT_S) == "updating"  # busy all along: the wait ends
     assert hosted.updater.started == ["0.4.11"]
     assert events(hosted.store, "system.update.started") == [("system:hosting", {"from": "0.4.9", "to": "0.4.11"})]
@@ -179,7 +179,7 @@ def test_a_failed_or_rolled_back_update_is_reported_and_never_tried_again(api, h
 def test_a_target_taken_back_before_it_starts_is_dropped_and_hq_answers_are_checked(api, hosted):  # noqa: F811
     hosted.hq.target = {"version": "latest", "request_id": TARGET["request_id"]}  # not a release: ignored
     hosted.tick(T0)
-    execution.CLAIMED_BUSY["mac"] = (frozenset({"coo"}), frozenset(), time.monotonic())
+    execution.CLAIMED_BUSY["mac"] = (frozenset({"assistant"}), frozenset(), time.monotonic())
     hosted.hq.target = TARGET
     assert hosted.tick(T0 + HU.CHECK_S) == "waiting"
     hosted.hq.target = None
@@ -208,7 +208,7 @@ FRESH = {"version": "0.6.0", "request_id": "hu_" + "f" * 16}
 def _one_task(api):
     from backend.tests.helpers.cards import task
 
-    return task(api, "coo", "Ship the spring catalog")
+    return task(api, "assistant", "Ship the spring catalog")
 
 
 def _no_tasks(store):

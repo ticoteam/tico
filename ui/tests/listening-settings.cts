@@ -13,14 +13,14 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 
 const CATEGORIES = ['market', 'content', 'lead', 'vendor_pitch'].map(id => ({id, label: id.replace('_', ' ')}));
-const RECEIVERS = [{actor: 'bot:librarian', name: 'Librarian'}, {actor: 'bot:content', name: 'Content'}, {actor: 'bot:sales-ops', name: 'Sales Ops'}];
+const RECEIVERS = [{actor: 'bot:librarian', name: 'Librarian'}, {actor: 'bot:content', name: 'Content'}, {actor: 'bot:sales-operations-manager', name: 'Sales Ops'}];
 
 async function open(browser: Browser, role: string, width = 1440) {
   const page = await browser.newPage({viewport: {width, height: 900}, serviceWorkers: 'block'});
   const errors: string[] = [], writes: Record<string, unknown>[] = [];
   const dests = [
     {key: 'market', category: 'market', threshold: 0.7, receiver: 'bot:librarian', readers: [], unless: null, what: 'a post about the market', source: 'settings', overrides_yaml: false},
-    {key: 'leads', category: 'lead', threshold: 0.75, receiver: 'bot:sales-ops', readers: ['bot:content'],
+    {key: 'leads', category: 'lead', threshold: 0.75, receiver: 'bot:sales-operations-manager', readers: ['bot:content'],
       unless: {category: 'vendor_pitch', threshold: 0.7}, what: 'a team lead', source: 'yaml', overrides_yaml: false}];
   page.on('pageerror', (e: Error) => errors.push(e.message));
   await page.route('**/*', (route: Route) => {

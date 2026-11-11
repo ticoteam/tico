@@ -202,14 +202,16 @@ def test_an_unchanged_webhook_queues_nothing_and_the_preset_is_its_only_timer(ap
 
 @pytest.mark.parametrize("name", ["token_saver", "performance"])
 def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unheld(api, name):
-    preset(api, "coo", name)
+    preset(api, "assistant", name)
     with api.app.state.store.transaction() as c:
-        parent = H.task_create(c, "bot:coo", "Plan the launch", "Plan it.", "bot:coo")
-        task = H.task_create(c, "bot:coo", "Draft the plan", "Please draft it.", "bot:ops", parent_id=parent["id"])
-        before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0]
+        parent = H.task_create(c, "bot:assistant", "Plan the launch", "Plan it.", "bot:assistant")
+        task = H.task_create(
+            c, "bot:assistant", "Draft the plan", "Please draft it.", "bot:ops", parent_id=parent["id"]
+        )
+        before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='assistant'").fetchone()[0]
         H.task_update(c, "bot:ops", task["id"], note="Started on the outline")
         H.task_update(c, "bot:ops", task["id"], note="Half way")
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='coo'").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='assistant'").fetchone()[0] == before
         H.task_update(
             c, "bot:ops", task["id"], status="done", note="Drafted", seen_version=H.task(c, task["id"])["version"]
         )
@@ -218,7 +220,7 @@ def test_a_subordinates_edits_do_not_wake_its_manager_and_its_end_wakes_it_unhel
         never_stuck.check(c)
         woken = c.execute(
             "SELECT j.held FROM jobs j JOIN messages m ON m.id=j.message_id "
-            "WHERE j.bot_id='coo' AND j.state='queued' AND json_extract(m.refs,'$.task')=?",
+            "WHERE j.bot_id='assistant' AND j.state='queued' AND json_extract(m.refs,'$.task')=?",
             (parent["id"],),
         ).fetchall()
         assert woken and all(row["held"] == 0 for row in woken)

@@ -19,7 +19,7 @@ from clients import manifest, repo_safety
 from clients.routines import validate_schedules
 
 CARD = """template: assistant
-slug: coo
+slug: assistant
 name: The Assistant
 required: true
 bootstrap: true
@@ -53,7 +53,7 @@ labels: [owner:CHANGE-ME]
 schedules: []
 """
 
-NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "coo"}
+NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "assistant"}
 ANSWERS = {
     "what_we_do": "we clean holiday homes",
     "customers": "owners of holiday homes",
@@ -106,7 +106,7 @@ class Materialize(unittest.TestCase):
         fixture(self.catalog)
         self.workspace = Path(self.tmp.name) / "Companies/Acme"
 
-    def make(self, slug="coo", **over):
+    def make(self, slug="assistant", **over):
         return catalog.materialize("assistant", slug, self.workspace, NAMES, ANSWERS, directory=self.catalog, **over)
 
     def test_an_existing_repository_is_never_overwritten(self):
@@ -136,7 +136,7 @@ class Materialize(unittest.TestCase):
         self.assertEqual(list(install.iterdir()), [])
 
     def test_a_bot_given_another_bots_old_slug_is_built_in_the_folder_the_server_recorded(self):
-        # A renamed bot still works in bot-coo; the new bot named coo was given bot-coo-<part of its id>.
+        # A renamed bot still works in bot-assistant; the new bot named assistant was given bot-assistant-<part of its id>.
         first = self.make()
         (first / "state.md").write_text("# State\n\nThe renamed bot's memory.\n")
         second = self.make(folder="bot-coo-0a1b2c3d")
@@ -146,7 +146,7 @@ class Materialize(unittest.TestCase):
         self.assertIn("The renamed bot's memory.", (first / "state.md").read_text())
         # A recorded value that is not one plain folder name is never a path.
         with self.assertRaises(ValueError):
-            self.make(folder="../coo")
+            self.make(folder="../assistant")
 
 
 class Refresh(unittest.TestCase):
@@ -160,7 +160,7 @@ class Refresh(unittest.TestCase):
         self.template = fixture(self.catalog)
         (self.template / "playbooks" / "fleet.md").write_text("Check the fleet for {{company_name}}.\n")
         self.path = catalog.materialize(
-            "assistant", "coo", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog
+            "assistant", "assistant", Path(self.tmp.name) / "ws", NAMES, ANSWERS, directory=self.catalog
         )
 
     def refresh(self):

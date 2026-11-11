@@ -90,7 +90,7 @@ def test_a_bots_suggestion_lands_as_suggested_with_its_cite(api):
     assert r.status_code == 200, r.text
     rule_view = r.json()
     assert rule_view["status"] == "suggested"
-    assert rule_view["suggested_by"] == "bot:tico-counsel"
+    assert rule_view["suggested_by"] == "bot:rules-owner"
     # The person who added the document reads the cite (Counsel itself sees only what its file lets it see).
     assert get(api, f"rules/{rule_view['id']}")["cite"] == {
         "file_id": file_id,
@@ -196,7 +196,7 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
     read = post(api, "rules/read", {"file_id": file_id, "source_id": source(api)})
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body, owner_id FROM tasks WHERE id=?", (read["task_id"],)).fetchone()
-    assert body["owner_id"] == "bot:tico-counsel"
+    assert body["owner_id"] == "bot:rules-owner"
     text = body["body"]
     start = text.index("<<UNTRUSTED DOCUMENT ")
     end = text.index("<<END UNTRUSTED DOCUMENT ")
@@ -206,7 +206,7 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
 
 
 def test_counsel_has_no_credentials_and_sends_nothing(api):
-    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "tico-counsel" / "bot.yaml"
+    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "rules-owner" / "bot.yaml"
     document = yaml.safe_load(card.read_text())
     assert document["tools"] == []
     assert "outbound_send" not in document  # a bot.yaml asks for nothing: the sending policy decides
@@ -215,15 +215,15 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
     assert "no credentials" in card.read_text() and "sends nothing" in card.read_text()
     counsel_on(api)
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:tico-counsel'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:rules-owner'").fetchone()[0] == 0
 
 
 def test_a_branch_of_a_stateless_bot_is_stateless_too():
     branch = SB.follow(
         None,
         "counsel-acme",
-        {"shared_from": "tico-counsel"},
-        rows=lambda slug: {"config": json.dumps({"template": "tico-counsel", "shared": True}), "repo": "emp-counsel"},
+        {"shared_from": "rules-owner"},
+        rows=lambda slug: {"config": json.dumps({"template": "rules-owner", "shared": True}), "repo": "emp-counsel"},
     )
     assert branch["stateless"] is True
     plain = SB.follow(
@@ -236,11 +236,11 @@ def test_a_branch_of_a_stateless_bot_is_stateless_too():
 
 
 def test_counsel_is_stateless_by_its_template_and_an_explicit_flag_wins():
-    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "tico-counsel" / "bot.yaml"
+    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "rules-owner" / "bot.yaml"
     assert yaml.safe_load(card.read_text())["stateless"] is True
-    assert H.stateless({"template": "tico-counsel"}) and H.stateless({"stateless": True})
+    assert H.stateless({"template": "rules-owner"}) and H.stateless({"stateless": True})
     assert not H.stateless({"template": "ops"}) and not H.stateless(None)
-    assert not H.stateless({"template": "tico-counsel", "stateless": False})
+    assert not H.stateless({"template": "rules-owner", "stateless": False})
 
 
 def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monkeypatch):
@@ -419,9 +419,9 @@ def test_a_counsel_run_reads_no_other_runs_summary_or_any_run_history(api):
     post(api, "rules/ask", {"question": "Can I share the price list?"}, token="cara-test")
     later = headers(next_counsel_run(api, r)["token"])
     for path in (
-        "bots/tico-counsel/turns",
-        "bots/tico-counsel/history",
-        "bots/tico-counsel/memory",
+        "bots/rules-owner/turns",
+        "bots/rules-owner/history",
+        "bots/rules-owner/memory",
         "runs",
         f"turns/{attempt['id']}/steps",
     ):
@@ -429,7 +429,7 @@ def test_a_counsel_run_reads_no_other_runs_summary_or_any_run_history(api):
             got = api.get("/api/" + ("" if path == "runs" else "v2/") + path, headers=token)
             assert got.status_code in (403, 404) and "price list" not in got.text, (path, got.text)
     # The owner still reads the run list.
-    assert "price list" in api.get("/api/v2/bots/tico-counsel/turns", headers=headers("ana-test")).text
+    assert "price list" in api.get("/api/v2/bots/rules-owner/turns", headers=headers("ana-test")).text
 
 
 def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
@@ -443,7 +443,7 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
         ("GET", f"pages/{file_id}"),
         ("GET", "replay"),
         ("GET", f"file-approvals?file={file_id}&version=2"),
-        ("GET", "bots/tico-counsel/turns"),
+        ("GET", "bots/rules-owner/turns"),
         ("GET", f"files/{file_id}/versions"),
         ("GET", f"files/{file_id}/meta?v=2"),
         ("GET", f"tasks/{read['task_id']}/answers"),
@@ -459,7 +459,7 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
             got = api.request(method, "/api/v2/" + path, headers=token, json={} if method == "POST" else None)
             assert got.status_code == 403 and "merger" not in got.text, (method, path, got.text)
     # A person still reads the run list and the file's versions.
-    for path in ("bots/tico-counsel/turns", f"files/{file_id}/versions"):
+    for path in ("bots/rules-owner/turns", f"files/{file_id}/versions"):
         assert api.get("/api/v2/" + path, headers=headers("ana-test")).status_code == 200, path
 
 
@@ -587,7 +587,7 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
         ("tico_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}),
     )
     shown = api.get(f"/api/v2/tasks/{ask['task_id']}", headers=headers(token)).json()["task"]["version"]
-    with pytest.raises(Exception, match="Counsel reads only"):
+    with pytest.raises(Exception, match="The Rules Owner reads only"):
         hubtools.task_close(Turn(api, token), {"id": ask["task_id"], "why": "Answered.", "version": shown})
     move = f"/api/v2/tasks/{ask['task_id']}/move"
     assert ("POST", move, counsel.READ_SCOPE) in seen
@@ -653,10 +653,10 @@ def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatc
     assert set(item) <= {"id", "file_id", "version", "ref", "kind"} and item["file_id"] == other
     assert "/visuals/" not in page.text
     # And a visual token naming Counsel, however it came about, opens nothing.
-    token = visuals.mint(visuals.key_for(api.app, api.app.state.store.settings), "bot:tico-counsel", other, 1)
+    token = visuals.mint(visuals.key_for(api.app, api.app.state.store.settings), "bot:rules-owner", other, 1)
     assert api.get("/visuals/" + token, headers={"host": "visuals.localhost:9001"}).status_code == 404
     with api.app.state.store.read() as c:
-        assert visuals.token_reader(c, api.app.state.auth, "bot:tico-counsel") is None
+        assert visuals.token_reader(c, api.app.state.auth, "bot:rules-owner") is None
         assert visuals.token_reader(c, api.app.state.auth, "bot:ops") is not None
 
 
@@ -838,7 +838,7 @@ def test_screening_runs_on_every_document_read_and_warns(api, monkeypatch):
 
     monkeypatch.setattr(screening, "screen", warn)
     read = read_document(api, file_id)
-    assert seen == [("document", "tico-counsel")]
+    assert seen == [("document", "rules-owner")]
     with api.app.state.store.read() as c:
         body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     assert body.startswith("Tico screening:")
@@ -1109,8 +1109,8 @@ def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch)
 
 def test_counsels_registries_list_it_as_a_hidden_helper():
     text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.ts").read_text()
-    assert "const COUNSEL_BOT = 'tico-counsel';" in text and "slug === COUNSEL_BOT" in text
-    assert "ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', COUNSEL_BOT]" in text
+    assert "const RULES_OWNER_BOT = 'rules-owner';" in text and "slug === RULES_OWNER_BOT" in text
+    assert "ASSISTANT_HELPERS = ['botops', 'strategy-owner', 'librarian', RULES_OWNER_BOT]" in text
 
 
 def outside_fence(text):
@@ -1188,7 +1188,7 @@ def test_counsel_is_offered_only_its_own_tools_and_refuses_the_rest():
     # Other bots and people keep theirs.
     assert outward <= {t["name"] for t in hubtools.listing(kind="bot")}
     assert outward <= {t["name"] for t in hubtools.listing(kind="owner")}
-    assert hubtools.kind_of({"role": "bot", "actor": "bot:tico-counsel"}) == "counsel"
+    assert hubtools.kind_of({"role": "bot", "actor": "bot:rules-owner"}) == "counsel"
     assert hubtools.kind_of({"role": "bot", "actor": "bot:ops"}) == "bot"
     # A refused call never reaches the server (the protocol has no API to call here).
     for name in sorted(outward):
@@ -1203,8 +1203,8 @@ def test_the_cli_refuses_an_outward_command_for_counsel_only(monkeypatch):
     from argparse import Namespace
     from clients import remotecli
 
-    monkeypatch.setenv("HUB_BOT", "tico-counsel")
-    with pytest.raises(SystemExit, match="not available to Counsel"):
+    monkeypatch.setenv("HUB_BOT", "rules-owner")
+    with pytest.raises(SystemExit, match="not available to the Rules Owner"):
         remotecli.counsel_held(Namespace(fn="gateway search", query="x"))
     with pytest.raises(SystemExit):
         remotecli.counsel_held(Namespace(fn="message send", to="ana", text="x"))
@@ -1285,9 +1285,9 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
 def test_counsel_tasks_are_private_by_default(api):
     counsel_on(api)
     with api.app.state.store.transaction() as c:
-        BS.write(c, 'tico-counsel', {'template': 'tico-counsel'})
+        BS.write(c, 'rules-owner', {'template': 'rules-owner'})
     with api.app.state.store.read() as c:
-        assert H.private_tasks_default(c, "bot:tico-counsel") is True
+        assert H.private_tasks_default(c, "bot:rules-owner") is True
 
 
 def test_an_uploaded_pdf_is_read_as_text_and_an_office_file_is_refused(api):
@@ -1407,7 +1407,7 @@ def test_counsel_still_completes_its_own_attempt(api):
 
     org(api)
     counsel_on(api)
-    r, _, attempt = setup_attempt(api, bot="tico-counsel")
+    r, _, attempt = setup_attempt(api, bot="rules-owner")
     api_post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
     done = api_post(
         api,
@@ -1423,7 +1423,7 @@ def test_counsel_still_completes_its_own_attempt(api):
         token=r["token"],
         key="counsel-complete",
     )
-    identity = Identity("bot:tico-counsel", "bot", attempt_id=attempt["id"])
+    identity = Identity("bot:rules-owner", "bot", attempt_id=attempt["id"])
     assert counsel.refused(api.app.state.store, identity, f"/api/v2/attempts/{attempt['id']}/complete", "POST") is False
     assert counsel.refused(api.app.state.store, identity, "/api/v2/runners/heartbeat", "POST") is False
 
@@ -1513,7 +1513,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
     assert done_notes(api, first["task_id"]) == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
     # A failed run leaves its read task to the normal retry.
     second = read_document(api, store_file(api, CONTRACT, title="Globex Terms")[0])
-    attempt = post(api, "jobs/claim", {"bot": "tico-counsel", "start_places": True}, token=r["token"])["attempt"]
+    attempt = post(api, "jobs/claim", {"bot": "rules-owner", "start_places": True}, token=r["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
     post(
         api,
@@ -1525,7 +1525,7 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
 
 
 def next_counsel_run(api, r):
-    attempt = post(api, "jobs/claim", {"bot": "tico-counsel", "start_places": True}, token=r["token"])["attempt"]
+    attempt = post(api, "jobs/claim", {"bot": "rules-owner", "start_places": True}, token=r["token"])["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
     return attempt
 
@@ -1560,12 +1560,12 @@ def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_it
     # A "Can I" left open with Counsel: the next read's notice names it, without its text.
     asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='rules-owner'")
     file_id, version = store_file(api, CONTRACT)
     other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
     read_document(api, other_file)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='tico-counsel'")
+        c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='rules-owner'")
     read = read_document(api, file_id)
     r, attempt = counsel_run(api)
     with api.app.state.store.read() as c:
@@ -1603,7 +1603,7 @@ def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the
     )
     r, attempt = counsel_run(api)
     with api.app.state.store.transaction() as c:
-        H.event(c, "bot:tico-counsel", "task.next-run.carried", attempt["id"], {"task_id": asked["task_id"]})
+        H.event(c, "bot:rules-owner", "task.next-run.carried", attempt["id"], {"task_id": asked["task_id"]})
     assert run_suggests(api, attempt, file_id, version).status_code == 403
     finish(api, r, attempt, text="Read it. Globex price list is secret.")
     assert task_state(api, read["task_id"])["status"] != "done"
@@ -1643,29 +1643,29 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
 
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')"
+            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('rules-owner', 'rules-owner', 'Counsel', 'active')"
         )
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
-        BS.write(c, 'tico-counsel', {'template': 'tico-counsel', 'session': 'bot'})
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('rules-owner','','ana')")
+        BS.write(c, 'rules-owner', {'template': 'rules-owner', 'session': 'bot'})
         task = H.task_create(
-            c, "human:ana", "Read the synthetic contract", "Use only fixture text.", "bot:tico-counsel", lint=False
+            c, "human:ana", "Read the synthetic contract", "Use only fixture text.", "bot:rules-owner", lint=False
         )["id"]
     r = runner(api)
     with api.app.state.store.read() as c:  # the assignment may already exist (a transfer names its generation)
-        found = c.execute("SELECT generation FROM assignments WHERE bot='tico-counsel'").fetchone()
-    assign(api, r, "tico-counsel", generation=found[0] if found else 0)
+        found = c.execute("SELECT generation FROM assignments WHERE bot='rules-owner'").fetchone()
+    assign(api, r, "rules-owner", generation=found[0] if found else 0)
     post(
         api,
         "runners/heartbeat",
         {
             "version": "test",
             "platform": "test",
-            "readiness": {"tico-counsel": True},
+            "readiness": {"rules-owner": True},
             "capabilities": ["task_lanes_v2", "session_roots_v1"],
         },
         token=r["token"],
     )
-    turn = claim(api, r, "tico-counsel")
+    turn = claim(api, r, "rules-owner")
     assert (turn["lane"], turn["task"]["session_task_id"]) == ("task:" + task, task)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-counsel"}, token=r["token"])
     post(
@@ -1677,5 +1677,5 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     assert get(api, "tasks/" + task)["task"]["checkpoint"] == "Read the clauses."
     with api.app.state.store.read() as c:
         assert [link["url"] for link in H.task_links(c, task) if link["kind"] == "session"] == [
-            "session:tico-counsel/t-counsel"
+            "session:rules-owner/t-counsel"
         ]

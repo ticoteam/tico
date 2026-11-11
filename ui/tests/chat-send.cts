@@ -31,7 +31,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{id: 'coo', slug: 'coo', name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{id: 'assistant', slug: 'assistant', name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/assistant') return json(assistantView('c1', {messages: thread}));
       if (p === '/api/v2/conversations/c1/snapshot') return json({messages: thread, execution: null});

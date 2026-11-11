@@ -370,7 +370,7 @@ pub fn first_turn_pack(attempt: &Value, tokens: usize) -> String {
 }
 
 fn pack(attempt: &Value, tokens: usize) -> Option<String> {
-    if attempt["bot"] == "coo" && attempt["conversation"]["scope"] == "personal" {
+    if attempt["bot"] == "assistant" && attempt["conversation"]["scope"] == "personal" {
         return None; // the private Assistant room (crate::prompt: its history belongs only to that person)
     }
     let current = text_of(&attempt["message"]["id"]);
@@ -1180,7 +1180,7 @@ mod tests {
             ""
         );
         // The private Assistant room stays out, as it does from a fallback.
-        let room = json!({"bot": "coo", "conversation": {"scope": "personal"}, "message": {"id": "m3"}, "history": [{"id": "m1", "body": "Mine"}, {"id": "m3", "body": "Hi"}]});
+        let room = json!({"bot": "assistant", "conversation": {"scope": "personal"}, "message": {"id": "m3"}, "history": [{"id": "m1", "body": "Mine"}, {"id": "m3", "body": "Hi"}]});
         assert_eq!(first_turn_pack(&room, REPLAY_TOKENS), "");
     }
 
@@ -1216,7 +1216,7 @@ mod tests {
         // A person's private Assistant room is never sent to the fallback; another bot's one-person room is.
         attempt["conversation"]["scope"] = json!("personal");
         assert_eq!(replay(&attempt, 90), text);
-        attempt["bot"] = json!("coo");
+        attempt["bot"] = json!("assistant");
         assert_eq!(replay(&attempt, 90), "");
         // The newest alone over the budget keeps its end; nothing to replay is no block at all.
         let long = json!({"bot": "ops", "message": {"id": "m9"}, "history": [{"id": "m8", "from_actor": "human:ana@acme.test", "body": format!("{}END", "x".repeat(400))}]});

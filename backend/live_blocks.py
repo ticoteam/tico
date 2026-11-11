@@ -1,4 +1,4 @@
-"""Live blocks in pages (Video Producer plan, work package C): tags a bot's page may carry, which the server replaces with
+"""Live blocks in pages (Video Owner plan, work package C): tags a bot's page may carry, which the server replaces with
 static HTML for the one viewer the visual address names. Pages stay script-free: a viewer's list is made when the page
 is served, from the same rules as Needs you (tasks waiting on a person), the task page (one task) and the Library
 (files on a task). Nothing a viewer may not see is written: no title, count or name.

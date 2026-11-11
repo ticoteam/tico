@@ -11,7 +11,7 @@ const {unrouted} = require('./support/routes.cts') as import('./support/routes.c
 
 const bot = (name: string, display_name: string, org_parent: string, over: Record<string, unknown> = {}) => ({name, display_name, org_parent, reports_to: org_parent.startsWith('p:') ? 'human:' + org_parent.slice(2) : org_parent.slice(2),
   host: 'keeper', status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: [], ...over});
-const bots = [bot('coo', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'p:ana'), bot('sales', 'Head of Sales', 'p:ana')];
+const bots = [bot('assistant', 'Assistant', 'p:ana'), bot('botops', 'BotOps', 'p:ana'), bot('sales', 'Head of Sales', 'p:ana')];
 const seat = (id: string, title: string, org_parent: string, description = '') => ({id, kind: 'seat', stage: 'recruiting', title, description, team: '',
   reports_to: org_parent.startsWith('p:') ? 'human:' + org_parent.slice(2) : org_parent.startsWith('s:') ? 'seat:' + org_parent.slice(2) : org_parent.slice(2),
   created_at: '2026-10-24T00:00:00Z', org_parent});

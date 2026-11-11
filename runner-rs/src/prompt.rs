@@ -24,7 +24,7 @@ pub const DEFAULT_NAMES: &[(&str, &str)] = &[
     ("company_name", "the company"),
     ("app_name", "Tico"),
     ("assistant_name", "Assistant"),
-    ("assistant_bot", "coo"),
+    ("assistant_bot", "assistant"),
 ];
 
 pub struct Names {
@@ -355,7 +355,7 @@ fn parts(
     } else {
         "this run".into()
     };
-    // A stateless bot (Counsel) keeps no memory and reads no state.md: it is told so, and nothing it is given says otherwise.
+    // A stateless bot (the Rules Owner) keeps no memory and reads no state.md: it is told so, and nothing it is given says otherwise.
     let stateless = crate::continuity::stateless(&attempt["config"]);
     let make_page = attempt["make_page"]["task"].is_object();
     let mut opening: Vec<String> = vec![
@@ -399,7 +399,7 @@ fn parts(
     crate::sessions::prompt_head(attempt, &mut lines);
     // The Assistant's room: every person's one chat, the owner's included. The Strategy Owner, the Librarian and BotOps
     // are helpers it hands work to (backend/assistant.py HELPERS); none of them has a person's chat.
-    if !make_page && bot == "coo" && conversation["scope"] == "personal" {
+    if !make_page && bot == "assistant" && conversation["scope"] == "personal" {
         let owner = if truthy(&conversation["owner_actor"]) {
             s(&conversation["owner_actor"])
         } else {
@@ -410,7 +410,7 @@ fn parts(
             "This provider session and its conversation history belong only to that person. Never copy personal preferences, messages, or attachments into shared repository files.".into(),
             "For live questions about running, queued, blocked, waiting, unhealthy, or approval work, run `tico health check`. Its response is already filtered to the signed-in person you represent.".into(),
             format!("You act as {owner}, with their rights, on what they ask in this chat. Answer an ask addressed to them only when they ask, as them (`tico task answer`). An OK that lets something go (send, spend, publish) is their own click on its preview in Tico: link it, never answer it."),
-            "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: `tico task create --owner goal-manager --request-id turn`.".into(),
+            "For strategy advice or goal changes (goal and KPI colours and reasons, the vision) ask the Strategy Owner: `tico task create --owner strategy-owner --request-id turn`.".into(),
             "For research, Market and Docs setup or library work ask the Librarian: `tico task create --owner librarian --request-id turn`.".into(),
             "To create a new bot, or change a bot's instructions or code, ask BotOps: `tico task create --owner botops --request-id turn`, so BotOps acts with the person's own rights, then report its result when the task returns. Pausing or resuming a bot, its model, its routines and automations, and rules: make the change yourself, as the person.".into(),
             "Replies in this chat follow AGENT.md: short, with links, what changed and how to undo it. Never mention your repository, state.md, memory or commits to the person.".into(),
@@ -493,10 +493,10 @@ fn parts(
             format!("{UPDATES_HEADER}\n{}", py_dumps(&attempt["updates"])),
         );
     }
-    // Every bot, by its own judgement (Visual replies, choice 5); Design and Video Producer are the ones the rest file
+    // Every bot, by its own judgement (Visual replies, choice 5); Design and Video Owner are the ones the rest file
     // brand and edited work with, so they get the first sentence only.
-    if bot != "designer" && bot != "video-producer" {
-        put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.".into());
+    if bot != "designer" && bot != "video-owner" {
+        put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed graphics or edited video, file a task for bot:designer or bot:video-owner; do not buy them.".into());
     } else {
         put(&mut lines, Part::Standing, "Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer clearer, never for a plain answer, and keep the text answer complete on its own.".into());
     }
@@ -703,7 +703,7 @@ fn parts(
     }
     if kind == "chat" && !setup && person {
         put(&mut lines, Part::Standing, "Human chat response contract: lead with the answer or outcome. Use enough explanation, comparison rows or list items to fulfill the request. If the person asks for one thing, focus on that thing; do not substitute the standing backlog or add unrelated tasks. For a next-priority question, first run `tico health check` and use its current open, doing, waiting, and needs-human state; never repeat an item that current state shows is done merely because it appears in conversation history. Check the current external source, such as a PR's actual state, when the Hub note may be stale. Use the task's attached URL for that check; do not guess a repository from its title. If the first lookup fails, inspect the attached URL and retry the exact source. Never call work blocked until you verify the missing permission or dependency. Carry forward the person's scoped authorization instead of asking again.".into());
-        if bot == "coo" {
+        if bot == "assistant" {
             put(&mut lines, Part::Standing, "House chat style: sound like a helpful colleague, not a status report. Default to a short conversational paragraph. For 'top things needing my attention', give a few short bullets, each naming the concrete decision or action and any essential deadline. Usually 40–90 words total is enough; this is a default, not a hard limit. No introductory boilerplate, section headings, nested lists, task IDs, owner/status fields, or narration of tools and sources. Link the relevant item when useful. Keep supporting detail in the task; explain it when asked. Answer follow-ups without repeating the whole list. Give a complete longer list or deeper explanation when requested. Do the verification silently: completed work is not a current blocker, and an old task note or remembered PR state must not override current evidence.".into());
         }
     }
@@ -789,7 +789,7 @@ mod tests {
     #[test]
     fn make_page_prompt_uses_normal_rights_and_request_scratch() {
         let message = json!({"id": "m1", "from_actor": "human:ana", "body": "Make a public plan"});
-        let turn = json!({"id": "make-1", "bot": "coo", "config": {"session": "bot"},
+        let turn = json!({"id": "make-1", "bot": "assistant", "config": {"session": "bot"},
             "conversation": {"id": "private-chat", "scope": "personal"},
             "make_page": {"task": {"id": "t1"}},
             "learned": {"personal": ["PRIVATE-LEARNING-MARKER"], "company": {"vision": "PRIVATE-COMPANY-MARKER"}},
@@ -835,13 +835,13 @@ mod tests {
         };
         let history = json!([
             {"id": "m1", "from_actor": "human:ana@acme.test", "body": "Earlier", "refs": {}},
-            {"id": "m2", "from_actor": "bot:coo", "body": "Mine", "refs": {}},
+            {"id": "m2", "from_actor": "bot:assistant", "body": "Mine", "refs": {}},
             {"id": "m3", "from_actor": "human:bo@acme.test", "body": "Since", "refs": {"live": {"kind": "batch"}, "answer": {"choice": "é"}, "attachments": [{"id": "f1"}]}},
             {"id": "m4", "from_actor": "human:ana@acme.test", "body": "Now", "refs": {}}
         ]);
         let cases = [
             (
-                json!({"id": "a1", "bot": "coo", "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ana@acme.test"},
+                json!({"id": "a1", "bot": "assistant", "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ana@acme.test"},
                     "message": {"id": "m4", "from_actor": "human:ana@acme.test", "body": "Now", "refs": {"voice": true, "attachments": [{"id": "f2"}]}},
                     "history": history, "notes": [{"body": "fyi", "at": "2026-10-14"}], "next_run": [{"id": "t9"}],
                     "deferred": "Deferred since your last turn: 1 message, 1 task"}),
@@ -850,7 +850,7 @@ mod tests {
             ),
             (
                 json!({"id": "a2", "bot": "botops", "conversation": {"id": "c2", "kind": "task", "scope": "shared"},
-                    "message": {"id": "m9", "from_actor": "bot:coo", "body": "Do it", "refs": {"update": "u1"}},
+                    "message": {"id": "m9", "from_actor": "bot:assistant", "body": "Do it", "refs": {"update": "u1"}},
                     "task": {"id": "t1", "title": "Fix", "requester": "human:ana@acme.test", "checkpoint": "half done", "checkpoint_at": null, "goal": {"objective": "Green CI"}},
                     "history": history, "routine": {"id": "r1"}}),
                 None,
@@ -960,7 +960,7 @@ mod tests {
             app: "Tico".into(),
         };
         let turn = |learned: Value| {
-            json!({"id": "a6", "bot": "coo", "learned": learned,
+            json!({"id": "a6", "bot": "assistant", "learned": learned,
             "conversation": {"id": "c6", "kind": "chat", "scope": "personal", "owner_actor": "human:ben", "room_key": "assistant"},
             "message": {"id": "m6", "from_actor": "human:ben", "body": "Top update?", "refs": {"assistant": true}}, "history": []})
         };
@@ -1021,7 +1021,7 @@ mod tests {
             app: "Tico".into(),
         };
         let turn = |updates: Value| {
-            json!({"id": "a7", "bot": "coo", "updates": updates,
+            json!({"id": "a7", "bot": "assistant", "updates": updates,
             "conversation": {"id": "c7", "kind": "chat", "scope": "personal", "owner_actor": "human:ben", "room_key": "assistant"},
             "message": {"id": "m7", "from_actor": "human:ben", "body": "What's the top update today?", "refs": {"assistant": true, "updates": true}}, "history": []})
         };
@@ -1050,7 +1050,7 @@ mod tests {
             app: "Tico".into(),
         };
         let turn = |refs: Value| {
-            json!({"id": "a8", "bot": "coo",
+            json!({"id": "a8", "bot": "assistant",
             "conversation": {"id": "c8", "kind": "chat", "scope": "personal", "owner_actor": "human:ben", "room_key": "assistant"},
             "message": {"id": "m8", "from_actor": "human:ben", "body": "Who changed this?", "refs": refs}, "history": []})
         };
@@ -1080,19 +1080,19 @@ mod tests {
             "conversation": {"id": "c5", "kind": "chat", "scope": "personal", "owner_actor": "human:ana", "room_key": room_key},
             "message": {"id": "m5", "from_actor": "human:ana", "body": "Plan my week", "refs": {"assistant": true}}, "history": []})
         };
-        let owner = prompt(&turn("coo", "assistant"), &names, None, false);
+        let owner = prompt(&turn("assistant", "assistant"), &names, None, false);
         assert!(owner.contains("You are privately assisting human:ana."));
         for helper in [
-            "--owner goal-manager --request-id turn",
+            "--owner strategy-owner --request-id turn",
             "--owner librarian --request-id turn",
             "--owner botops --request-id turn",
         ] {
             assert!(owner.contains(helper), "{helper}");
         }
         // The owner's earlier Strategy Owner chat (room_key "ceo") is history: a turn queued there has no person's authority.
-        for key in ["ceo", "strategy", "goal-manager"] {
+        for key in ["ceo", "strategy", "strategy-owner"] {
             assert!(
-                !prompt(&turn("goal-manager", key), &names, None, false)
+                !prompt(&turn("strategy-owner", key), &names, None, false)
                     .contains("privately assisting"),
                 "{key}"
             );
@@ -1328,7 +1328,7 @@ mod tests {
             app: "Tico".into(),
         };
         let turn = |id: &str, refs: Value| {
-            json!({"id": id, "bot": "coo", "config": {"shared": true}, "branch_sync_problem": if id == "a2" { json!("it diverged") } else { Value::Null },
+            json!({"id": id, "bot": "assistant", "config": {"shared": true}, "branch_sync_problem": if id == "a2" { json!("it diverged") } else { Value::Null },
             "conversation": {"id": "c1", "kind": "chat", "scope": "personal", "owner_actor": "human:ben", "room_key": "assistant"},
             "message": {"id": id, "from_actor": "human:ben", "body": "Hi", "refs": refs}, "history": []})
         };

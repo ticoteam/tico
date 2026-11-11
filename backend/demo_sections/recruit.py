@@ -14,7 +14,7 @@ CONTENT = {
     "seats": {
         "install": {
             "title": "Install Crew Coordinator",
-            "reports_to": "ops-manager",
+            "reports_to": "operations-manager",
             "days": 6.0,
             "description": "For a person, not a bot. Schedules the field crews and technicians for each Facade "
             "install: which crew goes, on which day, with the skills, parts and site access each job "
@@ -23,7 +23,7 @@ CONTENT = {
         },
         "warranty": {
             "title": "Warranty Claims",
-            "reports_to": "support-lead",
+            "reports_to": "success-team-manager",
             "days": 2.5,
             "description": "Works each warranty claim from the customer's first message: checks the unit's serial "
             "number and purchase date, decides repair, replacement or refund inside the refund limit, "
@@ -74,7 +74,7 @@ CONTENT = {
     # One hire filled from a template last week: a seat posted, then filled by the bot hired for it.
     "hire": {
         "title": "Creator Partnerships",
-        "reports_to": "marketing-lead",
+        "reports_to": "growth-team-manager",
         "posted": 6.3,
         "days": 5.9,
         "bot": "creators",
