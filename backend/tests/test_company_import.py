@@ -740,12 +740,23 @@ def test_a_refused_start_file_names_the_role_for_the_owner_and_logs_the_field(tm
 
 
 def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tmp_path):
-    """A failed start, then the owner uploads a fixed file: later starts with the same broken file (or a changed or
-    unreadable one) leave the team as it is and show nothing. A failure kept from before setup was complete ends at the
-    next start."""
+    """Tico Team's case: a failed start, then the owner uploads a fixed file, while the server's company file setting
+    still names the original plan. Later starts leave the team as it is, with no Health line, no event and no welcome
+    card, whether that file doesn't load (a template this release lacks), loads but differs from what was imported
+    (an older release's slugs, read as today's), or can't be read. A failure kept from before ends at the next start."""
     start, failed = starts(tmp_path)
     good = company_text()
     broken = unknown_role_plan(good)
+    # The original plan, on an older release's slug and with one title the owner fixed in the upload: it loads (the
+    # old slug reads as today's), but it isn't the file imported.
+    older = starter.load(good.replace("Acme Payables", "Payables"))
+    next(b for b in older["bots"] if b["title"] == "Payables")["template"] = "accounts-payable"
+    older = packed_as_is(older)
+    assert starter.unpack(older) != starter.load(good)
+
+    def failures(api):
+        return rows(api, "SELECT count(*) AS n FROM events WHERE action='onboarding.company_import_failed'")[0]["n"]
+
     with start(broken) as api:
         assert "Acme Payables" in failed(api)["reason"]
         body = {"company_yaml": good}
@@ -755,8 +766,10 @@ def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tm
         done = api.post("/api/v2/setup/company/import", json=body, headers=signed_in())
         assert done.status_code == 200 and done.json()["company_import_failed"] is None and done.json()["completed"]
         seats = rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id")
+        kept = failures(api)
     for data, error in (
         (broken, ""),
+        (older, ""),
         (starter.pack(good.replace("Acme Finance", "Another Company")), ""),
         ("", "The company file setup copied to this server can't be read (no access)"),
     ):
@@ -766,6 +779,7 @@ def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tm
                 r["id"] for r in api.get("/api/v2/health", headers=signed_in()).json()["checks"]
             }
             assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == seats
+            assert failures(api) == kept
     with start(broken) as api:  # one kept from before (an older release kept them on set-up companies too)
         with api.app.state.store.transaction() as c:
             c.execute(
