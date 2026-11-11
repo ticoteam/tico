@@ -590,6 +590,43 @@ jobs:
           path: durations.json
           retention-days: 30
 
+  # The runner's contract with the real `claude` and `codex` CLIs (runner-rs/src/cli_contract.rs): the newest of each,
+  # as a cloud computer installs them, run up to authentication and read with the runner's own code. Every other test
+  # drives a fake CLI. Full validations only (one a day from the train, so this is also its schedule; no macOS job).
+  # Not part of the verdict: a CLI that changed is a red job to read before a release, not a red main.
+  cli-contract:
+    needs: candidate
+    if: inputs.anchor == ''
+    runs-on: ubuntu-24.04
+    continue-on-error: true
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.candidate.outputs.sha }}
+          persist-credentials: false
+      - id: has
+        # A candidate frozen before the contract check has nothing to run.
+        run: |
+          if [ -x scripts/cli_contract.sh ]; then echo "check=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::this candidate predates scripts/cli_contract.sh; the real CLIs were not checked"; fi
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        if: steps.has.outputs.check == 'true'
+        with:
+          node-version: '22'
+      - name: Install Rust
+        if: steps.has.outputs.check == 'true'
+        run: rustup toolchain install 1.92 --profile minimal && rustup default 1.92
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        if: steps.has.outputs.check == 'true'
+        with:
+          workspaces: runner-rs -> target
+          key: cli-contract
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The real claude and codex still behave as the runner expects
+        if: steps.has.outputs.check == 'true'
+        run: scripts/cli_contract.sh --latest
+
   # The one verdict: the release passes only when every part passed and the Linux binaries and images built.
   release-check:
     needs: [gate, images]
