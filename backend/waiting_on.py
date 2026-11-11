@@ -645,6 +645,8 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                 continue
             if wait.line.endswith(task_wakes.RUN_HELD) and _botops_reviews(conn, wait.who):
                 continue  # BotOps has the held run's review task (execution._hand_to_maintainer): no person row
+            if wait.line.endswith(task_wakes.CANT_START):
+                continue  # BotOps has the task to find why its runs can't start (start_holds.file): no person row
             if wait.who not in fixers:
                 fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
             fixer = fixers[wait.who]
