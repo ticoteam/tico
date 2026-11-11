@@ -155,6 +155,6 @@ behind, when complaints or bounces stay high after a pause, or when someone asks
 about. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-Pages go on their task with `tico page publish ... --task <id>`; the Email playbook page is bot-wide (`--scope bot`).
+Pages go on their task with `tico page publish ... --task <id>`; the Email playbook page is bot-wide (`--scope bot`), published from a task: a chat refuses it.
 The email drafts themselves live in `reports/` and are attached to their task. Files humans send you are inputs, not
 yours to list.

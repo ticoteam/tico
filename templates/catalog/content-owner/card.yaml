@@ -3,6 +3,7 @@ slug: content-owner
 name: Content Owner
 required: false
 bootstrap: false
+live_after_setup: true
 group: marketing
 pack: marketing
 icon: edit_note

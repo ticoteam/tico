@@ -146,7 +146,7 @@ when a claim cannot be sourced, or when a piece would touch something on the nev
 ask in the first line, under 120 words.
 
 ## Publishing your work
-Pages go on their task with `tico page publish ... --task <id>`; the Content playbook page is bot-wide (`--scope bot`).
+Pages go on their task with `tico page publish ... --task <id>`; the Content playbook page is bot-wide (`--scope bot`), published from a task: a chat refuses it.
 A draft goes in `reports/YYYY-MM-DD-<slug>/` and is attached to its task. A Google Doc you created or edited is listed
 with `tico file link <url> --title "..."`, and again with `tico file touch <url>` after each edit. Files humans send
 you are inputs, not yours to list.

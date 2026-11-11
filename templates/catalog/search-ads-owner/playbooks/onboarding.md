@@ -48,14 +48,30 @@ Then file each kept campaign as a task in Growth Monitoring. It lands in Watchin
 
     tico task create --owner me --pipeline growth-monitoring --label channel:search-ads --title "<campaign name>" --body "<link to the campaign>. KPI: cost per result <value>, range <low> to <high>; spend <low> to <high> a week. Kept at setup."
 
-## 5. Publish the Search Ads playbook
+## 5. Say setup is done
 
-Fill the blanks in `knowledge/channel-playbook.md` (who puts changes live, anything that must never change) and publish
-it as the page "Search Ads playbook", written as plain HTML from the file:
+Record the answers in `memory/decisions.md`, then run:
+
+    tico bot setup-done
+
+It tells {{app_name}} that setup is done: you go live, take work, and your routines switch on. Until it runs, a task you
+file is refused, so run it now, before the steps below.
+
+## 6. Publish the Search Ads playbook
+
+Fill the blanks in `knowledge/channel-playbook.md` (who puts changes live, anything that must never change). The page
+"Search Ads playbook" is bot-wide, and a page made in a chat stays in that chat, so publish it on a task of its own.
+File one for yourself:
+
+    tico task create --owner me --title "Publish the Search Ads playbook" --body "Publish knowledge/channel-playbook.md as the Search Ads playbook page."
+
+On that task (or on this one, when setup runs on a task), write the file as an HTML page and publish it. Bold, code
+and lists become HTML tags, with no `**` or backtick left on the page, and the sentence that calls the file a starter
+is left out:
 
     tico page publish reports/search-ads-playbook.html --title "Search Ads playbook" --cadence none --scope bot
 
-Publish it again, the same way, whenever the file changes.
+Publish it again the same way, on a task, whenever the file changes.
 
 **The cutoff.** "Ads pause when cost per new customer passes N times its 30-day average" is off until a person sets N
 in Rules. If the person gave a number in question 5, suggest it:
@@ -66,7 +82,7 @@ A bot's rule is a suggestion: a person accepts it in Rules. If they gave no numb
 cutoff is off and where to set it. Either way, you may always pause by yourself, and never raise a budget outside an
 approved experiment.
 
-## 6. Set up your KPI
+## 7. Set up your KPI
 
 Look for it first: `tico kpi list --owner me`. If it is not there, make it and put it under the North Star:
 
@@ -77,21 +93,16 @@ Look for it first: `tico kpi list --owner me`. If it is not there, make it and p
 Use the team's own currency for `--unit` if it is not dollars. With no North Star yet, leave the parent off and say so
 in the task. Log the first reading if you can read one.
 
-## 7. File your first ideas
+## 8. File your first ideas
 
 Follow `playbooks/find-ideas.md` now, with this task as its task: file up to 3 ideas from what you found. Start none:
 the person sees them first.
 
-## 8. Check the routines
+## 9. Check the routines
 
 Setting you up switched on both routines, Watch and Find ideas. Check them with `tico automation list`; if one shows
 off and no person turned it off, run `tico automation update <id> --enable` with its id from that list. Tell the human in
 one line what each does: "Each morning I check the campaigns we kept, and on Mondays the search terms; each Tuesday I
 file up to three search ads ideas." They can change or turn off either at any time; there is nothing to approve.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. Last, run:
-
-    tico bot setup-done
-
-It tells {{app_name}} that setup is done and clears your "Needs setup" mark. Run it once the answers, the playbook page
-and the first ideas are recorded, not before.
+Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.

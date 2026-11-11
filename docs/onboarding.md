@@ -282,6 +282,11 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   summary. Only a person above it on the org chart (its manager, their managers, the owner) sees **Mark onboarding complete**
   (`tico bot setup-done <bot>`, `POST /api/v2/bots/{bot}/onboarded`, checked on the server; the bot's own call is its "I'm
   ready"). That makes it **Active**: its routines run, its queued work starts and it counts toward a member's limit.
+- A bot whose card says `live_after_setup: true` (the six growth channel packs: SEO, Content, Email, CRO, Search Ads and
+  Social Ads Owners) goes Active on its own `tico bot setup-done`, as a seat bot goes live with no person step: its setup
+  says done right after it records the answers, then files its first ideas and publishes its playbook page on a task of
+  its own (a page made in a chat stays in that chat). Changed Nov 11: it used to stay Onboarding, and its first ideas
+  were refused until a person marked it complete.
 
 `stage` on a bot (`GET /api/v2/bots`, `/api/v2/bots/{bot}`, `/api/v2/org`) is `onboarding` or `active`; while onboarding it also
 carries `can_complete_onboarding` and `onboarding_ready`. On an upgrade nothing is rewritten: a bot in the old *Set up* stage

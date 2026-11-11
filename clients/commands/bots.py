@@ -217,7 +217,8 @@ def bot_owners(api, args):
     "tico_bot_setup_done",
     "Mark a bot's onboarding complete, as a person above it on the org chart (its manager, their "
     "managers or the owner): it becomes Active, its automations run and it takes tasks. Nobody else may. A bot calling it "
-    "on itself says it is ready instead, like tico_bot_ready, and stays Onboarding. Repeating it changes nothing. A "
+    "on itself says it is ready instead, like tico_bot_ready, and stays Onboarding, unless its template goes live after "
+    "setup (the growth channel packs): then its own call makes it Active. Repeating it changes nothing. A "
     "member's bot counts toward their limit of active bots from here on, so this can answer `bot_limit`: tell the "
     "person to archive a bot or ask an admin.",
     {"slug": _s("The bot; you, when you leave it out")},

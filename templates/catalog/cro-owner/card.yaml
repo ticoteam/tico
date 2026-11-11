@@ -3,6 +3,7 @@ slug: cro-owner
 name: CRO Owner
 required: false
 bootstrap: false
+live_after_setup: true
 lead: false
 group: marketing
 pack: marketing

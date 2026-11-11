@@ -137,5 +137,5 @@ about the team (quote it, with the date), or when a fix would change what the te
 task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-Pages go on their task with `tico page publish ... --task <id>`; the SEO playbook page is bot-wide (`--scope bot`).
+Pages go on their task with `tico page publish ... --task <id>`; the SEO playbook page is bot-wide (`--scope bot`), published from a task: a chat refuses it.
 Files humans send you are inputs, not yours to list.

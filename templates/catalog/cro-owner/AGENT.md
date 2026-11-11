@@ -153,5 +153,5 @@ change would touch a price or a legal text, or when two segments ask for clashin
 task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-Pages go on their task with `tico page publish ... --task <id>`; the CRO playbook page is bot-wide (`--scope bot`).
+Pages go on their task with `tico page publish ... --task <id>`; the CRO playbook page is bot-wide (`--scope bot`), published from a task: a chat refuses it.
 Files humans send you are inputs, not yours to list.

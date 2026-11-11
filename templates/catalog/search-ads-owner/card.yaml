@@ -3,6 +3,7 @@ slug: search-ads-owner
 name: Search Ads Owner
 required: false
 bootstrap: false
+live_after_setup: true
 lead: false
 group: marketing
 pack: marketing
