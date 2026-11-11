@@ -1473,6 +1473,7 @@ def connect(c, settings, who, body):
     from . import model_login
 
     name, sid = (body.name or "").strip(), body.subscription or ""
+    sub = None
     if sid:
         sub = row(c, sid)
         if not sub:
@@ -1496,7 +1497,7 @@ def connect(c, settings, who, body):
             **model_login.view(login),
             "computer": runner["label"],
             "not_yours": runner["owner_id"] != H.actor_id(who.actor),
-            "name": sub["name"] if sid else target["name"],
+            "name": sub["name"] if sub else target["name"],
             "waking": False,
         }
 
@@ -1528,7 +1529,7 @@ def connect(c, settings, who, body):
                 "state": "requested",
                 "computer": "",
                 "not_yours": False,
-                "name": sub["name"] if sid else target["name"],
+                "name": sub["name"] if sub else target["name"],
                 "waking": True,
             }
         raise Problem(

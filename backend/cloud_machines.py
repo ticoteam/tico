@@ -1152,7 +1152,7 @@ def signin_wake(c, settings):
         return False
     ensure_shared(c)
     current = row(c, SHARED)
-    if current["enroll_fails"] >= ENROLL_TRIES or current["problem"] in ("no_enroll", "replacing"):
+    if not current or current["enroll_fails"] >= ENROLL_TRIES or current["problem"] in ("no_enroll", "replacing"):
         return False
     if (
         current["runner_id"]
