@@ -16,7 +16,7 @@ from fastapi import Request
 from . import hubdb as H
 from . import mailbox_access as MA
 from . import people as P
-from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate, MailboxDirectoryUpdate
+from .models import MailboxAccessCreate, MailboxAccessUpdate, MailboxCreate, MailboxContactsUpdate
 from .store import Problem
 
 PATH = "/api/v2/mailboxes"
@@ -446,7 +446,7 @@ def install(app, store):
             return detail(c, who, mid)
 
     @app.patch(PATH + "/{mid}/contacts")
-    def set_mailbox_directory(request: Request, mid: str, body: MailboxDirectoryUpdate):
+    def set_mailbox_contacts(request: Request, mid: str, body: MailboxContactsUpdate):
         """Switch whether this inbox's mail feeds Contacts. Its person decides (an admin, for a shared inbox). A bot's
         inbox always feeds it, whatever this says."""
         who = request.state.identity

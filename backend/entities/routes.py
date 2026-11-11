@@ -1,5 +1,5 @@
 # pyright: strict
-"""The Directory's HTTP routes (`tico contacts`, track 4). Each route is a call on backend/entities/store.py, which holds the
+"""Contacts HTTP routes (`tico contacts`; it was the Directory, track 4). Each route is a call on backend/entities/store.py, which holds the
 read rule (visible.py) and the writer gate, so a route holds no SQL (the lint test keeps the entity tables to the store).
 A read answers with what the caller may see; a write names the caller as its actor, and runs through `mutate` so a retry
 with the same Idempotency-Key lands once.
@@ -25,10 +25,10 @@ if TYPE_CHECKING:
     from backend.auth import Auth
     from backend.store import Store
 
-SOURCE = "hub"  # what an entity value's source says when the Directory's own tools wrote it; the source_id is the actor
+SOURCE = "hub"  # what an entity value's source says when the Contacts tools wrote it; the source_id is the actor
 
 
-class DirectoryUpsert(Contract):
+class ContactsUpsert(Contract):
     type: str
     match: dict[str, str] = Field(default_factory=dict)  # one of: id, email, domain, name
     values: dict[str, Any] = Field(default_factory=dict)
@@ -37,7 +37,7 @@ class DirectoryUpsert(Contract):
     confidence: float = Field(0.6, ge=0, le=1)
 
 
-class DirectoryLinkCreate(Contract):
+class ContactsLinkCreate(Contract):
     from_ref: str
     link_key: str
     to_ref: str
@@ -47,32 +47,32 @@ class DirectoryLinkCreate(Contract):
     evidence_id: str | None = None
 
 
-class DirectoryUnlink(Contract):
+class ContactsUnlink(Contract):
     link_id: str
 
 
-class DirectoryMerge(Contract):
+class ContactsMerge(Contract):
     keep: str
     drop: str
 
 
-class DirectoryUnmerge(Contract):
+class ContactsUnmerge(Contract):
     drop: str
 
 
-class DirectoryNoteCreate(Contract):
+class ContactsNoteCreate(Contract):
     ref: str
     body: str
     audience: str = "company"
     evidence_id: str | None = None
 
 
-class DirectoryOption(Contract):
+class ContactsOption(Contract):
     key: str
     label: str
 
 
-class DirectoryTypeCreate(Contract):
+class ContactsTypeCreate(Contract):
     key: str
     name: str
     description: str
@@ -80,12 +80,12 @@ class DirectoryTypeCreate(Contract):
     icon: str = ""
 
 
-class DirectoryAttributeCreate(Contract):
+class ContactsAttributeCreate(Contract):
     key: str
     name: str
     description: str
     value_type: str
-    options: list[DirectoryOption] = Field(default_factory=list)
+    options: list[ContactsOption] = Field(default_factory=list)
     multiple: bool = False
     unique_value: bool = False
     required: bool = False
@@ -93,7 +93,7 @@ class DirectoryAttributeCreate(Contract):
     owner: str | None = None
 
 
-class DirectoryLinkTypeCreate(Contract):
+class ContactsLinkTypeCreate(Contract):
     key: str
     name: str
     inverse_name: str
@@ -175,7 +175,7 @@ def install(
         return Problem("validation", str(error), 422)
 
     @app.get("/api/v2/entities/self")
-    def directory_self(request: Request):
+    def contacts_self(request: Request):
         """Who we are: our company, where we operate, and the obligations that bind us (none until rules arrive). Every
         bot's base context reads it."""
         actor = caller(request)
@@ -186,21 +186,21 @@ def install(
         return body
 
     @app.get("/api/v2/entities/types")
-    def directory_types(request: Request):
+    def contacts_types(request: Request):
         """The contact types: built-in and added, each with its description and who added it. Documents are not contacts."""
         caller(request)
         with read() as c:
             return {"types": ES.types(c)}
 
     @app.get("/api/v2/entities/counts")
-    def directory_counts(request: Request):
+    def contacts_counts(request: Request):
         """How many entities of each type you can see, each stopping at 1,000 and saying so (`approximate`)."""
         actor = caller(request)
         with read() as c:
             return {"counts": ES.type_counts(c, actor)}
 
     @app.get("/api/v2/entities/types/{type_key}")
-    def directory_describe(request: Request, type_key: str):
+    def contacts_describe(request: Request, type_key: str):
         """One type: its attributes (each with its owner and options) and the link types that may touch it."""
         caller(request)
         with read() as c:
@@ -210,7 +210,7 @@ def install(
         return body
 
     @app.get("/api/v2/entities/find/{type_key}")
-    def directory_find(
+    def contacts_find(
         request: Request,
         type_key: str,
         name: str | None = None,
@@ -242,7 +242,7 @@ def install(
                 raise page_error(error) from None
 
     @app.get("/api/v2/entities/card")
-    def directory_card(request: Request, ref: str):
+    def contacts_card(request: Request, ref: str):
         """One entity as you see it: its values with source and age, its links, external records, and your notes. A
         reference two entities match returns both, and says so."""
         actor = caller(request)
@@ -261,7 +261,7 @@ def install(
         return {"ambiguous": False, **body}
 
     @app.get("/api/v2/entities/rules")
-    def directory_rules(request: Request, ref: str, action: str | None = None, as_bot: str | None = None):
+    def contacts_rules(request: Request, ref: str, action: str | None = None, as_bot: str | None = None):
         """The rules that apply to an entity, with their paths. Rules arrive in track 5, so none apply yet."""
         actor = caller(request)
         with read() as c:
@@ -275,7 +275,7 @@ def install(
         return {"entity": found[0]["id"], "action": action, "as_bot": as_bot, "rules": applies or []}
 
     @app.get("/api/v2/entities/history")
-    def directory_history(
+    def contacts_history(
         request: Request, ref: str, attribute: str | None = None, after: str | None = None, limit: int | None = None
     ):
         """Past values of an entity's fields, newest first (one field with `attribute`). Page with `next`."""
@@ -293,7 +293,7 @@ def install(
         return body
 
     @app.post("/api/v2/entities/types")
-    def directory_type_add(request: Request, body: DirectoryTypeCreate):
+    def contacts_type_add(request: Request, body: ContactsTypeCreate):
         """Add an entity type. Its description is required; a near-duplicate of a type that exists is refused with that one."""
         actor = caller(request)
         return mutate(
@@ -307,7 +307,7 @@ def install(
         )
 
     @app.post("/api/v2/entities/types/{type_key}/attributes")
-    def directory_attribute_add(request: Request, type_key: str, body: DirectoryAttributeCreate):
+    def contacts_attribute_add(request: Request, type_key: str, body: ContactsAttributeCreate):
         """Add an attribute to a type. A select or status needs its options; an owner of connection:<id> makes it that
         connection's field."""
         actor = caller(request)
@@ -336,7 +336,7 @@ def install(
         )
 
     @app.post("/api/v2/entities/link-types")
-    def directory_link_type_add(request: Request, body: DirectoryLinkTypeCreate):
+    def contacts_link_type_add(request: Request, body: ContactsLinkTypeCreate):
         """Add a link type. Its description is required; `inherits_rules` says whether a rule toward one end reaches the other."""
         actor = caller(request)
         return mutate(
@@ -359,7 +359,7 @@ def install(
         )
 
     @app.post("/api/v2/entities")
-    def directory_upsert(request: Request, body: DirectoryUpsert):
+    def contacts_upsert(request: Request, body: ContactsUpsert):
         """Create or update one entity of a type. `match` names it by id, email, domain or name; several matches are refused."""
         actor = caller(request)
         return mutate(
@@ -380,7 +380,7 @@ def install(
         )
 
     @app.post("/api/v2/entities/links")
-    def directory_link(request: Request, body: DirectoryLinkCreate):
+    def contacts_link(request: Request, body: ContactsLinkCreate):
         """A typed, dated link between two entities you can see. The link type says which ends it may join. Where we
         operate (our company operates_in a place) is an owner's or an admin's."""
         actor = caller(request)
@@ -407,7 +407,7 @@ def install(
         return mutate(request, body, work)
 
     @app.post("/api/v2/entities/unlink")
-    def directory_unlink(request: Request, body: DirectoryUnlink):
+    def contacts_unlink(request: Request, body: ContactsUnlink):
         """End a link: it stops being current today. Its history stays. Where we operate is an owner's or an admin's."""
         actor = caller(request)
 
@@ -418,7 +418,7 @@ def install(
         return mutate(request, body, work)
 
     @app.post("/api/v2/entities/merge")
-    def directory_merge(request: Request, body: DirectoryMerge):
+    def contacts_merge(request: Request, body: ContactsMerge):
         """Merge one entity into another: the dropped one's rows move to the kept one, and `unmerge` reverses it exactly."""
         actor = caller(request)
 
@@ -430,13 +430,13 @@ def install(
         return mutate(request, body, work)
 
     @app.post("/api/v2/entities/unmerge")
-    def directory_unmerge(request: Request, body: DirectoryUnmerge):
+    def contacts_unmerge(request: Request, body: ContactsUnmerge):
         """Reverse the last merge of a dropped entity, named by its own id (a merged reference resolves to the kept one)."""
         actor = caller(request)
         return mutate(request, body, lambda c: {"unmerged": ES.unmerge(c, actor, body.drop)})
 
     @app.post("/api/v2/entities/notes")
-    def directory_note(request: Request, body: DirectoryNoteCreate):
+    def contacts_note(request: Request, body: ContactsNoteCreate):
         """A note on an entity. `audience` me keeps it to you; company shows it to everyone who sees the entity."""
         actor = caller(request)
 
