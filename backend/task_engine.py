@@ -990,6 +990,19 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
 
 
+def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
+    """A person's request (one a person asked for that no task filed, as C8 reads it) on its first visit, in a by-hand
+    stage: the person already picked it, so it is not held there. It moves on by itself when the next stage has room,
+    oldest first (never_stuck). One moved back into the stage, or snoozed there, is held like any other."""
+    stage_row: Row = row.get("stage") or {}
+    visit: Row = row.get("visit") or {}
+    if not stage_row.get("by_hand") or visit.get("entered_how") != "new" or row.get("snooze"):
+        return False
+    if not is_human(row.get("requester_id")):
+        return False
+    return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
+
+
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
     """Move every task that is ready and has room, oldest first. Run when a pipeline's settings change a limit. The
     never-stuck check does the same for every task on each pass, so a freed slot is filled within 10 seconds. Returns

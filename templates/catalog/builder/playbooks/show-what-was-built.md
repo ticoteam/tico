@@ -13,8 +13,9 @@ yes or no in a minute.
 - First line: the pull request link and the head commit.
 - What changed, for the person who asked: what they can now do or see, in two or three sentences.
 - How it was checked: the tests added, the commands run and their results, and what was not checked.
+- The checks at the head commit: passing, with the link.
 - What it looks like: a screenshot, a short recording or the command output, where there is anything to see.
-- What the reviewers found and what you did about each finding, one line each.
+- Reviewer 1's and Reviewer 2's verdicts, and what you did about each finding, one line each.
 - Anything the person should decide: a risk, a follow-up, a path that needs a named person.
 
 ## 2. Publish and attach

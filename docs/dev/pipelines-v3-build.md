@@ -225,7 +225,9 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 `fill_open_slots` and pushes to screens.
 
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
-never-stuck check does it, on its next pass.
+never-stuck check does it, on its next pass. A by-hand stage holds a person's request only once it was moved back
+there or snoozed: on its first visit (`task_engine.not_held_by_hand`) the check moves it on when the next stage has
+room, oldest first, before C10's room wake (`never_stuck._requests`).
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -606,7 +608,11 @@ With many PRs the first unmet one, in link order, gives the line.
 
 ### Choices made while building
 
-- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset.
+- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
+  request in Ideas takes the room first, by itself (G5, Nov 10).
+- **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
+  manager) is refused when its save would remove a people-only OK, open it to bots, or name a bot on it
+  (`pipeline_settings._loosens_people_only`). An untouched preset made before is tightened by `_fill`.
 - **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
   so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a
   stage's filing skips it the same way.

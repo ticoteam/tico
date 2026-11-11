@@ -60,11 +60,12 @@ def covered() -> set[int]:
 def idea_to_done(r: SoftRig) -> None:
     from backend import task_engine as E
 
-    # 1. A person files the idea and moves it to Spec by hand. The PM attaches a spec, Jev passes it, a person OKs it.
+    # 1. A person files the request: it is not held by hand, and goes into Spec by itself on the next pass. The PM
+    #    attaches a spec, Jev passes it, a person OKs it.
     p = r.idea("Export to CSV")
     r.at(p, "Ideas")
-    expect([s for s, _ in r.waits(p)] == ["by_hand"], f"Ideas waits on {r.waits(p)}, not a person's hand")
-    r.by_hand(p)
+    expect([s for s, _ in r.waits(p)] == ["room"], f"a person's request in Ideas waits on {r.waits(p)}, not room")
+    r.check()
     r.at(p, "Spec")
     expect(r.owner(p) == PM, f"Spec's owner is {r.owner(p)}")
     r.says(p, "No page attached")
@@ -317,7 +318,7 @@ def push_past_pr_merged(r: SoftRig) -> None:
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
-    ideas = [r.idea(f"Idea {i}") for i in range(1, 4)]
+    ideas = [r.idea(f"Idea {i}", by=PM) for i in range(1, 4)]  # the PM's own: held by hand
     for p in ideas[:2]:
         r.by_hand(p)
         r.at(p, "Spec")

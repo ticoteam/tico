@@ -7,17 +7,21 @@ Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, wh
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend import answers as A
 from backend import bot_settings as BS
 from backend import company_import
 from backend import never_stuck as N
+from backend import page_verdicts as V
 from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
 from backend import task_engine as E
 from backend import task_requirements as R
+from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -190,12 +194,19 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
-    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_with_exceptions")
+    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_only")
     assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
-    assert fixes_2["person_id"] == ANA
+    assert (fixes_2["person_id"], fixes_2["who_oks"]) == (ANA, "people_only")
+    assert "checks pass at the newest commit" in fixes_2["settings"]["rubric"]
+    assert "Reviewer 1's and Reviewer 2's verdicts" in fixes_2["settings"]["rubric"]
+    # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
+    people_only = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only")
+    assert people_only == ["engineering-fixes-2", "product-spec"]
+    named = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["person_id"])
+    assert named == people_only
     assert all(
         r["settings"]["at_head"]
         for s in ("engineering-review-1", "engineering-review-2")
@@ -461,7 +472,7 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
-    ideas = [X.new_task(c, ANA, f"Idea {n}", "product") for n in range(4)]
+    ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
     first = N.room_key("product-spec", None)
@@ -482,6 +493,166 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]
     assert keys == [first, N.room_key("product-spec", left)]
     assert N.rules_hold(c) == []
+
+
+def _ideas_moves(c):
+    return {
+        row[0]: row[1]
+        for row in c.execute("SELECT title, stage_id FROM tasks WHERE pipeline_id='product' AND status='open'")
+    }
+
+
+def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_waits_by_hand(c):
+    """G5: a person who files into Product already picked it. Two filed at once both go into Spec (its limit); the third
+    waits for room, named as room, and goes in first when a slot frees. A bot's idea, and a request moved back into
+    Ideas, are held by hand."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
+    brief = X.new_task(c, "bot:pm", "Brief", "product")
+    X.settled(c)
+    assert N.check(c)["moved"] == 2
+    assert _ideas_moves(c) == {
+        "Request 0": "product-spec",
+        "Request 1": "product-spec",
+        "Request 2": "product-ideas",
+        "Brief": "product-ideas",
+    }
+    (wait,) = W.of(c, E.task(c, asked[2]["id"]))
+    assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
+    (held,) = W.of(c, E.task(c, brief["id"]))
+    assert held.state == W.BY_HAND
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    moved = E.task(c, asked[0]["id"])
+    assert moved["owner_id"] == "bot:pm" and X.wakes(c, moved["id"], "bot:pm")  # its owner is told at once
+    E.move(c, asked[0]["id"], "product-ideas", ANA, "Not this month")
+    N.check(c)
+    assert _ideas_moves(c) == {
+        "Request 0": "product-ideas",  # moved back: held by hand like any idea
+        "Request 1": "product-spec",
+        "Request 2": "product-spec",  # the slot went to the waiting request, not to a room wake
+        "Brief": "product-ideas",
+    }
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert N.rules_hold(c) == []
+
+
+# ----------------------------------------------------------------------------- the two person sign-offs (G1)
+def _jev_passed(c, task_id, file_id, version):
+    found = V.owe(c, file_id, version, "")
+    c.execute("UPDATE page_verdicts SET verdict='met', reasons='' WHERE id=?", (found["id"],))
+    return E.task(c, task_id)
+
+
+def _sign_off(c, stage_id):
+    """A task waiting on the person's OK of its page in `stage_id`, after Jev passed it. Returns it and the page
+    requirement's id."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    pipeline = stage_id.split("-")[0]
+    row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
+    row = E.move(c, row["id"], stage_id, ANA, "Straight to the sign-off for this test")
+    rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (stage_id,)).fetchone()[0]
+    c.execute(
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (H.new_id(), row["visit"]["id"], rid, "f-page", 1, "{}", row["owner_id"], H.now()),
+    )
+    return _jev_passed(c, row["id"], "f-page", 1), rid
+
+
+@pytest.mark.parametrize("stage_id", ["product-spec", "engineering-fixes-2"])
+def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_person(c, time_machine, stage_id):
+    time_machine.move_to(datetime(2026, 11, 10, 9, tzinfo=timezone.utc), tick=False)
+    row, rid = _sign_off(c, stage_id)
+    # Fixes 2's checks need GitHub: met here by taking them off, so the person's OK is all the task waits on.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id=? AND kind='checks_pass'", (H.now(), stage_id))
+    row = E.task(c, row["id"])
+    page = next(s for s in R.standings(c, row) if s.requirement["id"] == rid)
+    assert (page.state, page.on) == (R.WAITING, ANA)
+    owner, manager = row["owner_id"], row["pipeline"]["manager_id"]
+    for bot in (owner, manager):
+        with pytest.raises(H.Refused, match="task_requirement"):
+            A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
+        with pytest.raises(H.Refused, match="task_needs_person"):
+            E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
+    # Late: the manager bot is told once, and still cannot push past. The task stays the person's, whom it reads.
+    minutes = row["stage"]["expected_minutes"]
+    X.settled(c)
+    time_machine.shift(timedelta(minutes=minutes + 1))
+    assert N.check(c)["late"] == 1
+    late = E.task(c, row["id"])
+    assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == [manager]
+    with pytest.raises(H.Refused, match="task_needs_person"):
+        E.move(c, row["id"], E.NEXT, manager, "Late: pushing past", seen_version=late["version"])
+    time_machine.shift(timedelta(minutes=3 * minutes))
+    N.check(c)
+    head = next(w for w in W.of(c, E.task(c, row["id"])) if w.requirement_id == rid)
+    assert (head.state, head.who) == (W.PERSON, ANA)
+    assert H.task_private_readable(c, ANA, E.task(c, row["id"]))
+    assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()
+    assert N.rules_hold(c) == []
+    # The person's OK is what moves it on.
+    A.answer(c, row["id"], rid, ANA, "ok")
+    after = E.task(c, row["id"])
+    assert (
+        after["stage_id"]
+        == {"product-spec": "product-in-development", "engineering-fixes-2": "engineering-merge"}[stage_id]
+    )
+
+
+def test_a_people_only_page_that_names_nobody_waits_on_a_person_not_on_jev_alone(c):
+    row, rid = _sign_off(c, "product-spec")
+    c.execute("UPDATE requirements SET person_id=NULL WHERE id=?", (rid,))
+    row = E.task(c, row["id"])
+    (page,) = R.standings(c, row)
+    assert (page.state, page.on) == (R.WAITING, None)
+    (wait,) = W.of(c, row)
+    assert (wait.state, wait.who) == (W.PERSON, ANA)
+    with pytest.raises(H.Refused, match="task_requirement"):
+        A.answer(c, row["id"], rid, "bot:pm", "ok", seen_version=row["version"])
+    A.answer(c, row["id"], rid, ANA, "ok")
+    assert E.task(c, row["id"])["stage_id"] == "product-in-development"
+
+
+def test_a_manager_bot_cannot_loosen_a_sign_off_but_may_change_the_rest(c):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    manager = "bot:" + PPM
+
+    def edit(change, by=manager):
+        record = PS.read(c, "product")
+        change(next(s for s in record["stages"] if s["id"] == "product-spec"))
+        return PS.save(c, by, record, seen_version=record["settings_version"])
+
+    for change in (
+        lambda s: s["requirements"][0].update(who_oks="people_with_exceptions"),
+        lambda s: s["requirements"][0].update(person_id="bot:pm"),
+        lambda s: s.update(requirements=[]),
+    ):
+        with pytest.raises(H.Refused, match="Only a person changes or removes the people-only OK on Spec"):
+            edit(change)
+    edit(lambda s: s["requirements"][0]["settings"].update(rubric="Goal, scope, done, and what it costs"))
+    assert edit(lambda s: s["requirements"][0].update(who_oks="people_with_exceptions"), by=ANA)
+
+
+def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    c.execute(
+        "UPDATE requirements SET who_oks='people_with_exceptions' "
+        "WHERE stage_id IN ('product-spec', 'engineering-fixes-2') AND kind='page'"
+    )
+    PS.ensure_presets(c)
+    found = c.execute(
+        "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-fixes-2') "
+        "AND kind='page' ORDER BY stage_id"
+    )
+    assert [tuple(r) for r in found] == [("engineering-fixes-2", "people_only"), ("product-spec", "people_only")]
 
 
 def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():

@@ -117,6 +117,11 @@ def _page(line: str, rubric: str, **settings: bool) -> Row:
     return {"kind": "page", "line": line, "settings": {"rubric": rubric, **settings}}
 
 
+def _people_only(requirement: Row) -> Row:
+    """A person's OK no bot can give or push past: the two person sign-offs, on the spec and before release."""
+    return {**requirement, "who_oks": "people_only"}
+
+
 REVIEW_RUBRIC = (
     "A real review of the newest commit of every linked PR: what was read and run, what is wrong, and what to fix. "
     "Not a summary of the change."
@@ -167,14 +172,18 @@ PRESETS["engineering"] = {
         _stage(
             "engineering-fixes-2",
             "Fixes 2",
-            "Fix what the second review found and attach a Review page that shows what was built.",
+            "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
+            "newest commit and both reviewers' verdicts.",
             240,
             [
                 github("checks_pass"),
-                _page(
-                    "Review page",
-                    "Shows what was built, with screenshots or output, and how it was checked. Enough for a person "
-                    "to OK it without opening the code.",
+                _people_only(
+                    _page(
+                        "Review page",
+                        "Shows what was built, with screenshots or output, and how it was checked; that the checks "
+                        "pass at the newest commit; and Reviewer 1's and Reviewer 2's verdicts. Enough for a person "
+                        "to OK it without opening the code.",
+                    )
                 ),
             ],
         ),
@@ -222,7 +231,7 @@ PRESETS["product"] = {
             "Spec",
             "A spec a builder can build from.",
             2880,
-            [_page("Spec page", "Covers goal, scope, what done looks like")],
+            [_people_only(_page("Spec page", "Covers goal, scope, what done looks like"))],
             task_limit=2,
         ),
         _stage(
@@ -956,6 +965,25 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
     return loosened
 
 
+def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) -> str | None:
+    """The stage whose people-only OK the record would remove, open to bots, or give to a bot. None when it keeps every
+    one. A bot that manages a pipeline may change the rest of it, never a person's sign-off."""
+    kept: dict[str, Row] = {req["id"]: req for stage in parsed["stages"] for req in stage["requirements"] if req["id"]}
+    for stage in task_engine.stages(conn, pipeline_id):
+        if stage["kind"] != "work":
+            continue
+        for req in R.on_stage(conn, stage["id"]):
+            if not R.people_only(req):
+                continue
+            new = kept.get(req["id"])
+            if not new or new["who_oks"] != "people_only":
+                return str(stage["name"])
+            person: object = new.get("person_id")
+            if person != req.get("person_id") and not is_human(person):
+                return str(stage["name"])
+    return None
+
+
 def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | str | None = None) -> Row:
     """Create a pipeline (no id, or an id that does not exist yet) or change one. Returns the record as `read` gives
     it. Refuses `task_settings` with the first problem `check` finds, and `task_changed` when `seen_version` is not the
@@ -965,6 +993,10 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
     _may_change(conn, by, existing, seen_version)
     if existing and existing.get("private") and not parsed["private"] and is_bot(by):
         _refuse(conn, by, "task_settings", "Only a person makes a private pipeline company-wide.")
+    if existing and is_bot(by):
+        sign_off = _loosens_people_only(conn, str(existing["id"]), parsed)
+        if sign_off:
+            _refuse(conn, by, "task_settings", f"Only a person changes or removes the people-only OK on {sign_off}.")
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])
@@ -1081,9 +1113,10 @@ def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
 
 def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
-    stage owner, an empty person on a stage's people OK. Nothing a person set is changed, and the settings version
-    stays 1, so the next bot that appears is filled in too. A stand-in up the ladder (`preset`: the Task Manager for
-    a manager, the manager for a stage) gives way to the role's bot once it exists."""
+    stage owner, an empty person on a stage's people OK, and a people-only OK the preset now has. Nothing a person set
+    is changed, and the settings version stays 1, so the next bot that appears is filled in too. A stand-in up the
+    ladder (`preset`: the Task Manager for a manager, the manager for a stage) gives way to the role's bot once it
+    exists."""
     record = preset(conn, key)
     ts = _h().now()
     found = conn.execute("SELECT manager_id, private FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
@@ -1108,6 +1141,13 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
                     "UPDATE requirements SET person_id=? WHERE stage_id=? AND kind=? AND person_id IS NULL "
                     "AND withdrawn_at IS NULL AND visit_id IS NULL",
                     (req["person_id"], stage["id"], req["kind"]),
+                )
+            if req.get("who_oks") == "people_only":
+                # A preset made before its sign-offs were people only gets them: a tightening, never a loosening.
+                conn.execute(
+                    "UPDATE requirements SET who_oks='people_only' WHERE stage_id=? AND kind=? "
+                    "AND who_oks<>'people_only' AND withdrawn_at IS NULL AND visit_id IS NULL",
+                    (stage["id"], req["kind"]),
                 )
 
 
