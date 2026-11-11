@@ -7,6 +7,7 @@ Ana owns the company and Ben is an admin (both credential administrators); Cara,
 
 import json
 import logging
+from pathlib import Path
 
 import pytest
 
@@ -208,6 +209,15 @@ def test_an_address_a_browser_could_read_differently_matches_no_site():
 
 
 # ---- the pick rule
+
+
+@pytest.mark.parametrize(
+    "case",
+    json.loads((Path(__file__).parents[2] / "contracts/website-sites.json").read_text())["cases"],
+    ids=lambda case: case["name"],
+)
+def test_shared_site_acceptance_vectors(case):
+    assert W.site_matches(case["sites"], case["url"]) is case["matches"]
 
 
 def test_own_account_first_then_the_oldest_shared_one_granted_and_a_listed_tool_stays_hidden(api):

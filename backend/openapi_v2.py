@@ -8094,7 +8094,8 @@ STABLE.extend(
             'post',
             'Tools',
             'openWebsiteBrowser',
-            'Open, or wake, the account\'s browser on the browser host for your live view',
+            'Open, or wake, the account\'s browser for your live view: on the computer its session runs on, else the browser '
+            'host. A live session is woken without changing its page',
             'BrowserOpened',
         ),
         (
@@ -8103,7 +8104,7 @@ STABLE.extend(
             'Tools',
             'getWebsiteBrowserFrame',
             'The newest picture of the account\'s browser (JPEG; 204 before the first), with X-Page-Url, X-Page-Width and '
-            'X-Page-Height. The browser host takes at most one a second however many people watch',
+            'X-Page-Height. From the computer the session runs on, at most one a second however many people watch',
             None,
         ),
         (
@@ -8124,7 +8125,7 @@ STABLE.extend(
         ),
     ]
 )
-SCHEMAS['BrowserOpened'] = obj({'ok': 'b', 'where': {'enum': ['central']}})
+SCHEMAS['BrowserOpened'] = obj({'ok': 'b', 'where': {'enum': ['central', 'own']}})
 SCHEMAS['BrowserControlState'] = obj({'ok': 'b', 'control': 'b'})
 SCHEMAS['BrowserInputDone'] = obj({'ok': 'b'})
 TAGS['Webhook relay'] = (

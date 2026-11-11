@@ -20,7 +20,8 @@ A website tool is a site the company signs in to, added in Tools (Add → Websit
 **shared** (used by the teammates it is shared with) or **own** (one person's or one bot's, used by them alone). Tico
 picks the account for you: your own on that site, else the shared one shared with you. The browser runs on the
 company's **browser host** (one computer an admin picks); without one, on your own computer, unless the site is
-**central only** (banks), which runs on the browser host or not at all. You drive it a verb at a time with
+**central only** (banks), which runs on the browser host or not at all. Opening chooses the computer and every
+later command stays there; if that computer goes away, you are told to open the website again. You drive it a verb at a time with
 `tico browser`, and sign in with `tico login`. You never see the password, the 2FA key, the cookies or the browser
 itself.
 

@@ -10,11 +10,13 @@
     "events": {"method": "POST", "path": "/api/v2/attempts/{aid}/events", "request": "EventBatch", "answer": "EventsAnswer"},
     "renew": {"method": "POST", "path": "/api/v2/attempts/{aid}/renew", "request": "Empty", "answer": "RenewAnswer"},
     "complete": {"method": "POST", "path": "/api/v2/attempts/{aid}/complete", "request": "Completion", "answer": "CompleteAnswer"},
+    "browser_commands": {"method": "GET", "path": "/api/v2/runner-browser-commands", "answer": "BrowserCommandsAnswer"},
     "runner_events": {"method": "GET", "path": "/api/v2/runners/me/events", "stream": {
       "ready": "ReadyFrame", "runner": "RunnerFrame", "reset": "ResetFrame", "expired": "ExpiredFrame"}}
   },
   "error": "ErrorEnvelope",
   "gated": {
+    "browser_commands": "runner-rs/src/browser/host.rs backs off on an older server without this endpoint; expires_in is optional to old readers, and new runners accept its absence from old servers",
     "heartbeat.request.capabilities": "Older servers can negotiate it away; requests stay queued until a runner advertises make_page",
     "heartbeat.request.readiness.worktree_recovery": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; retired worktrees are not allocated to computers without this capability",
     "start_place.request.harness_allocated": "runner-rs/src/execute.rs post_allocated: a 422 naming harness_allocated retries without the field",
@@ -40,6 +42,24 @@
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },
   "$defs": {
+    "BrowserCommandsAnswer": {
+      "type": "object", "additionalProperties": false, "required": ["commands"],
+      "properties": {"commands": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/BrowserRelayCommand"}}}
+    },
+    "BrowserRelayCommand": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "account", "tool", "verb", "args", "sites", "profile", "where", "expires_in"],
+      "properties": {
+        "id": {"type": "string"}, "account": {"type": "string"}, "tool": {"type": "string"},
+        "verb": {"type": "string", "x-open-enum": true},
+        "args": {"type": "object", "additionalProperties": true},
+        "sites": {"type": "array", "maxItems": 50, "items": {"type": "string"}},
+        "profile": {"type": "string"}, "where": {"enum": ["central", "own"]},
+        "bot": {"type": "string"}, "value": {"type": "string"},
+        "expires_in": {"type": "number", "minimum": 0, "maximum": 30,
+          "x-note": "Seconds remaining when this payload leaves the server; the runner subtracts time spent waiting locally and never starts an expired command."}
+      }
+    },
     "ErrorEnvelope": {
       "type": "object", "additionalProperties": false, "required": ["error"],
       "properties": {"error": {"$ref": "#/$defs/Error"}}

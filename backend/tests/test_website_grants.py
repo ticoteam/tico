@@ -192,8 +192,11 @@ def computers(website):
         c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara',team='product' WHERE bot='ops'")
     assign(s.api, s.own, "ops")
     ready(s.api, s.own, ["ops"], capabilities=["browser_v1"])
-    post(s.api, "tasks", {"owner": "ops", "title": "Read the report", "body": "Read Acme."})
+    s.task = post(s.api, "tasks", {"owner": "ops", "title": "Read the report", "body": "Read Acme."})
     s.turn = claim(s.api, s.own, "ops")
+    facts = B.MAILBOX.facts(s.aid)
+    facts.where, facts.runner_id, facts.computer = "central", s.host["runner_id"], "Host"
+    facts.tool_id, facts.sites = s.tid, [SITE]
     return s
 
 
@@ -203,7 +206,7 @@ def command(s, verb="read", token=None):
     )
 
 
-def begin(s, verb="read", token=None):
+def begin(s, verb="open", token=None):
     box = {}
     thread = threading.Thread(target=lambda: box.setdefault("response", command(s, verb, token)))
     thread.start()
@@ -294,7 +297,7 @@ def test_removing_access_closes_the_session_and_refuses_the_next_command(compute
     [close] = poll(s, s.host, wait=3)
     assert close["verb"] == "close" and "value" not in close
     report(s, s.host, close)
-    response = command(s)
+    response = command(s, "open")
     assert response.status_code in (403, 404)
     assert response.json()["error"]["code"] == ("no_such_site" if change == "delete_tool" else "no_account")
 
@@ -477,7 +480,7 @@ def test_placement_refusals_are_stable_and_actionable(computers, central_only, h
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.host["runner_id"],))
         if not own:
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.own["runner_id"],))
-    response = command(s)
+    response = command(s, "open")
     assert response.status_code == status and response.json()["error"]["code"] == code
     assert poll(s, s.own) == [] and poll(s, s.host) == []
 
@@ -490,7 +493,7 @@ def test_host_change_rejects_an_old_report_and_the_next_command_uses_the_new_hos
     thread, box = begin(s)
     [old] = poll(s, s.host, wait=3)
     post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
-    assert report(s, s.host, old, expected=409)["error"]["code"] == "browser_host_offline"
+    assert report(s, s.host, old, expected=404)["error"]["code"] == "not_found"
     end(thread, box, 409, "browser_host_offline")
     thread, box = begin(s)
     [cmd] = poll(s, other, wait=3)
@@ -602,6 +605,7 @@ def test_http_cli_and_mcp_keep_the_same_refusal_sentence_and_code(computers, cod
             c.execute("UPDATE tools SET central_only=1 WHERE id=?", (s.tid,))
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.host["runner_id"],))
     elif code == "no_browser":
+        verb = "open"
         with s.store.transaction() as c:
             c.execute("DELETE FROM registry_metadata WHERE key=?", (B.KEY,))
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.own["runner_id"],))
@@ -655,3 +659,196 @@ def test_http_cli_and_mcp_keep_the_same_refusal_sentence_and_code(computers, cod
             response.status_code,
             error["detail"],
         )
+
+
+@pytest.mark.parametrize("where", ["central", "own"])
+def test_browser_placement_stays_with_the_session_until_open(computers, where):
+    """A: recovering a host never moves an own sign-in, and a stale session never silently falls back."""
+    s = computers
+    if where == "own":
+        with s.store.transaction() as c:
+            c.execute(
+                "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+                (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
+            )
+    machine = s.own if where == "own" else s.host
+    thread, box = begin(s)
+    [cmd] = poll(s, machine, wait=3)
+    report(s, machine, cmd)
+    end(thread, box)
+    ready(s.api, s.host, [], capabilities=["browser_v1"])
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, machine, wait=3)
+    assert cmd["verb"] == "read"
+    report(s, machine, cmd)
+    assert end(thread, box).json()["where"] == where
+    with s.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-200), machine["runner_id"]),
+        )
+    response = command(s)
+    assert response.status_code == 409 and "open the website again" in response.json()["error"]["detail"]
+    assert poll(s, s.own) == [] and poll(s, s.host) == []
+
+
+def person_request(s, path, token="ana-test", body=None):
+    box = {}
+
+    def send():
+        box["response"] = s.api.request(
+            "GET" if body is None else "POST", "/api/v2/" + path, json=body, headers=headers(token)
+        )
+
+    thread = threading.Thread(target=send)
+    thread.start()
+    return thread, box
+
+
+def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
+    """B: the asked person helps the same own-computer browser, then Done lets the bot continue there."""
+    import base64
+
+    s = computers
+    with s.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
+        )
+    thread, box = begin(s)
+    [cmd] = poll(s, s.own, wait=3)
+    post(
+        s.api,
+        f"runner-browser-commands/{cmd['id']}/report",
+        {"ok": True, "url": "https://" + SITE + "/code"},
+        s.own["token"],
+    )
+    end(thread, box)
+    rid = post(s.api, "browser/needs-you", {"site": s.tid, "line": "Please finish sign-in."}, s.turn["token"])[
+        "requirement_id"
+    ]
+    with s.store.read() as c:
+        person = c.execute("SELECT person_id FROM requirements WHERE id=?", (rid,)).fetchone()[0]
+    token = person.removeprefix("human:") + "-test"
+    path = f"website-tools/{s.tid}/accounts/{s.aid}/browser"
+    thread, box = person_request(s, path, token, {})
+    [cmd] = poll(s, s.own, wait=3)
+    assert cmd["verb"] == "open" and cmd["args"] == {} and cmd["where"] == "own"
+    report(s, s.own, cmd)
+    assert end(thread, box).json()["where"] == "own"
+    post(s.api, path + "/control", {"take": True}, token)
+    thread, box = person_request(s, path + "/input", token, {"kind": "key", "key": "Enter"})
+    [cmd] = poll(s, s.own, wait=3)
+    assert cmd["verb"] == "input_key"
+    report(s, s.own, cmd)
+    end(thread, box)
+    thread, box = person_request(s, path + "/frame", token)
+    [cmd] = poll(s, s.own, wait=3)
+    assert cmd["verb"] == "screenshot"
+    post(
+        s.api,
+        f"runner-browser-commands/{cmd['id']}/report",
+        {"ok": True, "image": base64.b64encode(b"\xff\xd8\xff\xd9").decode(), "width": 32, "height": 16},
+        s.own["token"],
+    )
+    assert end(thread, box).headers["content-type"] == "image/jpeg"
+    post(s.api, f"tasks/{s.task['id']}/asks/{rid}/answer", {"value": "Done"}, token)
+    post(s.api, path + "/control", {"take": False}, token)
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, s.own, wait=3)
+    report(s, s.own, cmd)
+    end(thread, box)
+    assert B.session_view(s.aid)["computer"] == "Own"
+
+
+def test_opening_a_persons_view_wakes_the_existing_page_without_a_url(computers):
+    """C: viewing a two-step sign-in never navigates it back to its old address."""
+    s = computers
+    facts = B.MAILBOX.facts(s.aid)
+    facts.url = "https://" + SITE + "/second-step"
+    thread, box = person_request(s, f"website-tools/{s.tid}/accounts/{s.aid}/browser", body={})
+    [cmd] = poll(s, s.host, wait=3)
+    assert cmd["verb"] == "open" and cmd["args"] == {}
+    report(s, s.host, cmd)
+    end(thread, box)
+    assert B.MAILBOX.facts(s.aid).url.endswith("/second-step")
+
+
+def test_a_refused_person_view_leaves_the_bots_session_intact(computers):
+    """D: losing a viewer's permission cancels only that viewer's queued command."""
+    s = computers
+    thread, box = begin(s)
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    end(thread, box)
+    before = B.MAILBOX.facts(s.aid)
+    thread, box = person_request(s, f"website-tools/{s.tid}/accounts/{s.aid}/browser", "ben-test", {})
+    prepared(s, s.host)
+    s.store.settings.credential_admins = ("ana@acme.example",)
+    assert poll(s, s.host) == []
+    end(thread, box, 404, "not_found")
+    assert B.MAILBOX.facts(s.aid) is before
+    assert B.MAILBOX.holder(s.aid).actor == "bot:ops"
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    end(thread, box)
+
+
+@pytest.mark.parametrize("error", ["stale_ref", "not_on_site", "not_a_password_field"])
+def test_refused_fills_do_not_burn_the_successful_secret_limit(computers, monkeypatch, error):
+    """E: a refused fill refunds its reservation, while the first successful fill uses the one allowed slot."""
+    s = computers
+    monkeypatch.setattr(W, "SECRET_RATE", 1)
+
+    def fill():
+        box = {}
+        thread = threading.Thread(
+            target=lambda: box.setdefault(
+                "response",
+                s.api.post(
+                    "/api/v2/browser/commands",
+                    json={"site": s.tid, "verb": "fill", "args": {"field": "password"}},
+                    headers=headers(s.turn["token"]),
+                ),
+            )
+        )
+        thread.start()
+        return thread, box
+
+    for _ in range(2):
+        thread, box = fill()
+        [cmd] = poll(s, s.host, wait=3)
+        post(s.api, f"runner-browser-commands/{cmd['id']}/report", {"ok": False, "error": error}, s.host["token"])
+        end(thread, box, 422 if error != "stale_ref" else 409, error)
+        assert not W._spent[s.aid]
+    thread, box = fill()
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    end(thread, box)
+    thread, box = fill()
+    end(thread, box, 429, "slow_down")
+
+
+def test_command_deadline_shrinks_in_the_payload_and_matches_the_wire_contract():
+    """F: queue time consumes the command's relative execution budget before a runner sees it."""
+    import json
+    from pathlib import Path
+    from scripts.check_wire_contract import errors
+
+    async def run():
+        loop = asyncio.get_running_loop()
+        cmd = B._new(
+            loop,
+            B.Place("computer", "Host", True),
+            {"account_id": "account", "tool_id": "tool", "sites": [SITE]},
+            "read",
+            {},
+        )
+        assert cmd.payload(now=cmd.deadline_at - 7)["expires_in"] == 7
+        assert cmd.payload(now=cmd.deadline_at + 1)["expires_in"] == 0
+        wire = json.loads((Path(__file__).parents[2] / "contracts/runner/wire.json").read_text())
+        schema = {"$ref": "#/$defs/BrowserRelayCommand", "$defs": wire["$defs"]}
+        assert errors(cmd.payload(now=cmd.deadline_at - 7), schema, wire) == []
+
+    asyncio.run(run())

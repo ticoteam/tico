@@ -74,7 +74,7 @@ What leaves the vault, and to whom:
   own clipboard for 30 s with `tico login copy`). The computer types it only on the tool's own sites over https, and
   only into a password box. It is masked in every run's output on that computer.
 - The 2FA key never leaves the server. The server works out the current code when a fill, copy or code is asked for and
-  sends only the 6 to 8 digits. At most 20 fills, copies and codes an hour per account.
+  sends only the 6 to 8 digits. At most 20 successful fills, copies and codes an hour per account; a refused fill does not count.
 - A bot never sees a password or a 2FA key: no environment variable, no file, no list, no event. Login Credentials
   never go to `credential-runtime` or a computer's secrets.
 - A person who can use the account sees the current code (**Show code**) and may reveal the password (**Reveal

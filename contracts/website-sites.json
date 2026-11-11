@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "rule": "Match the host or its subdomains on the granted port; without a port, only the scheme default is allowed; IP literals match exactly; HTTP requires an explicit http:// site; userinfo, controls and backslashes are refused.",
+  "cases": [
+    {
+      "name": "host",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example/login",
+      "matches": true
+    },
+    {
+      "name": "subdomain",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://login.acme.example/",
+      "matches": true
+    },
+    {
+      "name": "unrelated-host",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://other.example/",
+      "matches": false
+    },
+    {
+      "name": "suffix-trick",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example.evil.example/",
+      "matches": false
+    },
+    {
+      "name": "prefix-trick",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://evilacme.example/",
+      "matches": false
+    },
+    {
+      "name": "port-on-page",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example:8443/",
+      "matches": false
+    },
+    {
+      "name": "port-on-grant",
+      "sites": [
+        "acme.example:8443"
+      ],
+      "url": "https://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "port-on-subdomain",
+      "sites": [
+        "acme.example:8443"
+      ],
+      "url": "https://login.acme.example:9443/",
+      "matches": false
+    },
+    {
+      "name": "default-port",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example:443/",
+      "matches": true
+    },
+    {
+      "name": "ipv6",
+      "sites": [
+        "[2001:db8::1]"
+      ],
+      "url": "https://[2001:db8::1]/",
+      "matches": true
+    },
+    {
+      "name": "ipv6-port",
+      "sites": [
+        "[2001:db8::1]:8443"
+      ],
+      "url": "https://[2001:db8::1]:9443/",
+      "matches": false
+    },
+    {
+      "name": "ipv6-other",
+      "sites": [
+        "[2001:db8::1]"
+      ],
+      "url": "https://[2001:db8::2]/",
+      "matches": false
+    },
+    {
+      "name": "ipv4",
+      "sites": [
+        "192.0.2.1"
+      ],
+      "url": "https://192.0.2.1:8443/",
+      "matches": false
+    },
+    {
+      "name": "ip-is-not-domain",
+      "sites": [
+        "192.0.2.1"
+      ],
+      "url": "https://login.192.0.2.1/",
+      "matches": false
+    },
+    {
+      "name": "https-only",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "http://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "explicit-http",
+      "sites": [
+        "http://acme.example"
+      ],
+      "url": "http://acme.example:8080/",
+      "matches": false
+    },
+    {
+      "name": "http-grant-allows-https",
+      "sites": [
+        "http://acme.example"
+      ],
+      "url": "https://acme.example/",
+      "matches": true
+    },
+    {
+      "name": "unsupported-scheme",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "ftp://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "script-scheme",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "javascript://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "trailing-dot",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example./",
+      "matches": true
+    },
+    {
+      "name": "grant-trailing-dot",
+      "sites": [
+        "acme.example."
+      ],
+      "url": "https://acme.example/",
+      "matches": true
+    },
+    {
+      "name": "case",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://LOGIN.Acme.Example/",
+      "matches": true
+    },
+    {
+      "name": "userinfo",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://user@acme.example/",
+      "matches": false
+    },
+    {
+      "name": "userinfo-password",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://user:pass@acme.example/",
+      "matches": false
+    },
+    {
+      "name": "userinfo-host-trick",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://evil.example@acme.example/",
+      "matches": false
+    },
+    {
+      "name": "backslash-userinfo",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://evil.example\\@acme.example/",
+      "matches": false
+    },
+    {
+      "name": "backslash-host",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://evil.example\\.acme.example/",
+      "matches": false
+    },
+    {
+      "name": "encoded-host",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example%2f.evil.example/",
+      "matches": false
+    },
+    {
+      "name": "control",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.exa\nmple/",
+      "matches": false
+    },
+    {
+      "name": "space",
+      "sites": [
+        "acme.example"
+      ],
+      "url": "https://acme.example /",
+      "matches": false
+    },
+    {
+      "name": "single-word",
+      "sites": [
+        "example"
+      ],
+      "url": "https://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "punycode",
+      "sites": [
+        "xn--bcher-kva.example"
+      ],
+      "url": "https://b\u00fccher.example/",
+      "matches": true
+    },
+    {
+      "name": "empty-grant",
+      "sites": [],
+      "url": "https://acme.example/",
+      "matches": false
+    },
+    {
+      "name": "matching-explicit-port",
+      "sites": [
+        "acme.example:8443"
+      ],
+      "url": "https://acme.example:8443/",
+      "matches": true
+    },
+    {
+      "name": "matching-explicit-http-port",
+      "sites": [
+        "http://acme.example:8080"
+      ],
+      "url": "http://acme.example:8080/",
+      "matches": true
+    },
+    {
+      "name": "ipv6-matching-port",
+      "sites": [
+        "[2001:db8::1]:8443"
+      ],
+      "url": "https://[2001:db8::1]:8443/",
+      "matches": true
+    },
+    {
+      "name": "ipv6-canonical-form",
+      "sites": [
+        "[2001:db8::1]"
+      ],
+      "url": "https://[2001:0db8:0:0:0:0:0:1]/",
+      "matches": true
+    }
+  ]
+}

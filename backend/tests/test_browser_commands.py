@@ -58,8 +58,11 @@ class Tools(types.ModuleType):
         assert (tool_id, account_id) == ("tool1", "acct1")
         return self._picked()
 
-    def secret(self, conn, vault, account_id, field):
+    def secret(self, conn, vault, account_id, field, *, charge=True):
         return {"username": "robot", "password": PASSWORD, "code": CODE}[field]
+
+    def spend(self, account_id):
+        return None
 
     def expires_in(self, conn, vault, account_id):
         return 17
@@ -103,6 +106,9 @@ def setup(api, tools):
     for bot in ("ops", "finance"):
         tasks[bot] = post(api, "tasks", {"owner": bot, "title": f"Pull the {bot} report", "body": "Get it from Acme."})
     turns = {bot: claim(api, own, bot) for bot in ("ops", "finance")}
+    facts = bc.MAILBOX.facts("acct1")
+    facts.where, facts.runner_id, facts.computer = "central", host["runner_id"], "Host Mac"
+    facts.tool_id, facts.sites = "tool1", ["acme.example"]
     return types.SimpleNamespace(api=api, host=host, own=own, tasks=tasks, ops=turns["ops"], finance=turns["finance"])
 
 
@@ -192,12 +198,12 @@ def test_a_command_reaches_the_host_and_its_report_returns_to_the_bot(setup, too
 def test_host_offline_falls_back_to_the_callers_own_computer(setup, tools):
     s = setup
     stale(s, s.host)
-    thread, box = call(s, s.ops, "read")
+    thread, box = call(s, s.ops, "open")
     assert collect(s, s.host, wait=0) == []
     [cmd] = serve(s, s.own, text="Reports")
     r = done(thread, box)
-    assert r.status_code == 200 and r.json()["where"] == "own" and r.json()["text"] == "Reports"
-    assert cmd["verb"] == "read"
+    assert r.status_code == 200 and r.json()["where"] == "own"
+    assert cmd["verb"] == "open"
     with s.api.app.state.store.read() as c:
         assert bc.host_view(c)["online"] is False
         assert bc.health_problem(c).startswith("Browser host offline: Host Mac")
@@ -223,7 +229,7 @@ def test_busy_for_a_second_bot_until_close_or_the_hold_ends(setup, tools, monkey
     thread, box = call(s, s.ops, "close")
     serve(s, s.host)
     assert done(thread, box).status_code == 200
-    thread, box = call(s, s.finance, "read")
+    thread, box = call(s, s.finance, "open")
     serve(s, s.host, text="Page")
     assert done(thread, box).status_code == 200
     # finance holds it now; once its hold runs out ops gets it back without a close.
@@ -296,6 +302,7 @@ def test_copy_runs_on_the_callers_computer_and_not_for_central_only(setup, tools
     r = done(thread, box)
     assert r.status_code == 200 and r.json()["where"] == "own"
     assert tools.logs[-1] == ("bot:ops", "copy", "acme.example/home", "own", "use")
+    assert bc.session_view("acct1")["where"] == "central"
     tools.central_only = True
     r = now(s, s.ops, "copy", {"field": "password"})
     assert r.status_code == 403 and r.json()["error"]["code"] == "central_only"
@@ -381,7 +388,7 @@ def test_a_computer_that_is_neither_the_host_nor_running_the_turn_gets_nothing(s
     assert collect(s, s.own, wait=0) == []
     # The host stops being the host before it collects: it gets nothing and the bot is told.
     post(s.api, f"runners/{s.host['runner_id']}/browser-host", {"on": False})
-    assert collect(s, s.host, wait=0) == []
+    assert all(cmd["verb"] == "close" for cmd in collect(s, s.host, wait=0))
     r = done(thread, box)
     assert r.status_code == 409 and r.json()["error"]["code"] == "browser_host_offline"
     # And a report for a command it never collected is a 404.
@@ -431,7 +438,9 @@ def test_health_says_when_chrome_is_missing_and_a_removed_host_is_forgotten(setu
 def test_values_sent_earlier_are_scrubbed_from_every_later_answer_on_the_account(setup, tools, monkeypatch):
     s = setup
     secret = "p@ss word/42"
-    tools.secret = lambda conn, vault, aid, field: {"username": "robot", "password": secret, "code": CODE}[field]
+    tools.secret = lambda conn, vault, aid, field, **kwargs: {"username": "robot", "password": secret, "code": CODE}[
+        field
+    ]
     thread, box = call(s, s.ops, "fill", {"field": "password"})
     serve(s, s.host)
     assert done(thread, box).status_code == 200
@@ -605,3 +614,14 @@ def test_a_poll_left_open_by_a_stopped_runner_never_takes_the_restarted_runners_
     assert not second.is_alive() and [c["verb"] for c in new["cmds"]] == ["read"]
     report(s, s.host, new["cmds"][0], text="Reports")
     assert done(thread, box).status_code == 200
+
+
+def test_scrub_report_also_covers_a_short_current_fill_value():
+    """H: the single report scrubber covers values too short to remember across later reads."""
+    box = bc.Mailbox()
+    value = "xyz"
+    box.remember("account", "password", value)
+    report = box.scrub_report(
+        "account", bc.BrowserReport(ok=True, text=value, title=value, url=value, error=value), value
+    )
+    assert all(value not in str(getattr(report, field)) for field in ("text", "title", "url", "error"))

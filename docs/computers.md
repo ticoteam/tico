@@ -452,13 +452,15 @@ computer's pop-up; one per company.
 - Each account's browser starts on its first command, closes after 15 minutes idle (the sign-in is kept) and at most 8
   are open at once.
 
-Where a website command runs:
+Where a website runs is chosen when it is opened:
 
 1. On the browser host, when one is set, online and has Chrome.
 2. Otherwise on the bot's own computer, if it has Chrome, unless the site is **central only**.
 3. Otherwise it is refused, naming the browser host when it is the one that is offline.
 
-A person's view of a website always uses the browser host.
+Every later command stays on that computer. If it goes offline or is no longer allowed, the command is refused and the
+bot opens the website again, which chooses afresh. A person's view follows the session to its computer and does not
+change the page; with no session it opens on the browser host.
 
 ## Add a connection
 

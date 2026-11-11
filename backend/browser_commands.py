@@ -190,8 +190,10 @@ class Command:
     file: tuple[str, bytes] | None = None
     delivered: bool = False
     at: float = field(default_factory=time.monotonic)
+    deadline_at: float = field(default_factory=lambda: time.monotonic() + REPLY_WAIT)
+    spent_at: float | None = None
 
-    def payload(self) -> dict[str, Any]:
+    def payload(self, now: float | None = None) -> dict[str, Any]:
         out: dict[str, Any] = {
             "id": self.id,
             "account": self.account_id,
@@ -200,12 +202,15 @@ class Command:
             "args": self.args,
             "sites": self.sites,
             "profile": self.account_id,
+            "expires_in": max(0.0, self.deadline_at - (time.monotonic() if now is None else now)),
         }
         if not self.central:
             # On the caller's own computer the browser goes out the way that bot's browsing does (its exit).
             out["where"] = "own"
             if self.by is not None and self.by["kind"] == "bot":
                 out["bot"] = self.by["id"]
+            elif (bot := MAILBOX.facts(self.account_id).bot) is not None:
+                out["bot"] = bot
         else:
             out["where"] = "central"
         if self.value is not None:
@@ -234,6 +239,7 @@ class SessionFacts:
     title: str = ""
     sites: list[str] = field(default_factory=list)
     tool_id: str = ""
+    bot: str | None = None
 
 
 @dataclass
@@ -301,8 +307,10 @@ class Mailbox:
             text = text.replace(form, MASK)
         return text
 
-    def scrub_report(self, account_id: str, report: "BrowserReport") -> "BrowserReport":
+    def scrub_report(self, account_id: str, report: "BrowserReport", value: str | None = None) -> "BrowserReport":
         changes = {name: self.scrub(account_id, getattr(report, name)) for name in ("text", "title", "url", "error")}
+        if value:
+            changes = {name: text.replace(value, MASK) if text else text for name, text in changes.items()}
         return report.model_copy(update=changes)
 
     # -------------------------------------------------------------------- the loop
@@ -432,7 +440,17 @@ class Mailbox:
     def settle(self, cmd: Command, outcome: Outcome) -> None:
         self.drop(cmd)
         if not cmd.reply.done():
+            if cmd.spent_at is not None:
+                _wt().finish_spend(cmd.account_id, cmd.spent_at, isinstance(outcome, BrowserReport) and outcome.ok)
+                cmd.spent_at = None
             cmd.reply.set_result(outcome)
+
+    def refuse(self, cmd: Command, refused: Problem) -> None:
+        """A person's refused view never disrupts the bot's session or another viewer."""
+        if cmd.attempt_id and not cmd.cleanup:
+            self.close_account(cmd.account_id, refused)
+        else:
+            self.settle(cmd, refused)
 
     def disconnect(self, runner_id: str) -> None:
         """A computer removed: its commands fail, its sessions and the frames they made are gone."""
@@ -527,6 +545,8 @@ class Mailbox:
             facts.runner_id, facts.computer = cmd.runner_id, cmd.label
             if cmd.by is not None:
                 facts.by = cmd.by
+                if cmd.by["kind"] == "bot":
+                    facts.bot = cmd.by["id"]
             if report.url:
                 facts.url = report.url
             if report.title is not None:
@@ -539,7 +559,7 @@ class Mailbox:
                     facts.state = known
             if cmd.verb == "close" and report.ok:
                 facts.where = facts.runner_id = facts.computer = None
-            if cmd.central and cmd.verb == "screenshot" and report.ok and report.image:
+            if cmd.verb == "screenshot" and report.ok and report.image:
                 data = _b64(report.image)
                 if data and data.startswith(b"\xff\xd8"):
                     frame = self.frames.setdefault(cmd.account_id, Frame())
@@ -673,12 +693,6 @@ def first_url(sites: list[str]) -> str:
     if site.startswith(("http://", "https://")):
         return site.rstrip("/") + "/"
     return "https://" + site.strip("/") + "/"
-
-
-def _scrub(text: str | None, value: str | None) -> str | None:
-    if text is None or not value:
-        return text
-    return text.replace(value, "••••")
 
 
 def _idle(request: Request, began: float) -> None:
@@ -869,6 +883,18 @@ def central(c: sqlite3.Connection) -> Place:
     return Place(str(row["id"]), str(row["label"] or row["id"]), True)
 
 
+def session_place(c: sqlite3.Connection, picked: Any, who: Any = None) -> Place:
+    """A browser stays on its computer until open chooses again; person viewers follow that same session."""
+    facts = MAILBOX.facts(str(picked["account_id"]))
+    row = _computer(c, facts.runner_id)
+    if row is not None and _online(row) and _has_browser(row):
+        central = facts.where == "central"
+        allowed = host_id(c) == facts.runner_id if central else not picked["central_only"]
+        if allowed and (who is None or central or who.runner_id == facts.runner_id):
+            return Place(str(row["id"]), str(row["label"] or row["id"]), central)
+    raise Problem("browser_host_offline", "This browser session is unavailable; open the website again.", 409)
+
+
 def place(c: sqlite3.Connection, who: Any, picked: Any, verb: str) -> Place:
     """Where this caller's command runs: the browser host, else (unless central only) the caller's own computer."""
     central_only = bool(picked["central_only"])
@@ -886,6 +912,8 @@ def place(c: sqlite3.Connection, who: Any, picked: Any, verb: str) -> Place:
                 409,
             )
         return Place(str(own["id"]), str(own["label"] or own["id"]), False)
+    if verb != "open":
+        return session_place(c, picked, who)
     host = _computer(c, host_id(c))
     if host is not None and _online(host) and _has_browser(host):
         return Place(str(host["id"]), str(host["label"] or host["id"]), True)
@@ -964,7 +992,7 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
     timeout, the caller gone or cancelled) the command is settled and leaves the queue: nothing piles up for a computer
     that is offline."""
     began = time.perf_counter()
-    deadline = time.monotonic() + within
+    deadline = cmd.deadline_at = min(cmd.deadline_at, time.monotonic() + within)
     try:
         while True:
             left = deadline - time.monotonic()
@@ -978,11 +1006,13 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
                 outcome = await asyncio.wait_for(asyncio.shield(cmd.reply), min(left, GONE_CHECK))
                 break
             except TimeoutError:
+                if time.monotonic() >= deadline:
+                    continue
                 check = getattr(request.app.state, "browser_check", None) if hasattr(request, "app") else None
                 if check is not None:
                     refused = await asyncio.to_thread(check, cmd)
                     if refused is not None:
-                        MAILBOX.close_account(cmd.account_id, refused)
+                        MAILBOX.refuse(cmd, refused)
                         raise refused from None
                 if await request.is_disconnected():
                     raise Problem(
@@ -1176,20 +1206,27 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 if verb != "copy":
                     mailbox.take(str(picked["account_id"]), who.actor, by)
                 value = (
-                    str(wt.secret(c, vault(), picked["account_id"], args["field"]))
+                    str(wt.secret(c, vault(), picked["account_id"], args["field"], charge=verb != "fill"))
                     if verb in ("fill", "copy")
                     else None
                 )
                 if value is not None:
                     mailbox.remember(str(picked["account_id"]), str(args["field"]), value)
-                return picked, _new(loop, spot, picked, verb, args, value, who.attempt_id, by, who), None
+                cmd = _new(loop, spot, picked, verb, args, value, who.attempt_id, by, who)
+                if verb == "fill" and args["field"] in ("password", "code"):
+                    cmd.spent_at = wt.spend(str(picked["account_id"]))
+                return picked, cmd, None
 
         picked, cmd, answered = await asyncio.to_thread(prepare)
         if answered is not None:
             mailbox.clear_needs_you(str(picked["account_id"]))
             return answered
         assert cmd is not None
-        mailbox.enqueue(cmd)
+        try:
+            mailbox.enqueue(cmd)
+        except Problem as refused:
+            mailbox.settle(cmd, refused)
+            raise
         where = "central" if cmd.central else "own"
         try:
             report = await wait_reply(request, cmd, REPLY_WAIT)
@@ -1203,9 +1240,10 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             if cmd.verb == "close":
                 mailbox.release(cmd.account_id, who.actor)
         # Scrubbed again here as well as on arrival: a value sent after the report came in is still kept out.
-        report = mailbox.scrub_report(cmd.account_id, report)
+        report = mailbox.scrub_report(cmd.account_id, report, cmd.value)
         await still_allowed(cmd)
-        mailbox.note(cmd, report)
+        if cmd.verb != "copy":
+            mailbox.note(cmd, report)
         mailbox.clear_needs_you(cmd.account_id)  # the bot is past what it needed a person for
         if cmd.verb in LOGGED:
             page = page_of(
@@ -1214,7 +1252,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             await asyncio.to_thread(log, picked, who, cmd.verb, page, where)
         out: dict[str, Any] = {"ok": True, "where": where}
         if cmd.verb in ("read",) and report.text is not None:
-            out["text"] = _scrub(report.text, cmd.value)
+            out["text"] = report.text
         if cmd.verb == "screenshot" and report.image:
             out["image"] = report.image
         if cmd.verb == "download":
@@ -1229,7 +1267,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         if report.url is not None:
             out["url"] = report.url
         if report.title is not None:
-            out["title"] = _scrub(report.title, cmd.value)
+            out["title"] = report.title
         return out
 
     @app.post("/api/v2/browser/needs-you")
@@ -1325,10 +1363,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                     return {"commands": []}
                 for cmd in queued:
                     if cmd.id in refused:
-                        if cmd.cleanup:
-                            mailbox.settle(cmd, refused[cmd.id])
-                        else:
-                            mailbox.close_account(cmd.account_id, refused[cmd.id])
+                        mailbox.refuse(cmd, refused[cmd.id])
                 taken = mailbox.hand_out(runner_id, {cmd.id for cmd in queued if cmd.id not in refused})
                 if taken:
                     return {"commands": [cmd.payload() for cmd in taken]}
@@ -1354,9 +1389,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         return refused
 
     def check(c: sqlite3.Connection, cmd: Command) -> None:
+        if time.monotonic() >= cmd.deadline_at:
+            raise Problem("browser_timeout", "This browser command expired; open the website again.", 504)
         computer = _computer(c, cmd.runner_id)
         if computer is None or not _online(computer) or not _has_browser(computer):
-            raise _offline(computer)
+            raise Problem("browser_host_offline", "This browser session is unavailable; open the website again.", 409)
         if cmd.cleanup:
             return
         if cmd.central and host_id(c) != cmd.runner_id:
@@ -1367,10 +1404,13 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
                 picked = _wt().authorize(c, cmd.identity, cmd.tool_id, cmd.account_id)
             else:
                 picked = _wt().picked_account(c, cmd.identity, cmd.tool_id, cmd.account_id)
+                if not cmd.central and session_place(c, picked).runner_id != cmd.runner_id:
+                    raise Problem("browser_host_offline", "This browser session moved; open the website again.", 409)
             if list(picked["sites"]) != cmd.sites or (picked["central_only"] and not cmd.central):
                 raise Problem("no_account", "This website changed; open it again before continuing.", 403)
         if (
             not cmd.central
+            and cmd.attempt_id
             and not c.execute(
                 "SELECT 1 FROM attempts WHERE id=? AND runner_id=? AND state IN ('leased','running') AND lease_until>?",
                 (cmd.attempt_id, cmd.runner_id, H.now()),
@@ -1386,10 +1426,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     async def still_allowed(cmd: Command) -> None:
         refused = await asyncio.to_thread(check_one, cmd)
         if refused is not None:
-            if cmd.cleanup:
-                mailbox.settle(cmd, refused)
-            else:
-                mailbox.close_account(cmd.account_id, refused)
+            mailbox.refuse(cmd, refused)
             raise refused
 
     def delivered(request: Request, cid: str) -> Command:
@@ -1415,7 +1452,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         await still_allowed(cmd)
         if body.image is not None and (_b64(body.image) or b"")[:2] != b"\xff\xd8":
             body = body.model_copy(update={"image": None, "ok": False, "error": "screenshot_failed"})
-        mailbox.settle(cmd, mailbox.scrub_report(cmd.account_id, body))
+        mailbox.settle(cmd, mailbox.scrub_report(cmd.account_id, body, cmd.value))
         return {"ok": True}
 
     @app.post("/api/v2/runner-browser-commands/{cid}/file")
@@ -1447,31 +1484,38 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         with read() as c:
             return _wt().picked_account(c, who, tool_id, account_id)
 
-    def on_host(picked: Any) -> Place:
+    def view_place(picked: Any) -> Place:
         with read() as c:
+            try:
+                return session_place(c, picked)
+            except Problem:
+                pass
             return central(c)
 
     @app.post(base)
     async def browser_open(request: Request, tool_id: str, account_id: str, body: BrowserOpen) -> Any:
-        """Open, or wake, this account's browser on the browser host for the person's live view."""
+        """Wake an existing session for the person's live view, or open one on the browser host."""
         who = request.state.identity
         loop = mailbox.bind()
         picked = await asyncio.to_thread(viewer, request, tool_id, account_id)
-        spot = await asyncio.to_thread(on_host, picked)
+        spot = await asyncio.to_thread(view_place, picked)
         facts = mailbox.facts(account_id)
         sites = list(picked["sites"])
-        url = facts.url if facts.url and _wt().site_matches(sites, facts.url) else first_url(sites)
+        args = {} if facts.runner_id == spot.runner_id else {"url": first_url(sites)}
         by = await asyncio.to_thread(lambda: _with_read(lambda c: who_of(c, who.actor)))
-        cmd = _new(loop, spot, picked, "open", {"url": url}, by=by, identity=who)
+        cmd = _new(loop, spot, picked, "open", args, by=by, identity=who)
         mailbox.enqueue(cmd)
         report = await wait_reply(request, cmd, REPLY_WAIT)
         mailbox.note(cmd, report)
-        await asyncio.to_thread(log, picked, who, "open", page_of(report.url or url), "central")
+        where = "central" if spot.central else "own"
+        await asyncio.to_thread(
+            log, picked, who, "open", page_of(report.url or facts.url or args.get("url", "")), where
+        )
         with mailbox.lock:
             frame = mailbox.frames.get(account_id)
             if frame:
                 frame.issued = 0.0
-        return {"ok": True, "where": "central"}
+        return {"ok": True, "where": where}
 
     def _with_read(fn: Callable[[sqlite3.Connection], Any]) -> Any:
         with read() as c:
@@ -1486,11 +1530,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         },
     )
     async def browser_frame(request: Request, tool_id: str, account_id: str) -> Response:
-        """The newest picture of the account's browser on the browser host (JPEG), with X-Page-Url, X-Page-Width and
+        """The newest picture of the account's browser (JPEG), with X-Page-Url, X-Page-Width and
         X-Page-Height. However many people watch, the host takes at most one screenshot a second."""
         loop = mailbox.bind()
         picked = await asyncio.to_thread(viewer, request, tool_id, account_id)
-        spot = await asyncio.to_thread(on_host, picked)
+        spot = await asyncio.to_thread(view_place, picked)
         now = time.monotonic()
         with mailbox.lock:
             mailbox.frames = {
@@ -1525,7 +1569,9 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         if pending is not None:
             began = time.perf_counter()
             try:
-                await asyncio.wait_for(asyncio.shield(pending.reply), FRAME_WAIT)
+                outcome = await asyncio.wait_for(asyncio.shield(pending.reply), FRAME_WAIT)
+                if isinstance(outcome, Problem):
+                    raise outcome
             except TimeoutError:
                 pass
             finally:
@@ -1557,7 +1603,11 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
     async def browser_control(request: Request, tool_id: str, account_id: str, body: BrowserControl) -> Any:
         """Take control of the account's browser (bots wait until it is given back, or 5 minutes idle), or give it back."""
         who = request.state.identity
-        await asyncio.to_thread(viewer, request, tool_id, account_id)
+        person(who)
+        held = mailbox.holder(account_id)
+        # Done may end the ask's viewing permission before the person gives their control back.
+        if body.take or held is None or held.actor != who.actor or not held.person:
+            await asyncio.to_thread(viewer, request, tool_id, account_id)
         if body.take:
             by = await asyncio.to_thread(lambda: _with_read(lambda c: who_of(c, who.actor)))
             mailbox.take(account_id, who.actor, by, person=True)
@@ -1594,7 +1644,7 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             verb, args = "input_scroll", {"dy": body.dy if body.dy is not None else 600}
 
         async def run() -> Any:
-            spot = await asyncio.to_thread(on_host, picked)
+            spot = await asyncio.to_thread(view_place, picked)
             cmd = _new(loop, spot, picked, verb, args, by=held.who, identity=who)
             mailbox.enqueue(cmd)
             report = await wait_reply(request, cmd, REPLY_WAIT)

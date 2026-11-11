@@ -123,6 +123,8 @@ def _split(text: str) -> tuple[str, str, int | None] | None:
         return None
     if not host or not (_is_ip(host) if _ip_like(host) else _is_host(host)):
         return None
+    if _is_ip(host):
+        host = str(ipaddress.ip_address(host))
     if port is not None and port == _DEFAULT_PORTS.get(scheme):
         port = None
     return scheme, host, port
@@ -181,7 +183,12 @@ def site_matches(sites: list[str], url: str) -> bool:
         return False
     for site in sites or ():
         own = _split(site)
-        if own is None or (scheme == "http" and not site.startswith(HTTP)) or port != own[2]:
+        if (
+            own is None
+            or own[0] not in ("", "http", "https")
+            or (scheme == "http" and own[0] != "http")
+            or port != own[2]
+        ):
             continue
         own_host = own[1]
         if not _is_ip(own_host) and "." not in own_host:
@@ -440,7 +447,7 @@ _spent: dict[str, deque[float]] = {}
 _spent_lock = threading.Lock()
 
 
-def spend(account_id: str, now: float | None = None) -> None:
+def spend(account_id: str, now: float | None = None) -> float:
     """Count one secret read of the account; 429 `slow_down` past SECRET_RATE in an hour. In memory: a restart
     forgets, which only ever allows more."""
     at = time.monotonic() if now is None else now
@@ -456,6 +463,17 @@ def spend(account_id: str, now: float | None = None) -> None:
                 retryable=True,
             )
         times.append(at)
+    return at
+
+
+def finish_spend(account_id: str, reserved: float, success: bool) -> None:
+    """Finish a fill's reservation: only a successful report starts its hourly usage window."""
+    with _spent_lock:
+        times = _spent.get(account_id)
+        if times is not None and reserved in times:
+            times.remove(reserved)
+            if success:
+                times.append(time.monotonic())
 
 
 def _login_row(c: Any, account_id: str) -> Any:
@@ -479,7 +497,9 @@ def _totp_of(c: Any, vault: Any, row: Any) -> T.Totp:
     return found
 
 
-def secret(conn: Any, vault: Any, account_id: str, field: Literal["username", "password", "code"]) -> str:
+def secret(
+    conn: Any, vault: Any, account_id: str, field: Literal["username", "password", "code"], *, charge: bool = True
+) -> str:
     """The value a fill or copy sends: the username, the password, or the current 2FA code (409 `no_2fa` when the
     account has none). A password or a code counts toward the account's hourly limit (429 `slow_down`). The caller
     checked who may use it (`pick`, `picked_account`). Never logged."""
@@ -487,11 +507,13 @@ def secret(conn: Any, vault: Any, account_id: str, field: Literal["username", "p
     if field == "username":
         return str(row["username"] or "")
     if field == "password":
-        spend(row["id"])
+        if charge:
+            spend(row["id"])
         return cast(dict[str, str], vault.open_login(conn, row))["password"]
     if field == "code":
         found = _totp_of(conn, vault, row)
-        spend(row["id"])
+        if charge:
+            spend(row["id"])
         return T.code(found)
     raise Problem("field", "Choose username, password or code for field.", 422)
 
