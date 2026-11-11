@@ -25,16 +25,17 @@ draft.
 Only a company that is not set up yet can start as the sample: the first run is unfinished and no bot is active. A
 company that is set up is left alone.
 
-- **From the welcome.** The first screen of the first run (`#/welcome`) offers **Start with a sample company**. One
-  click, by the owner, does the whole first run (`POST /api/v2/setup/sample`) and lands on the screen after Create.
+Setup does not offer it.
+
 - **At install.** `TICO_SAMPLE_COMPANY=on` in the server's environment loads it on the first start whose owner is on
   the roster, once. A restart never loads it again, and a rehearsal never loads it.
   Unset or any other value loads nothing.
+- **From the API.** `POST /api/v2/setup/sample`, by the owner, does the whole first run in one request.
 
 ## What it sets up
 
 - **Names and answers.** The first run's answers describe Sample Co, as if the owner had typed them. A team name
-  already set (`TICO_TEAM_NAME`, which the recommended install sets to Sample Co, or one saved in the welcome) is
+  already set (`TICO_TEAM_NAME`, which the recommended install sets to Sample Co, or one saved in setup) is
   kept, and the first tasks use it; with none, the team is called Sample Co.
 - **Providers.** When no AI provider is chosen yet, Claude (the default) and ChatGPT are turned on. A company that
   already chose keeps its choice, and a bot whose provider is off runs on the company's default model instead. The

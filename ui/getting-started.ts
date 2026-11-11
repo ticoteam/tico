@@ -155,8 +155,8 @@ function gsTourEnd(): void {
 
 window.gsStartTour = gsTourStart;
 window.gsBoot = function () {
-  // The first look around, once per person, never over the wizard: the owner who just created the team has Show me
-  // around on that screen (ui/app/welcome.ts), else gets it on the next visit, like someone who joins later.
+  // The first look around, once per person, never over setup: the owner who set the team up has it marked seen
+  // (ui/app/welcome.ts) and finds it in the account menu; someone who joins later gets it on their first visit.
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });

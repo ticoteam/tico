@@ -7,19 +7,20 @@ the 108 role templates does is in [Starter bots](starter-bots.md). BotOps and th
 
 Start from what your team does, not from what a bot could do.
 
-1. **Say what you do** in "About the team": what the team does, who it sells to, whether software is its product and how big it is.
-   There is no list of pains to tick and no list of tools.
-2. **Build your team chart.** Pick the groups you want, then answer one short question for each ("What kind of sales do you do
-   today?"). Tico recruits bots for that group: its head is checked, the usual ones are checked or shown, and the rest are under
-   **More**. Check what you want and watch the chart grow. Skip a group you do not need; Product and Engineering are suggested only
-   if software is your product. A big chart is safe: a role you have not recruited yet is only a Recruiting seat. It is not a bot, does nothing on its own and
-   costs nothing. Recruiting it creates a bot parked in **Needs setup**.
-   The suggestions come from Tico HQ while the **Suggestions from Tico HQ** toggle in the builder is on, which it is by default: it sends this answer and your team description,
-   customer type, software answer, group, catalog version and, when enabled, install id. See [PRIVACY.md](../PRIVACY.md) for the payload
-   and retention. Switch it off to use local suggestions.
-3. **Edit before you create.** On the finished chart, click a bot to rename it, choose who it reports to (each group's bots report
-   to its head, and the heads to you), or remove it. To have one human's mail sorted and replies drafted, switch on the message bot
-   and choose whose mailbox it reads. The four **Built-in** bots are Assistant, BotOps, Librarian and Strategy Owner; Inbox Manager appears under **Message bots**; switched on, it is made as a bot linked to its mailbox, not a seat. Nothing exists until **Create my team**: then the four built-in bots exist and every other role you picked is a Recruiting seat.
+1. **Say what you are building.** The website and one line. Setup drafts your [strategy](strategy.md) from them in the
+   background; confirm it on the Strategy page when you are ready.
+2. **Start from the default team.** Setup shows it one team at a time, each team's top seat first and the seats under it
+   after it. Switch off a team you do not need. A big chart is safe: a role you have not recruited yet is only a
+   Recruiting seat. It is not a bot, does nothing on its own and costs nothing. Recruiting it creates a bot parked in
+   **Needs setup**. The built-in bots (Assistant, BotOps, Librarian and Strategy Owner) are always made.
+3. **Change it if you want to.** **Change** opens the team builder: pick the groups you want, answer one short question for
+   each ("What kind of sales do you do today?"), and Tico recruits bots for that group: its head is checked, the usual ones
+   are checked or shown, and the rest are under **More**. On the finished chart, click a bot to rename it, choose who it
+   reports to, or remove it; to have one human's mail sorted and replies drafted, switch on the message bot and choose
+   whose mailbox it reads. The suggestions come from Tico HQ while the **Suggestions from Tico HQ** toggle in the builder is
+   on, which it is by default: it sends this answer and your team description, customer type, software answer, group,
+   catalog version and, when enabled, install id. See [PRIVACY.md](../PRIVACY.md) for the payload and retention. Switch it
+   off to use local suggestions. Nothing exists until **Create team**.
 4. **Connect tools when a bot asks.** Finish setup does not ask which tools you use and no bot is held back for a missing one. When you press
    **Set up** on a bot, it tells you what it needs (a mailbox, tickets, a repository, a CRM) and where to connect it.
 

@@ -86,7 +86,7 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   const finance = kept?.finance === true, welcome = kept?.welcome === true;
   root.classList.toggle('nav-finance', finance);
   root.classList.toggle('nav-welcome', welcome);
-  // Setup's own page shows only Finish setup and the team (notices.js renderOnboardingNav); a new install opens on it.
+  // Setup is a modal over the app (ui/app/welcome.ts), with no tab bar or Ask under it; a new install opens on it.
   const setup = welcome && ['', '#/', '#/welcome'].includes(hash);
   root.classList.toggle('in-setup', setup);
   // Ask's row is away on the Assistant page and in setup (ui/app/ask-panel.ts askSync keeps the mark after).

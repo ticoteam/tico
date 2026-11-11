@@ -184,12 +184,12 @@ function renderFeedbackAsk() {
   };
 }
 // "Finish setup" tops the nav while the owner has not finished setup, and disappears the
-// moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
-// pages and What's new are not shown until setup is done: a new install has nothing there yet (html.in-setup,
-// ui/styles/sidebar.css). Until the config is read, both stay as ui/theme.ts marked them from this browser's last
-// answer; the in-setup mark waits for the first route() too, since a new install's boot sends it to the wizard after
-// its config is read. route() marks it before Ask's button syncs, so a tap made before /me never opens Ask over the
-// wizard, and a change here syncs Ask (ask-panel.js askAway).
+// moment the server stops asking for one. Everyone else never sees it. Setup is a modal over the whole app
+// (ui/app/welcome.ts); while it is open the phone's tab bar and Ask's button stay away (html.in-setup). Until the
+// config is read, both stay as ui/theme.ts marked them from this browser's last answer; the in-setup mark waits for
+// the first route() too, since a new install's boot sends it to setup after its config is read. route() marks it
+// before Ask's button syncs, so a tap made before /me never opens Ask over setup, and a change here syncs Ask
+// (ask-panel.js askAway).
 function setupMark() {
   if (!CONFIG_READ || !LAST_ROUTE) return;
   const setup = !!S.config.onboarding_needed && S.route === WELCOME, root = document.documentElement;

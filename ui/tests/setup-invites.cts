@@ -1,8 +1,8 @@
 // Invites and a failed import (bot-lifecycle-spec.md acceptance tests 2 and 3). Settings -> Humans: "Send invite" on a
 // roster row and Invite on each person the setup's company file names post once, and a refusal from Tico's sign-in mail
 // stays on screen in words; a sent one reads "Invited". "Create password" shows only when the issuer makes accounts,
-// shows the password once in a dialog and clears it on close. The welcome says a chosen chart that failed to import was not
-// replaced by a sample team. Fixtures only, no network.
+// shows the password once in a dialog and clears it on close. On a company already set up, a company file that failed
+// to import is one line in setup with Dismiss. Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -179,18 +179,16 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     await dialog.waitFor({state: 'hidden'});
     await dialog.locator('[data-made-password]').waitFor({state: 'detached'});      // not left in the page
 
-    // A company file that could not be imported at install: the welcome says so and that no sample team replaced it.
-    config = {...CONFIG, onboarding_needed: true};
-    record = {...record, completed: null, needed: true, company_import: null,
-      company_import_failed: {at: '2026-10-24T08:00:00Z', reason: 'The company file is not valid YAML (line 3).'}};
+    // A company file that failed on a company already set up: setup's last step says so in one line, with Dismiss as the
+    // way out (Health links there); a new company's failure is onboarding.cts's.
+    record = {...record, company_import_failed: {at: '2026-10-24T08:00:00Z', reason: 'The company file is not valid YAML (line 3).'}};
     const welcome = await context.newPage();
     welcome.on('pageerror', e => errors.push(e.message));
-    await welcome.goto('https://tico-ui.test/');
+    await welcome.goto('https://tico-ui.test/#/welcome');
     const failed = welcome.locator('#onb-import-failed');
     await failed.waitFor();
     assert.equal(await failed.getAttribute('role'), 'alert');
-    assert.match(await failed.innerText(), /Your chosen org chart wasn't imported.*not valid YAML \(line 3\).*No sample team was set up in its place/s);
-    // Dismiss is the way out when the owner won't import it again: the alert goes.
+    assert.match(await failed.innerText(), /not valid YAML \(line 3\)/);
     await failed.locator('#onb-import-failed-dismiss').click();
     await failed.waitFor({state: 'detached'});
     assert.deepEqual(calls.pop(), ['dismiss-import-failure']);

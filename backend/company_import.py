@@ -800,23 +800,26 @@ def finish_new_company(onboarding, c, who, seats, made, teams):
     return True
 
 
-def default_chart(onboarding, c, home):
+def default_chart(onboarding, c, home, every_team=False):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
     install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
-    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
-    Finance Owner's seat is filled by the Finance Owner, as on import."""
+    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`), and a team
+    setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all).
+    The Finance Owner's seat is filled by the Finance Owner, as on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
     record = O.load(c)
     display = O.display_names(onboarding.settings, record)
     no_software = record["answers"].get("software_product") == "no"
+    off = set() if every_team else set(record["answers"].get("teams_off") or [])
     rows = [
         row
         for row in F.build({})["employees"]
         if row["template"] in cards
+        and row["team"] not in off
         and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
     keys = {row["id"] for row in rows}
@@ -837,6 +840,28 @@ def default_chart(onboarding, c, home):
             **({"fills": built_in} if built_in else {}),
         }
     return seats
+
+
+def default_teams(onboarding, c, home):
+    """The default chart by team, for setup's Your team step: each team's name, whether it is on, and its seats in
+    chart order (live: a bot works from day one; else a Recruiting seat), each with the seat it reports to inside the
+    team (None for the team's top seats), so the step draws the chart's own shape. Every team is listed, the
+    switched-off ones as off."""
+    off = set(O.load(c)["answers"].get("teams_off") or [])
+    chart = default_chart(onboarding, c, home, every_team=True)
+    teams = {}
+    for key, seat in chart.items():
+        team = teams.setdefault(seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "roles": []})
+        boss = chart.get(seat["reports_to"])
+        team["roles"].append(
+            {
+                "id": key,
+                "title": seat["title"],
+                "live": seat["live"] or bool(seat.get("fills")),
+                "reports_to": seat["reports_to"] if boss and boss["team"] == seat["team"] else None,
+            }
+        )
+    return list(teams.values())
 
 
 def add_invitee(onboarding, c, who, key, email):

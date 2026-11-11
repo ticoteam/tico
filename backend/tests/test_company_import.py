@@ -1803,6 +1803,34 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
 
 
+def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched_off(environment):
+    """Setup's Your team step reads the default chart by team from GET /api/v2/setup and switches teams off with
+    `answers.teams_off`: completing then makes no seat of a team that is off, and the rest as before. Chart-agnostic:
+    the chart's teams and titles are the chart formula's to change."""
+    api = environment()
+    view = api.get("/api/v2/setup", headers=signed_in()).json()
+    teams = view["default_chart"]
+    assert len(teams) >= 2 and all(row["on"] and row["roles"] for row in teams)
+    for row in teams:
+        ids = {role["id"] for role in row["roles"]}
+        assert all(role["reports_to"] in ids for role in row["roles"] if role["reports_to"])
+        assert any(role["reports_to"] is None for role in row["roles"]), "each team has a top seat"
+    assert view["machine"]["cloud"] is False
+    off, kept = teams[-1], teams[:-1]
+    saved = api.put("/api/v2/setup", json={"answers": {"teams_off": [off["team"]]}}, headers=signed_in())
+    assert saved.status_code == 200, saved.text
+    assert {row["team"]: row["on"] for row in saved.json()["default_chart"]}[off["team"]] is False
+    # A client that does not send it keeps it.
+    api.put("/api/v2/setup", json={"answers": {"building": "Rentals"}}, headers=signed_in())
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert done.json()["default_chart"] == []
+    titles = {r["title"] for r in rows(api, "SELECT title FROM seats")}
+    others = {role["title"] for row in kept for role in row["roles"]}
+    assert titles & others
+    assert not titles & ({role["title"] for role in off["roles"]} - others)
+
+
 def _reviewer_models(api, enabled):
     done = api.put("/api/v2/providers", json={"enabled": enabled}, headers=signed_in())
     assert done.status_code == 200, done.text

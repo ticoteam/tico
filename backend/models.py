@@ -2479,6 +2479,8 @@ class OnboardingAnswers(Contract):
     briefings: dict[Department, Annotated[str, Field(max_length=500)]] = Field(default_factory=dict, max_length=9)
     # Where the company serves (a company file's company.regions): free text, 0..12 places, each 1..60 characters.
     regions: Annotated[list[str], AfterValidator(_places_rule)] = Field(default_factory=list, max_length=12)
+    # The default chart's teams switched off on setup's Your team step, by name ("Growth"); the rest are created.
+    teams_off: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(default_factory=list, max_length=20)
 
 
 class OnboardingSelection(Contract):
