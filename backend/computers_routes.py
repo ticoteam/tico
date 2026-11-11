@@ -14,7 +14,7 @@ from . import (
     views,
 )
 from .auth import Identity, validate_identity
-from .execution import bot_repository
+from .execution import runner_repository
 from .store import H, P, Problem
 
 
@@ -131,7 +131,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 from .shared_bots import follow
 
                 value["config"] = Providers.fill(company, follow(c, row["bot"], json.loads(value.pop("config"))))
-                value["repository"] = bot_repository(c, settings, row["bot"])
+                value["repository"] = runner_repository(c, settings, row["bot"])
                 result.append(value)
             return result
 

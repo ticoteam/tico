@@ -2265,8 +2265,12 @@ def _github_app(c):
 
 def bot_repository(c, settings, bot, rows=None, app=None):
     """`owner/name` of a bot's GitHub repository, resolved the way the token route resolves it, or "".
-    The runner clones and publishes this one (runner-rs/src/fetchrepo.rs). `rows(slug)` (its
-    bot_config row with config and repo) and `app` ((the github_app row,)) when read already."""
+    `rows(slug)` (its bot_config row with config and repo) and `app` ((the github_app row,)) when read already."""
+    return _repository_of(c, settings, bot, rows, app)[0]
+
+
+def _repository_of(c, settings, bot, rows=None, app=None):
+    """(bot_repository, the bot whose repository it is: a branch's original)."""
     from .github_app import repo_of
     from .shared_bots import _json, declared, source_of
 
@@ -2278,7 +2282,18 @@ def bot_repository(c, settings, bot, rows=None, app=None):
     bot = source_of(config) or bot
     config = rows(bot) if rows is not None else c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
     app = app[0] if app is not None else _github_app(c)
-    return repo_of(config["repo"] if config else "", (app["org"] if app else "") or settings.github_owner) or ""
+    return repo_of(config["repo"] if config else "", (app["org"] if app else "") or settings.github_owner) or "", bot
+
+
+def runner_repository(c, settings, bot, rows=None, app=None):
+    """The repository a bot's computer clones the bot from and publishes its history to (runner-rs/src/fetchrepo.rs):
+    bot_repository, or "" when Tico does not use it (repositories.home): the App is installed on chosen repositories
+    and not this one, or another company made it. The bot then works from its checkout on that computer, and
+    nothing is fetched from or pushed to GitHub for it."""
+    from .repositories import bot_home
+
+    repository, owner = _repository_of(c, settings, bot, rows, app)
+    return "" if repository and bot_home(c, owner, repository) else repository
 
 
 def _reported(c, runner_id, bot):
@@ -2303,6 +2318,11 @@ def stranded(c, settings, bot, source_id, target_id):
     target = "a new cloud machine" if target_id is None else _reported(c, target_id, bot)[0]
     repository = bot_repository(c, settings, bot) or "its repository"
     label = (H.bot(c, bot) or {}).get("slug", bot)
+    if repository != "its repository" and not runner_repository(c, settings, bot):
+        return (
+            f"{label}'s history exists only on {source}: Tico does not back it up to GitHub, so {target} could not "
+            f"fetch it and the bot would stop running. It stays on {source}"
+        )
     return (
         f"{label}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
         f"it and the bot would stop running. Create it as an empty private repository on GitHub "
@@ -3769,7 +3789,7 @@ class Execution:
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,
-                    'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
+                    'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app),
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
                     **model_subscriptions.assignment_fields(c, runner, config),

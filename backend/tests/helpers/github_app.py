@@ -46,6 +46,7 @@ class FakeGitHub:
         self.selected_repositories = set()
         self.list_status = 200
         self.created_repositories = set()
+        self.taken = set()  # owner/name already on GitHub, made by someone else: creating it answers 422
         self.create_response_message = ""
         self.history = set()  # repositories that hold commits; any other answers "empty"
         self.lose_next_product_create_response = False
@@ -110,7 +111,12 @@ class FakeGitHub:
             if self.list_status != 200:
                 return httpx.Response(self.list_status)
             return httpx.Response(
-                200, json={"total_count": len(seen), "repositories": seen[(page - 1) * 100 : page * 100]}
+                200,
+                json={
+                    "total_count": len(seen),
+                    "repository_selection": self.selection,
+                    "repositories": seen[(page - 1) * 100 : page * 100],
+                },
             )
         if "/contents/" in path:
             config = self.setup_files.get(path)
@@ -187,7 +193,9 @@ class FakeGitHub:
             repository = path.split("/")[2] + "/" + body["name"]
             if self.generate_status >= 300:
                 return httpx.Response(self.generate_status, json={"message": self.create_response_message})
-            if body.get("description") == "Tico product repository" and repository in self.created_repositories:
+            if repository in self.taken or (
+                body.get("description") == "Tico product repository" and repository in self.created_repositories
+            ):
                 return httpx.Response(422, json={"message": "name already exists"})
             self.created_repositories.add(repository)
             if body.get("description") == "Tico product repository" and self.lose_next_product_create_response:
@@ -197,6 +205,8 @@ class FakeGitHub:
                 self.generate_status, json={"full_name": repository, "html_url": "https://github.com/" + repository}
             )
         if path.endswith("/generate"):
+            if body["owner"] + "/" + body["name"] in self.taken:
+                return httpx.Response(422, json={"message": "name already exists"})
             return httpx.Response(
                 self.generate_status,
                 json={

@@ -219,6 +219,9 @@ def main(argv=None):
             BS.write(c, bot, config)
             c.execute("UPDATE bot_config SET repo=?,revision=revision+1 WHERE bot=?", (repo, bot))
             H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
+            from .repositories import note_chosen
+
+            note_chosen(c, repo, store.settings.github_owner)
         report = {"bot": bot, "repo": repo, "repo_url": repo_url(repo, store.settings.github_owner)}
     elif args.command == "delete-tasks":
         from .task_delete import delete_tasks

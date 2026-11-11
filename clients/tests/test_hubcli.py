@@ -1003,6 +1003,11 @@ class BotSetup(unittest.TestCase):
         self.assertTrue(any(self.workspace.iterdir()), "the local build is kept")
         self.client.github = APIError("github_not_connected", "GitHub is not connected.", 409, False)
         self.assertIn("skipped", self.remotecli.github_repository(self.client, "seo", self.workspace))
+        # Chosen repositories only, or a name someone else took: nothing is made or adopted; the bot stays here.
+        for code in ("github_selected_repos", "github_repo_taken", "github_repo_exists"):
+            self.client.github = APIError(code, "No repository was made for seo.", 409, False)
+            answer = self.remotecli.github_repository(self.client, "seo", self.workspace)
+            self.assertEqual(answer, {"skipped": "No repository was made for seo."})
 
     def test_creating_a_bot_the_server_has_not_registered_keeps_it_local(self):
         from clients.tico import APIError

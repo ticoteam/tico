@@ -879,14 +879,37 @@ class GitHubApp:
             if not installation or not token:
                 return None
             r = self._call("GET", f"/app/installations/{installation}", headers={"Authorization": "Bearer " + token})
-            permissions = r.json().get("permissions") if r.status_code < 300 else None
+            info = r.json() if r.status_code < 300 else {}
+            permissions = info.get("permissions") if isinstance(info, dict) else None
         except (Problem, ValueError, jwt.PyJWTError):
             return None
+        if info.get("repository_selection") in ("all", "selected"):
+            with self.lock:
+                self.live["selection"] = info["repository_selection"]
         if not isinstance(permissions, dict):
             return None
         with self.lock:
             self.live["permissions"] = (time.time() + LIVE_TTL, permissions)
         return permissions
+
+    def installation_selection(self, refresh=True):
+        """What the App is installed on: "all", "selected", or "" when unknown. GitHub's answer when it gives one (and
+        remembered for repositories.home), else the last one remembered. `refresh` False uses the answer the last
+        live_permissions call got. Called holding no transaction."""
+        from .repositories import save_selection, selection
+
+        if refresh:
+            with self.lock:
+                self.live.pop("selection", None)
+            self.live_permissions(refresh=True)
+        with self.lock:
+            live = self.live.get("selection")
+        with self.store.read() as c:
+            stored = selection(c)
+        if live and live != stored:
+            with self.store.transaction() as c:
+                save_selection(c, live)
+        return live or stored
 
     def checks_write_accepted(self):
         """Whether the installation reports Checks as read and write now (CHECKS_WITHHELD says what to do when not)."""
@@ -1306,6 +1329,17 @@ class GitHubApp:
             slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)
         personal = account_kind(row) == PERSONAL
         ready = self.can_create_repos(refresh=True, empty=empty)
+        if self.installation_selection(refresh=False) == "selected":
+            # GitHub does not add a repository the App makes to an installation on chosen repositories, so it could
+            # never reach it: nothing is made, and the bot works from its computer (repositories.home).
+            raise Problem(
+                "github_selected_repos",
+                f"No repository was made for {slug}: the GitHub App is installed on chosen repositories only, so it "
+                f"could not reach {row['org']}/{name}. {slug} works from its computer as usual; its history is not "
+                "backed up to GitHub. Nobody needs to act. To back bot history up, install the App on all "
+                "repositories, or make the repository and add it to the App's repositories on GitHub.",
+                409,
+            )
         user = None
         if ready and personal and empty:
             try:
@@ -1361,9 +1395,7 @@ class GitHubApp:
                     json=body,
                 )
             if r.status_code == 422:
-                raise Problem(
-                    "github_repo_exists", f"{row['org']}/{name} already exists or the name is not allowed", 409
-                )
+                return self._existing(row, name, slug, empty=True)
             if r.status_code >= 300:
                 raise Problem(
                     "github_create_failed",
@@ -1372,10 +1404,11 @@ class GitHubApp:
                     502,
                 )
             data = r.json()
-            from .repositories import reachable
+            from .repositories import MADE, note_repository, reachable
 
             with self.store.transaction() as c:
                 reachable(c, [data.get("full_name") or f"{row['org']}/{name}"])
+                note_repository(c, MADE, data.get("full_name") or f"{row['org']}/{name}")
             return {
                 "repository": data.get("full_name") or f"{row['org']}/{name}",
                 "html_url": data.get("html_url", ""),
@@ -1396,7 +1429,7 @@ class GitHubApp:
             },
         )
         if r.status_code == 422:
-            raise Problem("github_repo_exists", f"{row['org']}/{name} already exists or the name is not allowed", 409)
+            return self._existing(row, name, slug)
         if r.status_code >= 300:
             raise Problem(
                 "github_create_failed",
@@ -1405,15 +1438,44 @@ class GitHubApp:
                 502,
             )
         data = r.json()
-        from .repositories import reachable
+        from .repositories import MADE, note_repository, reachable
 
         with self.store.transaction() as c:
             reachable(c, [data.get("full_name") or f"{row['org']}/{name}"])
+            note_repository(c, MADE, data.get("full_name") or f"{row['org']}/{name}")
         return {
             "repository": data.get("full_name") or f"{row['org']}/{name}",
             "html_url": data.get("html_url", ""),
             "note": "If the app is installed on selected repositories only, add this repository to the installation.",
         }
+
+    def _existing(self, row, name, slug, empty=False):
+        """GitHub already has `name`. This company's own (an earlier create of it, or one a person pointed the bot at) is
+        the answer a retry wants. Anyone else's is never taken over: it is remembered as not this company's, so no
+        token, fetch or push uses it (repositories.home), and the bot keeps working from its computer."""
+        from .repositories import TAKEN, made_here, note_repository
+
+        repository = f"{row['org']}/{name}"
+        with self.store.read() as c:
+            ours = made_here(c, repository)
+        if ours:
+            return {
+                "repository": repository,
+                "html_url": "https://github.com/" + repository,
+                **({"empty": True} if empty else {}),
+                "existing": True,
+                "note": "Tico made this repository before; nothing new was made.",
+            }
+        with self.store.transaction() as c:
+            note_repository(c, TAKEN, repository)
+        raise Problem(
+            "github_repo_taken",
+            f"No repository was made for {slug}: {repository} already exists on GitHub and this company did not make "
+            f"it, so Tico leaves it alone and never pushes there. {slug} works from its computer as usual; its "
+            "history is not backed up to GitHub. If that repository is this company's, point the bot at it in "
+            "Settings > Bots; if it is another company's, connect a GitHub organization of your own.",
+            409,
+        )
 
     def product_repo_capability(self):
         """Report the live installation capability; a saved setup choice is not proof of permission."""
@@ -2182,6 +2244,11 @@ def install_github_app(app, settings, store):
             reads = R.Reads(c, [body.bot])
             grants = R.access(c, body.bot, row['org'], reads=reads)['effective']
             missing = reads.missing
+            # Its own repository only when this company may use it: one the App cannot reach (installed on chosen
+            # repositories) or another company's is left out, and the bot works from its computer (R.home).
+            homeless = R.bot_home(c, source, repo)
+            if homeless:
+                grants = [g for g in grants if g['full_name'].lower() != repo.lower()]
             extra, runs = botops_extra_repos(c, who) if body.bot == BOTOPS else (set(), [])
             if extra:
                 # The server's token cache is keyed on the exact repository set, so a narrower run never gets this one.
@@ -2194,12 +2261,25 @@ def install_github_app(app, settings, store):
                         and name.lower() not in have
                         and name.split("/")[0].lower() == row["org"].lower()
                         and name.lower() not in missing
+                        and not R.bot_home(c, other["bot"], name)
                     ):
                         have.add(name.lower())
                         grants.append({'full_name': name, 'access': 'write'})
             if who.attempt_id and task_privacy.private_meeting_run(c, who.attempt_id):
                 # A private meeting's turn reads its repositories and pushes to none (task_privacy.PRIVATE_MEETING_WRITES).
                 grants = [{'full_name': g['full_name'], 'access': 'read'} for g in grants]
+            if homeless and not grants:
+                # Nothing on GitHub for this bot: no token, and no refusal for its computer to report every turn.
+                return {
+                    "configured": True,
+                    "token": "",
+                    "expires_at": None,
+                    "repository": "",
+                    "repositories": [],
+                    "tokens": [],
+                    "hold": body.bot != BOTOPS,
+                    "history": R.HOME_WORDS[homeless],
+                }
         issuer = reviewer.for_bot(body.bot)
         repos = [r['full_name'] for r in grants]
         write_repos = [r['full_name'] for r in grants if r['access'] == 'write']
@@ -2424,8 +2504,10 @@ def install_github_app(app, settings, store):
             "configured": True,
             "token": value,
             "expires_at": expires,
-            "repository": repo,
+            # The runner publishes the bot's history to this one (git_credentials.publish_history): none when withheld.
+            "repository": "" if homeless else repo,
             "repositories": repos,
+            **({"history": R.HOME_WORDS[homeless]} if homeless else {}),
             "tokens": response_tokens,
             "hold": body.bot != BOTOPS,
             **{raised.answer: withheld[raised] for raised in RAISES if raised in withheld},
@@ -2556,10 +2638,16 @@ def install_github_app(app, settings, store):
         try:
             result = service.create_repo(slug, template, empty=body.empty)
         except Problem as problem:
-            if problem.code not in ("github_permission_missing", "github_user_token"):
+            if problem.code not in (
+                "github_permission_missing",
+                "github_user_token",
+                "github_selected_repos",
+                "github_repo_taken",
+            ):
                 raise
             # A person must act: the refusal names both fixes. The bot keeps its local build; BotOps asks again
-            # once either is done.
+            # once either is done. With the App on chosen repositories, or the name another company's, nobody need
+            # act: the bot keeps its local build, and its first placement is still where it was built.
             if builder:
                 with store.transaction() as c:
                     built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
@@ -2567,13 +2655,14 @@ def install_github_app(app, settings, store):
         with store.transaction() as c:
             if builder:
                 built_on.remember(c, (H.resolve_bot(c, slug) or {}).get("id", slug), builder)
-            H.event(
-                c,
-                who.actor,
-                "github.repo_created",
-                result["repository"],
-                {"empty": True} if body.empty else {"template": template},
-            )
+            if not result.get("existing"):
+                H.event(
+                    c,
+                    who.actor,
+                    "github.repo_created",
+                    result["repository"],
+                    {"empty": True} if body.empty else {"template": template},
+                )
         return result
 
     def bot_created(c, who, result):

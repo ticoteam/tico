@@ -67,7 +67,7 @@ from .observability import Observability, route as error_route
 from .execution import (
     AWAKE_GAP,
     Execution,
-    bot_repository,
+    runner_repository,
     flag_cut,
     reset_bot_sessions,
 )
@@ -4883,7 +4883,7 @@ def create_app(settings=None):
         with store.read() as c:
             if not built_on.computer(c, bot):
                 return None
-            repository = bot_repository(c, settings, bot)
+            repository = runner_repository(c, settings, bot)  # "" when Tico does not use it: history is only there
         service = getattr(app.state, "github_app", None)
         return service.repository_history(repository) if service and repository else None
 
