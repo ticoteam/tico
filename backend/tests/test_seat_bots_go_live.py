@@ -117,6 +117,49 @@ def test_every_seat_bot_goes_live_by_itself_once_its_computer_has_the_repository
     assert work and work["task"]["title"] == "Set yourself up", work
 
 
+def test_botops_building_a_seat_bot_without_its_slug_gets_that_bot_and_hires_no_second_one(environment):
+    """Tico Team on rc.7: BotOps ran `tico bot create --template growth-manager --name "Growth Manager"` on the Growth
+    Manager's own "Set up" task, without the slug. The server picked `growth-manager-2`, made a second bot with the
+    template's three routines, and BotOps archived it 14 seconds later. The bot the task is for answers instead; the
+    task says its slug is registered; and filing the tasks while BotOps had not started recorded no refusal."""
+    api, computer, seats = _company(environment)
+    assert not rows(api, "SELECT 1 FROM events WHERE action='refused'") and not rows(api, "SELECT 1 FROM refusals")
+    attempt = _claim(api, computer, "botops")
+    task = attempt["task"]["id"]
+    bot, slug = next((bot, slug) for bot, (slug, setup) in seats.items() if setup == task)
+    template = rows(api, "SELECT template FROM bot_settings WHERE bot_id=?", (bot,))[0]["template"]
+    assert f"`tico bot create {slug} --template {template}`" in attempt["task"]["body"]
+    before = rows(api, "SELECT id FROM bots ORDER BY id")
+    name = rows(api, "SELECT display_name FROM bots WHERE id=?", (bot,))[0]["display_name"]
+    made = act(api, attempt, "POST", "bots/register", {"template": template, "display_name": name})
+    assert made.status_code == 200, made.text
+    assert (made.json()["slug"], made.json()["created"], made.json()["id"]) == (slug, False, bot)
+    assert rows(api, "SELECT id FROM bots ORDER BY id") == before
+    # Another template is not that bot: it is a new one, as before.
+    other = next(t for t in ("builder", "qa-owner") if t != template)
+    new = act(api, attempt, "POST", "bots/register", {"template": other, "display_name": "Second pair of hands"})
+    assert new.status_code == 200 and new.json()["created"] and new.json()["slug"] == "second-pair-of-hands", new.text
+
+
+def test_archiving_a_bot_removes_the_routines_it_owns(environment):
+    """Tico Team on rc.7: the archived second Growth Manager left its three routines listed in Automations, off, owned
+    by a bot that was gone. Archiving deletes a bot's routines (archive_bot), and a routine is an automation it owns."""
+    api, computer, seats = _company(environment)
+    attempt = _claim(api, computer, "botops")
+    seeded = _seed(api, attempt, seats)
+    release, _ = _seat(seats, "release-owner")
+    mine = [aid for aid, bot in seeded.items() if bot == release]
+    assert len(mine) == 3
+    revision = rows(api, "SELECT revision FROM bot_config WHERE bot=?", (release,))[0]["revision"]
+    gone = api.post("/api/v2/bots/release-owner/archive", json={"expected_revision": revision}, headers=signed_in())
+    assert gone.status_code == 200, gone.text
+    left = rows(api, "SELECT id, enabled FROM automations WHERE owner_id=? AND deleted_at IS NULL", ("bot:" + release,))
+    assert left == []
+    listed = api.get("/api/v2/automations", headers=signed_in()).text
+    assert not [aid for aid in mine if aid in listed]
+    assert all(aid in listed for aid, bot in seeded.items() if bot != release)
+
+
 def test_botops_cannot_close_a_seat_bots_setup_task_until_the_bot_is_live(environment):
     """Acme case 1, bug 1: BotOps marked the Builder's setup done while it was still planned. Done is refused, naming
     the step, before go-live and while it waits for the repository, and taken once the bot is active."""

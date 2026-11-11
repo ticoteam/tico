@@ -91,6 +91,74 @@ def test_every_bot_has_one_manager_and_the_built_ins_are_the_general_managers_te
     assert lines(api) == {**first, "librarian": "product-manager"}
 
 
+def seeded_under_the_assistant(api):
+    """BotOps as the seed roster makes it (templates/environment-registry/employees.yaml): under the Assistant, set by
+    no person, before the General Manager exists."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")
+
+
+def test_a_new_company_puts_botops_under_the_general_manager_whatever_line_the_seed_gave(environment):
+    """Tico Team on rc.7: BotOps kept the seed's line to the Assistant, because only an unset line was filled. Setup lays
+    out the built-ins' lines for a new company; a line set afterwards stays through later starts."""
+    api = environment()
+    seeded_under_the_assistant(api)
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    first = lines(api)
+    owner = first["general-manager"]
+    assert owner.startswith("human:") and first["assistant"] == owner and first["finance-owner"] == owner
+    team = (
+        "botops",
+        "librarian",
+        "strategy-owner",
+        "rules-owner",
+        "design-owner",
+        "automations-owner",
+        "updates-owner",
+    )
+    assert {slug: first[slug] for slug in team} == dict.fromkeys(team, "general-manager")
+    assert [slug for slug, line in first.items() if not line] == []
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")  # a person moves it back
+        api.app.state.onboarding.complete_company(c)
+    assert lines(api) == {**first, "botops": "assistant"}
+
+
+@pytest.mark.parametrize("botops_line", ["assistant", "general-manager"])
+def test_a_company_started_on_rc7_starts_again_with_the_same_bots_and_lines(environment, monkeypatch, botops_line):
+    """A company made on rc.7 (BotOps on the seed's line, or moved under the General Manager by hand since) starts on
+    this release: no second built-in, no bot without a manager, no bot hired, no setup task filed, no line changed."""
+    from backend.onboarding import Onboarding
+
+    api = environment()
+    seeded_under_the_assistant(api)
+    with monkeypatch.context() as rc7:
+        # rc.7 filled only a line nobody had set, so the seed's line stayed.
+        fill = Onboarding.ensure_general_team
+        rc7.setattr(Onboarding, "ensure_general_team", lambda self, c, laid=(): fill(self, c))
+        assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+        machine(api)
+    assert lines(api)["botops"] == "assistant"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to=? WHERE bot='botops'", (botops_line,))
+
+    def company():
+        return (
+            lines(api),
+            rows(api, "SELECT id, slug, state FROM bots ORDER BY id"),
+            rows(api, "SELECT id, title FROM tasks WHERE owner_id='bot:botops' ORDER BY id"),  # the bots it sets up
+        )
+
+    before = company()
+    restarted = environment(seed_roster=False)
+    with restarted.app.state.store.transaction() as c:
+        restarted.app.state.onboarding.complete_company(c)
+    assert company() == before
+    assert before[0]["botops"] == botops_line and [slug for slug, line in before[0].items() if not line] == []
+    slugs = [row["slug"] for row in before[1]]
+    assert len(slugs) == len(set(slugs)) and not {"growth-manager-2", "botops-2", "general-manager-2"} & set(slugs)
+
+
 MANAGERS = (
     ("product-manager", "product-owner"),
     ("engineering-manager", "builder"),

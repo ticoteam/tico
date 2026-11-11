@@ -178,6 +178,40 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
         assert found.json()["agents"] == []
 
 
+@pytest.mark.parametrize("named,line", [(None, "general-manager"), ("assistant", "assistant")])
+def test_a_file_that_names_no_manager_for_botops_leaves_it_under_the_general_manager(environment, named, line):
+    """Tico Team on rc.7: a company file's BotOps went on the owner's line (the import staged it there) or kept the
+    seed's line to the Assistant. It is the General Manager's, like a company with no file, unless the file names its
+    manager. The seat count is the preview's: a built-in's own seat is counted with the built-ins."""
+    api = environment()
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='assistant' WHERE bot='botops'")  # as the seed roster has it
+    draft = C.from_yaml(company_text())
+    if named:
+        next(b for b in draft["bots"] if b["template"] == "botops")["reports_to"] = named
+    text = C.to_yaml(draft)
+    preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
+    assert preview.status_code == 200, preview.text
+    summary = preview.json()
+    assert {e["id"]: e["reports_to"] for e in summary["employees"]}["botops"] == line
+    done = api.post(
+        "/api/v2/onboarding/company/import",
+        json={"company_yaml": text, "fingerprint": summary["fingerprint"]},
+        headers=signed_in(),
+    )
+    assert done.status_code == 200, done.text
+    lines = {r["bot"]: r["reports_to"] for r in rows(api, "SELECT bot, reports_to FROM bot_config")}
+    assert lines["botops"] == line
+    assert lines["general-manager"] == lines["assistant"] == lines["finance-owner"] == "human:owner"
+    for slug in ("librarian", "strategy-owner", "rules-owner", "design-owner", "automations-owner", "updates-owner"):
+        assert lines[slug] == "general-manager", slug
+    assert done.json()["company_import"]["seats"] == len(summary["seats"])
+    # A later start changes no line.
+    with api.app.state.store.transaction() as c:
+        api.app.state.onboarding.complete_company(c)
+    assert {r["bot"]: r["reports_to"] for r in rows(api, "SELECT bot, reports_to FROM bot_config")} == lines
+
+
 def test_a_seat_with_no_template_yet_is_a_recruiting_seat_like_any_other_role(environment, monkeypatch):
     monkeypatch.setattr(C.draft, "OPEN_SEATS", {"controller"})  # every model seat has a template now
     api = environment()
