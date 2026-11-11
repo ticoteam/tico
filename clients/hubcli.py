@@ -4633,19 +4633,14 @@ REMOVED = [
     (("approval", "request"), ASK_INSTEAD),
     (("approval",), ANSWER_INSTEAD),
     (("approvals",), ANSWER_INSTEAD),
-    (("task", "wait"), WAIT_INSTEAD),
     (("task", "check-back"), WAIT_INSTEAD),
     (("task", "later"), WAIT_INSTEAD),
     (("task", "defer"), WAIT_INSTEAD),
     (("task", "stuck"), "Tico's own check finds a task that is stuck; tico task list lists tasks"),
     (("task", "bulk"), "a person changes many tasks at once on the Tasks page; a bot changes one task at a time"),
     (("task", "waive-qa"), MOVE_INSTEAD),
-    (("requirements",), MOVE_INSTEAD),
-    (("requirement",), MOVE_INSTEAD),
     (("task", "type"), PIPELINE_INSTEAD),
     (("task", "types"), PIPELINE_INSTEAD),
-    (("pipeline",), PIPELINE_INSTEAD),
-    (("pipeline-manager",), PIPELINE_INSTEAD),
     (
         ("growth", "idea"),
         'a growth idea is a task: tico task create --owner <bot> --title "..." --label channel:<slug>',
@@ -4669,8 +4664,6 @@ def parse(p, argv):
 
 def removed_notice(argv):
     """The one line for a command that is gone (REMOVED), or None."""
-    if hubcli_pipelines.current(argv):  # `tico pipeline list` is new; `tico pipeline --type` is gone
-        return None
     for old, instead in REMOVED:
         if tuple(argv[: len(old)]) == old:
             return f'{PROG}: "{" ".join(old)}" is gone; {instead}'
