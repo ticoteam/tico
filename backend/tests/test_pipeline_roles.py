@@ -65,7 +65,10 @@ def test_a_new_sample_company_has_no_ownerless_product_or_engineering_stage(envi
     api = _sample_company(environment)
     assert _staffing(api) == _sample_expected()
     # Nothing is added to the sample's team.
-    assert not rows(api, "SELECT id FROM bots WHERE slug IN ('product-manager','engineering-manager','reviewer-1')")
+    assert not rows(
+        api,
+        "SELECT id FROM bots WHERE slug IN ('product-pipeline-manager','engineering-pipeline-manager','reviewer-1')",
+    )
 
 
 def test_a_second_start_changes_nothing(environment):
@@ -95,14 +98,14 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
     onboarding = api.app.state.onboarding
     who = Identity("human:owner", "owner", OWNER_EMAIL)
     with api.app.state.store.transaction() as c:
-        for slug, template in (("reviewer-1", "pr-reviewer"), ("engineering-manager", "engineering-manager")):
+        for slug, template in (("reviewer-1", "pr-reviewer"), ("engineering-pipeline-manager", "pipeline-manager")):
             choice = {"template": template, "display_name": slug, "instructions": ""}
             onboarding._define(c, who, slug, choice, onboarding._template(template))
     staffed = _staffing(_restart(environment))["engineering"]
-    assert staffed[0] == "engineering-manager"
+    assert staffed[0] == "engineering-pipeline-manager"
     assert staffed[1]["engineering-review-1"] == "reviewer-1"
     # Still no second reviewer nor Release Owner: their stages go to the new manager.
-    assert staffed[1]["engineering-review-2"] == staffed[1]["engineering-merge"] == "engineering-manager"
+    assert staffed[1]["engineering-review-2"] == staffed[1]["engineering-merge"] == "engineering-pipeline-manager"
     assert all(staffed[1][stage] == "builder" for stage in BUILDER_STAGES)
 
 
@@ -111,11 +114,22 @@ def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager
     api = environment()
     done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert done.status_code == 200, done.text
-    assert rows(api, "SELECT state FROM bots WHERE slug='release-manager'")[0]["state"] == "planned"
-    engineering = _staffing(api)["engineering"]
-    assert engineering[0] == "engineering-manager"
-    assert engineering[1]["engineering-merge"] == engineering[1]["engineering-release"] == "release-manager"
-    assert engineering[1]["engineering-review-2"] == "reviewer-2"
+    assert rows(api, "SELECT state FROM bots WHERE slug='release-owner'")[0]["state"] == "planned"
+    staffing = _staffing(api)
+    assert staffing["product"] == (
+        "product-pipeline-manager",
+        dict.fromkeys(("product-ideas", "product-spec", "product-in-development", "product-validate"), "product-owner"),
+    )
+    assert staffing["engineering"] == (
+        "engineering-pipeline-manager",
+        {
+            **dict.fromkeys(BUILDER_STAGES, "builder"),
+            "engineering-review-1": "reviewer-1",
+            "engineering-review-2": "reviewer-2",
+            "engineering-merge": "release-owner",
+            "engineering-release": "release-owner",
+        },
+    )
 
 
 def test_a_product_task_handed_to_engineering_lands_on_an_owned_stage(environment):

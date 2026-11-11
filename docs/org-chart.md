@@ -153,7 +153,7 @@ profile image stored on the roster.
 | Group | Bots |
 |---|---|
 | marketing | The CMO bot and the SEO, analytics, listening and content bots. |
-| product | The Product Manager bot and everything under it. |
+| product | The Product Team Manager bot and everything under it. |
 | sales | Sales operations and the sales-process bots. |
 | engineering | The CTO bot, which monitors CI, deploys, alerts, security and cost. |
 

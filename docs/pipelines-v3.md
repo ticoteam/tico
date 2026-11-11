@@ -103,7 +103,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Manager bot gets one wake when Spec has room. It is not chased after that.
+- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that.
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
@@ -347,7 +347,7 @@ Anything else is "stopped early", and the never-stuck check wakes it again.
 
 - Entering In development files one Engineering task, linked. The owner may file more.
 - The filed task has the Product task's title and body, and a link to the Spec page at the version that was OK'd
-  (`page:<file id>@<version>`). Its requester is the Product Manager. It starts in On deck.
+  (`page:<file id>@<version>`). Its requester is the Product Owner. It starts in On deck.
 - The Product task leaves when every task filed in this visit ended Done.
 - If one ends Closed, the Product task stays and it is its owner's turn, with the reason shown.
 - **Not validated:** the owner moves the task back to In development with a reason. That is a new visit, so a new
@@ -596,29 +596,31 @@ Stages: To do → Done · Closed
   with no assignee, the Task Manager is woken to pick one.
 - **Done.** When the bot says done, it is Done. Nobody checks it. You can reopen it with a note.
 
-Roles are found by the seat's template, never by a name: Product Manager, Engineering Manager, Builder, Reviewer 1,
-Reviewer 2 and Release Owner. A software company has all six live. The person on a people OK is the first person
+Roles are found by the seat's template, never by a name: the Product and Engineering Pipeline Managers
+(`pipeline-manager`, each by its chart id), the Product Owner, Builder, Reviewer 1, Reviewer 2 and Release Owner. A
+software company has all of them live, with the QA Owner; a role nobody fills goes up to the pipeline's manager, and a
+manager nobody fills to the Task Manager, until the role's bot appears. The person on a people OK is the first person
 above the pipeline's manager bot on the org chart, else the org owner. Product and Engineering are made for a company
 that answers yes to "Do you build software?" (a blank answer is yes); an untouched pair is retired when it answers no.
 
 ### Product
 
-From an idea to something checked in production. Manager: the Product Manager bot.
+From an idea to something checked in production. Manager: the Product Pipeline Manager bot.
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Owner: Product Manager. Tasks leave by hand. The Product Manager is woken once when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
   no end date.
-- **Spec.** Owner: Product Manager. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
+- **Spec.** Owner: Product Owner. To leave: a Spec page. Jev checks it, then **a person OKs it**. Limit 2. Expected
   time: 2 days.
-- **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Manager. Expected
+- **In development.** On enter: file an Engineering task. To leave: Linked work done. Owner: Product Owner. Expected
   time: 5 days.
-- **Validate.** Owner: Product Manager. To leave: a "Checked in production" page that names the version production runs.
+- **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs.
   Jev checks it. No person. Expected time: 1 day.
 
 ### Engineering
 
-From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
+From a task to a published release. Manager: the Engineering Pipeline Manager bot. Builder is one bot, working each task in its
 own thread.
 
 Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done · Closed
@@ -918,7 +920,7 @@ Rules:
 ### S3. The ask screen
 
 Today: the requirement review queue. Today the page to review is a link. New: the page is on the screen. Today: Approve,
-Mark met, Message Product Manager twice. New: Approve and Send back.
+Mark met, Message Product Owner twice. New: Approve and Send back.
 
 **New, desktop.** An approval of a page:
 
@@ -926,7 +928,7 @@ Mark met, Message Product Manager twice. New: Approve and Send back.
 - **Left, the page itself,** shown in full: the heading "Checkout flow: spec", then "Guests can pay without making an
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
-- **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Manager · version 2"; a
+- **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
   "Notes" box; buttons "Approve" (main) and "Send back".
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
@@ -1129,13 +1131,13 @@ Today: the pipeline editor.
 **New** (the Product pipeline):
 
 - **Heading:** "Product".
-- **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Manager ▾";
+- **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Owner ▾";
   Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.1: saving a private pipeline is refused. Tasks can
   still be private one by one.)
 - **Stages,** one panel each, closed (▸) until clicked:
   - "▸ Ideas"
   - "▾ Spec", open, with buttons "↑", "↓" and "Remove" at the right. Its fields: Purpose "A spec a builder can build
-    from"; Owner "Product Manager ▾"; Tasks leave "When requirements are met ▾"; Limit "2"; Expected time "2 days"; On
+    from"; Owner "Product Owner ▾"; Tasks leave "When requirements are met ▾"; Limit "2"; Expected time "2 days"; On
     enter "Nothing ▾". Then the label "To leave", with one requirement row: "▸ Spec page", and at the right, dimmed,
     "Jev, then Ana". Then a button "+ Requirement".
   - "▸ In development"
@@ -1582,11 +1584,11 @@ Numbered in order so they can be cited (scenario 1 to 52).
 18. A task is dragged two stages ahead: every skipped requirement is recorded as pushed past, with one reason.
 19. A new org gets the presets: every work stage has an owner and at least one requirement. On deck has none. Tasks leave
     Ideas by hand.
-20. Spec empties while Ideas holds tasks: the Product Manager is woken once.
+20. Spec empties while Ideas holds tasks: the Product Owner is woken once.
 21. Close a Product task in Spec with the spec unmet: it closes at once with the reason.
 22. Close a Product task in a factory: the Done count doesn't change.
 23. Close the Engineering task of a Product task in In development: Product shows it closed with the reason, and it is
-    the Product Manager's turn.
+    the Product Owner's turn.
 24. Close a Product task that has an open Engineering task: that task closes with a note. One whose PR merged stays open.
 25. Save a pipeline where A files into B and B into A: refused with "would loop".
 26. Not validated four times in a row: four new Engineering tasks. Nothing stops a fifth.

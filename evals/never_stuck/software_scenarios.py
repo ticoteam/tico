@@ -18,7 +18,7 @@ from .fake_github import Delivery
 from .fake_jev import FAIL, NOT_MET, UNSURE
 from .scenarios import expect
 from .software import ENGINEERING, PRODUCT, SoftRig, soft_rig
-from .world import ANA, BUILDER, EM, PM, RELEASE, REVIEWER_1, REVIEWER_2, Refusal
+from .world import ANA, BUILDER, EM, PM, PPM, RELEASE, REVIEWER_1, REVIEWER_2, Refusal
 
 REF_1, REF_2 = "acme/app#1", "acme/app#2"
 
@@ -216,7 +216,7 @@ def presets(r: SoftRig) -> None:
     engineering = r.w.read(lambda c: PS.read(c, r.preset(ENGINEERING)["id"]))
     expect([s["name"] for s in product["stages"]] == list(S.PRODUCT_STAGES), f"Product: {product['stages']}")
     expect([s["name"] for s in engineering["stages"]] == list(S.ENGINEERING_STAGES), "Engineering's stages")
-    expect(product["manager_id"] == PM and engineering["manager_id"] == EM, "the managers")
+    expect(product["manager_id"] == PPM and engineering["manager_id"] == EM, "the managers")
     for record in (product, engineering):
         for stage in record["stages"]:
             expect(stage["owner"], f"{stage['name']} has no owner")

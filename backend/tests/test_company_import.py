@@ -1423,10 +1423,10 @@ def test_the_places_a_company_serves_reach_botops_and_the_librarian_only_when_gi
 # (title, template, the title of the seat it reports to or "" for the owner, live, team). A live seat is made as a bot
 # that fills it; the Engineering Pipeline Manager is a live seat, and the Growth one a plain seat.
 LIVE_SEATS = (
-    ("Engineering Manager", "engineering-manager", "", False, "Engineering"),
-    ("Lead Builder", "builder", "Engineering Manager", True, "Engineering"),
+    ("Engineering Team Manager", "engineering-team-manager", "", False, "Engineering"),
+    ("Lead Builder", "builder", "Engineering Team Manager", True, "Engineering"),
     ("Code Reviewer", "pr-reviewer", "Lead Builder", True, "Engineering"),
-    ("Engineering Pipeline Manager", "pipeline", "Engineering Manager", True, "Engineering"),
+    ("Engineering Pipeline Manager", "pipeline", "Engineering Team Manager", True, "Engineering"),
     ("Growth Experiments Pipeline Manager", "pipeline", "", False, "Growth"),
 )
 
@@ -1530,8 +1530,24 @@ def test_a_live_seat_whose_template_Tico_lacks_is_refused_in_the_preview(environ
 
 
 # ------------------------------------------------------------------ the default chart, on every way a company starts
-# The six roles the Product and Engineering pipelines name (D2); QA Owner is a seat that starts open (D4).
-LIVE_DEFAULT = ("product-manager", "engineering-manager", "builder", "reviewer-1", "reviewer-2", "release-manager")
+# The bots a new company starts with: every default pipeline's manager, the Product and Engineering stage owners, the
+# QA Owner, and the Legal Owner, who runs Legal.
+LIVE_DEFAULT = (
+    "product-pipeline-manager",
+    "product-owner",
+    "engineering-pipeline-manager",
+    "builder",
+    "reviewer-1",
+    "reviewer-2",
+    "qa-owner",
+    "release-owner",
+    "growth-experiments-pipeline-manager",
+    "lead-pipeline-manager",
+    "opportunity-pipeline-manager",
+    "success-experiments-pipeline-manager",
+    "customer-pipeline-manager",
+    "legal-owner",
+)
 
 
 def default_chart_text():
@@ -1574,9 +1590,15 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     ids = bot_ids(api)
     assert set(LIVE_DEFAULT) <= set(ids)
     seats = {r["title"]: r for r in rows(api, "SELECT id,title,filled_by,closed_at FROM seats")}
-    assert seats["QA Owner"]["closed_at"] is None and not seats["QA Owner"]["filled_by"]
-    assert seats["Release Owner"]["filled_by"] == ids["release-manager"]
-    assert not {"Product Team Manager", "Engineering Team Manager", "Product Owner", "Release Owner"} & set(seats)
+    for title, slug in (
+        ("QA Owner", "qa-owner"),
+        ("Release Owner", "release-owner"),
+        ("Product Owner", "product-owner"),
+    ):
+        assert seats[title]["filled_by"] == ids[slug], title
+    # The Team Managers are seats to fill; nothing is a Product or Engineering Manager.
+    assert seats["Product Team Manager"]["closed_at"] is None and not seats["Product Team Manager"]["filled_by"]
+    assert not {"Product Manager", "Engineering Manager", "Release Manager"} & set(seats)
     before = (len(rows(api, "SELECT id FROM seats")), len(ids))
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text

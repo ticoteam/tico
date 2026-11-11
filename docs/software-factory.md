@@ -14,8 +14,8 @@ those stages.
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Product Manager | `product-manager` | Owns Product: writes the Spec page, files the Engineering task, checks it in production |
-| 2 | Engineering Manager | `engineering-manager` | Manages Engineering: picks up what is late or stuck and decides what happens next |
+| 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
+| 2 | Product and Engineering Pipeline Managers | `pipeline-manager` | Each manages one pipeline: picks up what is late or stuck and decides what happens next |
 | 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
 | 4 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
 | 5 | Reviewer 2 | `pr-reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
@@ -24,9 +24,10 @@ those stages.
 | 8 | Technical Writer | `docs-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
-Two managers sit above the line. **Product Manager** (`product-manager`) decides *what* to build: it triages feature
-ideas, writes the spec and acceptance tests, and keeps the roadmap. **Engineering Manager** (`engineering-manager`) decides
-*how*: it splits an approved spec into tasks, picks the Builder and sets the merge rules. A small team can
+The **Product Owner** (`segment-product-owner`) decides *what* to build: it triages feature ideas, writes the spec and
+acceptance tests, and keeps the roadmap. Each pipeline's **Pipeline Manager** (`pipeline-manager`) keeps its tasks
+moving: when one stops, it reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. The
+Product and Engineering Team Managers lead the people and bots of each team. A small team can
 let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
@@ -53,7 +54,7 @@ approval before merge.
 
 ## Rules that make it work
 
-1. **Product decides what, engineering decides how.** Feature ideas go to the Product Manager first. Bugs and small
+1. **Product decides what, engineering decides how.** Feature ideas go to the Product Owner first. Bugs and small
    changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
@@ -78,11 +79,11 @@ leaves Release once the merge is in a published release (a repo that publishes n
 
 ## Visual specs
 
-A spec can be a visual page. The product manager publishes it on the task it describes with
+A spec can be a visual page. The Product Owner publishes it on the task it describes with
 `tico page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
 Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
 A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
-`templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
+`templates/catalog/segment-product-owner/skills/build-the-spec-page/SKILL.md`.
 
 ## When Security holds a release
 
@@ -93,7 +94,7 @@ Security holds a release only for:
 - an exploitable injection or similar hole
 - a new dependency with a known critical flaw
 
-Everything else becomes a follow-up task. The Engineering Manager may release anyway, with a written reason on the
+Everything else becomes a follow-up task. The Engineering Team Manager may release anyway, with a written reason on the
 release.
 
 ## What each release carries
@@ -109,4 +110,4 @@ Nobody is asked to name a private task.
 ## After launch
 
 For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. The
-Product Manager uses that report at the next triage.
+Product Owner uses that report at the next triage.

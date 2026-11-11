@@ -67,9 +67,9 @@ def sample(api):
 
 
 # Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
-# Product or Engineering Manager, the Task Manager stands in (pipeline_settings.preset: the ladder).
+# Pipeline Manager, the Task Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
-    "onboarding": {"product": "product-manager", "engineering": "engineering-manager"},
+    "onboarding": {"product": "product-pipeline-manager", "engineering": "engineering-pipeline-manager"},
     "company_file": {"product": "task-manager", "engineering": "task-manager"},
     "sample": {"product": "task-manager", "engineering": "task-manager"},
 }
@@ -83,7 +83,7 @@ def test_a_new_company_is_complete_when_its_first_run_ends_and_a_restart_adds_no
     first_run(api)
     after_setup = whole(api)
     # No answer to "Software is the product" is yes: Product and Engineering come too. Their managers are the default
-    # chart's Product Manager and Engineering Manager where setup started them (pipeline_settings.ensure_presets).
+    # chart's Product and Engineering Pipeline Managers where setup started them (pipeline_settings.ensure_presets).
     slugs = {f"bot:{r['id']}": r["slug"] for r in rows(api, "SELECT id, slug FROM bots")}
     managers = {r["id"]: slugs.get(r["manager_id"], r["manager_id"]) for r in after_setup["managers"]}
     assert managers == {"general": "task-manager", **MANAGERS[first_run.__name__]}
