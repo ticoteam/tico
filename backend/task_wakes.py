@@ -64,6 +64,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
     if handed:
         lines.append("From earlier stages (read each before you act):")
         lines += stage_inputs.lines(conn, handed)
+        if any(entry["kind"] == "pr" and entry.get("url") for entry in handed):
+            lines.append(stage_inputs.READ_CHECKS)
         lines.append(stage_inputs.IF_MISSING)
     standings = R.standings(conn, task)
     fresh = _unreviewed(conn, task, standings)

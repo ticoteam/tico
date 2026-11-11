@@ -62,6 +62,12 @@ _SIGNOFFS = (
     "AND r.stage_id IS NOT NULL "
     "ORDER BY l.created_at, l.id, a.created_at, a.id"
 )
+# The PRs linked to a task and to the tasks it filed, in one statement however many it filed: (task, item key).
+_PR_KEYS = (
+    "SELECT tl.task_id, tl.item_key FROM task_links tl WHERE tl.source='github' AND tl.item_type='pr' "
+    "AND (tl.task_id=? OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id=?)) "
+    "ORDER BY tl.created_at, tl.id"
+)
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
     "WHERE rc.commit_sha=? AND rc.included=1 ORDER BY r.published_at, r.tag"
@@ -268,6 +274,22 @@ def of(
     return out
 
 
+def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> str | None:
+    """The one GitHub repository a task's work is in, `owner/name`: the repository of every PR linked to it and to the
+    tasks it filed that `readable(task_id)` allows. The runner sets it as the turn's GH_REPO (runner-rs/src/env.rs), so
+    a bare `gh pr checks 46` reads it from a copy with no git remote too, and the gh shim picks its token. None when no
+    PR is linked, or the PRs are in more than one repository: the wake names each PR by its link then."""
+    from .item_sources import github as G
+
+    found: dict[str, str] = {}
+    allowed: dict[str, bool] = {task_id: True}
+    for linked, key in conn.execute(_PR_KEYS, (task_id, task_id)).fetchall():
+        if allowed.setdefault(str(linked), readable(str(linked))):
+            repo = G.split_key(str(key))[0]
+            found.setdefault(repo.lower(), repo)
+    return next(iter(found.values())) if len(found) == 1 else None
+
+
 def lines(conn: "sqlite3.Connection", entries: list[Row]) -> list[str]:
     """The entries as a bot reads them in its wake: each line, with who attached a page, said done or signed off."""
     H = _h()
@@ -278,6 +300,8 @@ def lines(conn: "sqlite3.Connection", entries: list[Row]) -> list[str]:
     return out
 
 
+# Said once under the handed-on PRs: a bot made from an older template learns it here, not only from its playbook.
+READ_CHECKS = "Read a PR's checks with `gh pr checks <its link>`: the link names the repository wherever you run it."
 IF_MISSING = (
     "If something you need from an earlier stage is missing or wrong, do not say done: send the task back to the "
     'stage it comes from, `tico task move <id> "<stage>" -m "<what is missing>" --version N`.'

@@ -280,3 +280,52 @@ def test_tico_task_show_prints_a_sign_off_with_its_person():
     lines = hubtools.task_text(task, {ANA: "Ana"}).splitlines()
     at = lines.index("From earlier stages:")
     assert lines[at + 1] == f"  {SIGNED} (Ana)"
+
+
+def _link_other_pr(c, task_id, repo, number):
+    c.execute(
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
+        "VALUES (?,?,'pr',?,?,?,'github','pr',?,?)",
+        (H.new_id(), task_id, f"https://github.com/{repo}/pull/{number}", repo, number, f"{repo}#{number}", H.now()),
+    )
+
+
+def test_a_task_in_one_repository_names_it_for_gh_and_its_wake_says_how_to_read_checks(c):
+    """Acme rc.4 and rc.5: the Product Owner ran a bare `gh pr checks 46` where no git remote names the repository and
+    wrote that it could not read CI. Its turn is handed the repository (GH_REPO) and its wake says to pass the link."""
+    product, eng = _filed_engineering(c)
+    everyone = lambda _task_id: True  # noqa: E731
+    assert SI.repository(c, product, everyone) is None  # no PR yet: nothing to name
+    _move(c, eng, "engineering-build")
+    assert SI.READ_CHECKS not in _wake(c, eng, "bot:builder")
+    _link_pr(c, eng, 12, "aaa")
+    assert SI.repository(c, eng, everyone) == REPO
+    # The Product task names the repository of the work it filed, but not from a filed task its bot may not read.
+    assert SI.repository(c, product, everyone) == REPO
+    assert SI.repository(c, product, lambda _task_id: False) is None
+    _move(c, eng, "engineering-review-1")
+    assert SI.READ_CHECKS in _wake(c, eng, "bot:rev-a")
+
+    _push(c, 12, "aaa", state="merged", merged_sha="ccc111")
+    _move(c, product, "product-validate")
+    wake = _wake(c, product, "bot:pm")
+    assert f"https://github.com/{REPO}/pull/12" in wake and SI.READ_CHECKS in wake
+
+    # PRs in two repositories: no one repository to name; each PR's link is in the wake.
+    _link_other_pr(c, eng, "acme/site", 3)
+    assert SI.repository(c, product, everyone) is None
+    _link_other_pr(c, eng, REPO.upper(), 13)  # the same repository, however it is spelled, is still one
+    c.execute("DELETE FROM task_links WHERE repo='acme/site'")
+    assert SI.repository(c, product, everyone) == REPO
+
+
+def test_the_turn_is_handed_the_one_repository_its_task_is_in(api):
+    from backend.tests.helpers.api import assign, claim, post, ready, runner
+
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Ship the refund page", "body": "x"})
+    with api.app.state.store.transaction() as c:
+        _link_other_pr(c, task["id"], "acme/app", 46)
+    assert claim(api, r, "ops")["github_repository"] == "acme/app"

@@ -5147,6 +5147,7 @@ class Execution:
             else None
         )
         routine = None
+        github_repository = None
         if task:
             # The routine this task came from, so the bot knows the text is a standing
             # instruction and not a person's ask. What it says is already the task body.
@@ -5175,6 +5176,10 @@ class Execution:
             from .task_relations import for_prompt
 
             task = {**task, "relations": for_prompt(c, task["id"], lambda other: bool(other) and readable(other))}
+            from .stage_inputs import repository
+
+            # The one repository the task's work is in, for the turn's `gh` (GH_REPO, runner-rs/src/env.rs).
+            github_repository = repository(c, task["id"], lambda other: readable(H.task(c, other)))
             from .worktrees import recovery_prompt
 
             if recovery_notes := recovery_prompt(c, task, row['bot_id']):
@@ -5394,6 +5399,7 @@ class Execution:
                 "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")} if msg else msg),
                 "conversation": conversation,
                 "task": wire_task,
+                **({"github_repository": github_repository} if github_repository else {}),
                 **({"continue_thread": continue_thread} if continue_thread else {}),
                 **({"source_continuation": source} if source else {}),
                 # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).

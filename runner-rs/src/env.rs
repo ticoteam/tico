@@ -324,6 +324,13 @@ pub struct EnvContext<'a> {
     pub state_dir: &'a Path,
 }
 
+/// The task's one GitHub repository as the server names it (`github_repository`), checked as `owner/name`.
+fn task_repository(attempt: &Value) -> Option<String> {
+    attempt["github_repository"]
+        .as_str()
+        .and_then(crate::gitcred::repository_name)
+}
+
 /// The turn's environment, and the vault values it carries.
 pub async fn environment(
     ctx: &EnvContext<'_>,
@@ -528,6 +535,11 @@ pub async fn environment_with(
     ] {
         env.insert(k.to_string(), v);
     }
+    // The one repository the task's work is in (backend/stage_inputs.py repository): a bare `gh pr checks 46` reads it
+    // wherever the turn runs it, a copy with no git remote included, and the gh shim picks its token (crate::gitcred).
+    if let Some(repo) = task_repository(attempt) {
+        env.insert("GH_REPO".into(), repo);
+    }
     // The bot's own checkout folder, as recorded (crate::sessions::named_folder): a bot made with a UUID id is not in
     // bot-<HUB_BOT>, and a rename keeps its folder, so the connectors that read its manifest find it by this.
     match crate::sessions::named_folder(&attempt["config"]) {
@@ -669,6 +681,48 @@ mod tests {
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"), "{env:?}");
         assert!(!vault.names.contains("CLAUDE_CONFIG_DIR"));
         assert_eq!(env["ACME_API_KEY"], "acme-synthetic");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_task_in_one_repository_names_it_to_gh_wherever_the_turn_runs_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-env-gh-repo-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = EnvContext {
+            url: "http://hub.invalid",
+            projects_dir: &dir,
+            state_dir: &dir,
+        };
+        let turn = |attempt: Value| {
+            let ctx = &ctx;
+            async move {
+                environment_with(ctx, &attempt, &mut Vault::default(), None)
+                    .await
+                    .unwrap()
+            }
+        };
+        let env =
+            turn(serde_json::json!({"bot": "po", "token": "t", "github_repository": "Acme/web"}))
+                .await;
+        assert_eq!(env["GH_REPO"], "Acme/web");
+        // A bare `gh pr checks 46` in a copy with no remote reads that repository, and the shim picks its token.
+        let argv: Vec<String> = ["pr", "checks", "46"].map(String::from).into();
+        assert_eq!(
+            crate::gitcred::gh_repository(&argv, env.get("GH_REPO").map(String::as_str)).as_deref(),
+            Some("Acme/web")
+        );
+        // Anything that is not owner/name is never set.
+        let env = turn(
+            serde_json::json!({"bot": "po", "token": "t", "github_repository": "web; rm -rf /"}),
+        )
+        .await;
+        assert_ne!(
+            env.get("GH_REPO").map(String::as_str),
+            Some("web; rm -rf /")
+        );
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
