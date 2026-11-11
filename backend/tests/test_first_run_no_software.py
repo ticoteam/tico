@@ -10,13 +10,11 @@ from backend.maintenance_steps import check_health
 from backend.tests.helpers.sample_company import booted, environment, machine, rows, settings_for, signed_in  # noqa: F401
 
 SOFTWARE = ("product", "engineering")
-OTHER_PIPELINE_MANAGERS = (
-    "Growth Experiments Pipeline Manager",
-    "Lead Pipeline Manager",
-    "Opportunity Pipeline Manager",
-    "Success Experiments Pipeline Manager",
-    "Customer Pipeline Manager",
-)
+# The Managers of the teams every company has: each runs its team's pipelines.
+OTHER_MANAGERS = {
+    "Set up Growth Manager from the growth-manager template",
+    "Set up Success Manager from the success-manager template",
+}
 
 
 def _set_up(api, software="no", provider=True):
@@ -58,29 +56,28 @@ def test_a_company_that_makes_no_software_gets_no_product_or_engineering_seats_b
         "JOIN bot_settings s ON s.bot_id=b.id WHERE b.state<>'archived'",
     )
     assert not [b for b in bots if b["template"] in software], bots
-    # Its own pipelines' managers are set up; no Product or Engineering one.
+    # Its own teams' Managers are set up; no Product or Engineering one.
     setup = {row["title"] for row in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up % template'")}
-    others = {"Set up %s from the pipeline-manager template" % name for name in OTHER_PIPELINE_MANAGERS}
-    assert setup == others | {"Set up Legal Owner from the legal-owner template"}, setup
+    assert setup == OTHER_MANAGERS | {"Set up Legal Owner from the legal-owner template"}, setup
 
 
 @pytest.mark.parametrize("software", ["yes", ""])
 def test_a_software_company_and_one_that_did_not_say_get_the_product_and_engineering_bots(environment, software):
     """Only a "no" leaves the software seats out: a blank answer is yes (D7), and a software company starts with each
-    pipeline's manager and every Product and Engineering stage owner live, the QA Owner and the Legal Owner."""
+    team's Manager and every Product and Engineering stage owner live, the QA Owner and the Legal Owner."""
     api = environment()
     _set_up(api, software=software)
     titles = {row["title"] for row in rows(api, "SELECT title FROM tasks WHERE title LIKE 'Set up % template'")}
     assert titles == {
-        "Set up Product Pipeline Manager from the pipeline-manager template",
+        "Set up Product Manager from the product-manager template",
         "Set up Product Owner from the segment-product-owner template",
-        "Set up Engineering Pipeline Manager from the pipeline-manager template",
+        "Set up Engineering Manager from the engineering-manager template",
         "Set up Builder from the builder template",
         "Set up Reviewer 1 from the reviewer template",
         "Set up Reviewer 2 from the reviewer template",
         "Set up QA Owner from the qa-owner template",
         "Set up Release Owner from the release-owner template",
-        *("Set up %s from the pipeline-manager template" % name for name in OTHER_PIPELINE_MANAGERS),
+        *OTHER_MANAGERS,
         "Set up Legal Owner from the legal-owner template",
     }
 

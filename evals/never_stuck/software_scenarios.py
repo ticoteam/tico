@@ -716,7 +716,7 @@ def jev_unsure(r: SoftRig) -> None:
 
 @case(
     "jev-unsure-bot-first",
-    "Jev unsure of a Review page: back to the reviewer once, then the Pipeline Manager decides with why; no person",
+    "Jev unsure of a Review page: back to the reviewer once, then the pipeline's manager decides with why; no person",
 )
 def jev_unsure_bot_first(r: SoftRig) -> None:
     from backend import answers as A

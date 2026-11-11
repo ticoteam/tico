@@ -110,7 +110,7 @@ def _bens_rule_suggestion_waits_as_a_suggestion(built):
 def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     directory, settings, _rows = built
     with signed_in(settings) as api:
-        care = timeline(api, home_id(api, "bot:success-team-manager"))
+        care = timeline(api, home_id(api, "bot:success-manager"))
     held = next(m for m in CONTENT["messages"] if m.get("held"))
     assert held["say"] not in [m["body"] for m in care]
     with sqlite3.connect(settings.db_path) as db:

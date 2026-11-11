@@ -100,7 +100,7 @@ BOT_INSTALLS = {
     ],
     "calibration-redo": ["support-owner", "technical-support-engineer"],
     "release-notes-writer": ["release-notes-writer", "product-manager"],
-    "weekly-spend": ["search-ads-owner", "fpa-analyst", "growth-team-manager"],
+    "weekly-spend": ["search-ads-owner", "fpa-analyst", "growth-manager"],
 }
 PEOPLE_INSTALLS = {"refund-check": ["ben"], "weekly-spend": ["cara", "ana"], "release-notes-writer": ["eli"]}
 # (skill outside the directory, bot, uses every third day): warranty-lookup is busy enough to suggest submitting it.
@@ -230,7 +230,7 @@ def seed(b):
                 ),
             )
         # Two installs that have been staged a month and never used, so the page shows the flag.
-        for slug in ("support-quality-analyst", "growth-team-manager"):
+        for slug in ("support-quality-analyst", "growth-manager"):
             name = "refund-check" if slug == "support-quality-analyst" else "weekly-spend"
             c.execute(
                 "INSERT OR REPLACE INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",

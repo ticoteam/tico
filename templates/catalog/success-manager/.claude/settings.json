@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Read",
+      "Edit",
+      "Write",
+      "Bash(git *)",
+      "Bash(gh issue *)"
+    ],
+    "deny": [
+      "Bash(gh repo delete *)",
+      "Bash(git push --force*)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr review *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh pr close *)",
+      "Bash(gh api *)",
+      "Bash(git push -f*)"
+    ]
+  }
+}

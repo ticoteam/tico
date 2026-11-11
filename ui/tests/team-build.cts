@@ -25,7 +25,7 @@ const item = (template: string, name: string, match = '') => ({template, name, i
 const agent = (id: string, name: string, supported: boolean) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
   connect_id: supported ? id : null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''});
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
-  {role: 'Head of Engineering', pick: item('engineering-team-manager', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
+  {role: 'Head of Engineering', pick: item('engineering-manager', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
     bot: {slug: 'ana-eng-lead', name: 'Rhea', icon: ''}},
   {role: 'Security engineer', pick: item('security-engineer', 'Security Engineer', 'strong'),
     alternatives: [item('software-architect', 'Software Architect', 'good'), item('reviewer', 'PR Reviewer')], on_team: false, checked: true},

@@ -33,7 +33,7 @@ then press **Use this team**. Tico lays out exactly that chart: each role is a R
 a job description from its template card (what it owns, and the file's reason for the role) and its reporting line,
 a role under a role included (`seat:<id>`). Only the built-ins and the file's `live` seats become bots, once each: a live bot is made from its
 template, fills its seat and reports where the seat's line ends. The Finance Owner (the bookkeeper) keeps a seat on its line in the team
-its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Team Manager hired later takes it
+its file gives (Corporate in the default structure), filled by the built-in bot itself, so a Corporate Manager hired later takes it
 along. Import retries do not duplicate
 a seat, and an import cannot replace a company whose setup is complete. A file named at install
 (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts; if it cannot be read or applied,

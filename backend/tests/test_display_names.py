@@ -88,7 +88,7 @@ def test_the_person_a_task_waits_on_is_named_though_they_are_not_on_the_task(api
 
 def test_a_pipelines_manager_is_named_though_it_holds_no_stage(api):
     """Acme rc.3 bug 8: `GET /api/v2/pipelines` named only the bots that own a stage, so a manager that holds none (the
-    General Manager on General, the Pipeline Managers) was left out of `actors`."""
+    General Manager on General, a team's Manager) was left out of `actors`."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
         c.execute("UPDATE pipelines SET manager_id='bot:ops' WHERE id='general'")

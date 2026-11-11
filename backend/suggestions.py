@@ -24,7 +24,7 @@ FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}\Z")
 ROLES = {
     "botops": ("botops",),
     "goal_manager": ("strategy-owner",),
-    "engineering_lead": ("engineering-team-manager", "engineering-team-manager"),
+    "engineering_lead": ("engineering-manager", "engineering-manager"),
 }
 OUTCOMES = {"delivered", "acted", "dismissed", "expired", "condition_false"}
 # This is the whole outbound dictionary. New local facts cannot silently become outbound fields.

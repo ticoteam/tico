@@ -658,7 +658,7 @@ CONTENT = {
                         "label": "Ana in Update the Support instructions",
                         "text": "Keep the refund wording short. Customers read it on their phones.",
                         "learnable": 0.8,
-                        "scores": {"support-owner": 0.8, "success-team-manager": 0.7, "growth-team-manager": 0.2},
+                        "scores": {"support-owner": 0.8, "success-manager": 0.7, "growth-manager": 0.2},
                     }
                 ],
             },
@@ -675,7 +675,7 @@ CONTENT = {
                         "learnable": 0.95,
                         "scores": {
                             "support-owner": 0.95,
-                            "success-team-manager": 0.9,
+                            "success-manager": 0.9,
                             "escalations-manager": 0.7,
                             "reputation-manager": 0.3,
                         },
@@ -705,7 +705,7 @@ CONTENT = {
                         "label": "Ana in Get the twelve creator contracts signed",
                         "text": "Creators get the Storefront demo a week before the launch post.",
                         "learnable": 0.85,
-                        "scores": {"creators": 0.9, "growth-team-manager": 0.8, "content-owner": 0.6},
+                        "scores": {"creators": 0.9, "growth-manager": 0.8, "content-owner": 0.6},
                     },
                 ],
             },
@@ -746,7 +746,7 @@ CONTENT = {
                         "learnable": 0.8,
                         "scores": {
                             "technical-support-engineer": 0.8,
-                            "success-team-manager": 0.6,
+                            "success-manager": 0.6,
                             "escalations-manager": 0.5,
                         },
                     }
@@ -771,7 +771,7 @@ CONTENT = {
                         "label": "Ben in Draft replies for the open support tickets",
                         "text": "Send login help in this order: version check, then the reset link, then the call.",
                         "learnable": 0.85,
-                        "scores": {"success-team-manager": 0.8, "support-owner": 0.9},
+                        "scores": {"success-manager": 0.8, "support-owner": 0.9},
                     },
                 ],
                 # The technical-support-engineer bot works the correction in its packet and saves it as a working rule.

@@ -447,5 +447,47 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
                     self.assertRegex(line.lower(), r"\b(never|no)\b", f"{path.name}: {line}")
 
 
+# A Manager has reports and runs its team's pipelines; an Owner owns an area and does the work. These templates are
+# named "Manager" and lead no team: a follow-up pull request renames each and empties this list. Add none.
+MANAGERS_THAT_LEAD_NO_TEAM = {
+    "account-manager",
+    "community-manager",
+    "compliance-manager",
+    "contracts-manager",
+    "employee-experience-manager",
+    "equity-manager",
+    "escalations-manager",
+    "event-marketing-manager",
+    "fundraising-manager",
+    "general-manager",
+    "inbox-manager",
+    "investor-relations-manager",
+    "legal-operations-manager",
+    "marketing-operations-manager",
+    "office-manager",
+    "pr-manager",
+    "privacy-manager",
+    "procurement-manager",
+    "product-operations-manager",
+    "reputation-manager",
+    "sales-enablement-manager",
+    "sales-operations-manager",
+    "social-media-manager",
+    "vendor-manager",
+}
+
+
+def test_a_template_named_manager_leads_a_team():
+    named = {card["template"]: bool(card.get("lead")) for card in catalog.cards() if card["name"].endswith("Manager")}
+    assert sorted(t for t, lead in named.items() if not lead) == sorted(MANAGERS_THAT_LEAD_NO_TEAM)
+    assert {t for t, lead in named.items() if lead} >= {
+        "product-manager",
+        "engineering-manager",
+        "growth-manager",
+        "success-manager",
+        "corporate-manager",
+    }
+
+
 if __name__ == "__main__":
     unittest.main()

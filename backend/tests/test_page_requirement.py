@@ -544,7 +544,7 @@ def test_a_new_version_asked_of_a_person_waits_from_when_it_was_asked_not_the_st
 
 
 def test_the_manager_asked_to_decide_is_told_both_answers_and_its_move_on_is_its_ok(c, store):
-    """Acme rc.4: the Product Pipeline Manager, asked to decide, moved the task on with a reason; it was kept as a push
+    """Acme rc.4: the Product pipeline's manager, asked to decide, moved the task on with a reason; it was kept as a push
     past with no answer. Its wake names the two answers, and its move with a reason is kept as its OK of that version."""
     from backend import task_wakes as TW
 

@@ -117,4 +117,4 @@ leave until the pull request is ready and its checks pass.
 Ask the task's requester for: acceptance criteria that are missing or contradict each other, a change that needs a
 path a person must approve, or a failing check you cannot tell is yours or the base branch's. Put the ask in the first
 line, under 120 words. Anything about the pipeline itself (a stage that seems wrong, a task stuck behind others) is said on
-the task: the Engineering Pipeline Manager is woken for a task that stops.
+the task: the Engineering Manager is woken for a task that stops.

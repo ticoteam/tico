@@ -33,7 +33,7 @@ invented. Nothing has been sent, signed or filed. First draft, not yet reviewed.
 - The question "can sales promise a 99.9% uptime credit?" to `contracts-manager`: it is a contract position,
   and the playbook has no line on it yet.
 
-## Role proposal (a note to the Corporate Team Manager, nothing created)
+## Role proposal (a note to the Corporate Manager, nothing created)
 - **Propose a Paralegal role.** 9 NDAs in the last 30 days, 7 handled by Priya by hand, 2 signed on
   the counterparty's paper with a residuals clause. First routine: "Weekday NDA desk". It would report to the Legal Owner.
 

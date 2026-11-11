@@ -1479,7 +1479,7 @@ class Onboarding:
     def seat_repositories(self, c):
         """At startup (an update) and at the end of a first run: each bot that fills a seat and whose repository access
         nobody has chosen gets its template's (repositories.seat_default: the Builder and the Release Owner write on
-        every repository In use, the reviewers, QA Owner, Product Owner and Pipeline Managers read). A bot a person
+        every repository In use, the reviewers, QA Owner, Product Owner, Product Manager and Engineering Manager read). A bot a person
         changed, or one the company's New bots get put on All repos in use, is left as it is, so this does something
         once per bot at most. An archived bot is left alone. Audited as the system's. Returns the bots it changed."""
         from . import repositories

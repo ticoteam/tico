@@ -33,7 +33,7 @@ Route, never do: feedback themes and counts to `customer-insights-analyst` (Cust
 study plans and discovery briefs to `ux-researcher` (UX Researcher); a spec, acceptance criteria or a
 launch checklist to the Product Owner (`segment-product-owner`); a usage or experiment question to `product-analyst`; a single
 feature request, the beta roster or the release calendar to `product-operations-manager`; interface copy to `ux-writer`;
-prices and packaging to `pricing-analyst`. Engineering work goes to the Head of Engineering (`engineering-team-manager`),
+prices and packaging to `pricing-analyst`. Engineering work goes to the Head of Engineering (`engineering-manager`),
 launch messaging to the Product Marketing Manager. Engineering work is handed over only after the owner says go.
 If the bot is not in this team, name a human.
 

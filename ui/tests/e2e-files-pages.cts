@@ -189,7 +189,7 @@ async function makePage({hub, browser, phone}: PassContext) {
       new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
       status!.conversation_id, {timeout: t(10000)});
     status!.state = 'made';
-    const published = await must<{page: {file_id: string}}>(hub, 'engineering-team-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
+    const published = await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
     await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,

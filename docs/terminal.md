@@ -94,7 +94,7 @@ server checks the whole record and refuses the first problem in a sentence, and 
 refused, never overwritten (add `--version N` to pin the version you read yourself).
 
 ```sh
-tico pipeline create support --name Support --manager success-team-manager --stage Triage --stage "Doing:success-team-manager"
+tico pipeline create support --name Support --manager success-manager --stage Triage --stage "Doing:success-manager"
 tico pipeline update product --goal "Specs a builder can build from" --manager product-manager
 tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2
 tico stage update product-ideas --no-by-hand --purpose "Ideas worth a spec"

@@ -32,11 +32,11 @@ BUILT = {W1, W2, W3, W4, W5, W6}
 # Priya reports to Dana, so "everyone above you sees yours, peers don't" is checked with real people (PLAN decision 36).
 DANA, OMAR, PRIYA = "dana-test", "omar-test", "priya-test"
 LEAD, CLAUDE, OPENAI, RELEASE = "lead-test", "claude-test", "openai-test", "release-test"
-DANA_REF, OMAR_REF, PRIYA_REF, LEAD_REF = "person:dana", "person:omar", "person:priya", "bot:engineering-team-manager"
+DANA_REF, OMAR_REF, PRIYA_REF, LEAD_REF = "person:dana", "person:omar", "person:priya", "bot:engineering-manager"
 CLAUDE_REF, OPENAI_REF, RELEASE_REF = "bot:builder-claude", "bot:builder-openai", "bot:release-manager"
 DANA_ID, OMAR_ID, PRIYA_ID = "dana", "omar", "priya"
 LEAD_ID, CLAUDE_ID, OPENAI_ID, RELEASE_ID = (
-    "engineering-team-manager",
+    "engineering-manager",
     "builder-claude",
     "builder-openai",
     "release-manager",

@@ -16,7 +16,7 @@ const whoami = (page: Page) => page.evaluate(async () => (await fetch('/api/v2/m
   try {
     browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as Parameters<typeof chromium.launch>[0]);
     assert.deepEqual(Object.keys(hub.tokens).sort(),
-      ['ana', 'builder-claude', 'builder-openai', 'dana', 'engineering-team-manager', 'omar', 'priya', 'release-manager']);
+      ['ana', 'builder-claude', 'builder-openai', 'dana', 'engineering-manager', 'omar', 'priya', 'release-manager']);
 
     for (const phone of [true, false]) {
       const page = await pageAs(browser, hub, 'dana', {phone});
@@ -35,10 +35,10 @@ const whoami = (page: Page) => page.evaluate(async () => (await fetch('/api/v2/m
       }
     }
 
-    const page = await pageAs(browser, hub, 'engineering-team-manager');
+    const page = await pageAs(browser, hub, 'engineering-manager');
     try {
       const me = await whoami(page);
-      assert.equal(me.actor, 'bot:engineering-team-manager', 'the page is signed in as the Engineering Lead');
+      assert.equal(me.actor, 'bot:engineering-manager', 'the page is signed in as the Engineering Lead');
       assert.equal(me.role, 'bot');
     } finally {
       await page.context().close();

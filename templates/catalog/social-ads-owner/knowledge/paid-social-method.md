@@ -18,7 +18,7 @@ The standing rules behind Watch, every bet and every change. Thresholds are plat
 - Fewer, larger ad sets learn faster. Splitting a small budget across many ad sets multiplies the events each one needs.
 - Set a target near the average cost per result of the last 90 days, not below it. A target far below history starves delivery.
 - Budget moves go in steps. The team default is no more than 20 per cent in one step (a team rule in `knowledge/targets.md`). Read the effect two weeks later, not the next day.
-- A budget move between segments is the marketing lead's decision (`growth-team-manager`). Within a channel, the split between campaigns is the Social Ads Owner's.
+- A budget move between segments is the marketing lead's decision (`growth-manager`). Within a channel, the split between campaigns is the Social Ads Owner's.
 
 ## Diagnosing a cost per result
 

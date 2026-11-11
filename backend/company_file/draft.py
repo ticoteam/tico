@@ -41,9 +41,6 @@ RETIRED = {"bookkeeping"}
 # Every slug any release shipped must stay readable: backend/tests/fixtures/shipped_template_slugs.json records them, and
 # backend/tests/test_template_renames.py fails when a slug leaves the catalog without an entry here.
 RENAMED = {
-    # Nov 10 (v0.6.0-rc.3): the Product and Engineering Managers became the Product Owner and the team manager.
-    "engineering-manager": "engineering-team-manager",
-    "product-manager": "segment-product-owner",
     # Nov 11 (#3265, v0.6.0-rc.6): slugs match card names; a removed role goes to the template that has it now.
     "accounts-payable": "accounts-payable-specialist",
     "affiliates": "affiliates-owner",
@@ -64,7 +61,7 @@ RENAMED = {
     "docs-writer": "technical-writer",
     "email-marketing": "email-owner",
     "employee-experience": "employee-experience-manager",
-    "engineering-lead": "engineering-team-manager",
+    "engineering-lead": "engineering-manager",
     "escalations": "escalations-manager",
     "events": "event-marketing-manager",
     "feedback-analyst": "customer-insights-analyst",
@@ -80,7 +77,7 @@ RENAMED = {
     "legal-review": "contracts-manager",
     "listening": "social-media-manager",
     "logistics": "logistics-coordinator",
-    "marketing-lead": "growth-team-manager",
+    "marketing-lead": "growth-manager",
     "marketing-ops": "marketing-operations-manager",
     "meeting-notes": "project-coordinator",
     "onboarding-specialist": "customer-onboarding-specialist",
@@ -107,7 +104,7 @@ RENAMED = {
     "returns": "returns-and-refunds-specialist",
     "sales": "inbound-sales-owner",
     "sales-enablement": "sales-enablement-manager",
-    "sales-lead": "growth-team-manager",
+    "sales-lead": "growth-manager",
     "sales-ops": "sales-operations-manager",
     "sdr-research": "outbound-sales-owner",
     "security-compliance": "security-and-compliance-analyst",
@@ -115,7 +112,7 @@ RENAMED = {
     "spend-watcher": "fpa-analyst",
     "strategy-planning": "strategy-analyst",
     "support": "support-owner",
-    "support-lead": "success-team-manager",
+    "support-lead": "success-manager",
     "support-ops": "support-operations-specialist",
     "support-qa": "support-quality-analyst",
     "tax": "tax-specialist",
@@ -123,8 +120,36 @@ RENAMED = {
     "tico-counsel": "rules-owner",
     "travel": "travel-coordinator",
     "video-producer": "video-owner",
-    # Nov 11 (v0.6.0-rc.7): the Task Manager is the General Manager.
+    # Nov 11 (v0.6.0-rc.7): the Task Manager is the General Manager, and each team has one Manager where it had a Team
+    # Manager and Pipeline Managers (`fold_managers` puts a Pipeline Manager in its team's Manager; one whose team a
+    # file does not say is the General Manager, who manages every pipeline nobody else does).
     "task-manager": "general-manager",
+    "corporate-team-manager": "corporate-manager",
+    "engineering-team-manager": "engineering-manager",
+    "growth-team-manager": "growth-manager",
+    "product-team-manager": "product-manager",
+    "success-team-manager": "success-manager",
+    "pipeline-manager": "general-manager",
+}
+# Each team's Manager: the bot that leads the team and manages its pipelines. {team: (template, department, title)}.
+TEAM_MANAGERS = {
+    "product": ("product-manager", "product", "Product Manager"),
+    "engineering": ("engineering-manager", "engineering", "Engineering Manager"),
+    "growth": ("growth-manager", "marketing", "Growth Manager"),
+    "success": ("success-manager", "success", "Success Manager"),
+    "corporate": ("corporate-manager", "corporate", "Corporate Manager"),
+}
+_MANAGER_TEAMS = {row[0]: team for team, row in TEAM_MANAGERS.items()}
+_PIPELINE_MANAGER = "pipeline-manager"
+# The team of each Pipeline Manager seat an older chart had, by the pipeline in its id (`<pipeline>-pipeline-manager`).
+_PIPELINE_TEAMS = {
+    "product": "product",
+    "engineering": "engineering",
+    "growth-experiments": "growth",
+    "lead": "growth",
+    "opportunity": "growth",
+    "customer": "success",
+    "success-experiments": "success",
 }
 
 
@@ -826,6 +851,86 @@ def _unique(rows, field):
         raise DraftError("%s has two entries with the same id" % field)
 
 
+def _manager_team(row, by_id):
+    """The team a Pipeline Manager row of an older chart worked for: the team it names, else the Manager it reports to,
+    else the pipeline in its id. None when the file does not say."""
+    team = str(row.get("team") or "").strip().lower()
+    if team in TEAM_MANAGERS:
+        return team
+    above = by_id.get(row.get("reports_to"))
+    if above is not None and current(above.get("template")) in _MANAGER_TEAMS:
+        return _MANAGER_TEAMS[current(above["template"])]
+    return _PIPELINE_TEAMS.get(str(row.get("id") or "").removesuffix("-pipeline-manager"))
+
+
+def fold_managers(rows, dept="dept"):
+    """A file's roles with one Manager per team, as this release has them, and {old id: the id that has the role now}.
+
+    An older chart gave a team a Team Manager seat and a Pipeline Manager for each pipeline; now the team's Manager is
+    both. So a Team Manager row is the team's Manager, and a Pipeline Manager row folds into it: the Manager is live
+    when either was, and a line that ended at either ends at the Manager. A team with Pipeline Managers and no Team
+    Manager gets its Manager from the first of them. A row that kept the older chart's id or title takes the
+    Manager's. `dept` is the rows' department key (a draft's `dept`, a file's `department`). The rows sent are not
+    changed, and a file with no such role comes back as it was."""
+    old = {_PIPELINE_MANAGER, *(t for t in RENAMED if t.endswith("-team-manager"))}
+
+    def role(row):
+        return isinstance(row, dict) and not row.get("existing") and isinstance(row.get("template"), str)
+
+    if not any(role(row) and row["template"] in old for row in rows):
+        return rows, {}
+    rows = [dict(row) if role(row) else row for row in rows]
+    by_id = {row.get("id"): row for row in rows if role(row)}
+    managers, renamed, moved, out = {}, [], {}, []
+    for row in rows:  # the Managers a file has, under either name
+        if role(row) and current(row["template"]) in _MANAGER_TEAMS and row["template"] != _PIPELINE_MANAGER:
+            team = _MANAGER_TEAMS[current(row["template"])]
+            if row["template"] != current(row["template"]):
+                row["template"] = current(row["template"])
+                renamed.append((team, row))
+            managers.setdefault(team, row)
+    for row in rows:
+        team = _manager_team(row, by_id) if role(row) and row["template"] == _PIPELINE_MANAGER else None
+        if team is None:
+            out.append(row)
+        elif team in managers:
+            if row.get("live") is True:
+                managers[team]["live"] = True
+            moved[row.get("id")] = managers[team]
+        else:
+            row["template"] = TEAM_MANAGERS[team][0]
+            row[dept] = TEAM_MANAGERS[team][1]
+            if row.get("reports_to") == row.get("id"):
+                row.pop("reports_to")
+            managers[team] = row
+            renamed.append((team, row))
+            out.append(row)
+    taken = {row.get("id") for row in out if isinstance(row, dict)}
+    ids = {}
+    for team, row in renamed:
+        template, _, title = TEAM_MANAGERS[team]
+        if "lead" in row:
+            row["lead"] = True
+        if str(row.get("title") or "").endswith((" Team Manager", " Pipeline Manager")):
+            row["title"] = title
+        was = row.get("id")
+        if isinstance(was, str) and was.endswith(("-team-manager", "-pipeline-manager")) and template not in taken:
+            taken.add(template)
+            row["id"] = ids[was] = template
+    ids.update({was: row.get("id") for was, row in moved.items()})
+    for row in out:
+        if role(row) and row.get("reports_to") in ids:
+            row["reports_to"] = ids[row["reports_to"]]
+            if row["reports_to"] == row.get("id"):
+                row.pop("reports_to")
+    return out, ids
+
+
+def _folded_owner(goal, folded):
+    """Whether a goal's owner is a role that folded into its team's Manager (`fold_managers`)."""
+    return isinstance(goal, dict) and isinstance(goal.get("owner"), str) and goal["owner"] in folded
+
+
 def _current_bots(rows):
     """A file's roles as this release names them: a retired template's role leaves (its built-in comes with every
     install), a renamed one takes its new slug. The rows sent are not changed."""
@@ -858,6 +963,7 @@ def check(raw, snapshot=False):
         raise DraftError("rules.mode and tools.mode are defaults or custom")
     if rules["review"] not in REVIEW:
         raise DraftError("rules.review is not a review level")
+    bots, folded = fold_managers(_list(raw["bots"], "bots", LIMITS["bots"]))
     draft = {
         "step": raw["step"],
         "company": {
@@ -866,8 +972,11 @@ def check(raw, snapshot=False):
             "signals": _choices(company["signals"], "company.signals", SIGNALS),
         },
         "people": [_person(p, i) for i, p in enumerate(_list(raw["people"], "people", LIMITS["people"]))],
-        "bots": [_bot(b, i) for i, b in enumerate(_current_bots(_list(raw["bots"], "bots", LIMITS["bots"])))],
-        "goals": [_goal(g, i) for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))],
+        "bots": [_bot(b, i) for i, b in enumerate(_current_bots(bots))],
+        "goals": [
+            _goal({**g, "owner": folded.get(g["owner"], g["owner"])} if _folded_owner(g, folded) else g, i)
+            for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))
+        ],
         "rules": {
             "mode": rules["mode"],
             "never": [r for r in RULES if r in _choices(rules["never"], "rules.never", RULES)],

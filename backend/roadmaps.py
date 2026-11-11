@@ -159,7 +159,7 @@ def suggestions_receiver(c):
     for template, states in (
         ('segment-product-owner', ('active', 'planned')),
         ('product-lead', ('active',)),
-        ('product-team-manager', ('active',)),
+        ('product-manager', ('active',)),
     ):
         row = c.execute(
             f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "

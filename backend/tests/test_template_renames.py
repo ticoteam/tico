@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 from backend import company_file as C
 from backend.company_file import draft as D
@@ -112,16 +113,75 @@ def test_every_template_a_file_can_name_has_its_card():
 
 
 # ---------------------------------------------------------------------------------------------- HQ's starting charts
+def tree(saved):
+    """A chart's roles as the company gets them: each with its template, department, team, whether it starts live, and
+    the template of the role it reports to (None for the person)."""
+    templates = {b["id"]: b["template"] for b in saved["bots"]}
+    return [
+        (b["template"], b["dept"], b.get("team"), bool(b.get("live")), b["lead"], templates.get(D.manager_of(saved, b)))
+        for b in saved["bots"]
+    ]
+
+
 @pytest.mark.parametrize("name", sorted(CHARTS))
 def test_every_starting_chart_hq_hands_out_loads_in_this_release(name):
     rows = CHARTS[name]
     packed = starter.pack(employees_file(rows), starter.MAX_PACKED)  # what HQ stores for the server
     saved = starter.unpack(packed)  # what the server reads at its first start
-    assert [b["id"] for b in saved["bots"]] == [r["id"] for r in rows if r["template"] not in D.RETIRED]
     assert {b["template"] for b in saved["bots"]} <= CURRENT
-    assert {b["id"]: b["template"] for b in saved["bots"]} == {
-        r["id"]: D.current(r["template"]) for r in rows if r["template"] not in D.RETIRED
-    }
+    # Each team's Team Manager seat and its Pipeline Managers are one Manager; every other role keeps its id.
+    folded = {r["id"] for r in rows if r["template"] == "pipeline-manager" or r["template"].endswith("-team-manager")}
+    kept = [r["id"] for r in rows if r["template"] not in D.RETIRED and r["id"] not in folded]
+    managers = [b for b in saved["bots"] if b["template"] in {row[0] for row in D.TEAM_MANAGERS.values()}]
+    assert [b["id"] for b in saved["bots"] if b not in managers] == kept
+    assert (
+        sorted(b["id"] for b in managers)
+        == sorted(b["template"] for b in managers)
+        == sorted(row[0] for row in D.TEAM_MANAGERS.values())
+    )
+    assert {b["id"]: b["title"] for b in managers} == {row[0]: row[2] for row in D.TEAM_MANAGERS.values()}
+
+
+@pytest.mark.parametrize("name", sorted(name for name in CHARTS if name.startswith("0.6 ")))
+def test_hqs_chart_in_the_older_shape_gives_the_tree_a_chart_in_todays_shape_gives(name):
+    """HQ plans a new company with the chart an older release drew: a Team Manager seat to recruit, a live Pipeline
+    Manager per pipeline, and every other seat on the Team Manager's line. Read here, it is the tree this release's
+    own chart gives the same company: one live Manager per team with the team under it."""
+    golden = json.loads((Path(__file__).parent / "fixtures" / "chart_formula_golden.json").read_text())
+    case = next(case for case in golden["cases"] if case["name"] == name.split()[1])
+    theirs = starter.load(employees_file(CHARTS[name]))
+    ours = starter.load(employees_file(case["expected"]["employees"]))
+    assert tree(theirs) == tree(ours)
+    live = {b["template"] for b in theirs["bots"] if b.get("live")}
+    assert {"product-manager", "engineering-manager", "growth-manager", "success-manager"} <= live
+    assert "corporate-manager" not in live
+
+
+def test_a_pipeline_manager_with_no_team_manager_becomes_its_teams_manager_and_goals_follow():
+    rows = [
+        {"id": "lead-pipeline-manager", "template": "pipeline-manager", "title": "Lead Pipeline Manager",
+         "department": "operations", "team": "Growth", "live": True},
+        {"id": "opportunity-pipeline-manager", "template": "pipeline-manager", "title": "Opportunity Pipeline Manager",
+         "department": "operations", "team": "Growth", "live": True},
+        {"id": "seo-owner", "template": "seo-owner", "title": "SEO Owner", "department": "marketing",
+         "reports_to": "opportunity-pipeline-manager"},
+        {"id": "ops", "template": "pipeline-manager", "title": "Ops Pipeline Manager", "department": "operations"},
+    ]  # fmt: skip
+    doc = yaml.safe_load(employees_file(rows))
+    doc["goals"] = [
+        {"id": "g1", "title": "More deals", "owner": "opportunity-pipeline-manager", "measure": "Deals", "unit": "",
+         "direction": "up"}
+    ]  # fmt: skip
+    saved = starter.load(yaml.safe_dump(doc, sort_keys=False))
+    assert [(b["id"], b["template"], b["title"], b["dept"], b.get("live")) for b in saved["bots"]] == [
+        ("growth-manager", "growth-manager", "Growth Manager", "marketing", True),
+        ("seo-owner", "seo-owner", "SEO Owner", "marketing", None),
+        ("ops", "general-manager", "Ops Pipeline Manager", "operations", None),  # no team said: the General Manager
+    ]
+    assert D.manager_of(saved, saved["bots"][1]) == "growth-manager" and saved["goals"][0]["owner"] == "growth-manager"
+    # A draft saved from the setup page folds the same way.
+    again = starter.load(saved | {"bots": saved["bots"]})
+    assert [b["id"] for b in again["bots"]] == ["growth-manager", "seo-owner", "ops"]
 
 
 # ---------------------------------------------------------------------------------------------- the owner's reason

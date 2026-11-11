@@ -7,11 +7,11 @@ from backend.store import H
 from backend.tests.helpers import engine as X
 
 ANA = X.ANA
-PPM, EPM = "product-pipeline-manager", "engineering-pipeline-manager"  # the chart ids pipeline_seats finds them by
+PPM, EPM = "product-manager", "engineering-manager"
 ROLE_BOTS = {
-    PPM: "pipeline-manager",
+    PPM: "product-manager",
     "pm": "segment-product-owner",  # the Product Owner
-    EPM: "pipeline-manager",
+    EPM: "engineering-manager",
     "builder": "builder",
     "rev-b": "reviewer",
     "rev-a": "reviewer",
@@ -47,9 +47,9 @@ def _team(c):
     """The role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
     for slug, template in ROLE_BOTS.items():
         _role_bot(c, slug, template)
-    _seat(c, "Product Pipeline Manager", "pipeline-manager", PPM)
+    _seat(c, "Product Manager", "product-manager", PPM)
     _seat(c, "Product Owner", "segment-product-owner", "pm")
-    _seat(c, "Engineering Pipeline Manager", "pipeline-manager", EPM)
+    _seat(c, "Engineering Manager", "engineering-manager", EPM)
     _seat(c, "Builder", "builder", "builder")
     _seat(c, "Reviewer 2", "reviewer", "rev-b")
     _seat(c, "Reviewer 1", "reviewer", "rev-a")

@@ -58,7 +58,7 @@ onboarding:
     why: "Each reading is compared with this target."
   - ask: "Is there a format engineers like for specs, and what must be true before anything ships? (Default: a one-page core; QA on the before-release criteria, support briefed, release notes and a rollback a person can carry out.)"
     why: "Becomes the spec format and the launch readiness checklist."
-  - ask: "Who reads the weekly review, and who should I ask when my manager cannot answer? (Default: my manager, the Product Team Manager, else the owner; Mondays at 08:00.)"
+  - ask: "Who reads the weekly review, and who should I ask when my manager cannot answer? (Default: my manager, the Product Manager, else the owner; Mondays at 08:00.)"
     why: "Sets the routine's recipients and the human escalation path."
 first_routine:
   title: "Weekly segment product review"

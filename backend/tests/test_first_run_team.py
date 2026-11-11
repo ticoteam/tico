@@ -225,7 +225,7 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     departments = ["sales", "marketing", "support", "finance", "operations"]
     templates = [
         "inbound-sales-owner",
-        "growth-team-manager",
+        "growth-manager",
         "escalations-manager",
         "fpa-analyst",
         "operations-manager",

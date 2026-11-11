@@ -263,7 +263,7 @@ def test_a_bots_own_setup_done_keeps_the_summary_it_gave_when_ready(api):
 def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(api):
     seat = post(api, "seats", {"title": "Marketing lead", "description": "Runs marketing.", "reports_to": "assistant"})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE seats SET template='growth-team-manager' WHERE id=?", (seat["id"],))
+        c.execute("UPDATE seats SET template='growth-manager' WHERE id=?", (seat["id"],))
 
     def template():
         with api.app.state.store.read() as c:
@@ -279,9 +279,9 @@ def test_renaming_a_seat_to_another_role_drops_the_template_it_was_set_up_with(a
     # Only the capitals change: the same role, so the template stays.
     recased = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "MARKETING LEAD"}, headers=headers())
     assert recased.status_code == 200, recased.text
-    assert template() == "growth-team-manager"
+    assert template() == "growth-manager"
     pinned = post(api, f"seats/{seat['id']}/recruit", {})["candidates"]
-    assert [c["template"] for c in pinned] == ["growth-team-manager"]
+    assert [c["template"] for c in pinned] == ["growth-manager"]
 
     # A different role is a different job: the seat is no longer pinned to that template.
     renamed = api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Support lead"}, headers=headers())

@@ -20,9 +20,9 @@ const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
 const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
-const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-team-manager', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
-  ['local-pages', 'Local pages', 'testing', 'bot:engineering-team-manager', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
-  ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-team-manager', .15]];
+const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-manager', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
+  ['local-pages', 'Local pages', 'testing', 'bot:engineering-manager', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
+  ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-manager', .15]];
 const short = (m: string) => new Date(`${m}-15`).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'});
 const long = (m: string) => `${short(m)} ${m.slice(0, 4)}`;
 
@@ -92,7 +92,7 @@ async function seedKpis(page: Page) {
 async function seedTasks(page: Page, goalId: string) {
   const task = async (title: string, channel: string | null, end: 'done' | 'closed' | null, goal: string | null = null) => {
     const channels = channel ? [`channel:${channel}`] : [];
-    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-team-manager', ...(goal ? {goal_id: goal} : {})});
+    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-manager', ...(goal ? {goal_id: goal} : {})});
     const id = (made.task?.id || made.id)!;
     const version = async () => { const read = await ok<{task?: {version: number}; version?: number}>(page, 'GET', `tasks/${id}`); return (read.task || read).version; };
     await ok(page, 'POST', `tasks/${id}`, {version: await version(), labels: [...channels, 'growth:ideas']});

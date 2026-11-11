@@ -41,7 +41,7 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
     )
     with api.app.state.store.transaction() as c:
         for slug, boss, template in (
-            ("cpo", "human:ana", "success-team-manager"),
+            ("cpo", "human:ana", "success-manager"),
             ("ops", "cpo", "support"),
             ("finance", "cpo", None),
             ("doc-updater", "cpo", None),

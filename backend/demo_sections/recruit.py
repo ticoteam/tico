@@ -23,7 +23,7 @@ CONTENT = {
         },
         "warranty": {
             "title": "Warranty Claims",
-            "reports_to": "success-team-manager",
+            "reports_to": "success-manager",
             "days": 2.5,
             "description": "Works each warranty claim from the customer's first message: checks the unit's serial "
             "number and purchase date, decides repair, replacement or refund inside the refund limit, "
@@ -74,7 +74,7 @@ CONTENT = {
     # One hire filled from a template last week: a seat posted, then filled by the bot hired for it.
     "hire": {
         "title": "Creator Partnerships",
-        "reports_to": "growth-team-manager",
+        "reports_to": "growth-manager",
         "posted": 6.3,
         "days": 5.9,
         "bot": "creators",

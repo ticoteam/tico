@@ -22,7 +22,7 @@ SETTINGS = {
     "model": "claude-haiku-5-5",
     "reasoning_effort": "high",
     "host": "keeper",
-    "template": "engineering-team-manager",
+    "template": "engineering-manager",
     "profile": "reviewer",
     "session": "task",
     "wake_preset": "token-saver",
@@ -97,7 +97,7 @@ def test_a_declaration_reads_back_as_written_from_python_and_from_sql(tmp_path):
             assert json.loads(c.execute(BS.ONE_SQL, (bot,)).fetchone()[0]) == wanted
         row = c.execute("SELECT * FROM bot_settings WHERE bot_id='b0'").fetchone()
         assert (row["template"], row["model"], row["compact_at"], row["stateless"]) == (
-            "engineering-team-manager",
+            "engineering-manager",
             None,
             None,
             None,

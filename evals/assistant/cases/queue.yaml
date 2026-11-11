@@ -30,7 +30,7 @@
         actor: "human:dana"
         count: 11
         by_kind: {task: 7, ask: 4}
-        bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-team-manager": 1}
+        bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-manager": 1}
         items:
           - kind: task
             id: c2d3e4f5-1000-4000-8000-000000000011
@@ -39,7 +39,7 @@
             line: "Website preview deploy failing"
             missing: ["Done"]
             since: "2026-10-14T09:00:00Z"
-            task: {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:engineering-team-manager"}
+            task: {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:engineering-manager"}
           - kind: ask
             id: 2a7f0c9e-4000-4000-8000-000000000001
             task_id: b1c2d3e4-1000-4000-8000-000000000007
@@ -254,7 +254,7 @@
         actor: "human:dana"
         count: 193
         by_kind: {task: 130, ask: 63}
-        bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-team-manager": 19, "bot:release-manager": 18, "bot:reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
+        bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-manager": 19, "bot:release-manager": 18, "bot:reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
         items:
           - kind: ask
             id: 5f3e21c0-4000-4000-8000-000000000002

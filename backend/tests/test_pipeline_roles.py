@@ -67,7 +67,7 @@ def test_a_new_sample_company_has_no_ownerless_product_or_engineering_stage(envi
     # Nothing is added to the sample's team.
     assert not rows(
         api,
-        "SELECT id FROM bots WHERE slug IN ('product-pipeline-manager','engineering-pipeline-manager','reviewer-1')",
+        "SELECT id FROM bots WHERE slug IN ('product-manager','engineering-manager','reviewer-1')",
     )
 
 
@@ -98,14 +98,14 @@ def test_a_role_bot_that_appears_later_takes_its_stages_from_the_stand_in(enviro
     onboarding = api.app.state.onboarding
     who = Identity("human:owner", "owner", OWNER_EMAIL)
     with api.app.state.store.transaction() as c:
-        for slug, template in (("reviewer-1", "reviewer"), ("engineering-pipeline-manager", "pipeline-manager")):
+        for slug, template in (("reviewer-1", "reviewer"), ("engineering-manager", "engineering-manager")):
             choice = {"template": template, "display_name": slug, "instructions": ""}
             onboarding._define(c, who, slug, choice, onboarding._template(template))
     staffed = _staffing(_restart(environment))["engineering"]
-    assert staffed[0] == "engineering-pipeline-manager"
+    assert staffed[0] == "engineering-manager"
     assert staffed[1]["engineering-review-1"] == "reviewer-1"
     # Still no second reviewer nor Release Owner: their stages go to the new manager.
-    assert staffed[1]["engineering-review-2"] == staffed[1]["engineering-merge"] == "engineering-pipeline-manager"
+    assert staffed[1]["engineering-review-2"] == staffed[1]["engineering-merge"] == "engineering-manager"
     assert all(staffed[1][stage] == "builder" for stage in BUILDER_STAGES)
 
 
@@ -117,11 +117,11 @@ def test_a_new_company_on_the_default_chart_is_staffed_while_its_release_manager
     assert rows(api, "SELECT state FROM bots WHERE slug='release-owner'")[0]["state"] == "planned"
     staffing = _staffing(api)
     assert staffing["product"] == (
-        "product-pipeline-manager",
+        "product-manager",
         dict.fromkeys(("product-ideas", "product-spec", "product-in-development", "product-validate"), "product-owner"),
     )
     assert staffing["engineering"] == (
-        "engineering-pipeline-manager",
+        "engineering-manager",
         {
             **dict.fromkeys(BUILDER_STAGES, "builder"),
             "engineering-review-1": "reviewer-1",

@@ -182,7 +182,7 @@ class FakeTico:
 
 def run_at(minute):
     return {
-        "bot": "engineering-team-manager",
+        "bot": "engineering-manager",
         "started_at": f"2099-01-01T00:{minute:02}:02Z",
         "finished_at": f"2099-01-01T00:{minute:02}:50Z",
     }
@@ -197,7 +197,7 @@ def bot_asks_then_finishes(fake, row, event):
                 "requirement_id": "a1",
                 "kind": "answer",
                 "who": "human:owner",
-                "asked_by": "bot:engineering-team-manager",
+                "asked_by": "bot:engineering-manager",
                 "choices": None,
                 "met": False,
             }
@@ -205,9 +205,9 @@ def bot_asks_then_finishes(fake, row, event):
         row["task"]["turn"] = {"state": "person", "who": "human:owner"}
     elif event == "answered":
         row["runs"].append(run_at(2))
-        row["files"].append({"name": "engineering-summary.md", "versions": [{"by": "bot:engineering-team-manager"}]})
+        row["files"].append({"name": "engineering-summary.md", "versions": [{"by": "bot:engineering-manager"}]})
         row["messages"].append(
-            message("b1", "bot:engineering-team-manager", "Attached: 5 shipped, nothing broke.", "2099-01-01T00:02:30Z")
+            message("b1", "bot:engineering-manager", "Attached: 5 shipped, nothing broke.", "2099-01-01T00:02:30Z")
         )
         row["task"]["status"] = "done"
 
@@ -217,7 +217,7 @@ def bot_gives_up(fake, row, event):
     row["messages"].append(
         message(
             "b1",
-            "bot:engineering-team-manager",
+            "bot:engineering-manager",
             "I could not read the runners (see harness logs).",
             "2099-01-01T00:02:00Z",
         )

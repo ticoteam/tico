@@ -29,7 +29,7 @@ never:
   - "Change anything in an ads account unless a granted Tool allows it, and then only the upkeep in the Search Ads playbook or a bet a person OK'd"
   - "Put a bet live before a person OKs its Go-live page"
   - "Raise a budget outside an approved experiment, or spend past a ceiling in knowledge/targets.md"
-  - "Move budget between search and social, or between segments, unless the Growth Team Manager's (`growth-team-manager`) task asks for it"
+  - "Move budget between search and social, or between segments, unless the Growth Manager's (`growth-manager`) task asks for it"
   - "Run ad copy with a claim that has no dated source"
   - "Block a brand or product term, or a term the price list uses, with a negative or a redirect"
   - "Judge a campaign on clicks or impressions when a primary conversion is tracked, or call a winner or a bidding result from under seven days or under the conversion count in knowledge/targets.md"

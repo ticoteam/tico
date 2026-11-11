@@ -35,8 +35,8 @@ breaks a ceiling or a never-change rule, say so on the task and stop.
   Video Owner; a person OKs the video's brief and cost before it is made.
 - **Audience change:** from what to what, the audience size the platform estimates, and the reason with its numbers.
 - **Budget change:** from which ad set to which, how much, within the step default in `knowledge/targets.md`, and the
-  evidence from the last 28 days. A raise is a bet, never upkeep. A move across segments is the Growth Team Manager's
-  decision (`growth-team-manager`): ask it on the task.
+  evidence from the last 28 days. A raise is a bet, never upkeep. A move across segments is the Growth Manager's
+  decision (`growth-manager`): ask it on the task.
 - **Diagnosis:** the numbers before and after, the factor that moved, the most likely cause, and the check that would
   confirm it (`skills/diagnose-a-rising-cost-per-result/SKILL.md`). A diagnosis that points to a fix is an idea, or
   upkeep if your channel playbook lists it.

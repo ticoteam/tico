@@ -93,7 +93,7 @@ def _learnings_shows_a_week_of_nights(built):
         assert len(nights) == 7
         assert sorted(night["status"] for night in nights) == ["done"] * 6 + ["quiet"]
         correction = next(night for night in nights if night["night"] == "2026-09-21")
-        packet = api.get(f"/api/v2/learnings/{correction['id']}/packets/success-team-manager")
+        packet = api.get(f"/api/v2/learnings/{correction['id']}/packets/success-manager")
         assert packet.status_code == 200
         assert any("refund" in item["text"].lower() for item in packet.json()["items"])
 

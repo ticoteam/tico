@@ -34,7 +34,7 @@ async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p:
 
 // Builder-claude's access: everyone may see it (so it is in the chart and the bot list), and only Dana may read or write
 // its Home. Omar sees the bot without reading its Home; Dana is the manager up the chart (builder-claude reports to
-// engineering-team-manager, who reports to Dana).
+// engineering-manager, who reports to Dana).
 async function restrictBot(hub: RealHubSupport.Hub) {
   const current = await api(hub, 'dana', 'GET', `/v2/bots/${BOT}/access`);
   const everyone = {everyone: true, people: [], teams: [], bots: []};

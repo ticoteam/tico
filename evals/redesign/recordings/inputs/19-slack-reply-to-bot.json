@@ -12,15 +12,15 @@
     },
     "thread": {
       "thread_ts": "1730100000.000200",
-      "started_by": "engineering-team-manager"
+      "started_by": "engineering-manager"
     },
     "previous_routing": {
-      "bot": "engineering-team-manager",
+      "bot": "engineering-manager",
       "asked": "Staging or production for the migration check?"
     },
     "roster": [
       {
-        "bot": "engineering-team-manager",
+        "bot": "engineering-manager",
         "role": "Engineering Lead: plans and reviews engineering work"
       },
       {

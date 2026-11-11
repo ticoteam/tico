@@ -32,5 +32,5 @@ approve, and who works the deal. Draft the reply to the partner in two to four s
 
 ## 5. Carry out the requested work
 
-Send the reply only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration put it on a task for the Customer Pipeline Manager (`tico team show` names who holds it) with the partner noted
+Send the reply only when the task asks, mail sending is on in Tico, and a granted Tool allows it; otherwise keep it as a draft. Record the decision, owner and date in `knowledge/registrations.md`, and for an accepted registration put it on a task for the Success Manager (`tico team show` names who holds it) with the partner noted
 as source. `tico task done <id> -m "..." --version N`.

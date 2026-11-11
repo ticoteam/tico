@@ -16,8 +16,8 @@
     {"name": "builder", "display_name": "Builder", "role": "Engineer", "org_parent": "b:eng-lead", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
     {"name": "reviewer", "display_name": "Reviewer", "role": "Code review", "org_parent": "b:eng-lead", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
     {"name": "web-dev", "display_name": "Web Developer", "role": "Front end", "org_parent": "b:eng-lead", "team": "web", "host": "keeper", "status": "active", "can_chat": true},
-    {"name": "growth-team-manager", "display_name": "Sales Lead", "role": "Head of Sales", "org_parent": "p:ana", "team": "sales", "host": "keeper", "status": "active", "can_chat": true},
-    {"name": "sdr", "display_name": "SDR", "role": "Outbound", "org_parent": "b:growth-team-manager", "team": "sales", "host": "keeper", "status": "active", "can_chat": true}
+    {"name": "growth-manager", "display_name": "Sales Lead", "role": "Head of Sales", "org_parent": "p:ana", "team": "sales", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "sdr", "display_name": "SDR", "role": "Outbound", "org_parent": "b:growth-manager", "team": "sales", "host": "keeper", "status": "active", "can_chat": true}
   ],
   "org_groups": [
     {"id": "eng", "name": "Engineering", "parent": "", "org_parent": "", "order": 0},
@@ -28,7 +28,7 @@
   "groups": [
     {"id": "eng", "name": "Engineering", "parent": "", "lead": "bot:eng-lead", "people": ["cara"], "bots": ["eng-lead", "builder", "reviewer"], "order": 0, "bet_id": null},
     {"id": "web", "name": "Web", "parent": "eng", "lead": "bot:web-dev", "people": [], "bots": ["web-dev"], "order": 0, "bet_id": null},
-    {"id": "sales", "name": "Sales", "parent": "", "lead": "person:ben", "people": ["ben"], "bots": ["growth-team-manager", "sdr"], "order": 1, "bet_id": null},
+    {"id": "sales", "name": "Sales", "parent": "", "lead": "person:ben", "people": ["ben"], "bots": ["growth-manager", "sdr"], "order": 1, "bet_id": null},
     {"id": "outbound", "name": "Outbound", "parent": "sales", "lead": "", "people": [], "bots": [], "order": 0, "bet_id": null},
     {"id": "built-in", "name": "Built-in", "parent": "", "lead": "", "people": [], "bots": ["assistant", "botops", "librarian", "strategy-owner"], "order": 2, "bet_id": null}
   ]

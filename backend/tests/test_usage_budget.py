@@ -33,17 +33,17 @@ def test_a_person_who_leads_lists_and_may_edit_the_bots_of_what_it_leads(api):
     from backend.tests.helpers.groups import add_bots
 
     with api.app.state.store.transaction() as c:
-        add_bots(c, **{"growth-team-manager": ({}, "ana"), "sdr": ({}, "growth-team-manager"), "outside": ({}, "ana")})
+        add_bots(c, **{"growth-manager": ({}, "ana"), "sdr": ({}, "growth-manager"), "outside": ({}, "ana")})
     sales = send(
         api,
         "POST",
         "groups",
-        {"name": "Sales", "add": {"people": ["cara"], "bots": ["growth-team-manager"]}, "lead": "person:cara"},
+        {"name": "Sales", "add": {"people": ["cara"], "bots": ["growth-manager"]}, "lead": "person:cara"},
     )["id"]
     outbound = send(api, "POST", "groups", {"name": "Outbound", "parent": sales, "add": {"bots": ["sdr"]}})["id"]
     limits = get(api, "usage/limits", token="cara-test")
     assert limits["leads"] == sorted([sales, outbound]) and limits["may_edit_default"] is False
-    assert {"growth-team-manager", "sdr"} <= set(limits["bots"]) and "outside" not in limits["bots"]
+    assert {"growth-manager", "sdr"} <= set(limits["bots"]) and "outside" not in limits["bots"]
     assert limits["bots"]["sdr"]["may_edit"] is True
     put(api, "usage/limits/sdr", {"daily_usd": 3}, "cara-test")  # what the page offers, the hub takes
     assert get(api, "usage/limits", token="cara-test")["bots"]["sdr"]["daily_usd"] == 3

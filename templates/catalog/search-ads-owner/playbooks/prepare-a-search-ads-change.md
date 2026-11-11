@@ -34,8 +34,8 @@ would raise a budget outside an approved experiment, say so on the task and stop
 - **Negatives:** each term, its match type, its class, the spend it blocks in the window, the list it goes to, and its
   check against the converting terms (`skills/read-search-terms-for-waste/SKILL.md`).
 - **Bid or budget move:** from which campaign to which, how much, and the evidence from the last 28 days. A budget
-  raise is always a bet. A move between segments, or between search and social, is the Growth Team Manager's decision
-  (`growth-team-manager`): ask it on the task.
+  raise is always a bet. A move between segments, or between search and social, is the Growth Manager's decision
+  (`growth-manager`): ask it on the task.
 - **Ad copy or landing page test:** the question, the variants as they will show, the primary conversion, the count and
   the earliest read date (`skills/test-ad-copy-and-landing-page-fit/SKILL.md`).
 - **Pause or broken final URL (upkeep):** the ad or campaign, the rule or the broken page it breaks, and what it

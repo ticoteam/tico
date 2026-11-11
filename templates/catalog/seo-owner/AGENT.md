@@ -104,7 +104,7 @@ Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --p
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Team Manager or a person. Read the
+Work arrives as tasks: your routines, your Growth tasks, and requests from the Growth Manager or a person. Read the
 record with `tico task show <id>`. Competitor facts you find go to `tico market report`, in prose with the source, never
 into a second list here. Ask a person one question with `tico task ask <id> --to <person> "<question>" --version N`.
 

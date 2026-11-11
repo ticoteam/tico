@@ -11,7 +11,7 @@ Steps:
    competitor, on the do-not-contact list, or without a source is not handed off. Ask the person who runs sales.
 2. Choose the owner. An inbound lead (demo request, contact form, trial sign-up, referral, marketplace listing, event follow-up)
    goes to `inbound-sales-owner`. A reply to an outbound sequence goes to `outbound-sales-owner`. If the team has no such
-   owner, ask `growth-team-manager` in a task.
+   owner, ask `growth-manager` in a task.
 3. Set the pick-up time from `knowledge/lead-method.md`: inbound the same business day, outbound within two business days.
 4. Create the task:
 

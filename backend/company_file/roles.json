@@ -573,6 +573,34 @@
    "default": false
   },
   {
+   "slug": "corporate-manager",
+   "template": "corporate-manager",
+   "name": "Corporate Manager",
+   "department": "corporate",
+   "lead": true,
+   "core": false,
+   "summary": "Leads the corporate team and manages any pipeline a person gives it: when a task there stops, it decides what happens, with one reason. Runs the corporate team's weekly review: legal, the books and partnerships against their own targets, the deadlines in the next 30 days, and the decisions needed. It proposes routing and hires, and never signs, pays, files or sends anything, does a stage's work or changes a stage's settings.",
+   "when": "A company with legal, finance and partner work that nobody sees together, where the owner needs one page on the company's obligations and deals each week.",
+   "tags": [
+    "corporate",
+    "legal",
+    "finance",
+    "partnerships",
+    "compliance",
+    "deadlines"
+   ],
+   "pains": [
+    "Legal, finance and partner work sit in different places and nobody sees the company's obligations together",
+    "A filing or contract deadline arrives before anyone notices it"
+   ],
+   "recommend_when": [
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly corporate summary · Mondays at 09:00 team time",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "corporate-secretary",
    "template": "corporate-secretary",
    "name": "Corporate Secretary",
@@ -606,32 +634,6 @@
     "docs",
     "meetings"
    ],
-   "default": false
-  },
-  {
-   "slug": "corporate-team-manager",
-   "template": "corporate-team-manager",
-   "name": "Corporate Team Manager",
-   "department": "corporate",
-   "lead": true,
-   "core": false,
-   "summary": "Runs the corporate team's weekly review: legal, the books and partnerships against their own targets, the deadlines in the next 30 days, and the decisions needed. It proposes routing and hires, and never signs, pays, files or sends anything itself.",
-   "when": "A company with legal, finance and partner work that nobody sees together, where the owner needs one page on the company's obligations and deals each week.",
-   "tags": [
-    "corporate",
-    "legal",
-    "finance",
-    "partnerships",
-    "compliance",
-    "deadlines"
-   ],
-   "pains": [
-    "Legal, finance and partner work sit in different places and nobody sees the company's obligations together",
-    "A filing or contract deadline arrives before anyone notices it"
-   ],
-   "recommend_when": [],
-   "first_routine": "Weekly corporate summary · Mondays at 09:00 team time",
-   "tools": [],
    "default": false
   },
   {
@@ -932,14 +934,14 @@
    "default": false
   },
   {
-   "slug": "engineering-team-manager",
-   "template": "engineering-team-manager",
-   "name": "Engineering Team Manager",
+   "slug": "engineering-manager",
+   "template": "engineering-manager",
+   "name": "Engineering Manager",
    "department": "engineering",
    "lead": true,
    "core": false,
-   "summary": "Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, routes tests, security, CI and releases to their owners, and reports progress with links.",
-   "when": "Offer when builders work across several repositories, or when a team needs one seat to plan the engineering week.",
+   "summary": "Manages the Engineering pipeline and leads the engineering team. When an Engineering task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, routes tests, security, CI and releases to their owners, and reports progress with links. It never does a stage's work or changes a stage's settings.",
+   "when": "Offer when builders work across several repositories, or when a team needs one seat to plan the engineering week and decide what happens when an Engineering task stops.",
    "tags": [
     "github",
     "delivery",
@@ -949,16 +951,18 @@
     "Changes across repositories need one delivery plan",
     "Stuck child tasks and pull requests need follow-up",
     "Delivery reports miss dependencies between builder tasks",
-    "Tests, security, CI and releases have no one owner"
+    "Tests, security, CI and releases have no one owner",
+    "Tasks sit in one stage for days and nobody decides anything"
    ],
    "recommend_when": [
-    "sells_software"
+    "sells_software",
+    "has_pipeline"
    ],
    "first_routine": "Daily delivery check · Daily at 09:00 team time",
    "tools": [
     "github"
    ],
-   "default": false
+   "default": true
   },
   {
    "slug": "equity-manager",
@@ -1218,13 +1222,13 @@
    "default": true
   },
   {
-   "slug": "growth-team-manager",
-   "template": "growth-team-manager",
-   "name": "Growth Team Manager",
+   "slug": "growth-manager",
+   "template": "growth-manager",
+   "name": "Growth Manager",
    "department": "marketing",
    "lead": true,
    "core": false,
-   "summary": "Runs the growth team's week: one page on marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, plus routing and hiring proposals. Channel owners and pipeline managers do the work; routing and set-up tasks happen only when the task asks for them and a granted Tool allows it.",
+   "summary": "Manages the growth team's pipelines and leads the growth team. When a task in one of them stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the growth team's week: one page on marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, plus routing and hiring proposals. The Owners do the work; it never does a stage's work or changes a stage's settings, and routing and set-up tasks happen only when the task asks for them and a granted Tool allows it.",
    "when": "A team that runs marketing and sales as one growth engine and wants one weekly page from first touch to closed deal, instead of separate marketing and sales reports.",
    "tags": [
     "marketing",
@@ -1241,7 +1245,8 @@
     "marketing counts leads and sales counts deals, and the numbers never match",
     "new leads sit unassigned for days",
     "I can't tell which deals are really moving",
-    "campaigns and launches collide with the sales calendar"
+    "campaigns and launches collide with the sales calendar",
+    "tasks sit in one stage for weeks and nobody decides anything"
    ],
    "recommend_when": [
     "sells_to_businesses",
@@ -2110,41 +2115,6 @@
    "default": false
   },
   {
-   "slug": "pipeline-manager",
-   "template": "pipeline-manager",
-   "name": "Pipeline Manager",
-   "department": "operations",
-   "lead": false,
-   "core": false,
-   "summary": "Manages the pipelines it is given. When a task stops (its owner couldn't move it, it is Late, or it has no owner), it decides what happens: reassign, move back, move on, snooze to a date or close, with one line of reason. It never does a stage's work and never changes a stage's settings.",
-   "when": "Any team whose work moves through a pipeline, such as product, engineering, growth, sales, customer success, legal or finance. Each pipeline has one Pipeline Manager; one may manage several.",
-   "tags": [
-    "pipeline",
-    "stages",
-    "tasks",
-    "handoffs",
-    "requirements",
-    "late",
-    "operations",
-    "saas"
-   ],
-   "pains": [
-    "tasks sit in one stage for weeks and nobody decides anything",
-    "a task waits on a seat that is not hired, or on nobody",
-    "work lands with the wrong owner and comes back",
-    "a task is snoozed with no date and forgotten",
-    "the same stage stops the same way every week and nobody proposes a fix"
-   ],
-   "recommend_when": [
-    "has_pipeline"
-   ],
-   "first_routine": "Weekly pipeline report · Mondays at 09:00 team time",
-   "tools": [
-    "github"
-   ],
-   "default": true
-  },
-  {
    "slug": "pr-manager",
    "template": "pr-manager",
    "name": "PR Manager",
@@ -2366,6 +2336,45 @@
    "default": true
   },
   {
+   "slug": "product-manager",
+   "template": "product-manager",
+   "name": "Product Manager",
+   "department": "product",
+   "lead": true,
+   "core": false,
+   "summary": "Manages the Product pipeline and leads the product team. When a Product task stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. It never does a stage's work or changes a stage's settings; roadmap changes happen only when asked and a Tool allows them.",
+   "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place, or to decide what happens when a Product task stops.",
+   "tags": [
+    "saas",
+    "software",
+    "roadmap",
+    "prioritisation",
+    "discovery",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "nobody knows what's on the roadmap this quarter",
+    "every loud request jumps the queue",
+    "product decisions aren't written down anywhere",
+    "we can't say why we built what we built",
+    "tasks sit in one stage for weeks and nobody decides anything"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly product summary · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
    "slug": "product-operations-manager",
    "template": "product-operations-manager",
    "name": "Product Operations Manager",
@@ -2402,43 +2411,6 @@
     "github"
    ],
    "default": false
-  },
-  {
-   "slug": "product-team-manager",
-   "template": "product-team-manager",
-   "name": "Product Team Manager",
-   "department": "product",
-   "lead": true,
-   "core": false,
-   "summary": "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them.",
-   "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place.",
-   "tags": [
-    "saas",
-    "software",
-    "roadmap",
-    "prioritisation",
-    "discovery",
-    "b2b",
-    "b2c"
-   ],
-   "pains": [
-    "nobody knows what's on the roadmap this quarter",
-    "every loud request jumps the queue",
-    "product decisions aren't written down anywhere",
-    "we can't say why we built what we built"
-   ],
-   "recommend_when": [
-    "sells_software",
-    "uses_github",
-    "uses_docs"
-   ],
-   "first_routine": "Weekly product summary · Mondays at 09:00 team time",
-   "tools": [
-    "docs",
-    "github",
-    "meetings"
-   ],
-   "default": true
   },
   {
    "slug": "project-coordinator",
@@ -3516,6 +3488,38 @@
    "default": false
   },
   {
+   "slug": "success-manager",
+   "template": "success-manager",
+   "name": "Success Manager",
+   "department": "success",
+   "lead": true,
+   "core": false,
+   "summary": "Manages the Customer, Success Experiments and Success Monitoring pipelines and leads the success team. When a task in one of them stops, it decides what happens: reassign, move back, move on, snooze to a date or close, with one reason. Runs the success team's weekly review: support and customer health against target, the oldest waiting customers, repeats and the decisions needed. It proposes routing and hires, and never answers a customer, does a stage's work or changes a stage's settings.",
+   "when": "A team with customer support and customer success work in more than one place, where nobody has the week's picture of both and nobody decides which success role to add next.",
+   "tags": [
+    "success",
+    "customers",
+    "renewals",
+    "retention",
+    "health",
+    "support"
+   ],
+   "pains": [
+    "Support and customer success run apart, and nobody sees a customer's whole story",
+    "Renewals and at-risk accounts surface too late",
+    "The support backlog and the success work have no shared weekly view",
+    "Tasks sit in one stage for weeks and nobody decides anything"
+   ],
+   "recommend_when": [
+    "uses_tickets",
+    "sells_to_consumers",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly success summary · Mondays at 09:00 team time",
+   "tools": [],
+   "default": true
+  },
+  {
    "slug": "success-owner",
    "template": "success-owner",
    "name": "Success Owner",
@@ -3550,36 +3554,6 @@
     "mail",
     "meetings"
    ],
-   "default": false
-  },
-  {
-   "slug": "success-team-manager",
-   "template": "success-team-manager",
-   "name": "Success Team Manager",
-   "department": "success",
-   "lead": true,
-   "core": false,
-   "summary": "Runs the success team's weekly review: support and customer health against target, the oldest waiting customers, repeats and the decisions needed. It proposes routing and hires, and never answers a customer or assigns a person itself.",
-   "when": "A team with customer support and customer success work in more than one place, where nobody has the week's picture of both and nobody decides which success role to add next.",
-   "tags": [
-    "success",
-    "customers",
-    "renewals",
-    "retention",
-    "health",
-    "support"
-   ],
-   "pains": [
-    "Support and customer success run apart, and nobody sees a customer's whole story",
-    "Renewals and at-risk accounts surface too late",
-    "The support backlog and the success work have no shared weekly view"
-   ],
-   "recommend_when": [
-    "uses_tickets",
-    "sells_to_consumers"
-   ],
-   "first_routine": "Weekly success summary · Mondays at 09:00 team time",
-   "tools": [],
    "default": false
   },
   {

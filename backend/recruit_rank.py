@@ -178,7 +178,7 @@ def build(departments, cards):
         members = [card for card in out if card["department"] == row["id"]]
         leads = [card["template"] for card in members if card["lead"]]
         named = row["head"]
-        # A Team Manager is a lead too, so the head groups.yaml names keeps the seat when it is a lead; the first lead by
+        # A team's Manager is a lead too, so the head groups.yaml names keeps the seat when it is a lead; the first lead by
         # name stands in only for a head that is not one.
         if named in leads:
             row["head"] = named

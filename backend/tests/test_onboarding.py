@@ -79,7 +79,7 @@ def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_t
     machine(api)
     picks = {
         "head-of-marketing": {
-            "template": "growth-team-manager",
+            "template": "growth-manager",
             "display_name": "Head of Marketing",
             "reports_to": "human:morgan",
         },
@@ -114,7 +114,7 @@ def test_the_default_marketing_chart_hires_the_writer_first_and_moves_it_under_t
     )
     writing = recruit_and_hire(writer, "content-owner")
     assert writing["reports_to"] == "human:morgan" and definition_reports_to(writing) == "human:morgan"
-    leading = recruit_and_hire(head, "growth-team-manager")
+    leading = recruit_and_hire(head, "growth-manager")
     assert definition_reports_to(leading) == "human:morgan"
     assert definition_reports_to(writing) == leading["bot"]  # moved when the head was hired, as placed
     assert seats(api) == []

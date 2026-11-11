@@ -7,10 +7,9 @@ Monitoring in the Success factory; Legal and Finance, both private, in the Corpo
 (`ensure_presets`): once, after setup finished, never again once the company has one under its id, and with the same
 ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manager, a manager to the General Manager).
 
-- A pipeline's manager is its own Pipeline Manager: the bot whose slug is `<pipeline>-pipeline-manager` (the default
-  chart's seat; every Pipeline Manager shares the `pipeline-manager` template, so the template can't tell them apart).
-  A Monitoring pipeline is the exception: the seat that manages its factory's Experiments manages it too (WITH), and it
-  is made only where that Experiments pipeline is.
+- A pipeline's manager is its team's Manager, found by its template: the Growth Manager (`growth-manager`) for the
+  Growth factory's pipelines and the Success Manager (`success-manager`) for the Success factory's (MANAGERS). A
+  Monitoring pipeline is made only where its factory's Experiments pipeline is (WITH).
 - A stage's owner is a role found by its template (`pipeline_seats`' way): Lead Generation Owner, Outbound Sales Owner,
   Inbound Sales Owner, Success Owner. The Experiments and Monitoring pipelines' stages belong to the task's assignee
   instead: the channel Owner who runs that experiment and then watches what it kept; a task with nobody assigned wakes
@@ -45,13 +44,33 @@ INBOUND_SALES = "inbound-sales-owner"
 SUCCESS = "success-owner"
 LEGAL_OWNER = "legal-owner"
 FINANCE_OWNER = "finance-owner"  # the built-in Finance Owner (backend/bookkeeper.py)
-TEMPLATE_ROLES = (LEAD_GENERATION, OUTBOUND_SALES, INBOUND_SALES, SUCCESS, LEGAL_OWNER, FINANCE_OWNER)
+GROWTH_MANAGER = "growth-manager"
+SUCCESS_MANAGER = "success-manager"
+TEMPLATE_ROLES = (
+    GROWTH_MANAGER,
+    SUCCESS_MANAGER,
+    LEAD_GENERATION,
+    OUTBOUND_SALES,
+    INBOUND_SALES,
+    SUCCESS,
+    LEGAL_OWNER,
+    FINANCE_OWNER,
+)
+# The team Manager that manages each preset here by default: the role its manager is found by.
+MANAGERS: dict[str, str] = {
+    "growth-experiments": GROWTH_MANAGER,
+    "growth-monitoring": GROWTH_MANAGER,
+    "lead": GROWTH_MANAGER,
+    "opportunity": GROWTH_MANAGER,
+    "customer": SUCCESS_MANAGER,
+    "success-experiments": SUCCESS_MANAGER,
+    "success-monitoring": SUCCESS_MANAGER,
+}
 
 
 def manager_role(pipeline_id: str) -> str:
-    """A pipeline's manager role: its Pipeline Manager seat's slug. A Monitoring pipeline's is its Experiments
-    pipeline's (WITH): one seat manages both."""
-    return f"{WITH.get(pipeline_id, pipeline_id)}-pipeline-manager"
+    """A pipeline's manager role: its team's Manager, by template."""
+    return MANAGERS[pipeline_id]
 
 
 def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements: list[Row], **more: Any) -> Row:
@@ -392,8 +411,7 @@ PRESETS: dict[str, Row] = {
 }
 # The private presets: made only once their owner bot exists, never handed to the General Manager.
 PRIVATE = ("legal", "finance")
-# Each Monitoring pipeline goes with its factory's Experiments: made only where that one is, and managed by the same
-# seat (no Monitoring Pipeline Manager seat).
+# Each Monitoring pipeline goes with its factory's Experiments: made only where that one is.
 WITH: dict[str, str] = {"growth-monitoring": "growth-experiments", "success-monitoring": "success-experiments"}
 
 
@@ -437,20 +455,13 @@ ROLES: dict[str, Row] = {
     },
 }
 
-_SLUG = "SELECT id FROM bots WHERE slug=? AND COALESCE(state, 'active') <> 'archived'"
-
 
 def resolve(conn: "sqlite3.Connection") -> dict[str, str | None]:
-    """{role: the bot's actor (`bot:<id>`) or None} for every role these presets name: each Pipeline Manager by its
-    slug, each other role by its template, the way `pipeline_seats.resolve` finds one."""
+    """{role: the bot's actor (`bot:<id>`) or None} for every role these presets name, each by its template, the way
+    `pipeline_seats.resolve` finds one."""
     seats: Any = S
     has_seats = bool(seats._has_seats(conn))
     found: dict[str, str | None] = {}
-    for pid in PRESETS:
-        if pid in PRIVATE:
-            continue  # managed by its owner bot, a template role
-        row = conn.execute(_SLUG, (manager_role(pid),)).fetchone()
-        found[manager_role(pid)] = f"bot:{row[0]}" if row else None
     for template in TEMPLATE_ROLES:
         bots: list[str] = seats._bots(conn, template, has_seats)
         found[template] = f"bot:{bots[0]}" if bots else None

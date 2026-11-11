@@ -215,7 +215,7 @@ def groups(world):
             {
                 "name": "Engineering",
                 "lead": OMAR_REF,
-                "add": {"bots": ["engineering-team-manager", "builder-claude", "builder-openai"], "people": [OMAR_ID]},
+                "add": {"bots": ["engineering-manager", "builder-claude", "builder-openai"], "people": [OMAR_ID]},
             },
             who=DANA,
         ),
@@ -241,7 +241,7 @@ def connection(world):
             **row,
             **(
                 {"tools": [{"service": "acme-billing", "identity": "Acme billing account", "can": ["read", "refund"]}]}
-                if slug == "engineering-team-manager"
+                if slug == "engineering-manager"
                 else {}
             ),
         }
@@ -296,13 +296,13 @@ def pages(world):
 
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
-        c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-team-manager'")
-        bot_settings.update(c, "engineering-team-manager", {"display_name": "Engineering Lead"})
+        c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-manager'")
+        bot_settings.update(c, "engineering-manager", {"display_name": "Engineering Lead"})
     made = _ok(
         world.api(
             "post",
             "/api/v2/tasks",
-            {"title": "Q3 launch", "body": "Plan the Q3 launch.", "owner": "engineering-team-manager"},
+            {"title": "Q3 launch", "body": "Plan the Q3 launch.", "owner": "engineering-manager"},
             who=DANA,
         ),
         "task",
@@ -343,7 +343,7 @@ def pages(world):
             "funnel.csv",
         )
 
-    if world.turn("engineering-team-manager", act=act) is None:
+    if world.turn("engineering-manager", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
 
 
@@ -382,7 +382,7 @@ def counsel(world):
         )
         world.app.state.files.add_version(
             c,
-            bot="engineering-team-manager",
+            bot="engineering-manager",
             actor="human:" + DANA_ID,
             scope="bot",
             task=None,
@@ -477,11 +477,11 @@ def directory(world):
 
 @seed("priya-leads")
 def priya_leads(world):
-    """Priya is the engineering manager on the chart: engineering-team-manager reports to her, so she is above the bots under it
+    """Priya is the engineering manager on the chart: engineering-manager reports to her, so she is above the bots under it
     (builder-claude, builder-openai) and reads their private tasks, as a manager does (docs/tasks.md). Written the way the
     harness places bots on the chart (harness.py), since the bot definition route does not take a hand-set reports_to."""
     with world.store.transaction() as c:
-        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-team-manager'")
+        c.execute("UPDATE bot_config SET reports_to='priya' WHERE bot='engineering-manager'")
 
 
 # ---------------------------------------------------------------------------------------------- Tools

@@ -549,10 +549,10 @@ RESPONDER_SLUGS = ()
 MONITOR_SLUGS = ("*-monitor", "*-watch", "social-media-manager", "sentry-triage")
 REVIEWER_SLUGS = ("*reviewer*", "qa-*", "security*", "pr-reviewer-sol", "reviewer-*")
 LEAD_SLUGS = (
-    "engineering-team-manager",
+    "engineering-manager",
     "product-lead",
-    "growth-team-manager",
-    "success-team-manager",
+    "growth-manager",
+    "success-manager",
     "cmo",
     "cro",
     "assistant",

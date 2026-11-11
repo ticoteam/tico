@@ -1,6 +1,6 @@
 # Plan a growth test
 
-Run inside the weekly review, or alone when the Growth Team Manager (`growth-team-manager`) asks for ideas for a segment. Budget 30 minutes.
+Run inside the weekly review, or alone when the Growth Manager (`growth-manager`) asks for ideas for a segment. Budget 30 minutes.
 The outcome is up to three idea tasks labelled growth:ideas, each with its channel and segment, ready for the Monday growth
 meeting. Nothing starts, spends or changes a channel here.
 
@@ -37,7 +37,7 @@ meeting decides.
 
 ## 4. File each idea
 
-    tico task create --owner growth-team-manager --label growth:ideas --title "<idea, one line>" --body-file <file> --label channel:<slug> --label segment:<slug>
+    tico task create --owner growth-manager --label growth:ideas --title "<idea, one line>" --body-file <file> --label channel:<slug> --label segment:<slug>
 
 ## 5. Link a follow-up
 
