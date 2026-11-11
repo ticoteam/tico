@@ -337,6 +337,10 @@ def run(args, who=None):
         else 15,
     )
     fn = args.fn
+    from clients.hubtools_org import COMMANDS as ORG_COMMANDS
+
+    if fn in ORG_COMMANDS:  # people, bots, the org chart, usage, billing and reach (clients/hubtools_org.py)
+        return via_tool(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
     if args.cmd == "rules":
