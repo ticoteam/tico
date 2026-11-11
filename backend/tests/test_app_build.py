@@ -45,3 +45,21 @@ def test_a_forward_reference_is_never_kept():
         config = None
 
     assert app_build.adapter_key(Field, v2.asdict) is None
+
+
+def test_an_apps_own_class_or_function_is_never_kept_so_no_app_outlives_its_test():
+    from fastapi._compat import v2
+
+    class Body(pydantic.BaseModel):
+        name: str
+
+    class Field:
+        field_info = pydantic.fields.FieldInfo(annotation=Body)
+        config = None
+
+    class Made:
+        field_info = pydantic.fields.FieldInfo(annotation=int, default_factory=lambda: 1)
+        config = None
+
+    assert app_build.adapter_key(Field, v2.asdict) is None
+    assert app_build.adapter_key(Made, v2.asdict) is None

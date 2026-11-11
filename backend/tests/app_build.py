@@ -7,8 +7,9 @@ every app and are kept for the worker:
 - Python's regex cache holds 512 patterns, so each app compiled every route's path pattern again (`re._MAXCACHE`).
 - FastAPI builds a pydantic TypeAdapter for each route parameter and response model (fastapi/_compat/v2.py ModelField),
   about a third of the build. An adapter depends only on the annotation, its metadata, the field's attributes and the
-  config; equal ones share an adapter. The annotation is compared by identity, so a class an app defines for itself
-  never shares one with another app's; metadata and attributes by their repr, which spells out a function's address.
+  config; equal ones share an adapter. One that names an app's own class or function (`<locals>`, an address) is never
+  kept: it would keep that app, its store and threads, alive (15 MB an app). The rest compare the annotation by identity
+  and metadata and attributes by repr.
 
 A server builds one app, so none of this is in the product. Nothing about a request or its validation changes.
 """
@@ -17,8 +18,8 @@ import re
 import typing
 
 ADAPTERS = {}
-# One app makes about 1,050 distinct adapters; about 16 more per app hold that app's own functions and never repeat.
-ADAPTERS_MAX = 3000
+ADAPTERS_MAX = 3000  # one app makes about 1,050 distinct ones
+APP_OWN = re.compile(r"<locals>| at 0x[0-9a-f]+")
 
 
 def adapter_key(field, asdict):
@@ -30,8 +31,11 @@ def adapter_key(field, asdict):
         hash(annotation)
     except TypeError:
         return None
-    attributes = sorted((name, repr(value)) for name, value in info["attributes"].items())
-    return (annotation, tuple(repr(item) for item in info["metadata"]), tuple(attributes), repr(field.config))
+    attributes = tuple(sorted((name, repr(value)) for name, value in info["attributes"].items()))
+    metadata = tuple(repr(item) for item in info["metadata"])
+    if APP_OWN.search(" ".join([repr(annotation), *metadata, *(value for _name, value in attributes)])):
+        return None  # an app's own class or function: kept, it would keep that app (its store, its threads) alive
+    return (annotation, metadata, attributes, repr(field.config))
 
 
 def install():
