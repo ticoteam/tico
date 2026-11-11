@@ -291,7 +291,7 @@ KEEP_LINES = (
     ("backend/pipeline_presets_more.py", re.compile(r'^\s+"legal-review",$|"legal-intake", "legal-review"')),
     ("backend/tests/fixtures/shipped_preset_texts.json", re.compile(r'"legal-review/purpose"')),
     # The old slugs the software factory guide must not name any more.
-    ("backend/tests/test_product_engineering_presets.py", re.compile(r"^        for old in \(\"`product-lead`\"")),
+    ("backend/tests/test_product_engineering_presets.py", re.compile(r"^\s+for old in \(\"`product-lead`\"")),
     ("backend/company_file/draft.py", re.compile(r"HEAD = re\.compile|\"operations\": \[")),
     ("backend/company_file/draft.py", re.compile(r"^RETIRED = ")),
     # The retired template the saved-draft test names, as draft.RETIRED does.
