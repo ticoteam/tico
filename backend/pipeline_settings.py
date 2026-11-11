@@ -122,9 +122,12 @@ def _people_only(requirement: Row) -> Row:
     return {**requirement, "who_oks": "people_only"}
 
 
+# Judged from the page alone (Jev is shown the linked PRs' newest commits beside it), and true of a good review of a
+# correct change: one with nothing to fix says so. "What is wrong" alone made a clean review read as incomplete, and
+# "not a summary" read against the summary every review page opens with (Acme, Nov 11: two good Review pages unsure).
 REVIEW_RUBRIC = (
-    "A real review of the newest commit of every linked PR: what was read and run, what is wrong, and what to fix. "
-    "Not a summary of the change."
+    "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what "
+    "to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
 )
 # The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines"). Made only for a company that builds
 # software (a blank answer is yes), once its setup is finished (ensure_presets).

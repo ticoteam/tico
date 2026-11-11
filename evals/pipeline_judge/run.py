@@ -1,9 +1,11 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 34 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
+cases.json holds 39 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
 text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 17 are Dev (tests pass, screenshots match spec, review done) and 17 Marketing (lead has company and contact, campaign
-brief approved, landing page live). Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a
+unsure. 22 are Dev (tests pass, screenshots match spec, review done) and 17 Marketing (lead has company and contact, campaign
+brief approved, landing page live). The five `acme-*` cases are real pages from the Acme test company (Nov 11), built as
+the page step builds them (attachment kind "page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric.
+`--only acme-*` runs just those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a
 draft, a placeholder page, a self-review. No customer data belongs in cases.json.
 
 Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
@@ -77,6 +79,12 @@ def problems(cases):
         if sum(1 for c in cases if c.get("domain") == domain) < 10:
             out.append(f"{domain}: fewer than 10 cases")
     return out
+
+
+def chosen(cases, only):
+    """The cases `only` names: ids, comma-separated, and a name ending in `*` takes every id that starts with the rest."""
+    names = [n.strip() for n in only.split(",") if n.strip()]
+    return [c for c in cases if any(c["id"] == n or (n.endswith("*") and c["id"].startswith(n[:-1])) for n in names)]
 
 
 def verdict(p):
@@ -219,7 +227,7 @@ def main(argv=None, env=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--models", default="jev")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--only", help="one case id")
+    parser.add_argument("--only", help="case ids, comma-separated; one ending in * is a prefix (acme-*)")
     parser.add_argument("--out", default=str(HERE / "results"))
     args = parser.parse_args(argv)
     cases = load()
@@ -228,7 +236,10 @@ def main(argv=None, env=None):
         print("\n".join(found), file=sys.stderr)
         return 1
     if args.only:
-        cases = [c for c in cases if c["id"] == args.only]
+        cases = chosen(cases, args.only)
+        if not cases:
+            print(f"No case matches --only {args.only}", file=sys.stderr)
+            return 1
     if args.dry_run:
         judges = fake_judges(cases)
     else:

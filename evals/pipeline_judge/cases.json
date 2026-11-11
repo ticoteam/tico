@@ -745,6 +745,154 @@
    },
    "expected": "not_met",
    "trap": "old_version"
+  },
+  {
+   "id": "acme-review-1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 3,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review1_v1.md",
+    "text": "Reviewed commit 1927310520c10dd7b70de3077ff3dac747f24d0d (ticoteam/pipeline-sandbox#38, branch 4-subtract)\n\n# Review 1: Add subtract(a, b) to calc.py\n\n**Summary:** Adds `subtract(a, b)` returning `a - b` in calc.py, plus five tests in test_calc.py. Nothing blocks. Blocking issues: 0.\n\n## Blocking issues\nNone.\n\n## Questions\n- question: The spec's open question about float rounding (0.3 - 0.1) has no answer in the page I read, so I assumed the default (Python's own result). The tests avoid such values (2.5 - 0.5 is exact), which is consistent with that default. Nothing to change if the default stands.\n\n## Suggestions\n- suggestion: `test_subtract_floats` uses `assertEqual(subtract(2.5, 0.5), 2.0)`. It is exact in binary floating point, so it is safe today. If a later test uses values like 0.3 and 0.1, use `assertAlmostEqual`.\n\n## Praise\n- praise: Each test maps to one acceptance criterion in the spec (AC-1 to AC-5), so the next reader can trace test to requirement. The change adds no extra functions, conversion or dependency, which matches the spec's non-goals.\n\n## Spec check (page file-081da932887d667c6d39e073 v1)\n| AC | Covered by | Result |\n|---|---|---|\n| AC-1 subtract(5, 3) == 2 | test_subtract_positive | met |\n| AC-2 subtract(3, 5) == -2 | test_subtract_negative_result | met |\n| AC-3 subtract(2.5, 0.5) == 2.0 | test_subtract_floats | met |\n| AC-4 subtract(7, 0) == 7 | test_subtract_zero | met |\n| AC-5 TypeError for \"a\", None | test_subtract_rejects_non_numbers | met |\n| AC-6 `from calc import subtract` | the test module imports it | met |\n| AC-7 earlier tests still pass | test_add still passes | met |\n\n## What I read\n- The whole diff against main (calc.py, test_calc.py, 1 commit, +26 lines), and the spec page.\n- Callers: none other than the tests. calc.py had only `add`, so `subtract` clashes with nothing.\n- Do the tests fail on the old code? Yes: on main, `from calc import add, subtract` raises ImportError, so every new test fails there.\n\n## Not checked\n- I ran `python3 -m unittest` on the head commit: 6 tests, all pass. I did not run the GitHub Actions jobs myself; Acme's link shows the check at this commit as passed.\n- Other open pull requests touching calc.py or test_calc.py (the spec mentions a separate `negate` task) could not be listed here: `gh` has no login on this computer. Expect a trivial merge conflict if both edit the end of calc.py.\n- `knowledge/standards.md` does not exist yet (setup has not finished), so I applied no team-specific checklist, only the spec.\n- No `ui/` files changed; no screens apply.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Review 1 page (Nov 11): judged unsure with no reason, a person OK'd it"
+  },
+  {
+   "id": "acme-review-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 5,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review2_v1.md",
+    "text": "Reviewed commit 1927310520c10dd7b70de3077ff3dac747f24d0d (pull request #38, ticoteam/pipeline-sandbox), Review 2.\n\n# Review: Add subtract(a, b) to calc.py\n\n**Summary:** The change adds `subtract(a, b)` returning `a - b`, with five tests. I read the whole diff (2 files, 25 lines added) at the commit above. Nothing blocks it. No screens changed.\n\n## Blocking\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- suggestion: `test_calc.py`, `test_subtract_floats`: `self.assertEqual(subtract(2.5, 0.5), 2.0)` is exact only because these values are exact in binary. A later float test such as `0.3 - 0.1` would fail with `assertEqual`; use `assertAlmostEqual` there. The spec leaves that rounding to Python, so nothing needs changing now.\n\n## Praise\n- praise: each test maps to a spec criterion (AC-1 to AC-5) and the `TypeError` test covers both `\"a\"` and `None`.\n\n## What I checked\n- **Spec:** all seven acceptance criteria are covered. `subtract(5, 3)`, `subtract(3, 5)`, `subtract(2.5, 0.5)`, `subtract(7, 0)` and the `TypeError` cases are tested. The import works. The existing `add` test is untouched.\n- **Scope:** only `subtract` was added. No other function, no dependency, no change to `add`.\n- **Tests:** I ran `python3 -m unittest` on the commit: 6 tests pass. With the new `test_calc.py` against `calc.py` from main, the run fails with an error, so the new tests prove the change.\n- **Checks:** Acme reports the GitHub checks as passed at this commit.\n- **Risk:** no sign-in, billing, deletion, migration or data surface. A pure function.\n\n## Not checked\n- I did not rerun the GitHub Actions jobs; I rely on Acme's report that they passed.\n- I could not list other open pull requests (for example the `negate` task) because `gh` has no login on this computer, so I did not check for conflicts with them.\n- `knowledge/standards.md` does not exist yet, so I reviewed against the spec and the review method only.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Review 2 page (Nov 11): judged unsure with no reason, a person OK'd it"
+  },
+  {
+   "id": "acme-fixes-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff"
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## How it was checked\n- Five new tests in test_calc.py: `subtract(5, 3) == 2`, `subtract(3, 5) == -2`, `subtract(2.5, 0.5) == 2.0`, `subtract(7, 0) == 7`, and `TypeError` for `\"a\"` and `None`.\n- Before the change the tests failed (ImportError: no `subtract`). After it, `python3 -m unittest` runs 6 tests, all pass (the existing `add` test included).\n- Not checked: float rounding such as 0.3 - 0.1, NaN, infinity, very large numbers (out of scope in the spec).\n\n## Checks at the head commit\nPassing: `checks`, `knobs` and `advisory`; `shards` skipped (not requested). https://github.com/ticoteam/pipeline-sandbox/pull/38/checks\n\n## Review findings\n- Reviewer 1: no comments on the pull request and no review page attached. Nothing to fix.\n- Reviewer 2: no comments on the pull request. Nothing to fix.\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Fixes 2 pre-release page (Nov 11): judged unsure with no reason"
+  },
+  {
+   "id": "acme-spec",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "Covers goal, scope, what done looks like"
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "3508775e-54a7-4d37-b90d-fee88b4e9020"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "spec_v1.md",
+    "text": "# subtract(a, b): Spec, 2026-11-11\n\nTask requested by human:owner. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `subtract(a, b)` function in calc.py. They write `a - b` themselves. The owner asked for `subtract(a, b)` returning a - b, with a test in test_calc.py.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:owner, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for the owner to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked (`tico goal list` is empty). Target: missing, to be set by the owner.\n- Measure: `subtract` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `subtract(a, b)` in calc.py, returning `a - b`.\n- Works for int and float; other types follow Python's binary minus.\n- Tests for it in test_calc.py.\n\n## Non-goals\n- No other new functions (no `negate`, `abs`, etc.; `negate` has its own task).\n- No input conversion: strings are not turned into numbers.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive numbers, When `subtract(5, 3)` is called, Then it returns 2. Check: before release.\n- AC-2. Given a result below zero, When `subtract(3, 5)` is called, Then it returns -2. Check: before release.\n- AC-3. Given floats, When `subtract(2.5, 0.5)` is called, Then it returns 2.0. Check: before release.\n- AC-4. Given zero as the second argument, When `subtract(7, 0)` is called, Then it returns 7. Check: before release.\n- AC-5. Given a value that is not a number (for example `\"a\"` or `None`), When `subtract` is called, Then it raises `TypeError`, as `-` does. Check: before release.\n- AC-6. Given the module, When a developer runs `from calc import subtract`, Then the import works. Check: before release.\n- AC-7. Given the existing test suite, When it runs after the change, Then all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own (e.g. 0.3 - 0.1), NaN and infinity, very large numbers.\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `subtract`? The negate spec assumed it did; this task assumes not. Owner: Builder checks at start; if it exists, stop and tell human:owner.\n- Is rounding for float results (0.3 - 0.1) left as Python's? Owner: human:owner, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release; no work needed before.\n- Possible duplicate of an existing function (see first open question). Cheapest check: grep calc.py.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Product Spec page (Nov 11): judged met"
+  },
+  {
+   "id": "acme-validate",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working there. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.",
+    "work_version": 5,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "3508775e-54a7-4d37-b90d-fee88b4e9020",
+     "release": [
+      "v6"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "validate.md",
+    "text": "# Checked in production: subtract(a, b), 2026-11-11\n\nTask 3508775e (requester human:owner). Spec: specs/subtract.md, version 1. Engineering task 0d6a5b92 (done), PR ticoteam/pipeline-sandbox#38, merged 2026-11-11 08:08 UTC.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v6` (commit b52868c, 2026-11-11 08:07 UTC), is the merge of PR #38, so it carries the change. Read 2026-11-11 from a fresh fetch of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v6`, exported with `git archive`, in a clean directory.\n\n- AC-1 `subtract(5, 3)` returns 2: met (returned 2).\n- AC-2 `subtract(3, 5)` returns -2: met (returned -2).\n- AC-3 `subtract(2.5, 0.5)` returns 2.0: met (returned 2.0).\n- AC-4 `subtract(7, 0)` returns 7: met (returned 7).\n- AC-5 `\"a\"` or `None` raises TypeError: met (both raised TypeError).\n- AC-6 `from calc import subtract` works: met.\n- AC-7 earlier tests still pass: met. `python3 -m unittest` on v6 ran 6 tests, all OK, including the original `test_add`.\n\nScope check: calc.py gained only `subtract`; `add` is unchanged. No other function or dependency was added.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, read at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `subtract` before (it held only `add`), so there was no duplicate.\n- Float rounding was left to Python's, as the spec's default said. The spec was OK'd with that default.\n\n## Not checked\nGitHub CI results for the PR could not be read (no GitHub access from this bot); the local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v6.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Product Validate page (Nov 11): judged met"
   }
  ]
 }

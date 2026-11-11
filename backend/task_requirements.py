@@ -339,8 +339,10 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
         return Standing(requirement, NOT_MET, owner, f"Jev sent it back: {reasons}" if reasons else "Jev sent it back")
     person = person_of(conn, requirement, visit_id)
     if said in ("unsure", "failed"):
+        # A failed verdict's reason is why the calls failed (last_error): it was Jev, not the page.
+        failure = " ".join(str((verdict or {}).get("last_error") or "").split())
         line = (
-            "Jev couldn't check this"
+            (f"Jev couldn't check this: {failure}" if failure else "Jev couldn't check this")
             if said == "failed"
             else (f"Jev is unsure: {reasons}" if reasons else "Jev is unsure")
         )

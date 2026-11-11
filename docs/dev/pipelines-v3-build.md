@@ -574,7 +574,7 @@ person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
 page          no page attached                          not_met  owner   No page attached
               at_head and a linked PR's head moved      not_met  owner   New commits since the review
               verdict owed                               waiting  jev     Jev is checking
-              verdict failed (3 tries)                   waiting  person  Jev couldn't check this
+              verdict failed (3 tries)                   waiting  person  Jev couldn't check this: <error>
               not_met                                    not_met  owner   Jev sent it back: <reasons>
               unsure                                     waiting  person  Jev is unsure: <reasons>
               met, person_id set, no OK for this version waiting  person  OK <name> (version <n>)

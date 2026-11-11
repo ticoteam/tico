@@ -283,9 +283,11 @@ def test_unsure_or_failed_goes_to_a_person_once_per_visit(c, store):
     second = _attach(c, row, "page:" + fid)
     _say(c, second, "unsure", "Still can't tell", failed=True)
     standing = _standing(c, row)
-    assert (standing.state, standing.on, standing.line) == (R.NOT_MET, WRITER, "Jev couldn't check this"), (
-        "a person already decided one this visit: the next goes back to the owner, not to their list"
-    )
+    assert (standing.state, standing.on, standing.line) == (
+        R.NOT_MET,
+        WRITER,
+        "Jev couldn't check this: Still can't tell",
+    ), "a person already decided one this visit: the next goes back to the owner, not to their list"
 
 
 def test_a_failed_check_is_a_persons_to_decide_and_their_ok_meets_it(c, store):
@@ -293,7 +295,9 @@ def test_a_failed_check_is_a_persons_to_decide_and_their_ok_meets_it(c, store):
     row = _task(c)
     made = _attach(c, row, "page:" + _page(c, store)[0])
     _say(c, made, "unsure", "no model", failed=True)
-    assert _standing(c, row).line == "Jev couldn't check this"
+    assert _standing(c, row).line == "Jev couldn't check this: no model", (
+        "the failure says why: it was Jev, not the page"
+    )
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Done"
 
 
@@ -452,6 +456,59 @@ def test_jevs_send_back_wakes_the_bot_owner_with_the_reasons(store, seeded, monk
     assert len(bodies) == 1 and 'Jev sent back "Spec page": No scope' in bodies[0]
 
 
+def test_jev_with_no_words_of_its_own_still_gives_every_verdict_a_reason(store, seeded, monkeypatch):
+    """Jev answers a probability and no prose (Acme, Nov 11: three Review pages "Jev is unsure" with nothing after it).
+    The verdict, its history line and the standing a person or the owner reads all say what was checked."""
+
+    def build(c):
+        _pipeline(c, page_settings={"rubric": "Says what done looks like"})
+        row = _task(c)
+        _attach(c, row, "page:" + _page(c, store)[0])
+        return row
+
+    row = seeded(build)
+    monkeypatch.setattr(PJ, "ENGINE", _engine(0.5, [], reason=""))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    with store.read() as r:
+        line = _standing(r, row).line
+        notes = [
+            n[0]
+            for n in r.execute(
+                "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='jev_verdict'",
+                (row["id"],),
+            )
+        ]
+    assert line.startswith("Jev is unsure: Jev could not tell") and "Says what done looks like" in line, line
+    assert notes and all("Says what done looks like" in (n or "") for n in notes), notes
+
+
+def test_the_judge_is_told_the_one_linked_prs_repo_number_and_author(store, seeded, monkeypatch):
+    """A Review page is judged against the work's PR, as any attachment is: its repo, number and the login that opened
+    it. With two PRs linked, each is in the context's heads instead."""
+
+    def build(c):
+        _pipeline(c, page_settings={"at_head": True, "rubric": "Reviewed"}, line="Review")
+        row = _task(c)
+        _link_pr(c, row["id"], "acme/app", 12, "aaa")
+        c.execute(
+            "UPDATE task_links SET detail=? WHERE task_id=? AND number=12",
+            (json.dumps({"author_login": "builder-bot"}), row["id"]),
+        )
+        _attach(
+            c, row, "page:" + _page(c, store, "<p>Reviewed commit aaa. Nothing blocks.</p>")[0], requirement="Review"
+        )
+        return row
+
+    seeded(build)
+    calls = []
+    monkeypatch.setattr(PJ, "ENGINE", _engine(0.95, calls))
+    assert V.run(store, H.shift(H.now(), seconds=1)) == 1
+    (state,) = calls
+    work = state["work"]
+    assert (work["repo"], work["pr"], work["author"]) == ("acme/app", 12, "builder-bot")
+    assert work["context"]["heads"] == {"acme/app#12": "aaa"}
+
+
 def test_three_failed_calls_give_the_page_to_a_person(store, seeded, monkeypatch):
     def build(c):
         _pipeline(c)
@@ -470,7 +527,7 @@ def test_three_failed_calls_give_the_page_to_a_person(store, seeded, monkeypatch
             assert verdict["tries"] == tries
     assert verdict["verdict"] == "failed" and verdict["last_error"] == "No judge is configured on this server"
     with store.read() as r:
-        assert _standing(r, row).line == "Jev couldn't check this"
+        assert _standing(r, row).line == "Jev couldn't check this: No judge is configured on this server"
 
 
 def test_a_failed_call_waits_before_the_next_try(store, seeded, monkeypatch):
