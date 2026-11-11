@@ -615,32 +615,46 @@ def release_repo(settings: Row, pr_repo: str) -> str:
     return str(settings.get("release_repo") or "").strip() or pr_repo
 
 
-def _refresh_releases(store: Any, github: GitHub, now: str) -> int:
+def read_releases_now(store: Any, github: GitHub, task_id: str, repo: str | None = None) -> int:
+    """Before Tico asks GitHub to cut a release for a task (github_release): read the releases of each repo the task
+    waits on (or of `repo` alone) now, whatever their last read, and save what is new the way the re-read does. A
+    release the repo already published with the merge is then found instead of cut again, and the task moves on. A
+    call GitHub fails is logged and the ask goes ahead. No transaction may be held."""
+    return _refresh_releases(store, github, _h().now(), task=task_id, repo=repo)
+
+
+def _refresh_releases(store: Any, github: GitHub, now: str, *, task: str | None = None, repo: str | None = None) -> int:
+    """The re-read of releases. With `task`, only that task's waits (in `repo` when given), read whatever their age."""
     H = _h()
     with store.read() as conn:
-        waits = _release_waits(conn)
+        waits = [
+            w
+            for w in _release_waits(conn)
+            if (task is None or w["task"] == task) and (repo is None or w["repo"].lower() == repo.lower())
+        ]
         cutoff = H.shift(now, seconds=-REREAD_S)
         stale = sorted(
             {
                 w["repo"].lower()
                 for w in waits
-                if not conn.execute(
+                if task is not None
+                or not conn.execute(
                     "SELECT 1 FROM github_release_reads WHERE repo=? AND read_at >= ?", (w["repo"], cutoff)
                 ).fetchone()
             }
         )
     changed = 0
-    for repo in stale:
+    for name in stale:
         version = version_now()
         try:
-            found = github.read_releases(repo)
+            found = github.read_releases(name)
         except Exception as exc:  # noqa: BLE001 - read again on the next pass
-            LOG.warning("Reading the releases of %s failed: %s", repo, exc)
+            LOG.warning("Reading the releases of %s failed: %s", name, exc)
             continue
         with store.transaction() as conn:
             for release in found:
-                changed += save_release(conn, repo, release, version)
-            saw_releases(conn, repo, version)
+                changed += save_release(conn, name, release, version)
+            saw_releases(conn, name, version)
     asked = 0
     for wait in waits:
         with store.read() as conn:
@@ -1076,13 +1090,20 @@ def _pr_of(effect: Row) -> tuple[str, int]:
     return split_key(str(effect["item_key"]))
 
 
+def look_first(store: Any, github: "GitHub", effect: Row) -> None:
+    """Before a release asked for is carried out, read the repo's releases from GitHub now (`read_releases_now`): the
+    repo may have published one with the merge since Tico last read them."""
+    if effect["action"] == RELEASE and effect["kind"] == SA.ACT:
+        read_releases_now(store, github, str(effect["task_id"]), str(effect["item_key"]))
+
+
 def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     """GitHub merged the PR before Tico's owed `queue` ran: it is done, with no call. One someone else queued (or set
     to merge by itself) is still carried out, so `tico/merge-ok` is posted on its head and it does not wait forever on
-    a ruleset that requires the check (`enqueue` answers ok for a PR already queued). A release asked for is always
-    asked."""
+    a ruleset that requires the check (`enqueue` answers ok for a PR already queued). A release asked for is not cut
+    when a published release already holds the task's merge (github_release.found_already)."""
     if effect["action"] == RELEASE:
-        return False
+        return GR.found_already(conn, effect)
     metadata = pr(conn, *_pr_of(effect))
     return metadata is not None and metadata["state"] == "merged"
 

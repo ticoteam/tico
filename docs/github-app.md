@@ -39,8 +39,11 @@ requirement names **Release with** `workflow:<file>` (for example `workflow:rele
 alone; with `tag`, it creates the named tag with Contents: write. No bot's token carries either for this. An App made
 before Actions: write was in its manifest needs it once: on the App's GitHub settings page set **Actions** to **Read
 and write**, save, then accept the updated permissions on the installation. Until then the task says "Tico's GitHub
-App lacks Actions: write", it is a person's turn, and health warns "Tico can't cut releases". Then ask again with
-`tico task release <task>`.
+App lacks Actions: write", it is a person's turn, and health warns "Tico can't cut releases" while a task waits in a
+stage whose Release with needs the missing permission (it clears when the permission is accepted, the setting changes,
+or no task waits any more). Then ask again with `tico task release <task>`. Before cutting, Tico reads the repo's
+newest releases from GitHub: when a published release (counted as In a release counts it) already holds the task's
+merge, it cuts nothing, the task moves on, and `tico task release` answers with the release that has it.
 
 ### Letting a bot run workflows
 
@@ -316,7 +319,9 @@ What it needs on the App:
 - **Checks: Read and write.** New Apps ask for it. An App made before asks the Owner to accept the change: on the App's
   GitHub settings page (**Permissions & events → Repository permissions**) set **Checks** to **Read and write**, then
   accept the updated permissions on the installation. Until then nothing is posted; a repository that requires the
-  check refuses every queue, and the owner of each task in Merge is told with GitHub's reason.
+  check refuses every queue, and the owner of each task in Merge is told with GitHub's reason. While a pipeline queues
+  pull requests and GitHub last reported the installation without Checks: write, Health warns "Tico can't post its
+  merge check", once for the organization, with a link to the App's permissions page.
 - **The Merge group event.** New Apps subscribe to it. For an older App, check **Merge group** under **Subscribe to
   events**. Without it Tico never hears that a group needs its checks: on a repository that requires the check, each
   group waits until the merge queue's check timeout and is then removed, and each task's owner hears of the removal.

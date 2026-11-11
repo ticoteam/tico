@@ -8,6 +8,7 @@ JSON. None of them writes a task's status, stage or owner: the engine does. A re
 """
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime, time, timezone
 from typing import Any
@@ -661,6 +662,24 @@ def register(
             owed = H.task_release(c, who.actor, task_id, body.tag, body.version)
             return {"asked": [{"repo": e["item_key"], "how": e["pinned"].rpartition("#")[0]} for e in owed]}
 
+        read_releases_first(request, tid)
         return work(request, tid, body, call)
+
+    def read_releases_first(request: Request, tid: str) -> None:
+        """Read the releases the task waits on from GitHub before the write, with no transaction held: the repo may
+        have published one with the merge since Tico last read them, and then the answer names it instead of asking
+        for another (item_sources/github.py `read_releases_now`). Anything that fails here leaves the call as it was."""
+        service = getattr(request.app.state, "github_app", None)
+        try:
+            if service is None or service.row() is None:
+                return
+            with store.read() as c:
+                task_id = auth.resolve_task(c, request.state.identity, tid)
+            from .github import AppGitHub
+            from .item_sources import github as GS
+
+            GS.read_releases_now(store, AppGitHub(service), task_id)
+        except Exception:  # noqa: BLE001 - the write below answers as it would have
+            logging.getLogger("tico.github").info("No releases read before the release of %s", tid, exc_info=True)
 
     replays()

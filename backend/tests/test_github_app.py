@@ -204,6 +204,25 @@ def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh)
     assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"
 
 
+def test_what_github_reports_of_the_installation_is_kept_for_health_and_forgotten_with_the_app(api, gh):
+    from backend.github_app import PERMISSIONS_SEEN, permission_seen
+
+    def seen(name):
+        with api.app_state.store.read() as c:
+            return permission_seen(c, name)
+
+    connect(api)
+    gh.permissions = {"checks": "read"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert seen("checks") == "read" and seen("deployments") == ""
+    gh.permissions = {"checks": "write"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert seen("checks") == "write"
+    with api.app_state.store.transaction() as c:
+        api.app_state.github_app.forget(c)
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,)).fetchone()
+
+
 def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_write_one(api, gh):
     connect(api)
     runner_token(api, "cmo")
