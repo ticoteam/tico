@@ -342,6 +342,14 @@ KEEP = (
             "postal_mail_grants",
             "postal_mail_settings",  # access and routing settings cannot send in rehearsal mode
             "maintenance_steps",  # each step's switch, "How often" and cursor: a copy keeps the team's settings
+            # Tico's calendar: events (a rule, never instances), who attends, time away, levels and links send nothing
+            "calendars",
+            "calendar_events",
+            "calendar_event_attendees",
+            "calendar_event_search_keys",
+            "calendar_accesses",
+            "calendar_event_links",
+            "absences",
             "factories",
             "agents",
             "archives",
