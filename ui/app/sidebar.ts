@@ -287,7 +287,7 @@ function mailPersonVisible(person: OrgPerson): boolean {
   return false;
 }
 function defaultCollapsed() {
-  const by = orgTreeByParent(), keys = new Set<string>();
+  const by = sidebarTree(), keys = new Set<string>([`g:${BUILT_IN_GROUP}`]);   // Built-in starts folded
   const founder = (by[''] || []).find(n => n.kind === 'person' && !n.person?.reports_to);
   for (const k of Object.keys(by)) {
     if (!k || !by[k]?.length) continue;
@@ -308,7 +308,12 @@ function ensureCollapsed() {
     collapsedSaved = false;
     try {
       const saved = id && localStorage.getItem(collapsedStorageKey());
-      if (saved) { collapsed = new Set(JSON.parse(saved)); collapsedSaved = true; return; }
+      if (saved) {
+        collapsed = new Set(JSON.parse(saved)); collapsedSaved = true;
+        // Folds saved before the Built-in group listed its bots are kept, with Built-in folded once.
+        if (!localStorage.getItem('hub.collapsed.builtin.' + id)) { collapsed.add(`g:${BUILT_IN_GROUP}`); localStorage.setItem('hub.collapsed.builtin.' + id, '1'); saveCollapsed(); }
+        return;
+      }
     } catch {}
     collapsed = defaultCollapsed();
     return;
@@ -770,6 +775,24 @@ function orgTreeWithHelpers(byParent: OrgByParent): OrgByParent {
     if (!(n.kind === 'bot' && isHelperBot(n))) (out[lift(parent)] ||= []).push(n);
   return out;
 }
+// The Team list's tree: the chart's (orgTreeWithHelpers), with the built-ins listed flat in the Built-in group when the
+// company has it (backend/groups.py BUILT_IN), and the top person's own group dissolved (orgOwnGroupDissolve).
+function sidebarTree(): OrgByParent {
+  const raw = orgTreeByParent(), by = orgTreeWithHelpers(raw);
+  if ((S.orgGroups || []).some(g => g.id === BUILT_IN_GROUP))
+    for (const kids of Object.values(raw)) for (const n of kids)
+      if (n.kind === 'bot' && isHelperBot(n) && (isBuiltInBot(n.id) || n.team === BUILT_IN_GROUP)) (by['g:' + BUILT_IN_GROUP] ||= []).push(n);
+  orgOwnGroupDissolve(by);
+  return by;
+}
+// The top person's own top-level group (a seeded "Leadership") is not drawn: what is in it sits at the top of the list,
+// beside the top person, as on the org chart (orgChartShape). Changes `by` in place.
+function orgOwnGroupDissolve(by: OrgByParent): void {
+  const person = orgChartTop(), home = person && Object.keys(by).find(k => k.startsWith('g:') && by[k]!.some(n => n.kind === 'person' && n.id === person.id));
+  if (!home || !(by[''] || []).some(n => n.kind === 'group' && 'g:' + n.id === home) || home === 'g:' + BUILT_IN_GROUP) return;
+  by[''] = [...(by[''] || []).filter(n => !(n.kind === 'group' && 'g:' + n.id === home)), ...by[home]!];
+  delete by[home];
+}
 // One parent's rows in the team chart's order. The screen after Create (ui/first-run.ts) lists its groups the same way.
 function orgSorted<T extends OrgNode>(parent: string, kids: T[] | undefined): T[] {
   const placed = byReportOrder(parent);
@@ -797,7 +820,7 @@ function orgTopPerson(byParent: OrgByParent): OrgPersonNode | null | undefined {
 function renderTree() {
   if (ORG_PENDING && !ORG_PENDING.sent) orgPendingApply(ORG_PENDING);   // a drop waiting for Move shows its new place
   ensureCollapsed();
-  const byParent = orgTreeWithHelpers(orgTreeByParent());
+  const byParent = sidebarTree();
   let needCounts: ReturnType<typeof needsMeCounts> | undefined;                                   // counted once per render, on first use
   const needN = (slug: string): number => (needCounts ||= needsMeCounts()).get('bot:' + slug) || 0;
   // only "needs you" surfaces through a collapsed parent; running is not something to chase
@@ -834,17 +857,22 @@ function renderTree() {
     if (!top) return rec('', 0);
     const isGroup = (n: OrgNode) => n.kind === 'group', under = orgSorted(topKey, byParent[topKey]);
     const rest = orgSorted('', byParent['']!.filter(n => n !== top));
-    return rows('', [top], 0) + rows(topKey, under.filter(isGroup), 1) + rows('', rest.filter(isGroup), 1)
-      + rows(topKey, under.filter(n => !isGroup(n)), 1) + rows('', rest.filter(n => !isGroup(n)), 1);
+    // The Built-in group comes last, after the teammates.
+    const builtIn = (n: OrgNode) => n.kind === 'group' && n.id === BUILT_IN_GROUP, team = (n: OrgNode) => isGroup(n) && !builtIn(n);
+    return rows('', [top], 0) + rows(topKey, under.filter(team), 1) + rows('', rest.filter(team), 1)
+      + rows(topKey, under.filter(n => !isGroup(n)), 1) + rows('', rest.filter(n => !isGroup(n)), 1)
+      + rows(topKey, under.filter(builtIn), 1) + rows('', rest.filter(builtIn), 1);
   };
   // A report's place among its manager's reports: its drop zones above and below.
   const placeAttrs = (key: string, at: OrgPlace) => at.order.includes(key) ? ` data-org-in="${esc(at.parent)}" data-org-place` : '';
   // flat: the history list, one row per bot and person, no children and nothing to drag
   const row = (node: OrgNode, depth: number, flat = false, at: OrgPlace = {parent: '', order: []}): string => {
     if (node.kind === 'group') {
-      const key = 'g:' + node.id, manage = orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
+      // Built-in is Tico's own: nothing is added to it, and it is not renamed, deleted or dragged.
+      const own = node.id !== BUILT_IN_GROUP;
+      const key = 'g:' + node.id, manage = own && orgCanGroups() && !flat, adding = manage && ORG_EDIT?.add === node.id;
       // The plus opens the add menu for this group (ui/app/team-add.ts): recruit a bot, an existing one, or a group.
-      const plus = !flat && teamAddAny(node.id), menuOpen = plus && teamAddOpenFor(node.id);
+      const plus = own && !flat && teamAddAny(node.id), menuOpen = plus && teamAddOpenFor(node.id);
       const kids = byParent[key], isCol = kids && collapsed.has(key) && !adding;
       if (!kids && !manage) return '';
       const renaming = manage && ORG_EDIT?.rename === node.id;
