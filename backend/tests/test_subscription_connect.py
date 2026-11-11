@@ -291,7 +291,9 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         everything = json.dumps([dict(r) for r in c.execute("SELECT * FROM events")]) + json.dumps(
             [dict(r) for r in c.execute("SELECT * FROM model_logins")]
         )
-    assert (kept["login_id"], kept["kind"], kept["category"]) == (login["id"], "connect", "provider_refused")
+    assert (kept["login"], kept["kind"], kept["category"]) == (login["id"], "connect", "provider_refused")
+    assert (kept["step"], kept["exit_code"], kept["elapsed_ms"]) == ("cli_exited", 0, 9100)
+    assert kept["lines"] == [kept["trace"]["screen"]] and len(kept["lines"][0]) <= 200
     assert kept["trace"]["category"] == "provider_refused"
     assert [(p["phase"], p["elapsed_ms"], p["exit_code"]) for p in kept["trace"]["phases"]] == [
         ("cli_started", 4, None),
@@ -311,7 +313,7 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
     ):
         assert leak not in everything, leak
     before = json.loads(rows[-2][0])  # a report with no trace keeps none, and still says which sign-in failed
-    assert "trace" not in before and (before["kind"], before["category"]) == ("connect", "") and before["login_id"]
+    assert "trace" not in before and (before["kind"], before["category"]) == ("connect", "") and before["login"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
 

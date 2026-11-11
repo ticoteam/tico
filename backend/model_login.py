@@ -919,7 +919,7 @@ def report(c, runner_id, lid, body, settings=None):
                 "runner:" + runner_id,
                 "runner.login.failed",
                 runner_id,
-                {"runtime": row["runtime"], "login_id": lid, "kind": row["kind"], "category": "in_use"},
+                {"runtime": row["runtime"], "login": lid, "kind": row["kind"], "category": "in_use"},
             )
             return {"state": "failed"}
     if body.state == "finishing" and row["state"] != "finishing":
@@ -952,11 +952,19 @@ def report(c, runner_id, lid, body, settings=None):
         detail = {"runtime": row["runtime"]}
         if state == "failed":
             # Which sign-in failed and why stay with its audit row (the login's own row is gone after a day), so a
-            # list of failures can show it and nobody has to read the computer's own log: the login, its kind, the
-            # category ("" when the computer named none) and, for a Connect, the scrubbed trace.
+            # list of failures can show it (the support bundle's reads these keys) and nobody has to read the
+            # computer's own log: the login, its kind, the category ("" when the computer named none) and, for a
+            # Connect, the step its command ended on with its exit code, the scrubbed last screen and the whole trace.
             trace = clean_trace(body.trace, row["pending_code"] or "")
-            detail.update(login_id=lid, kind=row["kind"], category=(trace or {}).get("category", ""))
+            detail.update(login=lid, kind=row["kind"], category=(trace or {}).get("category", ""))
             if trace and row["kind"] == "connect":
+                ended = [p for p in trace["phases"] if p["exit_code"] is not None][-1:] or trace["phases"][-1:]
+                for step in ended:
+                    detail.update(step=step["phase"], elapsed_ms=step["elapsed_ms"])
+                    if step["exit_code"] is not None:
+                        detail["exit_code"] = step["exit_code"]
+                if trace["screen"]:
+                    detail["lines"] = [trace["screen"]]
                 detail["trace"] = trace
         H.event(c, "runner:" + runner_id, "runner.login." + state, row["runner_id"], detail)
     # Switch to API key: only now is the key this computer's and the switch's marks lifted (confirm). Until the runner
