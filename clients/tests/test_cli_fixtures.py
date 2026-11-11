@@ -28,6 +28,7 @@ from clients import hubcli, hubtools
 from clients.tico import APIError, Client
 
 HERE = Path(__file__).parent / "cli_fixtures"
+REPO = str(Path(__file__).resolve().parents[2])  # printed as <repo>: a path in an error is the checkout's own
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
 ROOT_HELP = hubcli.parser().description
 
@@ -186,8 +187,8 @@ def run_line(argv, monkeypatch):
         "argv": list(argv),
         "tools": tools,
         "http": http,
-        "stdout": out.getvalue(),
-        "stderr": portable(err.getvalue()),
+        "stdout": out.getvalue().replace(REPO, "<repo>"),
+        "stderr": portable(err.getvalue()).replace(REPO, "<repo>"),
         "exit": code,
     }
 

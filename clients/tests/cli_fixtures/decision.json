@@ -195,7 +195,7 @@
   ],
   "tools": [],
   "http": [],
-  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"no question set 1 (/Volumes/PNYRP60PSSD/orca/workspaces/ticoteam-tico/cli-spec-gms/questions/1.json)\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"no question set 1 (<repo>/questions/1.json)\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
   "stderr": "",
   "exit": 2
  },
