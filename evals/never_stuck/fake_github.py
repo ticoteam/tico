@@ -130,7 +130,7 @@ class RigGitHub:
             self._pr_hook(repo, number)
         return out
 
-    def post_check(self, repo: str, sha: str, ok: bool, summary: str) -> bool:
+    def post_check(self, repo: str, sha: str, ok: bool | None, summary: str) -> bool:
         self._up("post_check")
         return self.gh.post_check(repo, sha, ok, summary)
 

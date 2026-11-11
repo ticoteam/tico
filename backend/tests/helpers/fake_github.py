@@ -120,7 +120,7 @@ class FakeGitHub:
         self.merge_ok_required.add(repo)
 
     def merge_ok_on(self, repo, sha):
-        """The newest `tico/merge-ok` on a commit: True (success), False (failure) or None (none posted)."""
+        """The newest `tico/merge-ok` on a commit: True (success), False (failure), "neutral" or None (none posted)."""
         posted = self.merge_ok.get((repo, sha))
         return posted[-1][0] if posted else None
 
@@ -227,7 +227,7 @@ class FakeGitHub:
         self._call("post_check", repo, sha, ok)
         if not self.checks_write:
             return False
-        self.merge_ok.setdefault((repo, sha), []).append((bool(ok), summary))
+        self.merge_ok.setdefault((repo, sha), []).append(("neutral" if ok is None else bool(ok), summary))
         return True
 
     def merge_group_prs(self, repo, base_ref, head_sha):

@@ -110,6 +110,31 @@ def test_checks_pass_reads_the_checks_at_the_newest_commit(c):
     assert line(c, task_id, "checks_pass") == (R.MET, None, "Checks pass")
 
 
+def test_no_checks_counts_as_met_only_on_a_draft_or_a_repo_that_runs_none(c):
+    """C13 is for a repo with no CI. On a repo whose PRs have run checks, a ready PR with none (an Actions outage, a
+    `[skip ci]` push) waits for them, then is the owner's turn: never a pass with no CI."""
+    engineering(c)
+    new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "merged", "head_sha": "a", "merged_sha": "m", "checks": PASSING}, 1)  # ran checks
+    task_id = new(c, 2)
+    F.save_pr(c, REPO, 2, {"state": "open", "draft": True, "head_sha": "b"}, 1)
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-11), 2)
+    assert line(c, task_id, "checks_pass") == (R.MET, None, "No checks on this repo")  # a draft runs nothing
+    F.save_pr(c, REPO, 2, {"draft": False}, 2)  # marked ready: its checks start now
+    assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Waiting for checks")
+    age(c, "head_seen_at", H.shift(H.now(), hours=-3), 2)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "No checks on acme/app#2 after 2 hours")
+    other = X.new_task(c, X.ANA, "Ship it elsewhere", "eng")["id"]  # a repo none of whose PRs ran checks
+    H.task_link(c, X.ANA, other, "https://github.com/acme/no_ci/pull/7")
+    F.save_pr(c, "acme/no_ci", 7, {"state": "open", "head_sha": "c"}, 1)
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-11), 7)
+    assert line(c, other, "checks_pass") == (R.MET, None, "No checks on this repo")
+    assert not F.runs_checks(c, "acme/no%ci") and F.runs_checks(c, "ACME/app")
+
+
+PASSING = [{"name": "checks", "state": "success"}]
+
+
 def read(c, gh, number=1):
     """GitHub's PR and the checks at its head, saved as the re-read saves them, without moving the task on."""
     F.save_pr(c, REPO, number, F.read_pr(gh, REPO, number), F.version_now())
@@ -291,7 +316,7 @@ def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     F.save_release(c, REPO, {"tag": "v2.0.0-rc.1", "commit_sha": "r1", "published_at": H.now()}, 4)
     rc = F.releases(c, REPO, prereleases=True)[0]
     F.save_included(c, rc["id"], "m", True)
-    assert R.KINDS["item"](c, row, req, None).line == "Waiting for a release of acme/app"  # a dash: pre-release
+    assert R.KINDS["item"](c, row, req, None).line == "Waiting for the next release of acme/app"  # a dash: pre-release
     found = R.KINDS["item"](c, row, {**req, "settings": {"prereleases": True}}, None)
     assert (found.state, found.line) == (R.MET, "In v2.0.0-rc.1")
     found = R.KINDS["item"](c, row, {**req, "settings": {"release_repo": "acme/server"}}, None)
@@ -501,7 +526,7 @@ def test_a_wait_on_github_with_no_word_for_two_hours_is_the_owner_s(company):
         release = {"tag": "v1.0.0", "commit_sha": "0" * 40, "prerelease": False, "published_at": H.now()}
         F.save_release(c, REPO, release, F.version_now())
         F.saw_releases(c, REPO, F.version_now())  # the releases were read just now: GitHub answers again
-        assert line(c, merging, "in_release") == (R.WAITING, "github", "Waiting for a release of acme/app")
+        assert line(c, merging, "in_release") == (R.WAITING, "github", "Waiting for the next release of acme/app")
         c.execute("UPDATE github_release_reads SET read_at=?", (hours_ago,))
         assert line(c, merging, "in_release")[:2] == (R.NOT_MET, RM)
 

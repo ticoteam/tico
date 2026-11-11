@@ -2362,8 +2362,9 @@ class AppGitHub:
         return {"ok": not errors, "how": "merged" if not errors else None, "reason": errors}
 
     def post_check(self, repo, sha, ok, summary):
-        """Tico's `tico/merge-ok` check run on `sha`, completed as success or failure (a new run each time: GitHub
-        counts the newest run of a name). Minted with the server's own Checks: write token (`mint_checks`), which no
+        """Tico's `tico/merge-ok` check run on `sha`, completed as success (`ok` True), failure (False) or neutral (None:
+        a merge group of PRs no Tico task links; GitHub counts neutral as passing) (a new run each time: GitHub counts
+        the newest run of a name). Minted with the server's own Checks: write token (`mint_checks`), which no
         bot's token carries. False when the installation has no Checks: write (nothing posted: the check is only extra
         where a ruleset does not require it, and GitHub refuses the merge where one does)."""
         from .item_sources import github as GS
@@ -2382,8 +2383,11 @@ class AppGitHub:
                 "name": GS.MERGE_OK,
                 "head_sha": sha,
                 "status": "completed",
-                "conclusion": "success" if ok else "failure",
-                "output": {"title": "Signed off in Tico" if ok else "Not queued by Tico", "summary": summary[:500]},
+                "conclusion": "neutral" if ok is None else "success" if ok else "failure",
+                "output": {
+                    "title": "Not a Tico task" if ok is None else "Signed off in Tico" if ok else "Not queued by Tico",
+                    "summary": summary[:500],
+                },
             },
         )
         if response.status_code not in (200, 201):

@@ -1147,6 +1147,39 @@ def _loosens_people_only(conn: "sqlite3.Connection", pipeline_id: str, parsed: R
     return None
 
 
+# How a release is cut and which releases count (In a release's settings): a person's call. A bot that could set
+# Release with could make Tico run a workflow or create a tag on a repo whose releases a person cuts.
+RELEASE_PEOPLE_ONLY = (
+    "Only a person changes how releases are cut: Release with, Pre-releases count and the release repo on {}."
+)
+
+
+def _release_way(settings: object) -> tuple[str, bool, str]:
+    found = _as_dict(_loads(settings)) or {}
+    return (
+        str(found.get("release_with") or "").strip(),
+        bool(found.get("prereleases")),
+        str(found.get("release_repo") or "").strip().lower(),
+    )
+
+
+def _changes_release(conn: "sqlite3.Connection", pipeline_id: str, parsed: Row) -> str | None:
+    """The stage on which the record sets or changes a release setting (`_release_way`), or None. A new requirement
+    counts as a change when it sets one to anything but its default; removing a requirement does not."""
+    old = {
+        str(req["id"]): _release_way(req.get("settings"))
+        for stage in task_engine.stages(conn, pipeline_id)
+        if stage["kind"] == "work"
+        for req in R.on_stage(conn, stage["id"])
+    }
+    for stage in parsed["stages"]:
+        for req in stage["requirements"]:
+            before = old.get(str(req["id"])) if req["id"] else None
+            if _release_way(req["settings"]) != (before or _release_way({})):
+                return str(stage["name"] or "a stage")
+    return None
+
+
 def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | str | None = None) -> Row:
     """Create a pipeline (no id, or an id that does not exist yet) or change one. Returns the record as `read` gives
     it. Refuses `task_settings` with the first problem `check` finds, and `task_changed` when `seen_version` is not the
@@ -1160,6 +1193,9 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
         sign_off = _loosens_people_only(conn, str(existing["id"]), parsed)
         if sign_off:
             _refuse(conn, by, "task_settings", LOOSENS.format(sign_off))
+        release = _changes_release(conn, str(existing["id"]), parsed)
+        if release:
+            _refuse(conn, by, "task_settings", RELEASE_PEOPLE_ONLY.format(release))
     problems += _problems(conn, parsed)
     if problems:
         _refuse(conn, by, "task_settings", problems[0])

@@ -8,7 +8,8 @@ is set up to make one, which the In a release requirement names in its `release_
   default branch. GitHub's Actions: write.
 - `tag`: Tico creates the tag the Release Owner names at the task's merge commit, and the repository's own workflow
   publishes the release from the tag. GitHub's Contents: write.
-- empty: the repository releases on its own (on every merge, or a release train). Tico only waits.
+- empty: the repository releases on its own (on every merge, or a release train) or a person cuts each release. Tico
+  only waits.
 
 Who acts: the Release Owner, a bot, is woken when a task enters Release with nothing asked yet, and asks with ONE Tico
 tool, `tico task release <task>` (`cut`). Tico carries it out through its GitHub App on the Heartbeat (a `release`
@@ -19,8 +20,9 @@ off before release (a bot asking), and while an earlier ask for the same reposit
 One ask serves every task waiting on the same repository: a workflow run asked after a task's merge covers that task
 too, so a batch of merged tasks is one release. A tag covers only the task that named it.
 
-Nothing waits silently. With no way set, a task waits OWN_WAIT_S after its merge, then it is the Release Owner's turn.
-GitHub refusing the ask, or no release CUT_WAIT_S after it, is the Release Owner's turn with why (it may ask again or
+Nothing waits silently. With no way set, a task waits for the next release that holds its merge (`NEXT_RELEASE`): only
+that release ends it, so it is nobody's turn and no bot is woken or told Late; after RELEASE_WAIT_S a person is told
+once (never_stuck). Who may set the way: a person only (pipeline_settings `_changes_release`). GitHub refusing the ask, or no release CUT_WAIT_S after it, is the Release Owner's turn with why (it may ask again or
 say why it cannot); a second failure for the repository since the merge, or a permission only a person can grant
 (`MISSING`), is a person's, once. History: `release_asked`, `release_cut`, `release_refused`, `release_found`.
 
@@ -47,7 +49,11 @@ SOURCE = "github"
 RELEASE = "release"  # GitHub's source action that cuts a release
 REPO = "repo"  # the item a release action is for: the release repository, `owner/name`
 CUT_WAIT_S = 3600  # a release asked for that has not come after this is a failure
-OWN_WAIT_S = 1800  # a repository that releases on its own: the Release Owner's turn this long after the merge
+# With no way set, the next release ends the wait, whoever cuts it. A person is told once after a week: a weekly
+# stable train is the slowest cadence a repository keeps on purpose, and repos that cut pre-releases several times a
+# day never get near it. A stage that expects longer keeps its own time (never_stuck._late_release).
+RELEASE_WAIT_S = 7 * 86400
+NEXT_RELEASE = "Waiting for the next release of"
 FAILS_TO_PERSON = 2  # failures for a repository since a task's merge before the task is a person's
 WORKFLOW = re.compile(r"^workflow:([A-Za-z0-9_.-]+\.ya?ml)$")
 TAG = re.compile(r"^(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._+-]{0,99}$")
@@ -97,6 +103,16 @@ def way(settings: Row) -> tuple[str, str] | None:
         return "tag", ""
     found = WORKFLOW.match(value)
     return ("workflow", found.group(1)) if found else None
+
+
+def waits_for_next_release(requirement: Row) -> bool:
+    """Whether a requirement is In a release with no way set: only the repository's next release, made without Tico,
+    ends its wait (never_stuck tells a person once after RELEASE_WAIT_S, and no bot)."""
+    return (
+        requirement.get("kind") == "item"
+        and (requirement.get("source"), requirement.get("condition")) == (SOURCE, "in_release")
+        and way(requirement.get("settings") or {}) is None
+    )
 
 
 def valid(value: object) -> bool:
@@ -263,19 +279,10 @@ def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, repo: str,
                 owner,
                 f"No release of {repo} asked for yet: cut one with `tico task release {task['id']}{tag}`",
             )
-        # From the merge, or from entering the stage when that came later (a merge read late, a task sent back)
-        waits = [_seconds(at) for at in (metadata.get("merged_at"), visit.get("entered_at")) if at]
-        waited = min((w for w in waits if w is not None), default=None)
-        if waited is None or waited < OWN_WAIT_S:
-            return Standing(requirement, WAITING, SOURCE, f"Waiting for a release of {repo}")
-        return Standing(
-            requirement,
-            NOT_MET,
-            owner,
-            f"No release of {repo} half an hour after the merge, and Tico has no way set to cut one: have the "
-            "pipeline's manager set Release with on In a release (workflow:<file> or tag), or say on the task when "
-            "the release comes",
-        )
+        # The repository releases on its own or a person cuts its releases (it has published some: C31 meets the
+        # rest). Only that release ends the wait: nobody's turn, and never_stuck tells a person once after
+        # `RELEASE_WAIT_S` (never_stuck._late_release).
+        return Standing(requirement, WAITING, SOURCE, f"{NEXT_RELEASE} {repo}")
     newest = found[-1]
     if newest["state"] == "owed":
         return Standing(requirement, WAITING, SOURCE, f"Asking GitHub for a release of {repo} ({said_as(newest)})")
@@ -378,8 +385,8 @@ def cut(
     if how is None:
         refuse(
             "task_requirement",
-            "Tico has no way set to cut a release here: the pipeline's manager sets Release with on In a release "
-            "(workflow:<file> or tag)",
+            "Tico does not cut releases here: this repository's releases come on their own or from a person, and "
+            "the task moves on when one holds the merge",
         )
         return []
     tag = (tag or "").strip()
