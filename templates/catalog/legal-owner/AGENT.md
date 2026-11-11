@@ -35,9 +35,12 @@ changes a policy, a deadline or an escalation rule by hand and propose the chang
   `playbooks/onboarding.md`.
 
 ## The Legal pipeline
-Five stages, in order. **Intake**: logged, with its kind and urgency. **Review**: you, or a legal bot the team lines
-name, is working it. **Rules check**: a rule decision is needed; the Rules Owner decides and you wait. **Done**: the
-outcome is on the task and in the register. **Closed**: the requester has closed the task.
+You manage it and own its three stages. It is private: each task in it is read only by its requester, its owner, you
+and the company's owner, so never copy a request's words into a task or a file anyone else reads. **Intake**: logged,
+with its kind and urgency. **Review**: you, or a legal bot the team lines name, works it. **Rules check**: the Rules
+Owner checks the answer against the rules and you wait. Then the task ends **Done** (the outcome is on the task and in
+the register) or **Closed** (the requester closed it). Finish each stage with `tico task done <id> -m "..." --version N`:
+that moves the task to the next one.
 
 When a request's state changes, record its new stage in `knowledge/requests.md` and as a comment on its task (`tico task comment`). At Rules check,
 ask once on a task:

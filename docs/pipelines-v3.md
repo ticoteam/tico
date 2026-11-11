@@ -585,19 +585,38 @@ are chat, not asks. The setup checklist is onboarding and is not touched.
 
 ## Default pipelines
 
-Eight presets built from the same parts, in three factories. Customers and manager bots can change any of it.
+Ten presets built from the same parts, in four factories. Customers and manager bots can change any of it.
 
 | Factory | Pipelines |
 |---|---|
 | Product | Product → Engineering |
 | Growth | Growth Experiments; Lead → Opportunity |
 | Success | Customer; Success Experiments |
+| Corporate | Legal; Finance (both private) |
 | none | General |
 
 A new org gets General at its first start, and the rest once its setup finishes (Product and Engineering only if it
 builds software). A company set up before a preset existed gets it at its next start. A preset the company retired or
-renamed is never made again. Legal and Finance wait for private pipelines: until then, make their tasks private one by
-one.
+renamed is never made again. Legal and Finance are made only once their owner bot exists (the Legal Owner, the
+Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in.
+
+### Private pipelines
+
+Every task in a private pipeline is a private task. When a task enters one (filed, filed by a stage, or restored) it is
+made private whatever was asked, and its manager and the company's owner go on its reader list. Its requester and owner
+read it as any private task's do. Nobody else: not the manager's group, not an Admin. It can't be made public while it is
+there. The pipeline itself (name, goal, stages, manager, counts) is seen by everyone, so anyone can file into it.
+
+- Private is set as a pipeline is made (a preset, or a new one), or while it holds no task; never changed on one that
+  holds tasks. Only a person turns it off.
+- Its manager reads its tasks, so it is never the Task Manager (which reads no private task) and never empty. The
+  never-stuck ladder stops at the manager, then a person who reads the task (the company's owner).
+- Its stages have no limit (a limit counts tasks a reader can't see) and no OK from a person.
+- Legal: prefix LG, "Contracts and compliance questions answered before they hold up the business". Intake → Review →
+  Rules check. Manager and every stage: the Legal Owner.
+- Finance: prefix F, "Money in, money out, and the books that show both". Intake → Doing → Review. Manager and every
+  stage: the Finance Owner (Bookkeeper). The Bookkeeper's own tasks (its checks, digests and routines) are filed here,
+  at Review: they are filed already taken in and done, so one done finishes each, as in General.
 
 ### General
 
@@ -1171,8 +1190,8 @@ Today: the pipeline editor.
 
 - **Heading:** "Product".
 - **Pipeline fields,** name then value: Goal "Discerning, high-quality specs that ship"; Manager "Product Owner ▾";
-  Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.1: saving a private pipeline is refused. Tasks can
-  still be private one by one.)
+  Factory "Product ▾"; Prefix "P". (No Private switch in 0.6.0-rc.3: a pipeline is private from its preset, or as it
+  is made through the API. See "Private pipelines".)
 - **Stages,** one panel each, closed (▸) until clicked:
   - "▸ Ideas"
   - "▾ Spec", open, with buttons "↑", "↓" and "Remove" at the right. Its fields: Purpose "A spec a builder can build
@@ -1446,7 +1465,8 @@ How each one works on the engine.
 - **Action items from a meeting.** General tasks.
 - **Moving a task to another pipeline.** It lands in that pipeline's first stage.
 - **Goals.** Not tasks. A goal links to the tasks that serve it.
-- **Private tasks.** Same engine. Who can see them doesn't change.
+- **Private tasks.** Same engine. Who can see them doesn't change, except that entering a private pipeline adds its
+  manager and the company's owner.
 - **Work that needs no code but was filed in Engineering.** Closed with a reason, or moved to General.
 - **An idea you don't want yet.** Snooze it with no end date. It leaves the stage's count.
 

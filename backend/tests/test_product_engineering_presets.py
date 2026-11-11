@@ -228,7 +228,9 @@ def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes
     assert _made(c) == ["engineering", "product"]
     assert PS.read(c, "general") == before
     after = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    assert after == events + 2 + len(more.PRESETS)  # with the Growth and Success pipelines
+    assert after == events + 2 + len(more.PRESETS) - len(
+        more.PRIVATE
+    )  # Growth and Success; no Legal Owner or Bookkeeper
 
 
 def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):

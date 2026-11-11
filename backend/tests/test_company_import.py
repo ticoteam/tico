@@ -1661,9 +1661,11 @@ def test_a_new_company_set_up_with_the_default_chart_on_a_fresh_database_has_its
         assert [r[0] for r in c.execute("SELECT id FROM pipelines ORDER BY id")] == [
             "customer",
             "engineering",
+            "finance",  # the default chart's Bookkeeper is live: Finance (private) with it
             "general",
             "growth-experiments",
             "lead",
+            "legal",  # and the Legal Owner: Legal (private)
             "opportunity",
             "product",
             "success-experiments",

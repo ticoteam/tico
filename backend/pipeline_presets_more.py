@@ -1,6 +1,7 @@
 # pyright: strict
 """The default pipelines beyond General, Product and Engineering (docs/pipelines-v3.md "Default pipelines"): Growth
-Experiments, Lead and Opportunity in the Growth factory; Customer and Success Experiments in the Success factory.
+Experiments, Lead and Opportunity in the Growth factory; Customer and Success Experiments in the Success factory; Legal
+and Finance, both private, in the Corporate factory.
 
 `pipeline_settings` takes PRESETS and ROLES into its own and makes these the way it makes Product and Engineering
 (`ensure_presets`): once, after setup finished, never again once the company has one under its id, and with the same
@@ -11,8 +12,12 @@ ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manag
 - A stage's owner is a role found by its template (`pipeline_seats`' way): Lead Generation Owner, Outbound Sales Owner,
   Inbound Sales Owner, Success Owner. The Experiments pipelines' stages belong to the task's assignee instead: the
   channel owner who runs that experiment; a task with nobody assigned wakes the manager to pick one (C25).
-- Legal and Finance are not here: the spec wants them private to their members, and a pipeline can't be private yet
-  (`pipeline_settings._problems`). Tasks can be private one by one.
+- Legal and Finance are private pipelines (backend/private_pipelines.py): every task in them is private, read by its
+  requester, its owner, the pipeline's manager and the company's owner. Each is managed, and each stage owned, by its
+  owner bot: the Legal Owner (template `legal-owner`, not the built-in Counsel) and the Finance Owner (the Bookkeeper,
+  template `bookkeeper`). Nothing on them falls back to the Task Manager, which reads no private task: while the owner
+  bot does not exist the pipeline is not made (PRIVATE, `pipeline_settings.ensure_presets`). Their stages have no
+  limit (a limit counts tasks a reader can't see) and no OK from a person.
 
 Only kinds that exist: Owner says done, a page (Jev checks it; a person OKs Opportunity's Proposal), Linked work done.
 An experiment that spends money or publishes gets an OK from a person added to that one task in On deck.
@@ -34,7 +39,9 @@ LEAD_GENERATION = "lead-generation-owner"
 OUTBOUND_SALES = "outbound-sales-owner"
 INBOUND_SALES = "inbound-sales-owner"
 SUCCESS = "success-owner"
-TEMPLATE_ROLES = (LEAD_GENERATION, OUTBOUND_SALES, INBOUND_SALES, SUCCESS)
+LEGAL_OWNER = "legal-owner"
+FINANCE_OWNER = "bookkeeper"  # the Finance Owner seat is filled by the built-in Bookkeeper (backend/bookkeeper.py)
+TEMPLATE_ROLES = (LEAD_GENERATION, OUTBOUND_SALES, INBOUND_SALES, SUCCESS, LEGAL_OWNER, FINANCE_OWNER)
 
 
 def manager_role(pipeline_id: str) -> str:
@@ -61,7 +68,9 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
 DONE: list[Row] = [{"kind": "owner_done"}]
 
 
-def _pipeline(pid: str, name: str, goal: str, prefix: str, factory: str, stages: list[Row]) -> Row:
+def _pipeline(
+    pid: str, name: str, goal: str, prefix: str, factory: str, stages: list[Row], private: bool = False
+) -> Row:
     return {
         "id": pid,
         "name": name,
@@ -69,7 +78,7 @@ def _pipeline(pid: str, name: str, goal: str, prefix: str, factory: str, stages:
         "prefix": prefix,
         "manager_id": None,
         "owner_id": None,
-        "private": False,
+        "private": private,
         "factory_id": factory,
         "preset": pid,
         "stages": stages,
@@ -131,6 +140,7 @@ def _experiments(pid: str, name: str, goal: str, prefix: str, factory: str) -> R
 FACTORIES: dict[str, Row] = {
     "growth": {"id": "growth", "name": "Growth", "goal": "Find leads and turn them into customers."},
     "success": {"id": "success", "name": "Success", "goal": "Customers reach their goals and refer others."},
+    "corporate": {"id": "corporate", "name": "Corporate", "goal": "Legal and money matters handled, privately."},
 }
 
 # In the order they are made: Opportunity before Lead, which files into it.
@@ -245,7 +255,59 @@ PRESETS: dict[str, Row] = {
         "SX",
         "success",
     ),
+    "legal": _pipeline(
+        "legal",
+        "Legal",
+        "Contracts and compliance questions answered before they hold up the business",
+        "LG",
+        "corporate",
+        [
+            _stage(
+                "legal-intake",
+                "Intake",
+                "Say what is asked, attach the contract or the facts, and what it holds up.",
+                DAY,
+                list(DONE),
+            ),
+            _stage(
+                "legal-review",
+                "Review",
+                "Read it and write the answer: what it means, what to change, and the risk.",
+                2 * DAY,
+                list(DONE),
+            ),
+            _stage(
+                "legal-rules-check",
+                "Rules check",
+                "Ask the Rules Owner to check the answer against the rules. Say done once its answer is on the task.",
+                DAY,
+                list(DONE),
+            ),
+        ],
+        private=True,
+    ),
+    "finance": _pipeline(
+        "finance",
+        "Finance",
+        "Money in, money out, and the books that show both",
+        "F",
+        "corporate",
+        [
+            _stage("finance-intake", "Intake", "Say what is needed, with the amounts and dates.", DAY, list(DONE)),
+            _stage("finance-doing", "Doing", "Do it in Finance.", DAY, list(DONE)),
+            _stage(
+                "finance-review",
+                "Review",
+                "Check the books show it right. Say done when they do.",
+                DAY,
+                list(DONE),
+            ),
+        ],
+        private=True,
+    ),
 }
+# The private presets: made only once their owner bot exists, never handed to the Task Manager.
+PRIVATE = ("legal", "finance")
 
 
 def _roles(pid: str, stages: dict[str, str], ok: tuple[str, ...] = ()) -> Row:
@@ -274,6 +336,16 @@ ROLES: dict[str, Row] = {
         "customer", dict.fromkeys(("customer-onboarding", "customer-active", "customer-referral-asked"), SUCCESS)
     ),
     "success-experiments": _roles("success-experiments", {}),
+    "legal": {
+        "manager": LEGAL_OWNER,
+        "stages": dict.fromkeys(("legal-intake", "legal-review", "legal-rules-check"), LEGAL_OWNER),
+        "ok": (),
+    },
+    "finance": {
+        "manager": FINANCE_OWNER,
+        "stages": dict.fromkeys(("finance-intake", "finance-doing", "finance-review"), FINANCE_OWNER),
+        "ok": (),
+    },
 }
 
 _SLUG = "SELECT id FROM bots WHERE slug=? AND COALESCE(state, 'active') <> 'archived'"
@@ -286,6 +358,8 @@ def resolve(conn: "sqlite3.Connection") -> dict[str, str | None]:
     has_seats = bool(seats._has_seats(conn))
     found: dict[str, str | None] = {}
     for pid in PRESETS:
+        if pid in PRIVATE:
+            continue  # managed by its owner bot, a template role
         row = conn.execute(_SLUG, (manager_role(pid),)).fetchone()
         found[manager_role(pid)] = f"bot:{row[0]}" if row else None
     for template in TEMPLATE_ROLES:

@@ -1,7 +1,8 @@
 """The default pipelines beyond Product and Engineering (backend/pipeline_presets_more.py, docs/pipelines-v3.md
 "Default pipelines"): a new company gets Growth Experiments, Lead and Opportunity in the Growth factory and Customer and
 Success Experiments in the Success factory, once; nothing it retired comes back; no stage is left without an owner; an
-experiment needs a person's OK only when it spends money or publishes. Legal and Finance wait for private pipelines."""
+experiment needs a person's OK only when it spends money or publishes. Legal and Finance (private, in the Corporate
+factory) are made once their owner bot is: the sample company has both, the Bookkeeper and the Legal Owner."""
 
 import pytest
 
@@ -26,6 +27,7 @@ FACTORIES = [
     ("product", ["product", "engineering"]),
     ("growth", ["growth-experiments", "lead", "opportunity"]),
     ("success", ["customer", "success-experiments"]),
+    ("corporate", ["finance", "legal"]),
 ]
 
 
@@ -70,8 +72,7 @@ def test_a_new_company_gets_every_default_pipeline_in_its_factory(environment):
     api = _new_company(environment)
     layout, live = _layout(api)
     assert [(f, sorted(p)) for f, p in FACTORIES] == layout
-    assert live == {"general", "product", "engineering", *NEW}
-    assert not live & {"legal", "finance"}  # private pipelines are not built yet
+    assert live == {"general", "product", "engineering", "finance", "legal", *NEW}
     stages = [r["name"] for r in rows(api, "SELECT name FROM stages WHERE pipeline_id='lead' ORDER BY position")]
     assert stages == ["Targets", "Outreach", "Replies", "Qualified", "Done", "Closed"]
     stages = [
@@ -130,8 +131,9 @@ def test_a_company_set_up_before_these_presets_gets_them_at_its_next_start(envir
         c.execute(f"DELETE FROM stages WHERE pipeline_id IN ({ids})")
         c.execute(f"DELETE FROM pipelines WHERE id IN ({ids})")
         c.execute("DELETE FROM factories WHERE id IN ('growth','success')")
-    assert _layout(api)[0] == [("product", sorted(FACTORIES[0][1]))]
-    assert _layout(_restart(environment))[0] == [(f, sorted(p)) for f, p in FACTORIES]
+    assert _layout(api)[0] == [(f, sorted(p)) for f, p in FACTORIES if f in ("product", "corporate")]
+    # Corporate stayed, so Growth and Success come after it here; what each factory holds is the same.
+    assert sorted(_layout(_restart(environment))[0]) == sorted((f, sorted(p)) for f, p in FACTORIES)
 
 
 # ----------------------------------------------------------------------------- an experiment, end to end

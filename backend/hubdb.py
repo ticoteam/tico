@@ -1923,9 +1923,27 @@ def hook(conn, type, subject, data, actor, revision=None):
     try:
         from . import automations
 
-        automations.on_event(conn, type, subject, data, actor)
+        # An automation hears of a private task only when its owner reads it, as a webhook endpoint's owner does.
+        hears = (lambda row: _automation_hears(conn, row.get("owner_id"), subject)) if task(conn, subject) else None
+        automations.on_event(conn, type, subject, data, actor, access=hears)
     except Exception:
         logging.getLogger(__name__).warning("automations did not hear %s", type, exc_info=True)
+
+
+def _automation_hears(conn, owner, task_id):
+    """Whether an automation owned by `owner` (`person:<id>`, `bot:<id>`, `group:<id>`) may hear an event about task
+    `task_id`: always for a company task; for a private one, only when the owner reads it (webhooks.view_for). A group
+    stands for no one, so it hears of no private task."""
+    row = task(conn, task_id)
+    if not row or not task_private(conn, row):
+        return True
+    kind, _, ident = str(owner or "").partition(":")
+    if kind == "group" or not ident:
+        return False
+    from . import webhooks
+
+    who = "human:" + ident if kind == "person" else str(owner)
+    return webhooks.view_for(conn, who, "task.event", task_id, {}, {}) is not None
 
 
 def _task_facts(conn, task_id, actor, **more):
@@ -5403,6 +5421,7 @@ def task_create(
     lint=True,
     goal_id=None,
     pipeline=None,
+    stage=None,
     link="sub_task",
     number=None,
     mover=None,
@@ -5473,7 +5492,7 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    from . import task_engine, visual_specs
+    from . import private_pipelines, task_engine, visual_specs
 
     body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -5487,6 +5506,13 @@ def task_create(
         or parent
         and task_private(conn, parent)
     )
+    # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
+    # enters (backend/private_pipelines.py).
+    pipeline_id = str(pipeline or GENERAL_PIPELINE)
+    pipe = task_engine.pipeline(conn, pipeline_id)
+    in_private_pipeline = private_pipelines.is_private(pipe)
+    if in_private_pipeline:
+        private = True
     if private:
         requester = actor
     from .roadmaps import settings as roadmap_settings
@@ -5520,8 +5546,6 @@ def task_create(
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
     path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     lane = _lane_for(conn, lane, target, actor)
-    pipeline_id = str(pipeline or GENERAL_PIPELINE)
-    pipe = task_engine.pipeline(conn, pipeline_id)
     if (
         not pipe
         or pipe.get("retired_at")
@@ -5686,6 +5710,8 @@ def task_create(
                 mover=mover,
                 check=(lambda added: readers_check(row["id"], added)) if readers_check else None,
             )
+        if in_private_pipeline:
+            private_pipelines.admit(conn, row["id"], pipe)
         if dedicated:
             conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
         if number is not None:
@@ -5770,6 +5796,7 @@ def task_create(
             wake=wake,
             trigger=trigger,
             source=trigger_source,
+            start=stage,
         )
         _next_number(conn, actor, row["id"], pipeline_id)
         event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
@@ -5957,6 +5984,10 @@ def task_update(
         if not private and parent:
             if task_private(conn, parent):
                 refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
+        from . import private_pipelines
+
+        if not private and private_pipelines.of_task(conn, task_id):
+            refuse(conn, actor, "private", private_pipelines.STAYS_PRIVATE)
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None

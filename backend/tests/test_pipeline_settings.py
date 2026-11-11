@@ -148,7 +148,9 @@ def test_presets_run_on_every_boot_make_general_once_and_never_change_it_again(c
         600,
         None,
     )
-    assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1 + len(more.PRESETS)
+    assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1 + len(more.PRESETS) - len(
+        more.PRIVATE
+    )  # Legal and Finance wait for their bots
 
 
 def test_a_saved_pipeline_reads_back_as_it_was_saved_with_done_and_closed_after_its_stages(c):

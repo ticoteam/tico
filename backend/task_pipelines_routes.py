@@ -1,8 +1,8 @@
 # pyright: strict
 """The pipelines' settings records (docs/dev/pipelines-v3-cutover.md, "HTTP"): read them, save one, retire one.
 
-The record is `pipeline_settings`'s: these routes read and write it whole, and every check is there. A private pipeline
-(phase 2) is not built: everyone on the team reads every pipeline.
+The record is `pipeline_settings`'s: these routes read and write it whole, and every check is there. Everyone on the
+team reads every pipeline record, a private one too: its tasks are private (backend/private_pipelines.py), not it.
 """
 
 import re
