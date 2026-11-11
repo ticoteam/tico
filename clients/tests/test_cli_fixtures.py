@@ -29,6 +29,7 @@ from clients.tico import APIError, Client
 
 HERE = Path(__file__).parent / "cli_fixtures"
 RECORD = os.environ.get("TICO_CLI_FIXTURES_RECORD") == "1"
+ROOT_HELP = hubcli.parser().description
 
 # What the fake API answers, by "METHOD path" with the query left off; anything else answers {"ok": true}.
 _TRIGGER = {"id": "stripe", "name": "Stripe events", "event": "webhook.stripe", "preset": "stripe", "hourly": 60}
@@ -95,7 +96,8 @@ ANSWERS = {
 
 def portable(text):
     """`text` without argparse's usage block (the `usage:` line and the lines indented under it), and its error line as
-    Python 3.12 words it on every version."""
+    Python 3.12 words it on every version. The top-level help (a group typed with no command, `tico email`) is kept to
+    its first line: the rest lists every command, which a slice's fixtures must not freeze."""
     text = re.sub(r", maybe you meant '[^']*'\?", "", text)
     text = re.sub(r"\(choose from ([^)]*)\)", lambda m: "(choose from " + m.group(1).replace("'", "") + ")", text)
     kept, in_usage = [], False
@@ -107,7 +109,8 @@ def portable(text):
             continue
         in_usage = False
         kept.append(line)
-    return "\n".join(kept)
+    text = "\n".join(kept)
+    return ROOT_HELP if text.lstrip().startswith(ROOT_HELP) else text
 
 
 def run_line(argv, monkeypatch):
