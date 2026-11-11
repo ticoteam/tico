@@ -29,6 +29,15 @@ def test_the_core_set_is_the_default_suggestions_and_botops():
     assert len(CORE) >= 19, f"only {len(CORE)} core templates: a card was lost or stopped suggesting by default"
 
 
+@pytest.mark.parametrize("template", CORE)
+def test_each_core_template_passes_the_preflight_checks(tmp_path, template):
+    """The quick half of the slow test below, on every pull request: a template that lost a required section (the
+    Pipeline Manager shipped without `## Owns`) fails here, not at release validation."""
+    card = next(row for row in catalog.cards() if row["template"] == template)
+    repo = catalog.materialize(template, template, tmp_path, NAMES, {}, display_name=card.get("name") or template)
+    assert catalog.check(repo, template) == []
+
+
 @pytest.mark.slow
 def test_a_company_from_each_template_has_its_bot_and_a_first_task_queues_a_job(api, tmp_path):
     for template in CORE:
