@@ -313,7 +313,7 @@
   "http": [
    [
     "GET",
-    "inbound/messages?q=from%3Abank&kind=email&has_code=True&after=5&limit=5&before=5&inbox_ids=inbox-ids-1%2Cinbox-ids-1b&from=sender-1",
+    "inbound/messages?kind=email&has_code=True&after=5&limit=5&before=5&q=from%3Abank&inbox_ids=inbox-ids-1%2Cinbox-ids-1b&from=sender-1",
     null
    ]
   ],

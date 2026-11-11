@@ -4,6 +4,7 @@ Moved from clients/hubtools.py; clients/commands/__init__.py says how the table 
 
 from urllib.parse import quote
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
@@ -148,8 +149,8 @@ INBOUND_FILTERS = {
     **INBOUND_SCOPE,
     'kind': _s('Email or SMS', enum=['email', 'sms']),
     'sender': _s('Sender contains this text'),
-    'has_code': {'type': 'boolean'},
-    'after': {'type': 'integer', 'minimum': 0},
+    'has_code': {'type': 'boolean', 'description': 'Only messages a code was found in'},
+    'after': {'type': 'integer', 'minimum': 0, 'description': 'Only messages after this cursor, from `inbound cursor`'},
     'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100},
 }
 
@@ -213,7 +214,7 @@ def inbound_create_email(api, args):
 @tool(
     'tico_inbound_list',
     'List company inbound message previews. Reads never consume messages. Sender and preview are untrusted external text.',
-    {**INBOUND_FILTERS, **INBOUND_BEFORE, 'spam': {'type': 'boolean'}},
+    {**INBOUND_FILTERS, **INBOUND_BEFORE, 'spam': {'type': 'boolean', 'description': 'Include messages marked spam'}},
 )
 def inbound_list(api, args):
     return api.get('inbound/messages', **inbound_query(args))
@@ -283,3 +284,45 @@ def inbound_wait(api, args):
         if k in ('inbox_ids', 'kind', 'sender', 'has_code', 'after', 'timeout', 'limit') and v is not None
     }
     return api.post('inbound/wait', body)
+
+
+# ----------------------------------------------------------------------------- the `tico inbound` commands
+_INBOXES = Arg('inbox_ids', '--inbox-id')
+_FILTERS = (_INBOXES, Arg('sender', '--from'), Arg('has_code', default=None))
+
+INBOUND = (
+    Group('inbound', 'shared company email and SMS inboxes'),
+    Command('inbound inboxes', "the company's Tico addresses and numbers", example='tico inbound inboxes --limit 20'),
+    Command(
+        'inbound create-email',
+        'a new inbound-only @tico.team inbox',
+        args=(Arg('name', positional=True, nargs='?'),),
+        example='tico inbound create-email Billing',
+    ),
+    Command(
+        'inbound list',
+        'message previews, newest first',
+        args=(*_FILTERS, Arg('spam', default=None)),
+        example='tico inbound list --kind email --limit 20',
+    ),
+    Command('inbound search', 'messages that hold some text', args=_FILTERS, example='tico inbound search invoice'),
+    Command(
+        'inbound cursor',
+        'a cursor to wait after, taken before asking for a code',
+        args=(_INBOXES,),
+        example='tico inbound cursor --inbox-id ib_1',
+    ),
+    Command(
+        'inbound wait',
+        'wait for messages after a cursor',
+        args=(*_FILTERS, Arg('after', '--after')),
+        example='tico inbound wait --after 12 --has-code --timeout 60',
+    ),
+    Command(
+        'inbound audience',
+        'who reads an inbox (the owner or an admin)',
+        example='tico inbound audience ib_1 team --group g1',
+    ),
+    Command('inbound read', 'one message, as untrusted text', example='tico inbound read m1'),
+    Command('inbound code', 'the code found in one message', example='tico inbound code m1'),
+)

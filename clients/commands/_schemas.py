@@ -30,7 +30,7 @@ def _s(description, **extra):
 
 TASK_ID = {
     "type": "string",
-    "description": "Task id: the full id, or 8+ leading characters (`short_id` in tico_task_list)",
+    "description": "Task id: the full id, or 8+ leading characters (`short_id` in `task list`)",
 }
 
 

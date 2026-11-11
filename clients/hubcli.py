@@ -427,7 +427,8 @@ def parser():
     p.add_argument("--version", action=_Version, help="print the Tico version")
     sub = p.add_subparsers(dest="cmd")
     from clients.commands import mail as mail_commands, rules as rule_commands, strategy as strategy_commands
-    from clients.commands import company_page, finance, threads as thread_commands, webhooks
+    from clients.commands import company_page, finance, listening as listening_commands, threads as thread_commands
+    from clients.commands import webhooks
     from clients.commands import computer_upkeep, computers, org as org_commands, pipelines as pipeline_commands
 
     sub.add_parser("whoami", help="who you are, to which company, and through which profile").set_defaults(fn="whoami")
@@ -454,81 +455,9 @@ def parser():
             for flag in ('timezone', 'quiet-start', 'quiet-end'):
                 item.add_argument('--' + flag)
 
-    inbound = sub.add_parser('inbound', help='shared company email and SMS inboxes').add_subparsers(dest='sub')
-    item = inbound.add_parser('inboxes')
-    item.set_defaults(fn='inbound inboxes')
-    item.add_argument('--after')
-    item.add_argument('--limit', type=int)
-    item = inbound.add_parser('create-email')
-    item.add_argument('name', nargs='?')
-    item.set_defaults(fn='inbound create-email')
-    for action in ('list', 'search', 'cursor', 'wait'):
-        item = inbound.add_parser(action)
-        item.set_defaults(fn='inbound ' + action)
-        item.add_argument('--inbox-id', dest='inbox_ids', action='append')
-        if action == 'search':
-            item.add_argument('q')
-        if action in ('list', 'search', 'wait'):
-            item.add_argument('--kind', choices=('email', 'sms'))
-            item.add_argument('--from', dest='sender')
-            item.add_argument('--has-code', action='store_true', default=None)
-            item.add_argument('--after', type=int, required=action == 'wait')
-            item.add_argument('--limit', type=int)
-        if action == 'wait':
-            item.add_argument('--timeout', type=int)
-        if action in ('list', 'search'):
-            item.add_argument('--before', type=int)
-        if action == 'list':
-            item.add_argument('--spam', action='store_true', default=None)
-    item = inbound.add_parser('audience')
-    item.set_defaults(fn='inbound audience')
-    item.add_argument('inbox_id')
-    item.add_argument('audience', choices=('company', 'team'))
-    item.add_argument('--group')
-    for action in ('read', 'code'):
-        item = inbound.add_parser(action)
-        item.set_defaults(fn='inbound ' + action)
-        item.add_argument('message_id')
-        if action == 'read':
-            item.add_argument('--offset', type=int)
-            item.add_argument('--max-chars', type=int)
-
-    letters = sub.add_parser('letter', help='quote and send physical letters through the Gateway').add_subparsers(
-        dest='sub'
-    )
-    item = letters.add_parser('quote', help='quote a PDF or text; never prints until send and approval')
-    item.set_defaults(fn='letter quote')
-    item.add_argument('--file-id')
-    item.add_argument('--text')
-    item.add_argument(
-        '--recipient', required=True, type=json.loads, help='US address as JSON: name, line1, city, state, postal_code'
-    )
-    item.add_argument('--mail-class', choices=['first_class', 'certified', 'certified_return_receipt'])
-    item.add_argument('--color', action='store_true')
-    item.add_argument('--duplex', action='store_true')
-    item.add_argument('--task-id')
-    item.add_argument('--thread-id')
-    item = letters.add_parser('list')
-    item.set_defaults(fn='letter list')
-    item.add_argument('--before')
-    item.add_argument('--limit', type=int)
-    for action in ('send', 'show', 'cancel'):
-        item = letters.add_parser(action)
-        item.set_defaults(fn='letter ' + action)
-        item.add_argument('letter_id')
-    mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(
-        dest='sub'
-    )
-    item = mail.add_parser('list')
-    item.set_defaults(fn='mail list')
-    item.add_argument('--status', choices=('new', 'filed', 'archived', 'failed'))
-    item.add_argument('--kind', choices=('legal', 'government_tax', 'bill', 'check', 'financial', 'junk', 'other'))
-    item.add_argument('--after')
-    item.add_argument('--limit', type=int)
-    item = mail.add_parser('read')
-    item.set_defaults(fn='mail read')
-    item.add_argument('item_id')
-
+    cli_spec.add(sub, listening_commands.INBOUND)  # tico inbound: clients/commands/listening.py
+    cli_spec.add(sub, mail_commands.LETTER)  # tico letter and tico mail: clients/commands/mail.py
+    cli_spec.add(sub, mail_commands.MAIL)
     cli_spec.add(sub, mail_commands.CLI)  # tico email: clients/commands/mail.py
 
     cli_spec.add(sub, company_page.CLI)  # tico company-page, audiences, editions, readers
@@ -3390,39 +3319,7 @@ def parser():
     s = manager.add_parser("bot", help="turn the Task Manager bot itself on or off")
     s.add_argument("state", choices=["on", "off"])
     s.set_defaults(fn="task-manager bot")
-    maintenance = sub.add_parser(
-        "maintenance", help="Maintenance: the scheduled steps, their switches and runs (docs/maintenance.md)"
-    ).add_subparsers(dest="sub")
-    maintenance.add_parser(
-        "status", help="schedule, pause, monthly judge cap, and each step's switch, frequency and last run"
-    ).set_defaults(fn="maintenance")
-    STEPS = ["collect", "clean_up", "check_health", "learn", "suggest", "update", "dream"]
-    s = maintenance.add_parser(
-        "set", help="change the schedule, the pause, the monthly judge cap, or a step's switch and limits"
-    )
-    s.add_argument("--schedule", choices=["hourly", "2h", "3h", "6h", "12h", "daily"], help="how often the run starts")
-    pause = s.add_mutually_exclusive_group()
-    pause.add_argument("--pause", dest="paused", action="store_true", default=None, help="pause the schedule")
-    pause.add_argument("--resume", dest="paused", action="store_false", help="resume the schedule")
-    s.add_argument("--cap", dest="monthly_cap_usd", type=float, help="monthly judge spend cap, in dollars")
-    s.add_argument("--step", choices=STEPS, help="the step the switch, frequency or limits change")
-    on = s.add_mutually_exclusive_group()
-    on.add_argument("--on", dest="enabled", action="store_true", default=None, help="switch the step on")
-    on.add_argument("--off", dest="enabled", action="store_false", help="switch the step off")
-    s.add_argument(
-        "--frequency", choices=["run", "day", "week", "custom"], help="run = every run; day; week; or custom"
-    )
-    s.add_argument("--every", dest="custom_every", type=int, help="custom: every N")
-    s.add_argument("--unit", dest="custom_unit", choices=["hours", "days"], help="custom: hours or days")
-    s.add_argument("--max-bots", dest="max_bots", type=int, help="dream: most bots per run")
-    s.set_defaults(fn="maintenance set")
-    s = maintenance.add_parser("run", help="run now: all steps, or one with --step (the owner or an admin)")
-    s.add_argument("--step", choices=STEPS)
-    s.set_defaults(fn="maintenance run")
-    s = maintenance.add_parser("runs", help="recent runs with each step's status")
-    s.add_argument("--limit", type=int)
-    s.add_argument("--before", help="the next cursor from the page before")
-    s.set_defaults(fn="maintenance runs")
+    cli_spec.add(sub, computers.MAINTENANCE)  # tico maintenance: clients/commands/computers.py
     roadmap = sub.add_parser(
         "roadmap", help="public roadmaps: ranking and company settings (docs/roadmaps.md)"
     ).add_subparsers(dest="sub")
