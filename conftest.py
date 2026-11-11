@@ -51,7 +51,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--api-database-snapshots",
         action="store_true",
-        help="Reuse a worker-local schema snapshot for the shared API fixture",
+        help="Reuse a worker-local schema snapshot for the shared API fixture (on in pytest.ini)",
     )
     parser.addoption(
         "--fresh-api-databases",
@@ -156,12 +156,26 @@ def pytest_xdist_auto_num_workers(config):
     """`-n auto` (pytest.ini): the cores left over, 1 to 8. Several bots run the suite at once on one team box, and
     eight workers each had five suites at a load of 54 on eight cores, next to the hub. Linux counts the load average
     against the cores this process may use; macOS's load average stays high when idle, so a Mac takes its cores.
-    PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
+    A CI VM (CI is set: a remote run, a PR or release job) runs this suite alone: one worker per vCPU, uncapped. The
+    cap and the load left a 16-vCPU remote run 8 workers and half its CPU idle (49 minutes for the suite); more workers
+    than vCPUs measured slower. PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
     if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
         return int(os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"])
     cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    if os.environ.get("CI"):
+        return cores
     free = cores - os.getloadavg()[0] if sys.platform.startswith("linux") else cores
     return max(1, min(PYTEST_WORKERS_MAX, int(free)))
+
+
+def pytest_xdist_make_scheduler(config, log):
+    """`--dist load` (xdist's default) with a module's tests kept on one worker when they share a module fixture, and
+    the slowest work handed out first (backend/tests/worker_schedule.py). Any other --dist keeps xdist's own."""
+    if config.getoption("dist") != "load":
+        return None
+    from backend.tests.worker_schedule import SharedFixtureScheduling
+
+    return SharedFixtureScheduling(config, log)
 
 
 def pytest_sessionfinish(session, exitstatus):
