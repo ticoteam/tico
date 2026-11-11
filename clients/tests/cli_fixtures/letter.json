@@ -1,0 +1,367 @@
+[
+ {
+  "argv": [
+   "letter"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico letter: error: argument sub: invalid choice: 'nope' (choose from quote, list, send, show, cancel) Did you mean: tico letter quote, tico letter cancel?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "quote",
+   "--recipient",
+   "{\"mode\": \"ask_first\"}"
+  ],
+  "tools": [
+   [
+    "tico_letter_quote",
+    {
+     "color": false,
+     "duplex": false,
+     "operation_id": null,
+     "recipient": {
+      "mode": "ask_first"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "letters/quotes",
+    {
+     "recipient": {
+      "mode": "ask_first"
+     },
+     "color": false,
+     "duplex": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "quote",
+   "--file-id",
+   "file-id-1",
+   "--text",
+   "Shipped it",
+   "--recipient",
+   "{\"mode\": \"ask_first\"}",
+   "--mail-class",
+   "first_class",
+   "--color",
+   "--duplex",
+   "--task-id",
+   "task-id-1",
+   "--thread-id",
+   "thread-id-1"
+  ],
+  "tools": [
+   [
+    "tico_letter_quote",
+    {
+     "color": true,
+     "duplex": true,
+     "file_id": "file-id-1",
+     "mail_class": "first_class",
+     "operation_id": null,
+     "recipient": {
+      "mode": "ask_first"
+     },
+     "task_id": "task-id-1",
+     "text": "Shipped it",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "letters/quotes",
+    {
+     "file_id": "file-id-1",
+     "text": "Shipped it",
+     "recipient": {
+      "mode": "ask_first"
+     },
+     "mail_class": "first_class",
+     "color": true,
+     "duplex": true,
+     "task_id": "task-id-1",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_letter_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "letters",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "list",
+   "--before",
+   "before-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_letter_list",
+    {
+     "before": "before-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "letters?before=before-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "send",
+   "letter-id-1"
+  ],
+  "tools": [
+   [
+    "tico_letter_send",
+    {
+     "letter_id": "letter-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "letters/letter-id-1/send",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "send"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico letter send <letter_id>\ntico letter send: error: the following arguments are required: letter_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "show",
+   "letter-id-1"
+  ],
+  "tools": [
+   [
+    "tico_letter_show",
+    {
+     "letter_id": "letter-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "letters/letter-id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "show"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico letter show <letter_id>\ntico letter show: error: the following arguments are required: letter_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "cancel",
+   "letter-id-1"
+  ],
+  "tools": [
+   [
+    "tico_letter_cancel",
+    {
+     "letter_id": "letter-id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "letters/letter-id-1/cancel",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "cancel"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico letter cancel <letter_id>\ntico letter cancel: error: the following arguments are required: letter_id",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "quote",
+   "--text",
+   "Hello",
+   "--recipient",
+   "{\"name\": \"Ada\", \"line1\": \"1 Main St\", \"city\": \"Austin\", \"state\": \"TX\", \"postal_code\": \"78701\"}",
+   "--mail-class",
+   "certified",
+   "--color",
+   "--duplex"
+  ],
+  "tools": [
+   [
+    "tico_letter_quote",
+    {
+     "color": true,
+     "duplex": true,
+     "mail_class": "certified",
+     "operation_id": null,
+     "recipient": {
+      "city": "Austin",
+      "line1": "1 Main St",
+      "name": "Ada",
+      "postal_code": "78701",
+      "state": "TX"
+     },
+     "text": "Hello"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "letters/quotes",
+    {
+     "text": "Hello",
+     "recipient": {
+      "name": "Ada",
+      "line1": "1 Main St",
+      "city": "Austin",
+      "state": "TX",
+      "postal_code": "78701"
+     },
+     "mail_class": "certified",
+     "color": true,
+     "duplex": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "letter",
+   "quote",
+   "--text",
+   "Hello",
+   "--recipient",
+   "not json"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico letter quote: error: argument --recipient: invalid loads value: 'not json'",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "letter",
+   "quote",
+   "--text",
+   "Hello"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico letter quote\ntico letter quote: error: the following arguments are required: --recipient",
+  "exit": 64
+ }
+]

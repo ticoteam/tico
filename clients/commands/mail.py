@@ -72,6 +72,7 @@ def email_cancel(api, args):
 # ----------------------------------------------------------------------------- letters out (backend/letters.py)
 LETTER_ADDRESS = {
     "type": "object",
+    "description": "The US address: name, line1, line2 (optional), city, state, postal_code",
     "additionalProperties": False,
     "properties": {
         name: _s(name.replace('_', ' ')) for name in ("name", "line1", "line2", "city", "state", "postal_code")
@@ -92,8 +93,8 @@ LETTER_ADDRESS = {
         "text": _s("Text or markdown; use instead of file_id"),
         "recipient": LETTER_ADDRESS,
         "mail_class": _s("Postage", enum=["first_class", "certified", "certified_return_receipt"]),
-        "color": {"type": "boolean"},
-        "duplex": {"type": "boolean"},
+        "color": {"type": "boolean", "description": "Print in color"},
+        "duplex": {"type": "boolean", "description": "Print on both sides"},
         "task_id": TASK_ID,
         "thread_id": _s("The thread this letter belongs to"),
     },
@@ -120,7 +121,7 @@ def letter_quote(api, args):
     "On their own still asks for certified mail, courts/agencies, uncertain classification and a new address. "
     "Monthly company and bot caps apply. Retry with the SAME letter_id: never make a replacement after a timeout "
     "or submission_unknown. Printing has no promised undo window.",
-    {"letter_id": _s("The id from tico_letter_quote")},
+    {"letter_id": _s("The id `letter quote` returned")},
     required=("letter_id",),
     writes=True,
 )
@@ -434,3 +435,26 @@ def mail_list(api, args):
 )
 def mail_read(api, args):
     return api.get('postal/items/' + quote(args['item_id'], safe=''))
+
+
+# `tico letter ...` and `tico mail ...` (clients/cli_spec.py)
+LETTER = (
+    Group('letter', 'quote and send physical letters through the Gateway'),
+    Command(
+        'letter quote',
+        'quote a PDF or text; never prints until send and approval',
+        args=(Arg('recipient', '--recipient', type=json.loads, metavar='JSON'),),
+        example='tico letter quote --file-id f_1 --recipient \'{"name": "Ada", "line1": "1 Main St", "city": "Austin", '
+        '"state": "TX", "postal_code": "78701"}\'',
+    ),
+    Command('letter list', 'letters out, newest first', example='tico letter list --limit 10'),
+    Command('letter send', 'send a quoted letter; a person approves it first', example='tico letter send ltr_1'),
+    Command('letter show', 'one letter out: proof, addresses, status', example='tico letter show ltr_1'),
+    Command('letter cancel', 'ask to cancel a letter', example='tico letter cancel ltr_1'),
+)
+
+MAIL = (
+    Group('mail', 'physical mail the company received (scanned letters)'),
+    Command('mail list', 'letters received, newest first', example='tico mail list --status new --kind legal'),
+    Command('mail read', 'one letter received, with its scan', example='tico mail read mail_1'),
+)

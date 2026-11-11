@@ -489,15 +489,32 @@ def maintenance_status(api, args):
     "day, week, or custom with `custom_every` and `custom_unit`) and `max_bots` for dream. "
     "The owner or an admin.",
     {
-        "schedule": {"type": "string", "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"]},
+        "schedule": {
+            "type": "string",
+            "enum": ["hourly", "2h", "3h", "6h", "12h", "daily"],
+            "description": "How often the run starts",
+        },
         "paused": {"type": "boolean", "description": "true pauses the schedule, false resumes it"},
-        "monthly_cap_usd": {"type": "number", "minimum": 0, "maximum": 100000},
-        "step": {"type": "string", "enum": MAINTENANCE_STEPS},
+        "monthly_cap_usd": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100000,
+            "description": "The monthly judge spend cap, in dollars",
+        },
+        "step": {
+            "type": "string",
+            "enum": MAINTENANCE_STEPS,
+            "description": "The step whose switch, frequency or limit changes",
+        },
         "enabled": {"type": "boolean", "description": "The step on or off"},
-        "frequency": {"type": "string", "enum": ["run", "day", "week", "custom"]},
-        "custom_every": {"type": "integer", "minimum": 1, "maximum": 999},
-        "custom_unit": {"type": "string", "enum": ["hours", "days"]},
-        "max_bots": {"type": "integer", "minimum": 1, "maximum": 20},
+        "frequency": {
+            "type": "string",
+            "enum": ["run", "day", "week", "custom"],
+            "description": "How often the step runs: every run, a day, a week, or custom",
+        },
+        "custom_every": {"type": "integer", "minimum": 1, "maximum": 999, "description": "Custom: every N units"},
+        "custom_unit": {"type": "string", "enum": ["hours", "days"], "description": "Custom: the unit"},
+        "max_bots": {"type": "integer", "minimum": 1, "maximum": 20, "description": "Dream: most bots a run"},
     },
     writes=True,
 )
@@ -534,7 +551,7 @@ def maintenance_runs(api, args):
     "schedule, so a step runs only when it is due and its switch is on; `step` runs that step even when it is not due. "
     "A run already going is returned, not a second one. "
     "The owner or an admin.",
-    {"step": {"type": "string", "enum": MAINTENANCE_STEPS}},
+    {"step": {"type": "string", "enum": MAINTENANCE_STEPS, "description": "Only this step, due or not"}},
     writes=True,
 )
 def maintenance_run(api, args):
@@ -617,4 +634,36 @@ COMPUTER = (
         "the server's release and each computer's release, runner version and update state",
         example="tico computer versions",
     ),
+)
+
+
+MAINTENANCE = (
+    Group("maintenance", "Maintenance: the scheduled steps, their switches and runs (docs/maintenance.md)"),
+    Command(
+        "maintenance status",
+        "schedule, pause, monthly judge cap, and each step's switch, frequency and last run",
+        tool="tico_maintenance",
+        example="tico maintenance status",
+    ),
+    Command(
+        "maintenance set",
+        "change the schedule, the pause, the monthly judge cap, or a step's switch and limits",
+        args=(
+            Arg("paused", "--pause", action="store_const", const=True),
+            Arg("paused", "--resume", action="store_const", const=False),
+            Arg("monthly_cap_usd", "--cap", metavar="DOLLARS"),
+            Arg("enabled", "--on", action="store_const", const=True),
+            Arg("enabled", "--off", action="store_const", const=False),
+            Arg("custom_every", "--every", metavar="N"),
+            Arg("custom_unit", "--unit"),
+        ),
+        exclusive=(("paused",), ("enabled",)),
+        example="tico maintenance set --step learn --on --frequency custom --every 6 --unit hours",
+    ),
+    Command(
+        "maintenance run",
+        "run now: all steps, or one with --step (the owner or an admin)",
+        example="tico maintenance run",
+    ),
+    Command("maintenance runs", "recent runs with each step's status", example="tico maintenance runs --limit 5"),
 )
