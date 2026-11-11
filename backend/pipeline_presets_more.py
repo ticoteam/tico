@@ -1,7 +1,7 @@
 # pyright: strict
 """The default pipelines beyond General, Product and Engineering (docs/pipelines-v3.md "Default pipelines"): Growth
-Experiments, Lead and Opportunity in the Growth factory; Customer and Success Experiments in the Success factory; Legal
-and Finance, both private, in the Corporate factory.
+Experiments, Growth Monitoring, Lead and Opportunity in the Growth factory; Customer, Success Experiments and Success
+Monitoring in the Success factory; Legal and Finance, both private, in the Corporate factory.
 
 `pipeline_settings` takes PRESETS and ROLES into its own and makes these the way it makes Product and Engineering
 (`ensure_presets`): once, after setup finished, never again once the company has one under its id, and with the same
@@ -9,9 +9,12 @@ ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manag
 
 - A pipeline's manager is its own Pipeline Manager: the bot whose slug is `<pipeline>-pipeline-manager` (the default
   chart's seat; every Pipeline Manager shares the `pipeline-manager` template, so the template can't tell them apart).
+  A Monitoring pipeline is the exception: the seat that manages its factory's Experiments manages it too (WITH), and it
+  is made only where that Experiments pipeline is.
 - A stage's owner is a role found by its template (`pipeline_seats`' way): Lead Generation Owner, Outbound Sales Owner,
-  Inbound Sales Owner, Success Owner. The Experiments pipelines' stages belong to the task's assignee instead: the
-  channel owner who runs that experiment; a task with nobody assigned wakes the manager to pick one (C25).
+  Inbound Sales Owner, Success Owner. The Experiments and Monitoring pipelines' stages belong to the task's assignee
+  instead: the channel Owner who runs that experiment and then watches what it kept; a task with nobody assigned wakes
+  the manager to pick one (C25).
 - Legal and Finance are private pipelines (backend/private_pipelines.py): every task in them is private, read by its
   requester, its owner, the pipeline's manager and the company's owner. Each is managed, and each stage owned, by its
   owner bot: the Legal Owner (template `legal-owner`, not the built-in Counsel) and the Finance Owner (the Bookkeeper,
@@ -19,8 +22,9 @@ ladder for a role no bot fills yet (a stage's owner goes to the pipeline's manag
   bot does not exist the pipeline is not made (PRIVATE, `pipeline_settings.ensure_presets`). Their stages have no
   limit (a limit counts tasks a reader can't see) and no OK from a person.
 
-Only kinds that exist: Owner says done, a page (Jev checks it; a person OKs Opportunity's Proposal), Linked work done.
-An experiment that spends money or publishes gets an OK from a person added to that one task in On deck.
+Only kinds that exist: Owner says done, a page (Jev checks it; a person OKs Opportunity's Proposal and, people only, an
+experiment's Go-live page), Linked work done. Ideas and Watching are by hand with "a person's request moves on" off:
+what rests there stays until someone moves it, and nothing there is late or woken.
 """
 
 from typing import TYPE_CHECKING, Any
@@ -45,8 +49,9 @@ TEMPLATE_ROLES = (LEAD_GENERATION, OUTBOUND_SALES, INBOUND_SALES, SUCCESS, LEGAL
 
 
 def manager_role(pipeline_id: str) -> str:
-    """A pipeline's manager role: its Pipeline Manager seat's slug."""
-    return f"{pipeline_id}-pipeline-manager"
+    """A pipeline's manager role: its Pipeline Manager seat's slug. A Monitoring pipeline's is its Experiments
+    pipeline's (WITH): one seat manages both."""
+    return f"{WITH.get(pipeline_id, pipeline_id)}-pipeline-manager"
 
 
 def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements: list[Row], **more: Any) -> Row:
@@ -56,6 +61,7 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
         "purpose": purpose,
         "owner": None,  # the stage's role (ROLES), filled by pipeline_settings.preset
         "by_hand": False,
+        "requests_move_on": False,  # a by-hand stage here holds every task until someone moves it
         "task_limit": None,
         "expected_minutes": minutes,
         "expected_bots_only": True,
@@ -87,49 +93,83 @@ def _pipeline(
     }
 
 
+GO_LIVE_RUBRIC = (
+    "Shows the thing as it will look when it goes live (the email, the page change, the ad), and names the metric it "
+    "moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says the brand check "
+    "passed."
+)
+RESULTS_RUBRIC = (
+    "Gives the number before and after, each with its dates and its source, and the result, tagged result:failed, "
+    "result:worked-once or result:watching. Worked means the baseline was beaten and at least 60% of the predicted "
+    "change was reached. On result:watching it links the Monitoring task filed as this task's follow-up."
+)
+
+
+def _people_only(requirement: Row) -> Row:
+    """A person's OK no bot can give or push past (pipeline_settings `_people_only`)."""
+    return {**requirement, "who_oks": "people_only"}
+
+
 def _experiments(pid: str, name: str, goal: str, prefix: str, factory: str) -> Row:
-    """Ideas → On deck → Running → Measuring. Every stage is the assignee's. Done is an experiment measured, kept or
-    dropped (its Results page says which); Closed is one stopped before it was measured."""
+    """Ideas → Building → Running. Every stage is the assignee's: the channel Owner whose number the bet moves, start to
+    finish. Ideas rest until someone starts one (no person's request moves on by itself). The one person gate is the
+    Go-live page in Building, people only. Done is an experiment measured, its result tagged; Closed is one stopped
+    before it was measured."""
     stages = [
         _stage(
             f"{pid}-ideas",
             "Ideas",
-            "Ideas wait here. Move one to On deck when it is worth trying. Snooze one to park it.",
+            "One line each: what to try and why. Ideas rest here. Start your own by moving it to Building when "
+            "Building has room.",
             None,
             [],
             by_hand=True,
         ),
         _stage(
-            f"{pid}-on-deck",
-            "On deck",
-            "Plan it: what you will try, what it costs, where it shows, and the number that says it worked. If it spends "
-            "money or publishes anything, add an OK from a person to this task before you say done.",
-            DAY,
-            list(DONE),
+            f"{pid}-building",
+            "Building",
+            "Make the real thing, not yet live: the email, the page change, the ad. Attach a Go-live page. A person "
+            "OKs it before it goes live.",
+            3 * DAY,
+            [_people_only({"kind": "page", "line": "Go-live page", "settings": {"rubric": GO_LIVE_RUBRIC}})],
+            task_limit=6,
         ),
         _stage(
             f"{pid}-running",
             "Running",
-            "Run it as planned. Say done once it has run long enough to measure.",
-            7 * DAY,
-            list(DONE),
-            task_limit=3,
+            "Put it live and snooze this task to its end date. When it wakes, measure it, tag the result and attach a "
+            "Results page. If it is kept and watched, file a Monitoring task as its follow-up first.",
+            2 * DAY,
+            [{"kind": "page", "line": "Results page", "settings": {"rubric": RESULTS_RUBRIC}}],
+        ),
+    ]
+    for stage in stages:
+        stage["owner"] = ASSIGNEE
+    return _pipeline(pid, name, goal, prefix, factory, stages)
+
+
+def _monitoring(pid: str, name: str, goal: str, prefix: str, factory: str) -> Row:
+    """Watching → Slipping. One task per kept thing (a campaign, a page set, a flow), the channel Owner's in both
+    stages. Watching is where it rests: by hand, nothing is late and nobody is woken. The Owner's Watch routine moves
+    it to Slipping when its number leaves its range; fixed, the Owner moves it back. Closed is a kept thing retired,
+    with the reason."""
+    stages = [
+        _stage(
+            f"{pid}-watching",
+            "Watching",
+            "One task per kept thing: what it is (a link), its KPI and range, and the experiment it came from. It "
+            "rests here. Move it to Slipping when its number leaves its range.",
+            None,
+            [],
+            by_hand=True,
         ),
         _stage(
-            f"{pid}-measuring",
-            "Measuring",
-            "Measure it and attach a Results page: the number before and after, and keep or drop.",
-            2 * DAY,
-            [
-                {
-                    "kind": "page",
-                    "line": "Results page",
-                    "settings": {
-                        "rubric": "Names the number the plan set, what it was before and after, and whether to keep "
-                        "or drop the change."
-                    },
-                }
-            ],
+            f"{pid}-slipping",
+            "Slipping",
+            "Fix it, then move it back to Watching. If it can't be fixed, file an idea and close this task with the "
+            "reason.",
+            3 * DAY,
+            list(DONE),
         ),
     ]
     for stage in stages:
@@ -255,6 +295,12 @@ PRESETS: dict[str, Row] = {
         "SX",
         "success",
     ),
+    "growth-monitoring": _monitoring(
+        "growth-monitoring", "Growth Monitoring", "Keep what worked working.", "GM", "growth"
+    ),
+    "success-monitoring": _monitoring(
+        "success-monitoring", "Success Monitoring", "Keep what worked for customers working.", "SM", "success"
+    ),
     "legal": _pipeline(
         "legal",
         "Legal",
@@ -308,6 +354,9 @@ PRESETS: dict[str, Row] = {
 }
 # The private presets: made only once their owner bot exists, never handed to the Task Manager.
 PRIVATE = ("legal", "finance")
+# Each Monitoring pipeline goes with its factory's Experiments: made only where that one is, and managed by the same
+# seat (no Monitoring Pipeline Manager seat).
+WITH: dict[str, str] = {"growth-monitoring": "growth-experiments", "success-monitoring": "success-experiments"}
 
 
 def _roles(pid: str, stages: dict[str, str], ok: tuple[str, ...] = ()) -> Row:
@@ -317,7 +366,9 @@ def _roles(pid: str, stages: dict[str, str], ok: tuple[str, ...] = ()) -> Row:
 # Who fills each preset's manager and stage owners, and which stages' page a person OKs (pipeline_settings.ROLES).
 # A stage left out keeps its preset owner: the Experiments pipelines' assignee.
 ROLES: dict[str, Row] = {
-    "growth-experiments": _roles("growth-experiments", {}),
+    "growth-experiments": _roles("growth-experiments", {}, ok=("growth-experiments-building",)),
+    "growth-monitoring": _roles("growth-monitoring", {}),
+    "success-monitoring": _roles("success-monitoring", {}),
     "opportunity": _roles(
         "opportunity",
         dict.fromkeys(("opportunity-talking", "opportunity-proposal", "opportunity-closing"), INBOUND_SALES),
@@ -335,7 +386,7 @@ ROLES: dict[str, Row] = {
     "customer": _roles(
         "customer", dict.fromkeys(("customer-onboarding", "customer-active", "customer-referral-asked"), SUCCESS)
     ),
-    "success-experiments": _roles("success-experiments", {}),
+    "success-experiments": _roles("success-experiments", {}, ok=("success-experiments-building",)),
     "legal": {
         "manager": LEGAL_OWNER,
         "stages": dict.fromkeys(("legal-intake", "legal-review", "legal-rules-check"), LEGAL_OWNER),

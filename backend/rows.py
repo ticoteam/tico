@@ -1396,6 +1396,7 @@ class StageRow(TypedDict):
     purpose: str
     owner: str | None
     by_hand: int
+    requests_move_on: int
     task_limit: int | None
     expected_minutes: int | None
     expected_bots_only: int
