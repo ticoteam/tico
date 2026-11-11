@@ -93,7 +93,9 @@ class Hub:
             public_url=f"http://127.0.0.1:{port}",
             test_identities={
                 TOKEN: Identity("human:owner", "owner", OWNER_EMAIL),
-                BOT_TOKEN: Identity("bot:botops", "bot", agent="hermes"),  # BotOps signed in as an agent, to ask as a bot does
+                BOT_TOKEN: Identity(
+                    "bot:botops", "bot", agent="hermes"
+                ),  # BotOps signed in as an agent, to ask as a bot does
             },
         )
         self.app = create_app(self.settings)
@@ -175,7 +177,11 @@ def main(argv=None):
         facts = build(hub, args.state)
         server = uvicorn.Server(
             uvicorn.Config(
-                hub.app, host="127.0.0.1", port=sock.getsockname()[1], log_level="warning", lifespan="off",
+                hub.app,
+                host="127.0.0.1",
+                port=sock.getsockname()[1],
+                log_level="warning",
+                lifespan="off",
                 timeout_graceful_shutdown=1,
             )
         )
@@ -187,7 +193,10 @@ def main(argv=None):
             time.sleep(0.05)
         if not server.started:
             raise RuntimeError("the hub did not start")
-        print(json.dumps({"url": hub.settings.public_url, "state": args.state, "token": TOKEN, "facts": facts}), flush=True)
+        print(
+            json.dumps({"url": hub.settings.public_url, "state": args.state, "token": TOKEN, "facts": facts}),
+            flush=True,
+        )
         while True:
             time.sleep(1)
     finally:
