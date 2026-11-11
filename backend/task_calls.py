@@ -402,11 +402,11 @@ def task_answer(
     seen_version: int | str | None = None,
     *,
     own_click: bool = False,
-    page_version: int | str | None = None,
+    page_version: str | None = None,
 ) -> Row:
     """Answer what is asked: `ok`, `no` with a note (send back) or `again` (look again) on an OK; `ok` or `no` on a
-    page, for the version shown (`page_version`); the choice or the text on a question; `done` on the owner's own
-    work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
+    page, for the page shown (`page_version`, `<file id>@<version>`); the choice or the text on a question; `done` on
+    the owner's own work. If that was the last thing missing the task moves on. The result carries `answer_id`. `own_click` says the
     request is the person's own click in their own session (task_asks.own_click): only that OKs an OK the person
     asked themself."""
     from . import answers as A
@@ -425,6 +425,24 @@ def task_answer(
             own_click=own_click,
             page_version=page_version,
         )
+
+
+@_task_write()
+def task_requeue(conn: "sqlite3.Connection", actor: str, task_id: str, seen_version: int | None = None) -> list[Row]:
+    """Queue again (merge_queue.requeue), as a task write: a private task's refusal keeps none of its words."""
+    from . import merge_queue
+
+    return merge_queue.requeue(conn, task_id, actor, seen_version=seen_version)
+
+
+@_task_write()
+def task_page_attach(
+    conn: "sqlite3.Connection", actor: str, task_id: str, requirement: str, ref: str, seen_version: int | None = None
+) -> Row:
+    """Attach a page (task_pages.attach), as a task write: a private task's refusal keeps none of its words."""
+    from . import task_pages
+
+    return task_pages.attach(conn, task_id, requirement, ref, actor, seen_version=seen_version)
 
 
 @_task_write()
