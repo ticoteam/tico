@@ -54,7 +54,7 @@ def test_every_hub_command_in_the_template_parses():
     assert not failures, "\n".join(failures)
 
 
-# Refresh copies only AGENT.md, playbooks/ and skills/ to a live Assistant (clients/catalog.py PRODUCT_OWNED). Anything the
+# Refresh brings AGENT.md, playbooks/ and skills/ to a live Assistant (clients/catalog.py PRODUCT_OWNED). Anything the
 # instructions name under those folders must exist, or an upgraded install would read a file that never arrives.
 PATH_IN_TEXT = re.compile(r"`((?:playbooks|skills)/[\w./-]+)`")
 

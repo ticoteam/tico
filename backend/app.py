@@ -5487,6 +5487,9 @@ def create_app(settings=None):
     from .memory_history import MAX_REPORT_BYTES, install_memory_history
 
     install_memory_history(app, store, auth, mutate)
+    from . import template_refresh
+
+    template_refresh.install(app, store, auth, mutate)  # a bot follows its template (docs/updates.md)
     from . import dream
 
     dream.install(app, store, auth, mutate, task_create, cap_before_preflight)  # a bot's Dream (docs/learnings.md)

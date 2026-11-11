@@ -149,6 +149,11 @@ class Materialize(unittest.TestCase):
             self.make(folder="../assistant")
 
 
+NOTHING = {"added": [], "updated": [], "removed": [], "kept": []}
+SEAT_CARD = CARD.replace("template: assistant", "template: sales").replace("bootstrap: true", "bootstrap: false")
+SETTINGS = '{"permissions": {"allow": ["Read"], "deny": ["Bash(gh repo delete *)"]}}\n'
+
+
 class Refresh(unittest.TestCase):
     """A built-in bot follows the release: the product's instructions and playbooks are brought up when the template
     changed, and whatever the bot improved and wrote itself stays."""
@@ -209,7 +214,7 @@ class Refresh(unittest.TestCase):
         path.unlink()
         path.symlink_to("../knowledge/kept.md")
         (self.template / "playbooks/fleet.md").write_text("New fleet rules.\n")
-        self.assertEqual(self.refresh(), ["playbooks/fleet.md"])
+        self.assertEqual(self.refresh()["updated"], ["playbooks/fleet.md"])
         self.assertFalse(path.is_symlink())
         self.assertEqual(path.read_text(), "New fleet rules.\n")
         self.assertEqual(kept.read_text(), "Keep my notes.\n")
@@ -219,17 +224,137 @@ class Refresh(unittest.TestCase):
         (self.path / "playbooks" / "mine.md").write_text("A playbook the bot wrote.\n")
         (self.path / "state.md").write_text("# State\n\nMid-task.\n")
         (self.template / "playbooks" / "fleet.md").write_text("Check the fleet, then fix it, for {{company_name}}.\n")
-        self.assertEqual(self.refresh(), ["playbooks/fleet.md"])
+        self.assertEqual(self.refresh(), {**NOTHING, "updated": ["playbooks/fleet.md"]})
         self.assertEqual(
             (self.path / "playbooks" / "fleet.md").read_text(), "Check the fleet, then fix it, for Acme Ltd.\n"
         )
         self.assertEqual((self.path / "playbooks" / "mine.md").read_text(), "A playbook the bot wrote.\n")
         self.assertIn("Mid-task.", (self.path / "state.md").read_text())
-        self.assertIn("Refresh 1 product file", git(self.path, "log", "-1", "--format=%s"))
+        self.assertIn("Refresh 1 file from the assistant template", git(self.path, "log", "-1", "--format=%s"))
         self.assertEqual(
             git(self.path, "show", "HEAD~1:playbooks/fleet.md"), "Improved by the bot."
         )  # kept in the history
-        self.assertEqual(self.refresh(), [])  # once
+        self.assertEqual(self.refresh(), NOTHING)  # once
+
+
+class SeatRefresh(unittest.TestCase):
+    """Every bot made from a template follows it after an update, not only the built-in ones: a file it was given and
+    never changed takes the newer template's, a file it or a person changed is kept and reported."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.catalog = Path(self.tmp.name) / "catalog"
+        self.template = fixture(self.catalog, "sales", SEAT_CARD)
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads for {{company_name}}.\n")
+        (self.template / "playbooks" / "old.md").write_text("A playbook the next release drops.\n")
+        (self.template / ".claude").mkdir()
+        (self.template / ".claude" / "settings.json").write_text(SETTINGS)
+        (self.template / "knowledge").mkdir()
+        (self.template / "knowledge" / "README.md").write_text("What this bot knows.\n")
+        self.instructions = self.reviewed(AGENT)
+        self.path = self.make("sam")
+
+    def reviewed(self, agent):
+        """What a person reviews when a seat is filled: the template filled in, then the seat's job description."""
+        values = {**NAMES, "bot_name": "Sam"}
+        return catalog.fill(agent, values) + "\n## Job description\nAnswer Acme's inbound leads.\n"
+
+    def make(self, slug):
+        return catalog.materialize(
+            "sales",
+            slug,
+            Path(self.tmp.name) / "ws",
+            NAMES,
+            ANSWERS,
+            display_name="Sam",
+            instructions=self.instructions,
+            directory=self.catalog,
+        )
+
+    def refresh(self, version="0.6.0-rc.5"):
+        return catalog.refresh(
+            "sales", self.path, NAMES, "Sam", self.catalog, instructions=self.instructions, version=version
+        )
+
+    def test_a_seat_bot_takes_a_changed_playbook_and_settings_file_and_keeps_its_job_description(self):
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads for {{company_name}} within an hour.\n")
+        newer = SETTINGS.replace('"Read"', '"Read", "Bash(gh pr checks *)"')
+        (self.template / ".claude" / "settings.json").write_text(newer)
+        (self.template / "AGENT.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
+        self.assertEqual(
+            self.refresh(), {**NOTHING, "updated": [".claude/settings.json", "AGENT.md", "playbooks/leads.md"]}
+        )
+        self.assertEqual(
+            (self.path / "playbooks" / "leads.md").read_text(), "Answer leads for Acme Ltd within an hour.\n"
+        )
+        self.assertEqual((self.path / ".claude" / "settings.json").read_text(), newer)
+        agent = (self.path / "AGENT.md").read_text()
+        self.assertIn("## Done means", agent)
+        self.assertTrue(agent.endswith("## Job description\nAnswer Acme's inbound leads.\n"))
+        self.assertIn("Acme Ltd", (self.path / "knowledge" / "company.md").read_text())
+        stamp = yaml.safe_load((self.path / catalog.STAMP).read_text())
+        self.assertEqual(stamp["version"], "0.6.0-rc.5")
+        self.assertIn("Refresh 3 files from the sales template", git(self.path, "log", "-1", "--format=%s"))
+        self.assertEqual(self.refresh(), NOTHING)  # a second run changes nothing
+        self.assertIn("Refresh 3 files", git(self.path, "log", "-1", "--format=%s"))
+
+    def test_a_file_the_bot_changed_is_kept_reported_once_and_new_and_dropped_files_follow_the_template(self):
+        (self.path / "playbooks" / "leads.md").write_text("My own way with leads.\n")
+        (self.path / "knowledge" / "notes.md").write_text("What I learned.\n")
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads within an hour.\n")
+        (self.template / "playbooks" / "follow-up.md").write_text("Follow up after a day.\n")
+        (self.template / "playbooks" / "old.md").unlink()
+        self.assertEqual(
+            self.refresh(),
+            {
+                "added": ["playbooks/follow-up.md"],
+                "updated": [],
+                "removed": ["playbooks/old.md"],
+                "kept": ["playbooks/leads.md"],
+            },
+        )
+        self.assertEqual((self.path / "playbooks" / "leads.md").read_text(), "My own way with leads.\n")
+        self.assertFalse((self.path / "playbooks" / "old.md").exists())
+        self.assertEqual((self.path / "knowledge" / "notes.md").read_text(), "What I learned.\n")
+        self.assertEqual(self.refresh(), NOTHING)  # reported once
+        # The template changes it again: offered again, and kept again while it is the bot's own.
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads within ten minutes.\n")
+        self.assertEqual(self.refresh(), {**NOTHING, "kept": ["playbooks/leads.md"]})
+
+    def test_a_dropped_file_the_bot_changed_stays(self):
+        (self.path / "playbooks" / "old.md").write_text("Still mine.\n")
+        (self.template / "playbooks" / "old.md").unlink()
+        self.assertEqual(self.refresh(), {**NOTHING, "kept": ["playbooks/old.md"]})
+        self.assertEqual((self.path / "playbooks" / "old.md").read_text(), "Still mine.\n")
+        self.assertEqual(self.refresh(), NOTHING)
+
+    def test_a_bot_from_before_the_stamp_counts_its_first_commit_as_what_it_was_given(self):
+        git(self.path, "rm", "-q", catalog.STAMP)
+        git(self.path, "-c", "user.name=Sam", "-c", "user.email=sam@acme.example", "commit", "-qm", "Before the stamp")
+        (self.path / ".claude" / "settings.json").write_text(SETTINGS.replace('"Read"', '"Read", "Write"'))
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads within an hour.\n")
+        (self.template / ".claude" / "settings.json").write_text(SETTINGS.replace("Read", "Edit"))
+        self.assertEqual(
+            self.refresh(), {**NOTHING, "updated": ["playbooks/leads.md"], "kept": [".claude/settings.json"]}
+        )
+        self.assertIn('"Write"', (self.path / ".claude" / "settings.json").read_text())
+        self.assertTrue((self.path / catalog.STAMP).is_file())
+        self.assertEqual(self.refresh(), NOTHING)
+
+    def test_files_from_a_newer_release_stay_until_this_computer_has_it(self):
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads within an hour.\n")
+        self.assertEqual(self.refresh("0.6.1")["updated"], ["playbooks/leads.md"])
+        (self.template / "playbooks" / "leads.md").write_text("Answer leads for {{company_name}}.\n")
+        self.assertEqual(self.refresh("0.6.0"), NOTHING)
+        self.assertTrue(catalog.newer("0.6.0", "0.6.0-rc.5") and not catalog.newer("dev", "0.6.0"))
+
+    def test_instructions_a_person_edited_before_the_bot_was_made_count_as_changed(self):
+        self.instructions = self.instructions.replace("## Tools and scope", "## Tone\nShort.\n\n## Tools and scope")
+        self.path = self.make("sue")
+        (self.template / "AGENT.md").write_text(AGENT + "\n## Done means\nThe lead has an answer.\n")
+        self.assertEqual(self.refresh(), {**NOTHING, "kept": ["AGENT.md"]})
+        self.assertIn("## Tone", (self.path / "AGENT.md").read_text())
 
 
 @functools.lru_cache(maxsize=None)
