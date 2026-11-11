@@ -4,7 +4,8 @@ arguments, the HTTP calls they make (method, path, body), what it prints on stdo
 
 The slices are the ones the typed command spec (step 4 of the CLI reorganisation) is piloted on, so a parser built
 from the spec has to give the same answers. argparse's usage lines are left out of stderr: they list flags in the
-parser's own order, which a generated parser need not keep. The error line after them stays.
+parser's own order, which a generated parser need not keep. The error line after them stays, as Python 3.12 words it
+(Python 3.14 quotes the choices and adds its own guess at a typo).
 
 A deliberate change regenerates the files, to be read in the diff before it is committed:
     TICO_CLI_FIXTURES_RECORD=1 python3 -m pytest -q clients/tests/test_cli_fixtures.py
@@ -14,6 +15,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -224,8 +226,11 @@ RULES = [
 SLICES = {"trigger": TRIGGER, "rules": RULES}
 
 
-def usage_free(text):
-    """`text` without argparse's usage block (the `usage:` line and the lines indented under it)."""
+def portable(text):
+    """`text` without argparse's usage block (the `usage:` line and the lines indented under it), and its error line as
+    Python 3.12 words it on every version."""
+    text = re.sub(r", maybe you meant '[^']*'\?", "", text)
+    text = re.sub(r"\(choose from ([^)]*)\)", lambda m: "(choose from " + m.group(1).replace("'", "") + ")", text)
     kept, in_usage = [], False
     for line in text.splitlines():
         if line.startswith("usage: "):
@@ -276,7 +281,7 @@ def run_line(argv, monkeypatch):
         "tools": tools,
         "http": http,
         "stdout": out.getvalue(),
-        "stderr": usage_free(err.getvalue()),
+        "stderr": portable(err.getvalue()),
         "exit": code,
     }
 
