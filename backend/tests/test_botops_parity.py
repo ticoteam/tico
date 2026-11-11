@@ -7,59 +7,37 @@ its turn: a member is refused what only an owner may do, an owner is not.
 
 import json
 import time
-from uuid import uuid4
 
 import pytest
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, call, close_computer, finish, register, turn  # noqa: F401  (fixtures)
 from backend.store import H
-
-
-def act(api, attempt, method, path, body=None, ref="turn"):
-    """One `hub api` call: the request BotOps makes, asking to be answered as the person it works for."""
-    kwargs = {"headers": {**headers(attempt["token"]), **({"X-Tico-On-Behalf-Of": ref} if ref else {})}}
-    if body is not None:
-        kwargs["json"] = body
-    return api.request(method.upper(), "/api/v2/" + path, **kwargs)
-
-
-def bot_id(api, slug):
-    """The id a bot is stored under (tables, actors and readiness reports use it; the slug is only its label)."""
-    with api.app.state.store.read() as c:
-        return H.resolve_bot(c, slug)["id"]
+from backend.tests.helpers.botops_parity import _wake, act, bot_id, everything, mcp_tool, vault
 
 
 @pytest.mark.parametrize("requester", ["bot:finance"])
-def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, botops, requester):
-    from backend.tests.test_mcp import call as mcp
+def test_botops_files_the_task_it_waits_on_without_borrowing_human_authority(api, botops, requester):
+    """A bot's request lends BotOps nothing: the task it files to wait on is its own, filed with its own rights."""
+    from backend.tests.helpers.mcp import call as mcp
 
     with api.app.state.store.transaction() as c:
         task = H.task_create(
             c, requester, "Diagnose the missing mail registry", "Find its approved source.", "bot:botops"
         )
-        blocker = H.task_create(
-            c, 'bot:botops', "Find the approved registry source", "Identify the source.", "bot:finance"
-        )
     attempt = claim(api, botops, "botops")
-    err, result = mcp(
-        api, "hub_task_relate", {"id": task["id"], "task": blocker["id"], "kind": "blocked_by"}, attempt["token"]
-    )
-    assert not err, result
-    err, result = mcp(
+    err, filed = mcp(
         api,
-        "hub_task_update",
-        {"id": task["id"], "status": "waiting", "note": "The authorized registry source is missing.", "quiet": True},
+        "tico_task_file",
+        {"parent": task["id"], "title": "Find the approved registry source", "owner": "finance"},
         attempt["token"],
     )
-    assert not err, result
+    assert not err, filed
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "waiting"
-        note = c.execute(
-            "SELECT actor FROM events WHERE action='task.update' AND target=? ORDER BY rowid DESC LIMIT 1",
-            (task["id"],),
-        ).fetchone()
-        assert note["actor"] == "bot:botops"
+        made = H.task(c, filed["task"]["id"])
+        assert made["requester_id"] == "bot:botops"
+        link = c.execute("SELECT from_task_id FROM links WHERE to_task_id=?", (made["id"],)).fetchone()
+        assert link[0] == task["id"]
     assert act(api, attempt, "PUT", "providers", {"enabled": ["openai"]}).status_code == 403
 
 
@@ -125,21 +103,6 @@ def test_secrets_are_refused_and_other_routes_use_the_humans_permissions(api, bo
     finish(api, botops, attempt)
     post(api, "tasks", {"owner": "botops", "title": "Review the bot list", "body": "Please look."}, "cara-test")
     assert act(api, claim(api, botops, "botops"), "GET", "bots").status_code == 200
-
-
-def mcp_tool(env="OPS_ADMIN_MCP_TOKEN", authorization="Bearer ${OPS_ADMIN_MCP_TOKEN}", **extra):
-    """A remote MCP server registration whose header names its credential by placeholder (docs/connect-tools.md)."""
-    return {
-        "service": "ops-admin",
-        "can": ["read"],
-        "env": env,
-        **extra,
-        "mcp": {
-            "url": "https://mcp.example.com/usage",
-            "transport": "http",
-            "headers": {"Authorization": authorization},
-        },
-    }
 
 
 def test_an_mcp_placeholder_header_registers_as_the_requester_and_a_secret_still_does_not(api, botops):
@@ -339,23 +302,6 @@ def test_go_live_places_activates_and_starts_setup_as_the_requester(api, botops)
 KEY = "ana@acme.example:atl-SECRET-token-0123456789"
 
 
-def vault(api):
-    from backend.tests.test_credentials import setup
-
-    setup(api)
-
-
-def everything(api):
-    """Every table's text, to look for a value that must not be anywhere."""
-    with api.app.state.store.read() as c:
-        names = [r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE '%fts%'")]
-        return "".join(
-            str([tuple(r) for r in c.execute(f"SELECT * FROM {n}")])
-            for n in names
-            if n not in ("credentials", "credential_keys")
-        )
-
-
 def test_a_credential_card_stores_and_grants_without_the_value_touching_anything_else(api, botops):
     vault(api)
     ana = turn(api, botops, person="ana-test", text="Make Jira work for ops")
@@ -543,7 +489,7 @@ def test_a_secret_is_never_a_command_line_argument():
 
 @pytest.mark.parametrize("person", ["cara-test"])
 def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api, botops, tmp_path, person):
-    from backend.tests.test_mcp import call as mcp
+    from backend.tests.helpers.mcp import call as mcp
 
     template = tmp_path / "catalog" / "qa-custom"
     template.mkdir(parents=True)
@@ -552,7 +498,7 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     api.app.state.store.settings.catalog_dir = template.parent
     err, made = mcp(
         api,
-        "hub_bot_create",
+        "tico_bot_create",
         {
             "slug": "qa-custom",
             "template": "qa-custom",
@@ -570,12 +516,12 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     assert act(api, attempt, "GET", "bots/qa-custom/access").status_code == 200
     credentials = act(api, attempt, "GET", "credentials")
     assert credentials.status_code == (200 if person == "ana-test" else 403)
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     qa = bot_id(api, "qa-custom")
     with api.app.state.store.transaction() as c:
         restrict(c, qa, people=["ana" if person == "ana-test" else "cara"])
-    err, status = mcp(api, "hub_tool_list", {"bot": "qa-custom"}, attempt["token"])
+    err, status = mcp(api, "tico_tool_list", {"bot": "qa-custom"}, attempt["token"])
     assert not err and status["bot"] == qa, status
     assign(api, botops, "qa-custom")
     ready(api, botops, ["botops", qa])
@@ -802,22 +748,25 @@ def test_delegated_botops_revalidates_its_credential_under_the_write_lock(api, b
 
 
 def test_botops_closing_its_own_task_for_the_person_keeps_their_close_and_its_own_words(api, botops):
-    """The close is the person's (closed_by), the closing note is BotOps' own report."""
+    """The close is the person's (closed_by); its why, BotOps' own report, is the move's note."""
     ana = turn(api, botops, person="ana-test", text="Clean up the QA bot")
     task = post(api, "tasks", {"owner": "botops", "title": "Clean up the QA bot", "body": "Clean it."})
     closed = act(
         api,
         ana,
         "POST",
-        f"tasks/{task['id']}",
-        {"version": task["version"], "close": True, "note": "Cleanup complete; folder kept."},
+        f"tasks/{task['id']}/move",
+        {"to": "closed", "version": task["version"], "why": "Cleanup complete; folder kept."},
     )
     assert closed.status_code == 200, closed.text
     with api.app.state.store.read() as c:
         row = c.execute("SELECT closed_by_id FROM tasks WHERE id=?", (task["id"],)).fetchone()
-        note = c.execute("SELECT sender_id FROM messages WHERE body='Cleanup complete; folder kept.'").fetchall()
+        moved = c.execute(
+            "SELECT note FROM history_events WHERE subject_id=? AND kind='move' ORDER BY rowid DESC LIMIT 1",
+            (task["id"],),
+        ).fetchone()
     assert row["closed_by_id"] == "human:ana"
-    assert note and {r["sender_id"] for r in note} == {"bot:botops"}
+    assert moved and moved["note"] == "Cleanup complete; folder kept."
 
 
 @pytest.mark.parametrize('legacy_anchor', [True])
@@ -850,21 +799,6 @@ def test_bot_filed_subtask_never_borrows_its_parents_human_rights(api, botops, l
     assert listed['can_manage'] is False and listed['people'] == [] and listed['bots'] == []
     assert all(not item['grants'] and 'preview' not in item for item in listed['credentials'])
     assert act(api, attempt, 'GET', 'credentials', ref=origin).status_code == 403
-
-
-# ------------------------------------------------------------------ following through on a person's request later
-def _wake(api, machine):
-    """A run the keeper starts with no task (a daily-update request): nobody's request is attached."""
-    with api.app.state.store.transaction() as c:
-        H.say(
-            c,
-            H.KEEPER,
-            "bot:botops",
-            "Time for your daily update.",
-            kind="notice",
-            refs={"wake": "update", "event": str(uuid4())},
-        )
-    return claim(api, machine, "botops")
 
 
 def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_may_not(api, botops):
@@ -948,8 +882,11 @@ def test_a_later_run_acts_for_the_person_whose_open_task_it_cites_and_a_bot_run_
     finish(api, botops, bot_run)
 
     # A closed task lends nothing.
+    from backend import task_engine
+
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task_id,))
+        version = c.execute("SELECT version FROM tasks WHERE id=?", (task_id,)).fetchone()[0]
+        task_engine.move(c, task_id, task_engine.CLOSED, "human:ana", "test: the task is closed", version)
     closed = _wake(api, botops)
     assert (
         act(
@@ -1120,7 +1057,7 @@ def test_a_persons_request_lends_rights_while_its_task_is_open_and_their_own_com
 def test_botops_files_support_and_turns_on_the_librarian_only_with_the_owners_rights(api, botops, monkeypatch):
     import httpx
     from backend import support
-    from backend.tests.test_support import FakeHQ
+    from backend.tests.helpers.support import FakeHQ
 
     hq = FakeHQ()
     monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(hq))
@@ -1192,7 +1129,12 @@ def test_only_the_daily_update_and_the_owners_automations_start_an_own_run(api, 
     from backend import automations
 
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE owner_id='bot:botops' AND title='Tidy'")
+        from backend import task_engine
+
+        for tidy, version in c.execute(
+            "SELECT id, version FROM tasks WHERE owner_id='bot:botops' AND title='Tidy' AND status='open'"
+        ).fetchall():
+            task_engine.move(c, tidy, task_engine.CLOSED, "bot:botops", "test: the last occurrence ended", version)
         row = c.execute("SELECT * FROM automations WHERE id=?", (owners,)).fetchone()
         before = automations.flow_of(row)
         steps = [{**before["steps"][0], "prompt": "Open everything."}]
@@ -1251,12 +1193,15 @@ def test_a_reopened_task_and_a_request_past_the_cap_lend_nothing(api, botops):
     task_id = (task.json().get("task") or task.json())["id"]
     finish(api, botops, ana)
     finish(api, botops, claim(api, botops, "botops"))  # the task's own "new task" notice
-    # Done after ten days (within the cap); BotOps moving it back to doing revives nothing.
+    # Done after ten days (within the cap); BotOps reopening it revives nothing.
     _age(api, ana["message"]["id"], 10)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET created_at=? WHERE id=?", (H.shift(H.now(), days=-10), task_id))
-        H.task_update(c, "bot:botops", task_id, status="done", note="Done.")
-        H.task_update(c, "bot:botops", task_id, status="doing", note="Again.")
+        # A bot's change carries the version it was shown (docs/dev/pipelines-v3-cutover.md, Version).
+        done = H.task_update(
+            c, "bot:botops", task_id, status="done", note="Done.", seen_version=H.task(c, task_id)["version"]
+        )
+        H.task_update(c, "bot:botops", task_id, status="open", note="Again.", seen_version=done["version"])
     later = _wake(api, botops)
     refused = act(api, later, "GET", "credentials", ref=task_id)
     assert refused.status_code == 403 and "send no on_behalf_of" in refused.text

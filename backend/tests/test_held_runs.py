@@ -11,8 +11,8 @@ from backend.store import H
 from backend import bot_settings as BS
 from backend import task_privacy as privacy
 from backend.auth import Identity
-from backend.tests.test_api import api, assign, claim, expire, get, post, ready, runner  # noqa: F401 (api: the fixture)
-from backend.tests.test_execution_review import (
+from backend.tests.helpers.api import assign, claim, expire, get, post, ready, runner  # noqa: F401 (api: the fixture)
+from backend.tests.helpers.execution_review import (
     aged,
     interrupted,
     job_state,
@@ -21,33 +21,9 @@ from backend.tests.test_execution_review import (
     stop_partway,
     sweep,
 )
+from backend.tests.helpers.held_runs import botops, held, task_held
 
 TITLE = "Review ops's stopped runs held for a check"
-
-
-def botops(api):
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
-            (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER),
-        )
-
-
-def held(api):
-    """One run of ops that merged a pull request from a shell and was cut off by a restart: held for BotOps, with its
-    review task filed. A shell alone resumes after a restart; a named outside action is what holds it."""
-    botops(api)
-    machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE attempt_events SET payload=json_set(payload,'$.summary','gh pr merge 42 --squash') "
-            "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.tool')='Bash' "
-            "AND json_extract(payload,'$.status')='started'",
-            (attempt['id'],),
-        )
-    aged(api, attempt['id'])
-    assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
-    return machine, message, attempt
 
 
 def reviews(api):
@@ -73,11 +49,9 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     backdate(api, first['id'], 60)
     with api.app.state.store.transaction() as c:
         if how == 'closed':
-            H.task_close(
-                c, H.KEEPER, first['id'], 'Closed by the stall check: BotOps cannot diagnose itself.', quiet=True
-            )
+            H.task_close(c, H.KEEPER, first['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
         else:
-            H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
+            H.task_done(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], 'Looked.', H.task(c, first['id'])['version'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     [second] = reviews(api)
     assert second['id'] == first['id'] and second['status'] == 'open'
@@ -95,17 +69,19 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
         },
     )
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, second['id'], 'Settled.', quiet=True)
+        if H.task(c, second['id'])['status'] == 'open':  # the dismissal may already have finished it
+            H.task_close(c, H.KEEPER, second['id'], 'Settled.')
     backdate(api, second['id'], 60)
+    [ended] = [r['status'] for r in reviews(api)]
     sweep(api)
-    assert [r['status'] for r in reviews(api)] == ['closed']
+    assert ended in ('closed', 'done') and [r['status'] for r in reviews(api)] == [ended]
 
 
 def test_a_review_closed_soon_after_it_was_filed_reopens_on_the_next_sweep(api):
     machine, message, attempt = held(api)
     [first] = reviews(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], status='done', note='Looked.')
+        H.task_done(c, H.bot_actor(H.FLEET_MAINTAINER), first['id'], 'Looked.', H.task(c, first['id'])['version'])
     sweep(api)
     assert [(r['id'], r['status']) for r in reviews(api)] == [(first['id'], 'open')]
 
@@ -149,7 +125,7 @@ def test_a_review_closed_while_its_runs_are_held_is_opened_again_naming_each_of_
     second = held_again(api, machine)
     [review] = reviews(api)
     with api.app.state.store.transaction() as c:
-        H.task_close(c, H.KEEPER, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.', quiet=True)
+        H.task_close(c, H.KEEPER, review['id'], 'Closed by the stall check: BotOps cannot diagnose itself.')
     backdate(api, review['id'], 60)
     sweep(api)
     [again] = [r for r in reviews(api) if r['status'] == 'open']
@@ -308,7 +284,7 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
 
 def test_a_saved_task_choice_with_queued_work_waits_for_the_live_lane_without_asking_again(api):
     """A saved choice is reviewed even when same-task work remains fenced behind its busy lane (Review 1)."""
-    from backend.tests.test_execution_review import rival
+    from backend.tests.helpers.execution_review import rival
 
     machine, attempt, task_id, _ = task_held(api)
     rival(api, machine, attempt)
@@ -340,29 +316,6 @@ def test_a_queued_reset_deferral_does_not_create_a_held_review(api):
     assert job_state(api, attempt['job_id']) == 'queued'
     assert reviews(api) == []
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
-
-
-def task_held(api, private=False):
-    """ops's run on a task stops partway after a shell call; a verdict queues behind it on that task, and a notice on
-    another task of ops queues too."""
-    machine = runner(api, 'ana')
-    assign(api, machine, 'ops')
-    ready(api, machine, ['ops'])
-    task = post(
-        api,
-        'tasks',
-        {'owner': 'ops', 'title': 'Ship the export', 'body': 'Build it and open the PR.', 'private': private},
-    )
-    task_id = task.get('task', task).get('id') or task['refs']['task']
-    attempt = claim(api, machine)
-    stop_partway(api, machine, attempt, 'held')
-    other = post(api, 'tasks', {'owner': 'ops', 'title': 'Weekly digest', 'body': 'Send it.'})
-    other_id = other.get('task', other).get('id') or other['refs']['task']
-    # Tico hands a review child's verdict back to its parent task as its own notice.
-    with api.app.state.store.transaction() as c:
-        H.task_comment(c, H.KEEPER, task_id, 'VERDICT: changes PR #12 head ' + 'a' * 40)
-        H.task_comment(c, H.KEEPER, other_id, 'The digest numbers are in.')
-    return machine, attempt, task_id, other_id
 
 
 def task_held_many(api, count):
@@ -527,7 +480,7 @@ def test_a_folded_input_another_run_already_read_keeps_that_runs_task(api):
 def test_two_requests_folded_into_one_stopped_run_are_one_run_on_needs_you_and_health(api):
     """Two requests that rode on one interrupted run are two jobs but one run: one line with its title once, and one
     count wherever runs are counted (Needs you, the two-hour check on Health)."""
-    from backend.tests.test_execution_review import busy_folded_run, stopped_issue
+    from backend.tests.helpers.execution_review import busy_folded_run, stopped_issue
 
     jobs = busy_folded_run(api)
     [attempt_id] = {job['run_id'] for job in jobs}
@@ -626,7 +579,7 @@ def test_a_held_run_on_a_finished_task_is_dismissed(api):
     machine, attempt, task_id = held_on_task(api)
     aged(api, attempt['id'])
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.KEEPER, task_id, status='done', quiet=True, note='Finished by hand.')
+        H.task_done(c, H.KEEPER, task_id, 'Finished by hand.')
     assert [d['state'] for d in sweep(api)] == ['canceled']
     [decision] = decision_of(api, attempt['job_id'])
     assert decision['decision'] == 'dismiss' and 'already done' in decision['note']

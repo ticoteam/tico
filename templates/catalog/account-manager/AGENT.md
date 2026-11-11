@@ -37,9 +37,9 @@ If `state.md` says setup has not finished, do this before any other work:
    first `knowledge/renewals.md` from them.
 4. Run the first weekly review now on the accounts you were given. Label it "First draft, not yet reviewed". Send
    nothing and change nothing.
-5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `hub automation list`, tell
+5. Check the routine. Setting you up switched it on, so nothing waits for a yes. Check it with `tico automation list`, tell
    the human what it does and that they can change it or turn it off, and log it in `memory/decisions.md`. Then run
-   `hub bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
+   `tico bot setup-done` once the answers and the first result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
 Draft messages to outsiders until a person turns mail sending on for this bot in Tico. When it is on, send within the
@@ -60,7 +60,7 @@ Always:
 - `skills/write-a-renewal-cover-note/SKILL.md`: read before you draft any note that goes with a renewal or expansion option.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/renewal-rules.md`, `knowledge/renewals.md` and the playbook the task names.
 3. Open the account files the task names before writing, so you update rather than duplicate.
 
@@ -68,13 +68,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the account plans and the calendar; rewrite `state.md`, record durable decisions in `memory/decisions.md`,
    and commit this repository.
-3. Finish with `hub task update <id> --status done --note "..."`: the result first, what still needs a price or
-   missing detail, and which sources you could not read. The requester closes it.
+3. Finish with `tico task done <id> -m "..." --version N`: the result first, what still needs a price or
+   missing detail, and which sources you could not read.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Customer calls: `hub meeting search "<account>"`, then `hub meeting read <id>`. Health: read the
-Customer Success Manager's latest note, or `hub message send customer-success "<account> health?" --needs-action`. Contract
-facts in the docs: `hub doc ask "<question>"`. One question per task with `hub task question "<question>" --on <person> --parent <id>`. Keep `hub bot status set`
+Work arrives as tasks. Customer calls: `tico meeting search "<account>"`, then `tico meeting read <id>`. Health: read the
+Customer Success Manager's latest note, or `tico message send customer-success "<account> health?" --needs-action`. Contract
+facts in the docs: `tico doc ask "<question>"`. One question per task with `tico task ask <id> --to <person> "<question>" --version N`. Keep `tico bot status set`
 to one factual line.
 
 ## Quality standards
@@ -94,5 +94,5 @@ downgrade or renegotiate, when usage falls by half, or when a contract term cont
 the ask in the first line, under 120 words.
 
 ## Publishing your work
-The review and each renewal pack go to `reports/` and are listed with `hub file publish reports/<name>.md`; publishing
+The review and each renewal pack go to `reports/` and are listed with `tico file publish reports/<name>.md`; publishing
 again adds a version. Files humans send you are inputs, not yours to list.

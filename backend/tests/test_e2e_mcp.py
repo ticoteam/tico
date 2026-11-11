@@ -14,9 +14,9 @@ from pathlib import Path
 import pytest
 
 from backend.tests.live import block_outside_network
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_automation_api import NOTE_STEP
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.automation_api import NOTE_STEP
+from backend.tests.helpers.mcp import call
 from clients import hubtools
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,7 +26,7 @@ SMOKE = "Acme smoke"
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
 OVERRIDES = {
     # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
-    "hub_thread_create": {"title": SMOKE},
+    "tico_thread_create": {"title": SMOKE},
 }
 # Values a string must match when its schema gives a pattern (the first candidate that matches is used).
 PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
@@ -83,13 +83,13 @@ def seeded(api):
 
 def seeds_for(tool, seeds):
     """The value a string argument gets, by its name and by the kind of object the tool is about."""
-    if tool.startswith("hub_task_") and tool != "hub_task_list":
+    if tool.startswith("tico_task_") and tool != "tico_task_list":
         return {"id": seeds["task"], "task_id": seeds["task"], "parent": seeds["task"]}
-    if tool.startswith(("hub_trigger_", "hub_relay_")):
+    if tool.startswith(("tico_trigger_", "tico_relay_")):
         return {"id": seeds["trigger"], "trigger": seeds["trigger"]}
-    if tool.startswith("hub_automation_"):
+    if tool.startswith("tico_automation_"):
         return {"id": seeds["automation"]}
-    if tool.startswith(("hub_message_", "hub_conversation_")):
+    if tool.startswith(("tico_message_", "tico_conversation_")):
         return {
             "id": seeds["conversation"],
             "conversation_id": seeds["conversation"],
@@ -206,26 +206,39 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
 
 
 def test_a_scripted_task_runs_over_mcp_from_create_to_done(api):
-    """A multi-step task as an external agent would run it: create, comment, assign, complete, then read it back."""
+    """A task as an external agent would run it: create, comment, read its version, reassign with it, finish with the
+    version the reassign gave back, then read it back Done."""
     is_error, made = call(
         api,
-        "hub_task_create",
+        "tico_task_create",
         {"owner": "ben", "title": "Smoke: scripted MCP task", "body": "Check the release notes and say what changed."},
     )
     assert not is_error, made
     task_id = made["task"]["id"]
 
-    is_error, comment = call(api, "hub_task_comment", {"id": task_id, "text": "Started on the release notes."})
+    is_error, comment = call(api, "tico_task_comment", {"id": task_id, "text": "Started on the release notes."})
     assert not is_error, comment
 
-    is_error, moved = call(api, "hub_task_update", {"id": task_id, "owner": "ana", "status": "doing"})
+    is_error, shown = call(api, "tico_task_show", {"id": task_id})
+    assert not is_error and shown["task"]["status"] == "open", shown
+    is_error, moved = call(
+        api,
+        "tico_task_reassign",
+        {"id": task_id, "owner": "ana", "why": "Hers now", "version": shown["task"]["version"]},
+    )
     assert not is_error, moved
-    assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["status"] == "doing"
+    assert moved["task"]["owner_id"] == "human:ana" and moved["task"]["version"] > shown["task"]["version"]
 
-    is_error, done = call(api, "hub_task_done", {"id": task_id, "note": "Release notes checked."})
+    is_error, stale = call(
+        api, "tico_task_done", {"id": task_id, "note": "Release notes checked.", "version": shown["task"]["version"]}
+    )
+    assert is_error and stale["error"] == "task_changed" and stale["version"] == moved["task"]["version"], stale
+    is_error, done = call(
+        api, "tico_task_done", {"id": task_id, "note": "Release notes checked.", "version": moved["task"]["version"]}
+    )
     assert not is_error, done
 
-    is_error, shown = call(api, "hub_task_show", {"id": task_id})
+    is_error, shown = call(api, "tico_task_show", {"id": task_id})
     assert not is_error, shown
     assert shown["task"]["status"] == "done"
     assert any("Started on the release notes." in str(c) for c in shown.get("comments", [shown]))

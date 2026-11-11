@@ -8,7 +8,7 @@ is a short answer with the numbers behind it.
 
 ## 1. Frame it
 
-    hub task show <id>
+    tico task show <id>
 
 Which items, which period, and what decision the human is about to make. If a promotion or season is
 involved, ask for the expected uplift once; do not invent one.

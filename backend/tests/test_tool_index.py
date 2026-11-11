@@ -6,8 +6,8 @@ Ana owns the company, Ben is an admin (a member after `as_member`), Cara is a me
 
 from backend import api_tools
 from backend.store import H
-from backend.tests.test_api import api, as_member, get, put, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_inbound_audience import narrow
+from backend.tests.helpers.api import as_member, get, put, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.inbound_audience import narrow
 
 
 def seed(api):
@@ -136,26 +136,26 @@ def test_a_narrowed_intake_inbox_names_nothing_outside_its_group(api):
 
 
 def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     seed(api)
-    err, result = call(api, "hub_tool_index", {"limit": 100}, "cara-test")
+    err, result = call(api, "tico_tool_index", {"limit": 100}, "cara-test")
     assert not err and {r["id"] for r in result["rows"]} == {
         r["id"] for r in get(api, "tool-index", "cara-test")["rows"]
     }
     err, result = call(
-        api, "hub_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "sales"}, "cara-test"
+        api, "tico_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "sales"}, "cara-test"
     )
     assert err  # a member may not
-    err, result = call(api, "hub_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "ops-team"})
+    err, result = call(api, "tico_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "ops-team"})
     assert not err and result["group_id"] == "ops-team"
     assert "inbox:ibx_a" not in ids(api, "cara-test")
     from clients import hubcli, remotecli
 
-    for words in (["tool", "index", "--limit", "5"], ["tools", "index"]):  # `hub tools` is the old spelling
-        assert remotecli.tool_name(hubcli.parser().parse_args(hubcli.rename_argv(words)[0]).fn) == "hub_tool_index"
+    for words in (["tool", "index", "--limit", "5"], ["tools", "index"]):  # `tico tools` is the old spelling
+        assert remotecli.tool_name(hubcli.parser().parse_args(hubcli.rename_argv(words)[0]).fn) == "tico_tool_index"
     args = hubcli.parser().parse_args(["tool", "check", "close-crm"])
-    assert remotecli.tool_name(args.fn) == "hub_tool_check" and args.id == "close-crm"
+    assert remotecli.tool_name(args.fn) == "tico_tool_check" and args.id == "close-crm"
     args = hubcli.parser().parse_args(["inbound", "audience", "ibx_a", "company"])
-    assert remotecli.tool_name(args.fn) == "hub_inbound_audience" and args.audience == "company"
+    assert remotecli.tool_name(args.fn) == "tico_inbound_audience" and args.audience == "company"
     get(api, "connections", expected=404)  # the old Connections list is gone

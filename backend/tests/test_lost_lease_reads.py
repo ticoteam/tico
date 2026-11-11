@@ -9,8 +9,8 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, claim, expire, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
-from backend.tests.test_execution_review import aged, job_state, sweep
+from backend.tests.helpers.api import claim, expire, post, ready, setup_attempt  # noqa: F401 (api: the fixture)
+from backend.tests.helpers.execution_review import aged, job_state, sweep
 
 CAPS = ['capacity_continue_v1']
 
@@ -122,7 +122,7 @@ def test_a_person_turn_that_may_have_acted_is_held_and_the_person_is_told_once(a
 
 def fixture_case(command, host):
     """A shell call's start event exactly as the runner sends it (runner-rs tests produce the same fixture)."""
-    from backend.tests.test_execution_review import runner_shell_cases
+    from backend.tests.helpers.execution_review import runner_shell_cases
 
     return {case['command']: case for case in runner_shell_cases()}[command][host]
 
@@ -142,6 +142,12 @@ def fixture_case(command, host):
         ('/bin/bash -lc "cd /tmp;gh pr merge 42"', 'claude', False),
         ('hub webhook send 1', 'claude', False),
         ('gh pr view 42', 'claude', False),  # `gh` is not a read the runner knows
+        # `tico` is the teamwork CLI; `hub` above is its old name.
+        ('tico task show 42', 'codex', True),
+        ('cd /w && tico needs-you show', 'claude', True),
+        ('tico task close 7', 'claude', False),
+        ('tico release now --notes synthetic-private-marker', 'codex', False),
+        ('tico support send --body synthetic-private-marker', 'claude', False),
     ],
 )
 def test_real_runner_shell_events_decide_a_lost_lease_turn(api, command, host, requeued):

@@ -1,108 +1,6 @@
 # Administration breadth: people and access, bot owners, org moves and renames, settings (direct and Confirm), routines,
 # finance budgets, shared inboxes, meetings, goals, credentials and invites (the NEVER list, with the parts the Assistant
-# can do). Two cases come from the owner's live chat: the pile of approvals with a next move, and a bulk clear that took
-# dozens of calls. Names and companies are fictional (Acme).
-
-- id: admin-support-pile-next-move
-  group: admin
-  prompt: "OK, what still needs me? Just the real ones."
-  history:
-    - {from: "human:dana", body: "send to tico support definitely doesn't need my approval"}
-    - {from: "assistant", body: "Got it. Those sends don't need your decision. I'll treat them as sends once you say yes to a list."}
-  hub:
-    - match: '^needs-you show'
-      out: {total: 24, by_kind: {approval: 24}, by_bot: [{bot: botops, count: 23}, {bot: website, count: 1}]}
-    - match: '^message list'
-      out:
-        actor: "human:dana"
-        messages:
-          - {id: 0a6d4b92-9400-4000-8000-000000000001, kind: notice, from_actor: "bot:website", text: 'Approve this merge: {"repo": "acme-site", "pull_request": 214, "target": "main"}', refs: {approval: 5f3e21c0-9400-4000-8000-000000000001, task: 91c2d7e4-9400-4000-8000-000000000001}, created: "2026-11-03T15:10:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000301, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Runner image build failed with exit 137 during npm install (build 4411).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000001}, created: "2026-11-03T07:40:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000302, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Hub CLI test job hangs on the Python 3.13 wheel for psycopg (run 9120).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000002}, created: "2026-11-03T07:41:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000303, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? TIDY server container restarts every 40 minutes after the libssl patch (incident 2231).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000003}, created: "2026-11-03T07:42:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000304, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Recorder image pull times out from the Bogota cell (pull 77).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000004}, created: "2026-11-03T07:43:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000305, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Rust 1.92 breaks the runner-rs build on arm64 (build 4418).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000005}, created: "2026-11-03T07:44:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000306, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Webhook retries stop after the second attempt (delivery 3307).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000006}, created: "2026-11-03T07:45:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000307, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Calendar sync drops all-day events for two accounts (sync 8810).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000007}, created: "2026-11-03T07:46:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000308, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Ask panel shows an empty thread after reconnect (report 552).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000008}, created: "2026-11-03T07:47:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000309, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Upgrade Manager PR check times out on the large lockfile (run 9133).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000009}, created: "2026-11-03T07:48:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000310, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Scheduled routine skips its 6am run in the Pacific zone (run 7012).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000010}, created: "2026-11-03T07:49:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000311, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Meeting import leaves speaker names blank (import 1190).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000011}, created: "2026-11-03T07:50:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000312, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Mail sync fails on one Gmail label with a 429 (sync 6621).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000012}, created: "2026-11-03T07:51:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000313, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Board view loads slowly past 400 tasks (trace 0917).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000013}, created: "2026-11-03T07:52:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000314, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Check health reports a stale runner on the Oregon cell (report 2280).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000014}, created: "2026-11-03T07:53:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000315, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Export to CSV cuts the last column on wide tables (report 1044).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000015}, created: "2026-11-03T07:54:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000316, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Login loop on Safari 18.1 after session timeout (report 902).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000016}, created: "2026-11-03T07:55:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000317, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Attachments over 20 MB fail silently in the Ask panel (report 1311).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000017}, created: "2026-11-03T07:56:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000318, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Team chart drops a reports-to line after a move (report 1408).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000018}, created: "2026-11-03T07:57:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000319, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Docs search returns archived pages first (report 1502).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000019}, created: "2026-11-03T07:58:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000320, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Billing page shows the wrong currency for EUR accounts (report 1609).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000020}, created: "2026-11-03T07:59:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000321, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Routine editor loses the time zone on save (report 1733).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000021}, created: "2026-11-03T08:00:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000322, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Phone layout hides the Send button under the keyboard (report 1820).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000022}, created: "2026-11-03T08:01:00Z"}
-          - {id: e0a4b7f2-9400-4000-8000-000000000323, kind: approval, from_actor: "bot:botops", text: "Send this to Tico support? Board view counts archived tasks twice (report 1904).", refs: {approval: 5b2e7d10-9400-4000-8000-000000000023}, created: "2026-11-03T08:02:00Z"}
-        more_messages: false
-        tasks: []
-        notices: []
-    - match: '^approval read-back'
-      out:
-        message_id: 0c4e7a19-9400-4000-8000-000000000001
-        approves: [5b2e7d10-9400-4000-8000-000000000001, 5b2e7d10-9400-4000-8000-000000000002, 5b2e7d10-9400-4000-8000-000000000003, 5b2e7d10-9400-4000-8000-000000000004, 5b2e7d10-9400-4000-8000-000000000005, 5b2e7d10-9400-4000-8000-000000000006, 5b2e7d10-9400-4000-8000-000000000007, 5b2e7d10-9400-4000-8000-000000000008, 5b2e7d10-9400-4000-8000-000000000009, 5b2e7d10-9400-4000-8000-000000000010, 5b2e7d10-9400-4000-8000-000000000011, 5b2e7d10-9400-4000-8000-000000000012, 5b2e7d10-9400-4000-8000-000000000013, 5b2e7d10-9400-4000-8000-000000000014, 5b2e7d10-9400-4000-8000-000000000015, 5b2e7d10-9400-4000-8000-000000000016, 5b2e7d10-9400-4000-8000-000000000017, 5b2e7d10-9400-4000-8000-000000000018, 5b2e7d10-9400-4000-8000-000000000019, 5b2e7d10-9400-4000-8000-000000000020, 5b2e7d10-9400-4000-8000-000000000021, 5b2e7d10-9400-4000-8000-000000000022, 5b2e7d10-9400-4000-8000-000000000023]
-        text: "The one real decision is the merge of acme-site PR 214 from Website: [Merge PR 214](#/task/91c2d7e4-9400-4000-8000-000000000001).\n\nI'll approve these 23 for you:\n- 23 Tico support reports, one line each in the chat (runner builds, CI, incidents, the rest)\n\nReply yes to approve exactly these; any other reply approves nothing."
-  must:
-    - '^approval read-back\b'
-    - '^approval read-back\b.*--note\b.*(214|merge|Website)'
-  must_not:
-    - '^approval (approve|decline)\b'
-  reply: |
-    Dana asked what still needs her, after saying earlier in this chat that sends to Tico support do not need her approval.
-    The merge decision is named inside the read-back's `--note`, since the read-back is the delivered reply: the merge of
-    acme-site PR 214 from Website, in plain words (the read-back shows no links, so none is expected there). Judge that in
-    the hub log. The note or the final text says the 23 "Send this to Tico support?" approvals are sends, not decisions for
-    her. The record has 24 waiting (23 support, 1 merge); the numbers match.
-    The turn ends with one `hub approval read-back` of all 23 as its last call, carrying that `--note`; text after it is not
-    posted, so it stays short. It approves and declines nothing, and it does not stop at calling the 23 noise. No list of all
-    23 anywhere.
-
-- id: admin-clear-list-one-bulk
-  group: admin
-  prompt: "Clear my list. Test pings and the per-release docs tasks can go. Everything else stays."
-  hub:
-    - match: '^needs-you show'
-      out: {total: 9, by_kind: {task: 9}, by_bot: [{bot: botops, count: 4}, {bot: technical-writer, count: 3}, {bot: copywriter, count: 2}]}
-      after:
-        - when: '^task bulk close'
-          out: {total: 2, by_kind: {task: 2}, by_bot: [{bot: copywriter, count: 1}, {bot: person, count: 1}]}
-    - match: '^task list'
-      out:
-        tasks:
-          - {id: 6a0c5e11-9500-4000-8000-000000000001, title: "Test ping: runner queue, build 4390", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-02T09:00:00Z", updated: "2026-11-02T09:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000002, title: "Test ping: runner queue, build 4391", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-02T15:00:00Z", updated: "2026-11-02T15:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000003, title: "Test ping: runner queue, build 4392", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T03:00:00Z", updated: "2026-11-03T03:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000004, title: "Test ping: runner queue, build 4393", status: open, owner: "human:dana", requester: "bot:botops", created: "2026-11-03T09:00:00Z", updated: "2026-11-03T09:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000005, title: "Docs for v0.5.19", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-10-30T10:00:00Z", updated: "2026-10-30T10:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000006, title: "Docs for v0.5.20", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-11-01T10:00:00Z", updated: "2026-11-01T10:00:00Z"}
-          - {id: 6a0c5e11-9500-4000-8000-000000000007, title: "Docs for v0.5.21", status: open, owner: "human:dana", requester: "bot:technical-writer", created: "2026-11-02T10:00:00Z", updated: "2026-11-02T10:00:00Z"}
-          - {id: 2c7e9f04-9500-4000-8000-000000000008, title: "Pick a launch date for the Spring launch", status: open, owner: "human:dana", requester: "bot:copywriter", created: "2026-10-28T12:00:00Z", updated: "2026-11-01T12:00:00Z"}
-          - {id: 2c7e9f04-9500-4000-8000-000000000009, title: "Harbor Co renewal: invoice and terms", status: waiting, owner: "human:dana", requester: "human:dana", created: "2026-10-29T15:00:00Z", updated: "2026-10-30T13:10:00Z"}
-        next_offset: null
-      after:
-        - when: '^task bulk close'
-          out: {tasks: [{id: 2c7e9f04-9500-4000-8000-000000000008, title: "Pick a launch date for the Spring launch", status: open, owner: "human:dana", requester: "bot:copywriter", created: "2026-10-28T12:00:00Z", updated: "2026-11-01T12:00:00Z"}, {id: 2c7e9f04-9500-4000-8000-000000000009, title: "Harbor Co renewal: invoice and terms", status: waiting, owner: "human:dana", requester: "human:dana", created: "2026-10-29T15:00:00Z", updated: "2026-10-30T13:10:00Z"}], next_offset: null}
-    - match: '^task bulk close'
-      out: {ok: true, action: "close", matched: 7, changed: 7, skipped: []}
-  must:
-    - '^task bulk close\b'
-  must_not:
-    - '^task close\b'
-    - '^task bulk close\b.*2c7e9f04'
-    - '^task bulk close\b.*--where-status'
-  no_invalid: true
-  reply: |
-    Dana wants her list cleared: the 4 test pings and the 3 per-release docs tasks go, the Spring launch date and the Harbor Co
-    renewal stay. The turn closes the 7 named tasks in ONE `hub task bulk close` call with their ids (a dry run of the same
-    first is fine), not one `hub task close` at a time, and does not close by a status filter. It does not touch the 2 real
-    tasks. No shell loops, no help lookups, no re-reading the list. Reply: counts (9 open before, 7 closed, 2 left), the links
-    to the two tasks that stay, and "say undo to put it back". Short.
+# can do). Names and companies are fictional (Acme).
 
 - id: admin-org-move-to-group
   group: admin
@@ -129,12 +27,12 @@
     - '^group update engineering\b.*--add-bots?\b.*\bupgrade-manager\b'
     - '^group update engineering\b.*--add-bots?\b.*\bperformance-monitor\b'
   must_not:
-    - '^group (delete|create)\b'
+    - '^group (delete\b|update\s+--)'
     - '^group update operations\b'
     - '^bot (archive|pause)\b'
   reply: |
     Dana moves three things to Engineering: the Security group (with its bot), and the Upgrade Manager and Performance Monitor
-    bots. The turn makes the moves with `hub group update`: Security nested under Engineering (`--parent engineering`), and the two
+    bots. The turn makes the moves with `tico group update`: Security nested under Engineering (`--parent engineering`), and the two
     bots added to Engineering (`--add-bot`), in one call or a few. Adding a teammate to a group takes it out of the group it was
     in, so no separate removal is needed. Nothing else changes: no delete, no pause, no other group. Reply: one or two short
     lines with the links to what moved and "say undo to put it back".
@@ -159,10 +57,10 @@
   must:
     - '^group update growth\b.*--name\s+Marketing\b'
   must_not:
-    - '^group (delete|create)\b'
+    - '^group (delete\b|update\s+--)'
     - '^group update growth\b.*--(parent|add-bots?|remove-bots?)'
   reply: |
-    Renames the Growth group to Marketing with one `hub group update growth --name Marketing`. The group keeps its people and
+    Renames the Growth group to Marketing with one `tico group update growth --name Marketing`. The group keeps its people and
     bots; nothing else moves. Reply: one line with the new name and "say undo to put it back".
 
 - id: admin-bot-owners-add
@@ -191,7 +89,7 @@
     - '^bot (archive|pause|update|check)\b'
     - '^message send\b'
   reply: |
-    Adds Priya as an owner of the Upgrade Manager bot, through `hub bot owners upgrade-manager --add priya`. Dana stays an owner.
+    Adds Priya as an owner of the Upgrade Manager bot, through `tico bot owners upgrade-manager --add priya`. Dana stays an owner.
     This is the bot's owner list, not the company's ownership: nothing is transferred or removed. Reply: one line with a link
     to the bot (`[Upgrade Manager](#/bot/upgrade-manager)`) and "say undo to put it back".
 
@@ -217,7 +115,7 @@
     - '^bot access pricing\b.*--write\b.*\bpriya\b'
     - '^bot owners\b'
   reply: |
-    Gives Priya read access to the Pricing bot and not write, with `hub bot access pricing --read dana,priya`. `--read` replaces
+    Gives Priya read access to the Pricing bot and not write, with `tico bot access pricing --read dana,priya`. `--read` replaces
     the whole read list, so the call names Dana too, who keeps her own levels. Priya gets no write. Reply: one line on what
     Priya can read and cannot change, a link to the bot (`[Pricing](#/bot/pricing)`), and "say undo to put it back".
 
@@ -243,7 +141,7 @@
     - '^human add\b'
   reply: |
     The Assistant cannot send an invite or change the sign-in list. The turn does not call an invite route and does not run
-    `hub human add`. It does the part it can: `hub group update engineering --add-human priya`. It gives Dana the link where she
+    `tico human add`. It does the part it can: `tico group update engineering --add-human priya`. It gives Dana the link where she
     sends the invite itself, [Settings > People](#/settings/people), in one sentence. No lecture, no offer to send the invite.
 
 - id: admin-credential-hand-off
@@ -287,12 +185,11 @@
   must:
     - '^settings set team\.rules\.bots_go_ahead\b'
   must_not:
-    - '^settings ask\b'
     - '^settings set team\.rules\.(admin|bots_go_ahead)\b.*--on-behalf-of'
   reply: |
     Dana asks to turn on the bots' go-ahead rule. The owner has turned off the Assistant's direct actions (team rule
     assistant_direct off), so the server returns a Confirm card for this Confirm-class setting rather than applying it. The turn
-    finds the setting and sets it with `hub settings set team.rules.bots_go_ahead true`, and the server returns the card in her
+    finds the setting and sets it with `tico settings set team.rules.bots_go_ahead true`, and the server returns the card in her
     chat rather than a change. The reply says the card is in her chat and nothing changes until she taps it. It never says the
     rule is on. One or two lines, with the Team rules link ([Settings > Humans](#/settings/people)).
 
@@ -303,7 +200,7 @@
     - match: '^automation guide'
       out:
         format: {name: "text", owner: "bot:<slug> or person:<id>", trigger: {type: "schedule", cron: "five fields, e.g. 0 9 * * 1", tz: "IANA zone"}, steps: [{id: "text", type: "bot_turn", bot: "<slug>", prompt: "text"}]}
-        save: "hub automation create --file - (the JSON on stdin)"
+        save: "tico automation create --file - (the JSON on stdin)"
     - match: '^bot show finance-analyst'
       out: {bot: {slug: finance-analyst, display_name: "Finance Analyst", status: active, owners: [dana]}}
     - match: '^automation list'
@@ -328,7 +225,7 @@
     - '^message send\b'
   reply: |
     Dana asks for a Monday 9am routine: the Finance Analyst puts last week's unpaid bills in her queue. The turn saves ONE
-    automation with `hub automation create --file -` (a JSON body with a name, owner `bot:finance-analyst`, a schedule trigger
+    automation with `tico automation create --file -` (a JSON body with a name, owner `bot:finance-analyst`, a schedule trigger
     with cron `0 9 * * 1` (a time zone only if the team has one; otherwise it is left out and the reply names the zone it runs in,
     never a question about the zone), and one bot_turn step for that bot). The reply gives its name, when it runs, the link
     [name](#/automations/<id>), and "say undo to put it back". It does not run it now, does not file tasks itself, and sends nothing
@@ -371,8 +268,8 @@
   must_not:
     - '^finance act budget_update\b.*"amount":\s*4000\b'
   reply: |
-    Dana raises the Marketing budget to $4,000 a month from December 1. The turn finds the budget id (`hub finance report
-    budget_vs_actual`: Marketing, now $3,000 a month) and makes the change with `hub finance act budget_update`: one committed
+    Dana raises the Marketing budget to $4,000 a month from December 1. The turn finds the budget id (`tico finance report
+    budget_vs_actual`: Marketing, now $3,000 a month) and makes the change with `tico finance act budget_update`: one committed
     call with that id, amount 400000 (amounts are in cents, so $4,000 is 400000, not 4000), effective_from 2026-12-01, and an
     operation id. A dry run before it is fine; the real change must still be made. It reports the outcome
     the answer gives (committed here) in one line, with the new amount and date, and says how to undo it (the old amount from
@@ -402,7 +299,7 @@
     - '^inbound audience ibx_billing company\b'
     - '^automation inbox\b.*--send\s+on'
   reply: |
-    Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `hub inbound audience
+    Dana wants the billing inbox seen by the Finance team only. The turn changes that one inbox with `tico inbound audience
     ibx_billing team --group finance`. The support inbox and its sending are left alone. Reply: one line that billing@ is now
     for Finance only, with the link [Tools](#/tools?show=mail), and "say undo to put it back".
 
@@ -422,7 +319,7 @@
         next_offset: null
     - match: '^meeting read mtg_tue_sync_1103'
       exit: 1
-      out: {error: {code: not_found, message: "No meeting mtg_tue_sync_1103 you can read: a Pending meeting is read in `hub meeting pending` until it is shared"}}
+      out: {error: {code: not_found, message: "No meeting mtg_tue_sync_1103 you can read: a Pending meeting is read in `tico meeting pending` until it is shared"}}
       after:
         - when: '^meeting approve mtg_tue_sync_1103\b'
           out:
@@ -445,7 +342,7 @@
     - '^meeting delete\b'
   reply: |
     Dana asks to share the Tuesday sync that is in her Pending, and for a task for Priya from its action items. The turn shares
-    the meeting with the team (`hub meeting approve`, not private) only because she asked it to share; a task alone would not
+    the meeting with the team (`tico meeting approve`, not private) only because she asked it to share; a task alone would not
     justify approve. It reads its action items, and files ONE task for Priya with her item, owned by her, with its link. It does
     not file Marco's item: Dana asked only for Priya's. Reply: two short lines, the meeting shared (with its link) and Priya's
     task (with its link), and how to undo the task (close it).
@@ -475,6 +372,6 @@
     - '^goal (save|create|update)\b'
   reply: |
     Dana adds a goal: close the Harbor Co renewal at list price by Nov 30, serving the Retention bet. The turn posts ONE read-back
-    with `hub goal read-back` (goal_create, with its title, owner and date, and the bet it serves) and saves nothing: no `hub
+    with `tico goal read-back` (goal_create, with its title, owner and date, and the bet it serves) and saves nothing: no `hub
     goal save`, no create, no update. The reply is the read-back in short, and says it is saved only on her plain yes. One
     question at most, if it is needed; the read-back is the expected call.

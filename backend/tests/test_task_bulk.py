@@ -1,9 +1,15 @@
 """A bulk change by filter (POST /api/v2/task-bulk): it selects with the task list's own filters, changes each task as
-its single update would (permissions, refusals and events alike), is capped, and a dry run writes nothing."""
+its single call would (the engine's moves, rights, refusals and events alike), is capped, and a dry run writes
+nothing."""
 
 from backend import hubdb as H
-from backend import pipeline_review
-from backend.tests.test_tasks_board import api, bot_token, get, pipeline, post  # noqa: F401
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.tasks_board import api, bot_token, get, post  # noqa: F401
+
+STAGES = (
+    {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+    {"name": "Legal review", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+)
 
 
 def bulk(api, filter, action, token="ana-test", expected=200, **change):
@@ -18,62 +24,60 @@ def label(api, t, *keys):
     return post(api, "tasks/" + t["id"], {"version": t["version"], "labels": list(keys)})
 
 
-def events(api, field):
-    with api.app.state.store.read() as c:
-        return [
-            dict(r)
-            for r in c.execute(
-                "SELECT subject_id AS task_id, actor_id AS actor, new FROM history_events WHERE subject_type='task' AND kind=?",
-                (field,),
-            )
-        ]
+def show(api, t, token="ana-test"):
+    return get(api, "tasks/" + t["id"], token=token)["task"]
 
 
-def test_the_filter_selects_exactly_what_the_task_list_shows(api):
-    typ = pipeline(api)
-    launch = [label(api, task(api, f"Draft launch post {i}", type=typ["id"]), "launch") for i in range(3)]
-    other_step = label(api, task(api, "Review the launch copy", type=typ["id"], step="Copy review"), "launch")
-    untagged = task(api, "Draft the footer", type=typ["id"])
-    general = label(api, task(api, "Draft the general note"), "launch")
-    elsewhere = label(api, task(api, "Draft the partner post", owner="ops", type=typ["id"]), "launch")
-    chosen = {"type": typ["id"], "step": "Draft", "label": "launch", "owner": "cmo"}
-    listed = get(api, f"tasks?type={typ['id']}&step=Draft&label=launch&owner=cmo")["tasks"]
+def campaign(api):
+    with api.app.state.store.transaction() as c:
+        return X.pipeline(c, "campaign", "Campaign", STAGES)["id"]
+
+
+def test_the_filter_selects_exactly_what_the_task_list_shows_and_each_task_moves_by_the_engine(api):
+    pid = campaign(api)
+    launch = [label(api, task(api, f"Draft launch post {i}", pipeline=pid), "launch") for i in range(3)]
+    untagged = task(api, "Draft the footer", pipeline=pid)
+    elsewhere = label(api, task(api, "Draft the partner post", owner="ops", pipeline=pid), "launch")
+    chosen = {"label": "launch", "owner": "cmo"}
+    listed = get(api, "tasks?label=launch&owner=cmo")["tasks"]
     assert {t["id"] for t in listed} == {t["id"] for t in launch}
 
-    out = bulk(api, chosen, "step", step="Legal review")
+    out = bulk(api, chosen, "move", to="Legal review", why="Copy is final")
     assert (out["matched"], out["changed"], out["unchanged"], out["skipped"]) == (3, 3, 0, 0)
     assert {t["id"] for t in out["tasks"]["changed"]} == {t["id"] for t in launch}
     for t in launch:
-        assert get(api, "tasks/" + t["id"])["task"]["step"]["name"] == "Legal review"
-    for t in (other_step, untagged, general, elsewhere):
-        assert get(api, "tasks/" + t["id"])["task"]["step_id"] == t["step_id"]
-    # Each task's move is its own event, made by the caller.
-    legal = next(s["id"] for s in typ["steps"] if s["name"] == "Legal review")
-    moved = [e for e in events(api, "step") if e["new"] == legal]
-    assert len(moved) == 3 and {e["actor"] for e in moved} == {"human:ana"}
+        assert show(api, t)["stage"]["name"] == "Legal review"
+    for t in (untagged, elsewhere):
+        assert show(api, t)["stage"]["name"] == "Draft"
+    with api.app.state.store.read() as c:
+        visits = c.execute(
+            "SELECT by_id, how FROM visits WHERE left_at IS NOT NULL AND task_id IN (?,?,?)",
+            tuple(t["id"] for t in launch),
+        ).fetchall()
+    assert sorted(tuple(v) for v in visits) == [("human:ana", "pushed_past")] * 3  # each its own move, by the caller
 
     # Run again, nothing is left to move; a filter that names nothing, or a person who is nobody, never widens.
-    again = bulk(api, {**chosen, "step": "Legal review"}, "step", step="Legal review")
-    assert (again["changed"], again["unchanged"]) == (0, 3)
+    again = bulk(api, chosen, "move", to="Legal review", why="Copy is final")
+    assert (again["changed"], again["unchanged"] + again["skipped"]) == (0, 3)
     assert bulk(api, {}, "close", expected=422)["error"]["code"] == "filter"
     assert bulk(api, {"lane": "company"}, "close", expected=422)["error"]["code"] == "filter"
     assert bulk(api, {"owner": "nobody-here"}, "close", expected=422)["error"]["code"] == "owner"
-    assert get(api, "tasks/" + general["id"])["task"]["status"] == "open"
+    assert show(api, untagged)["status"] == "open"
 
 
 def test_tags_close_and_reopen_by_filter(api):
     tasks = [label(api, task(api, f"Draft the brief {i}"), "brief") for i in range(2)]
     out = bulk(api, {"label": "brief"}, "tags", add=["Q4"], remove=["brief"])
     assert out["changed"] == 2
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
 
     assert conforms(out, {"$ref": "#/components/schemas/TaskBulkResult"}, get(api, "openapi.json")) is None
-    assert {tuple(get(api, "tasks/" + t["id"])["task"]["labels"]) for t in tasks} == {("q4",)}
-    assert bulk(api, {"label": "q4"}, "close", note="Not needed")["changed"] == 2
-    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"closed"}
+    assert {tuple(show(api, t)["labels"]) for t in tasks} == {("q4",)}
+    assert bulk(api, {"label": "q4"}, "close", why="Not needed")["changed"] == 2
+    assert {show(api, t)["status"] for t in tasks} == {"closed"}
     # A close has its way back: the same filter on closed tasks opens them again.
-    assert bulk(api, {"label": "q4", "status": "closed"}, "status", status="open")["changed"] == 2
-    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"open"}
+    assert bulk(api, {"label": "q4", "status": "closed"}, "move", to="reopen", why="Needed after all")["changed"] == 2
+    assert {show(api, t)["status"] for t in tasks} == {"open"}
 
 
 def test_blank_filters_never_widen_to_every_task(api):
@@ -82,271 +86,72 @@ def test_blank_filters_never_widen_to_every_task(api):
         for blank in ("", " \t "):
             out = bulk(api, {field: blank}, "close", expected=422)
             assert out["error"]["code"] == "filter"
-    now = get(api, "tasks/" + t["id"])["task"]
+    now = show(api, t)
     assert (now["status"], now["version"]) == ("open", t["version"])
-    assert bulk(api, {"ids": [t["id"]], "label": " \t "}, "close")["changed"] == 1
-
-
-def test_bulk_replay_rechecks_revoked_bot_read_access(api):
-    t = task(api, "Draft the confidential brief", private=False)
-    body = {"filter": {"ids": [t["id"]]}, "action": "close"}
-    headers = {"Authorization": "Bearer priya-test", "Idempotency-Key": "bulk-replay"}
-    original = api.post("/api/v2/task-bulk", json=body, headers=headers)
-    assert original.status_code == 200, original.text
-    assert original.json()["tasks"]["skipped"][0]["id"] == t["id"]
-    assert api.post("/api/v2/task-bulk", json=body, headers=headers).json() == original.json()
-
-    access = get(api, "bots/cmo/access")
-    revoked = api.put(
-        "/api/v2/bots/cmo/access",
-        json={
-            "revision": access["revision"],
-            "see": {"everyone": True},
-            "read": {"people": ["ana"]},
-            "write": {"everyone": True},
-        },
-        headers={"Authorization": "Bearer ana-test", "Idempotency-Key": "revoke-read"},
-    )
-    assert revoked.status_code == 200, revoked.text
-    get(api, "tasks/" + t["id"], token="priya-test", expected=403)
-    replay = api.post("/api/v2/task-bulk", json=body, headers=headers)
-    assert replay.status_code == 403, replay.text
-    assert t["title"] not in replay.text
+    assert bulk(api, {"ids": [t["id"]], "label": " \t "}, "close", why="Not needed")["changed"] == 1
 
 
 def test_a_dry_run_counts_the_real_outcome_and_changes_nothing(api):
-    mine = [label(api, task(api, f"Call the lead {i}", owner="priya"), "calls") for i in range(2)]
+    mine = [label(api, task(api, f"Call the lead {i}", owner="priya", token="priya-test"), "calls") for i in range(2)]
     theirs = label(api, task(api, "Draft the call script"), "calls")
     with api.app.state.store.read() as c:
-        before = c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0]
+        before = c.execute("SELECT count(*) FROM visits").fetchone()[0]
         refusals = c.execute("SELECT count(*) FROM refusals").fetchone()[0]
-    out = bulk(api, {"label": "calls"}, "status", token="priya-test", status="done", dry_run=True)
+    out = bulk(api, {"label": "calls"}, "close", token="priya-test", why="Lost", dry_run=True)
     assert out["dry_run"] is True and (out["changed"], out["skipped"]) == (2, 1)
     assert [t["id"] for t in out["tasks"]["skipped"]] == [theirs["id"]]
     for t in mine + [theirs]:
-        now = get(api, "tasks/" + t["id"])["task"]
+        now = show(api, t)
         assert (now["status"], now["version"]) == ("open", t["version"])
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM history_events WHERE subject_type='task'").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM visits").fetchone()[0] == before
         assert c.execute("SELECT count(*) FROM refusals").fetchone()[0] == refusals
 
 
 def test_nobody_bulk_changes_a_task_they_could_not_change_one_by_one(api):
-    mine = label(api, task(api, "Call the lead", owner="priya"), "calls")
+    mine = label(api, task(api, "Call the lead", owner="priya", token="priya-test"), "calls")
     theirs = label(api, task(api, "Draft the call script"), "calls")
-    # Priya moves no one else's task one at a time, so not in bulk either; her own still changes.
-    post(
-        api, "tasks/" + theirs["id"], {"version": theirs["version"], "status": "done"}, token="priya-test", expected=403
-    )
-    out = bulk(api, {"label": "calls"}, "status", token="priya-test", status="done")
+    out = bulk(api, {"label": "calls"}, "close", token="priya-test", why="Lost")
     assert (out["changed"], out["skipped"]) == (1, 1)
-    assert out["tasks"]["skipped"][0]["id"] == theirs["id"] and out["tasks"]["skipped"][0]["code"] == "identity"
-    assert get(api, "tasks/" + mine["id"])["task"]["status"] == "done"
-    assert get(api, "tasks/" + theirs["id"])["task"]["status"] == "open"
-
-    # A bot is held to its own rights too: it closes nothing it did not ask for, and each refusal is on record.
-    token = bot_token(api, "ops")
+    assert out["tasks"]["skipped"][0]["id"] == theirs["id"]
+    assert show(api, mine)["status"] == "closed"
+    assert show(api, theirs)["status"] == "open"
+    # People only: a bot changes tasks one at a time.
     owned = task(api, "Ship the screen", owner="ops")
-    out = bulk(api, {"owner": "ops"}, "close", token=token)
-    assert out["changed"] == 0 and owned["id"] in {t["id"] for t in out["tasks"]["skipped"]}
-    assert get(api, "tasks/" + owned["id"])["task"]["status"] == "open"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops'").fetchone()[0] >= 1
+    bulk(api, {"owner": "ops"}, "close", token=bot_token(api, "ops"), expected=403)
+    assert show(api, owned)["status"] == "open"
 
 
-def test_a_bulk_done_is_held_to_a_waiting_approval_like_a_single_done(api):
-    """Finding B1, the bulk route: a bulk status done is the single update each task gets, so a waiting approval on the
-    task's stage refuses it, and it goes through once the person has approved."""
-    # Booted Engineering's shape: its finish stage is closed, so a status done resolves to no step of its own.
-    typ = post(
-        api,
-        "task-types",
-        {"name": "Build", "steps": [{"name": "Draft", "status": "open"}, {"name": "Done", "status": "closed"}]},
-        token="ana-test",
-    )["type"]
-    draft = next(s["id"] for s in typ["steps"] if s["name"] == "Draft")
-    t = task(api, "Ship the campaign", type=typ["id"], step=draft)
+def test_a_move_the_engine_refuses_is_skipped_with_its_reason(api):
+    pid = campaign(api)
+    ready = label(api, task(api, "Draft the press note", pipeline=pid), "press")
+    waits = label(api, task(api, "Draft the press list", pipeline=pid), "press")
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO stage_requirements (id, pipeline_id, pipeline_stage_id, name, kind, needs, reviewed_by, reviewer_id, "
-            "version, created_by, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                "req-campaign-signoff",
-                typ["id"],
-                draft,
-                "Ana signs off",
-                "approval",
-                "{}",
-                "person",
-                "human:ana",
-                1,
-                "human:ana",
-                "2026-11-07T12:00:00.000000Z",
-                "2026-11-07T12:00:00.000000Z",
-            ),
-        )
-        c.execute(
-            "INSERT INTO stage_requirement_versions (stage_requirement_id, version, definition, changed_by, created_at) "
-            "VALUES (?,?,?,?,?)",
-            ("req-campaign-signoff", 1, "{}", "human:ana", "2026-11-07T12:00:00.000000Z"),
-        )
-    out = bulk(api, {"ids": [t["id"]]}, "status", status="done")
-    assert (out["changed"], out["skipped"]) == (0, 1)
-    assert get(api, "tasks/" + t["id"])["task"]["status"] == "open"
-    with api.app.state.store.transaction() as c:
-        pipeline_review.approve(c, "human:ana", t["id"], "req-campaign-signoff", requirement_version=1)
-    out = bulk(api, {"ids": [t["id"]]}, "status", status="done")
-    assert (out["changed"], out["skipped"]) == (1, 0)
-    assert get(api, "tasks/" + t["id"])["task"]["status"] == "done"
+        H.task_done(c, "bot:cmo", ready["id"], "Drafted.", H.task(c, ready["id"])["version"])
+    # The press note moved on by itself when its owner said done; neither may go on now without its owner: no reason,
+    # no push past. Each is skipped with the engine's own refusal.
+    out = bulk(api, {"label": "press"}, "move", to="next")
+    assert (out["changed"], out["skipped"]) == (0, 2)
+    assert {t["code"] for t in out["tasks"]["skipped"]} == {"task_not_met"}
+    assert (show(api, ready)["stage"]["name"], show(api, waits)["stage"]["name"]) == ("Legal review", "Draft")
 
 
 def test_more_tasks_than_the_cap_are_refused_whole(api):
     with api.app.state.store.transaction() as c:
         for i in range(201):
-            H.task_create(
-                c, "human:ana", f"Review the account {i}", "Please.", "bot:cmo", lint=False, deduplicate=False
-            )
-    out = bulk(api, {"owner": "cmo"}, "status", status="doing", expected=422)
-    assert out["error"]["code"] == "too_many" and "200" in out["error"]["detail"]
+            made = H.task_create(c, "human:ana", f"Note {i}", "x", "bot:cmo", lint=False)
+            H.task_update(c, "human:ana", made["id"], labels=["bulk"])
+    out = bulk(api, {"label": "bulk"}, "close", why="Too many", expected=422)
+    assert out["error"]["code"] == "too_many"
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM tasks WHERE status='doing'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM tasks WHERE status='closed'").fetchone()[0] == 0
 
 
-def test_the_cli_and_the_mcp_tool_send_the_bulk_change_the_route_takes(api):
-    from clients import hubcli, remotecli
-    from backend.tests.test_mcp import call
-
-    sent = []
-
-    class Client:
-        def get(self, path, **query):
-            return {"actor": "human:ana"}
-
-        def post(self, path, body, key=None):
-            sent.append((path, body))
-            return {}
-
-    args = hubcli.parser().parse_args(
-        [
-            "task",
-            "bulk",
-            "step",
-            "Legal review",
-            "--where-type",
-            "Campaign",
-            "--where-step",
-            "Draft",
-            "--where-owner",
-            "me",
-            "--where-status",
-            "open",
-            "--where-status",
-            "doing",
-            "--dry-run",
-        ]
-    )
-    remotecli.via_tool(Client(), args)
-    assert sent == [
-        (
-            "task-bulk",
-            {
-                "filter": {"type": "Campaign", "step": "Draft", "owner": "human:ana", "status": "open,doing"},
-                "action": "step",
-                "step": "Legal review",
-                "dry_run": True,
-            },
-        )
-    ]
-
-    tasks = [label(api, task(api, f"Draft the brief {i}"), "brief") for i in range(2)]
-    err, out = call(api, "hub_task_bulk", {"filter": {"label": "brief", "owner": "cmo"}, "action": "close"})
-    assert not err and out["changed"] == 2
-    assert {get(api, "tasks/" + t["id"])["task"]["status"] for t in tasks} == {"closed"}
-
-
-def test_one_bulk_call_counts_once_toward_a_bots_quarantine(api):
-    # Rule 8 quarantines a bot at QUARANTINE_AT repeated refusals in a day. A bot's honest bulk close over 50 tasks it
-    # may not close is one refused try: each task's refusal stays on record, and the bot stays active.
-    token = bot_token(api, "ops")
-    with api.app.state.store.transaction() as c:
-        owned = [
-            H.task_create(
-                c, "human:ana", f"Review the account {i}", "Please.", "bot:ops", lint=False, deduplicate=False
-            )
-            for i in range(50)
-        ]
-
-    def refusals():
-        with api.app.state.store.read() as c:
-            return c.execute("SELECT count(*) FROM refusals WHERE actor='bot:ops'").fetchone()[0]
-
-    def state():
-        with api.app.state.store.read() as c:
-            return H.bot(c, "ops")["state"]
-
-    # A dry run still adds none.
-    out = bulk(api, {"owner": "ops"}, "close", token=token, dry_run=True)
-    assert (out["changed"], out["skipped"]) == (0, 50) and refusals() == 0
-    out = bulk(api, {"owner": "ops"}, "close", token=token)
-    assert (out["changed"], out["skipped"]) == (0, 50)
-    assert refusals() == 50 and state() == "active"
-
-    # It counts as the same refused close made one by one: nine more single tries are its nine repeats, and the
-    # tenth holds the originating chat, as ten single tries in a row would have. The chat's token names the source,
-    # even when a write targets another task.
-    for i in range(H.QUARANTINE_AT):
-        assert state() == "active", i
-        row = get(api, "tasks/" + owned[0]["id"])["task"]
-        post(api, "tasks/" + row["id"], {"version": row["version"], "close": True}, token=token, expected=403)
-    assert state() == "active"
-    # What the bot is told when it is back quotes the refused words, never the stored refusal or its call.
-    with api.app.state.store.read() as c:
-        hold = c.execute(
-            "SELECT task_id,conversation_id,refusal FROM quarantine_holds WHERE released_at IS NULL"
-        ).fetchone()
-        assert hold["task_id"] is None and hold["conversation_id"]
-        stopped = H._json(hold["refusal"], {})
-        words = H.refusals_for(c, actor="bot:ops")[-1]["detail"]
-    assert stopped == {"rule": "close", "detail": words}
-
-
-def test_repeated_bulk_calls_count_every_source_even_when_each_call_counts_once(api):
-    from backend.tests.test_agents import credential, hermes_bot
-
-    hermes_bot(api)
-    token = credential(api)["token"]
-    tasks = [task(api, title, owner="scout") for title in ("Check the export", "Check the archive")]
-    for i in range(H.QUARANTINE_AT + 1):
-        out = bulk(api, {"ids": [row["id"] for row in tasks]}, "close", token=token)
-        assert (out["changed"], out["skipped"]) == (0, 2)
-        with api.app.state.store.read() as c:
-            assert H.resolve_bot(c, "scout")["state"] == ("quarantined" if i == H.QUARANTINE_AT else "active")
-            assert c.execute("SELECT count(*) FROM quarantine_holds WHERE released_at IS NULL").fetchone()[0] == 0
-
-
-def test_a_non_member_bulk_change_touches_no_ticket_of_a_members_only_pipeline(api):
-    # Legal is members-only (owned by Ana): Ben may not open its tickets, so a bulk close by filter or by id leaves them;
-    # a ticket Ben owns in it is still his to close.
-    legal = pipeline(api)
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE task_types SET pipeline_visibility='members', pipeline_owner_id='human:ana' WHERE id=?",
-            (legal["id"],),
-        )
-    hidden = [task(api, f"Legal memo {i}", owner="cmo", type=legal["id"]) for i in range(2)]
-    own = task(api, "Ben's own legal note", owner="ben", type=legal["id"])
-
-    by_filter = bulk(api, {"owner": "cmo"}, "close", token="ben-test")
-    assert by_filter["changed"] == 0 and by_filter["matched"] == 0
-    by_ids = bulk(api, {"ids": [t["id"] for t in hidden]}, "close", token="ben-test")
-    assert by_ids["changed"] == 0 and by_ids["matched"] == 0
-    # Not named anywhere in the answer, a dry run included.
-    dry = bulk(api, {"owner": "cmo"}, "close", token="ben-test")
-    dry_run = bulk(api, {"ids": [t["id"] for t in hidden]}, "close", token="ben-test", dry_run=True)
-    for answer in (by_filter, by_ids, dry, dry_run):
-        assert not any(t["id"] in str(answer) for t in hidden)
-    for t in hidden:
-        assert get(api, "tasks/" + t["id"], "ana-test")["task"]["status"] == "open"
-    mine = bulk(api, {"owner": "ben"}, "close", token="ben-test")
-    assert mine["changed"] == 1
-    assert get(api, "tasks/" + own["id"], "ana-test")["task"]["status"] == "closed"
+def test_a_private_task_someone_may_not_read_is_neither_changed_nor_named(api):
+    hidden = label(api, task(api, "Salary review", private=True), "hr")
+    own = label(api, task(api, "Ben's own note", owner="ben", token="ben-test"), "hr")
+    for dry in (False, True):
+        out = bulk(api, {"label": "hr"}, "close", token="ben-test", why="Done", dry_run=dry)
+        assert out["matched"] == 1 and hidden["id"] not in str(out) and "Salary" not in str(out)
+    assert show(api, hidden)["status"] == "open"
+    assert show(api, own)["status"] == "closed"

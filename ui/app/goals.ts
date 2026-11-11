@@ -6,7 +6,7 @@
 // The Goals page is one tree: the team, then every human and bot as the team chart nests them,
 // one line each with their goal (ui/goals-kpis.ts draws it and the panel a tap opens). A goal's level
 // comes from its owner: `company`, a human or a bot. Its parent is optional ("Supports"); a goal with
-// none is simply not linked. A bot reads its own with `hub goal list`; nothing here is pushed into a run.
+// none is simply not linked. A bot reads its own with `tico goal list`; nothing here is pushed into a run.
 /** The Goals page's state (pageGoals): the tree's data, what needs the person, and the open panel (ui/goals-kpis.ts). */
 interface GoalsState extends GkState<GkPanel | null> { owners: Record<string, unknown>; open: string }
 /** A to-do on the Goals page as the server sends it: GkNeed plus the owner fields the built-in-bot filter reads. */
@@ -29,6 +29,9 @@ type GoalForm = GkFormOf<GoalControls>;
 type GkFinForm = GkFormOf<{status: HTMLSelectElement; note: HTMLInputElement}> & {dataset: Record<'finReopenForm', string>};
 /** What saving a goal posts (POST /v2/goals/{id}). */
 interface GoalPatch { title?: string; owner?: string; parent_id?: string; bet_id?: string }
+/** What the goal sheet is opened with: the Goals page's whole state, or only the goals (the bot page, the Overview
+    graph). The sheet reads the goals; Details and a save hand the state on as it is. */
+type GoalSheetState = GkState<GkPanel | null> | Pick<GkState<GkPanel | null>, 'goals'>;
 let GOALS_ST: GoalsState | null = null;
 const goalBuiltInOwner = (actor: string | undefined) => String(actor || '').startsWith('bot:') && isBuiltInBot(actor!.slice(4));
 const goalLive = (g: {status?: string | null}) => !['done', 'dropped'].includes(String(g.status));
@@ -183,7 +186,7 @@ function goalLongPress(el: HTMLElement & {_pressed?: boolean}, fire: () => void)
 function goalPressed(el: HTMLElement & {_pressed?: boolean}) { if (!el._pressed) return false; el._pressed = false; return true; }
 // One goal on its own: tap a goal on the Goals tab, or "+" for a new one. A bottom sheet on a phone, a side panel on a
 // wider window (the owner's panel's frame, ui/styles/goals.css .gpanel). Details opens the owner's whole panel.
-function goalSheetOpen(state: GkState<GkPanel | null>, {goal = '', owner = ''}: {goal?: string; owner?: string} = {}) {
+function goalSheetOpen(state: GoalSheetState, {goal = '', owner = ''}: {goal?: string; owner?: string} = {}) {
   const g = goal ? state.goals.find(x => x.id === goal) : null;
   if (goal && !g) return;
   if (!g) { const me = mePerson(); owner = owner || (me ? 'human:' + me.id : S.me?.role === 'owner' ? GOAL_COMPANY : ''); }
@@ -202,7 +205,8 @@ function goalSheetOpen(state: GkState<GkPanel | null>, {goal = '', owner = ''}: 
   if (!dlg.open) dlg.showModal();
   dlg.querySelector<HTMLElement>('[data-gs-close]')!.onclick = () => dlg.close();
   const details = dlg.querySelector<HTMLElement>('[data-gs-details]');
-  if (details) details.onclick = () => { dlg.close(); goalPanelOpen(state, g!.owner_id, {goal: (g as GkGoal).id}); };
+  // A goals-only caller reaches Details through a Supports link: the panel gets the state it was given, as before.
+  if (details) details.onclick = () => { dlg.close(); goalPanelOpen(state as GkState<GkPanel | null>, g!.owner_id, {goal: (g as GkGoal).id}); };
   for (const a of dlg.querySelectorAll<GkEl<'goalGo'>>('[data-goal-go]')) a.onclick = (ev: MouseEvent) => {
     if (ev.metaKey || ev.ctrlKey || ev.shiftKey) return;
     ev.preventDefault();
@@ -210,7 +214,7 @@ function goalSheetOpen(state: GkState<GkPanel | null>, {goal = '', owner = ''}: 
   };
   bindGoalForm(dlg.querySelector<GoalForm>('[data-goal-form]')!, g || {}, state.goals, {owner}, (ok?: boolean) => {
     dlg.close();
-    if (ok && GOALS_ST === state) goalsRender(state);
+    if (ok && GOALS_ST === state && 'panel' in state) goalsRender(state);
   });
 }
 window.addEventListener('hashchange', () => {

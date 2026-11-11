@@ -9,11 +9,11 @@ from backend import live_meetings as meetings
 from backend import task_privacy
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.test_api import assign, get, headers, post, runner
-from backend.tests.test_live_meetings import api, attach, chunk, live, ready  # noqa: F401
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, turn as botops_turn  # noqa: F401
-from backend.tests.test_sql import query
+from backend.tests.helpers.api import assign, get, headers, post, runner
+from backend.tests.helpers.live_meetings import attach, chunk, live, ready  # noqa: F401
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, turn as botops_turn  # noqa: F401
+from backend.tests.helpers.sql import query
 
 
 def private(api, token="ana-test"):
@@ -277,7 +277,10 @@ def publication_responses(api, token):
         {"owner": "ops", "title": "Review synthetic team plan", "body": "Check the synthetic plan.", "private": False},
     )
     writes = {
-        "human": ("task-questions", {"on": "ana", "question": "Synthetic meeting summary?"}),
+        "human": (
+            f"tasks/{team_task['id']}/asks",
+            {"to": "ana", "line": "Synthetic meeting summary?", "version": team_task["version"]},
+        ),
         "bot": ("messages", {"to": "finance", "text": "Review this synthetic meeting summary."}),
         "task": (
             "tasks",

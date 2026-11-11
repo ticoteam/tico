@@ -1037,20 +1037,6 @@ def _monotonic():
     return time.monotonic()
 
 
-def _rule_controls(rule):
-    """A task rule's mirror controls, as the cutover writes them (redesign_migration `_builtins`)."""
-    from . import redesign_migration as M
-
-    return {
-        "on": bool(rule["enabled"]),
-        "preset": rule["preset"],
-        "daily_at": rule["daily_at"],
-        "department": rule["department"],
-        "triggers": M._json(rule["triggers"], []),
-        "actions": M._json(rule["actions"], []),
-    }
-
-
 def _health_mirror(owner, bot):
     from . import redesign_migration as M
 
@@ -1067,16 +1053,15 @@ def _health_mirror(owner, bot):
 def sync_system_mirrors(c):
     """Keep the read-only mirrors (redesign_migration `_builtins`) in step with what Tico runs, in the caller's write.
     The cutover made them once; this keeps them right after it, on every automations tick:
-    - a system job (system_routines.JOBS) or a task rule with no mirror gets one, of the cutover's shape, owner and id
-      scheme, marked in `redesign_migrated` as the cutover marks it, and so does the Health Monitor once its bot is
-      back (restored after it was archived). Only once the cutover is done and has a person to own it (`owner_wait` is
-      `catch_up`'s);
-    - a mirror of a job no longer in JOBS, of a task rule that is gone, a second mirror of one job or rule, and the
-      Health Monitor's once its bot is gone or archived are retired as a delete retires an automation (`remove`): off,
-      soft-deleted, their unfinished runs skipped; their runs stay as history. A mark that named a retired twin names
-      the one kept, so the cutover report does not call the job deleted;
-    - a job's mirror whose name or words are not the job's takes the job's; a task rule's takes the rule's name, switch
-      and settings; the Health Monitor's takes its bot's on/off.
+    - a system job (system_routines.JOBS) with no mirror gets one, of the cutover's shape, owner and id scheme, marked
+      in `redesign_migrated` as the cutover marks it, and so does the Health Monitor once its bot is back (restored
+      after it was archived). Only once the cutover is done and has a person to own it (`owner_wait` is `catch_up`'s);
+    - a mirror of a job no longer in JOBS, a task rule's mirror (task rules went with the old engine), a second mirror
+      of one job, and the Health Monitor's once its bot is gone or archived are retired as a delete retires an
+      automation (`remove`): off, soft-deleted, their unfinished runs skipped; their runs stay as history. A mark that
+      named a retired twin names the one kept, so the cutover report does not call the job deleted;
+    - a job's mirror whose name or words are not the job's takes the job's; the Health Monitor's takes its bot's
+      on/off.
     A job that cannot run on this install keeps its mirror: the reads hide it (automation_overview `hidden_jobs`).
     One read of the mirrors; writes only for what differs, so a second pass changes nothing. Never raises: a mirror
     that cannot be written is logged once and tried again after MIRROR_RETRY_SECONDS (per process). Returns {made,
@@ -1090,18 +1075,12 @@ def sync_system_mirrors(c):
         return done
     if record.get("state") != "done":
         return done
-    rules = (
-        {r["id"]: dict(r) for r in c.execute("SELECT * FROM task_rules ORDER BY created_at, id")}
-        if H._has_table(c, "task_rules")
-        else {}
-    )
     health = H.bot(c, H.HEALTH_MONITOR)
     health = dict(health) if health and health["state"] != "archived" else None
-    jobs, rule_mirrors, retire, twins, health_mirror = {}, {}, [], {}, None
+    jobs, retire, twins, health_mirror = {}, [], {}, None
     for row in c.execute(MIRRORS_SQL).fetchall():
         flow = flow_of(row)
         name = str((flow.get("trigger") or {}).get("name") or "")
-        source = flow.get("source") if isinstance(flow.get("source"), dict) else {}
         if name.startswith(AO.JOB_PREFIX):
             key = name[len(AO.JOB_PREFIX) :]
             if key in jobs:
@@ -1110,14 +1089,8 @@ def sync_system_mirrors(c):
                 retire.append(row)
             else:
                 jobs[key] = (row, flow)
-        elif name == AO.TASK_RULE and source.get("kind") == "task_rule":
-            rid = source.get("id")
-            if rid in rule_mirrors:
-                twins[row["id"]] = rule_mirrors[rid][0]["id"]
-            if rid not in rules or rid in rule_mirrors:
-                retire.append(row)
-            else:
-                rule_mirrors[rid] = (row, flow)
+        elif name == AO.TASK_RULE:
+            retire.append(row)
         elif name == HEALTH:
             if not health or health_mirror:
                 retire.append(row)
@@ -1172,12 +1145,6 @@ def sync_system_mirrors(c):
         if flow.get("name") != name or flow.get("description") != words:
             # Only its words change, never what it is: no new version, and its owner is not checked again.
             update(row, flow, {**flow, "name": name, "description": words})
-    for rid, (row, flow) in rule_mirrors.items():
-        rule = rules[rid]
-        controls = _rule_controls(rule)
-        name, on = str(rule["name"] or "")[:120], bool(rule["enabled"])
-        if flow.get("name") != name or bool(flow.get("enabled")) != on or flow.get("controls") != controls:
-            update(row, flow, {**flow, "name": name, "enabled": on, "controls": controls})
     if health_mirror:
         row, flow = health_mirror
         on = health.get("state") == "active"
@@ -1185,11 +1152,8 @@ def sync_system_mirrors(c):
             controls = {**(flow.get("controls") or {}), "on": on}
             update(row, flow, {**flow, "enabled": on, "controls": controls})
     missing = [job for job in SR.JOBS if job.key not in jobs and not waiting("make:job:" + job.key)]
-    unmirrored = [
-        (rid, rule) for rid, rule in rules.items() if rid not in rule_mirrors and not waiting("make:rule:" + rid)
-    ]
     lost_health = bool(health and not health_mirror and not waiting("make:health"))
-    if not (missing or unmirrored or lost_health) or record.get("owner_wait"):
+    if not (missing or lost_health) or record.get("owner_wait"):
         return done  # the usual tick: one read, nothing to write
     who = M.system_who(c)
     owner = M._owner_person(who)
@@ -1211,9 +1175,6 @@ def sync_system_mirrors(c):
         controls = {"on": True, "schedule": job.schedule, **(cfg.get(job.key) or {})}
         flow = M._mirror(job.name, owner, "job." + job.key, controls, {"kind": "system_job", "id": oid}, job.what)
         make("make:job:" + job.key, flow, "system_job", oid, job.name)
-    for rid, rule in unmirrored:
-        flow = M._mirror(rule["name"], owner, "task_rule", _rule_controls(rule), {"kind": "task_rule", "id": rid})
-        make("make:rule:" + rid, flow, "task_rule", rid, rule["name"])
     if lost_health:
         make(
             "make:health", _health_mirror(owner, health), "health_monitor", "bot:" + H.HEALTH_MONITOR, "Health Monitor"
@@ -1373,10 +1334,8 @@ def _unhold(c, aid, actor, how, via=None):
         ).rowcount
     c.execute("UPDATE automation_guard_holds SET cleared_at=? WHERE automation_id=?", (now, aid))
     task = H.task(c, hold["task_id"]) if hold["task_id"] else None
-    if task and task["status"] not in ("closed", "done", "declined"):
-        H.task_close(
-            c, H.KEEPER, task["id"], note="Released." if how == "release" else "Dropped.", quiet=True, strict=False
-        )
+    if task and task["status"] == "open":
+        H.attempt(c, H.task_close, H.KEEPER, task["id"], "Released." if how == "release" else "Dropped.")
     before = {"hold": {"rule": hold["rule"], "held_at": hold["held_at"], "dropped": hold["dropped"]}}
     H.event(
         c,
@@ -1404,9 +1363,7 @@ def _absorbed(c, row):
         (row["id"],),
     ).fetchone()
     open_task = (
-        c.execute(
-            "SELECT id FROM tasks WHERE id=? AND status IN ('open','doing','waiting','review','ready')", (last["task"],)
-        ).fetchone()
+        c.execute("SELECT id FROM tasks WHERE id=? AND status='open'", (last["task"],)).fetchone()
         if last and last["task"]
         else None
     )
@@ -1571,7 +1528,7 @@ def _attempt_chain(c, attempt):
 def acting_for(chain):
     """What a runner does for a turn (its claim, start and end) acts with the chain of the automation that started the
     turn, as the turn's own writes do, so the change it makes (a task's state, say) cannot start that automation again.
-    Without it, a turn that moves its own task re-runs the automation on task.state_changed, and each run's turn does the
+    Without it, a turn that moves its own task re-runs the automation on task.step_changed, and each run's turn does the
     same. An empty chain changes nothing."""
     token = CHAIN.set(tuple(chain) or CHAIN.get())
     try:
@@ -1693,7 +1650,7 @@ def on_event(c, type_, subject, data, actor, access=None):
     if name in ("task.created", "task.assigned") and isinstance(facts, dict) and facts.get("owner_id"):
         task = H.task(c, subject)
         if task and not H.task_private(c, task) and hub_checks(c, task):
-            # task.assigned is told before the owner column is written: the new owner is the event's.
+            # The owner is the event's: the one the task was given to by the change that published it.
             task = _received_task(task, facts["owner_id"])
             owner = F.owner_ref(facts["owner_id"])
             fire(
@@ -1707,14 +1664,9 @@ def on_event(c, type_, subject, data, actor, access=None):
 
 def _received_task(task, owner):
     """The task as a `task_received` automation hears it, keyed by the names its flow reads. The row's columns are read
-    under this code's names, so a column renamed since the row was read still fills its field. A task made without a type
-    keeps a NULL type_id; hubdb reads that as the general type, so the trigger does too."""
-    fields = ("id", "title", "body", "status", "requester", "step_id")
-    return {
-        **{k: task.get(renames.current_column("tasks", k)) for k in fields},
-        "type_id": task.get("type_id") or H.GENERAL_TYPE,
-        "owner": owner,
-    }
+    under this code's names, so a column renamed since the row was read still fills its field."""
+    fields = ("id", "title", "body", "status", "requester", "pipeline_id", "stage_id")
+    return {**{k: task.get(renames.current_column("tasks", k)) for k in fields}, "owner": owner}
 
 
 # The Gmail category labels a message can carry, as the words a rule reads. A message in no category has none.
@@ -2214,8 +2166,8 @@ def _rule_audience(c, auto, do, args, values):
 
 def _warned_args(c, auto, gate, do, args, key, values):
     """A warned step's arguments: the warning line on the argument its reader gets (`key`, from `_rule_key`): a post
-    of the turn's output posts that output with the line first; an assign with no note of its own puts the line
-    before the note the task already has, which stays whole."""
+    of the turn's output posts that output with the line first. An assign with no note of its own keeps its arguments:
+    its line goes before the note the task already has (`_warned_run`), not on the hand-off's why."""
     from . import org_rule_check
 
     if not (gate and gate.get("warn") and key):
@@ -2224,12 +2176,31 @@ def _warned_args(c, auto, gate, do, args, key, values):
     if not said and do == "post_update":
         said = A._turn_output(values).get("text")
     if not said and do == "assign":
-        try:
-            note = A.task_of(c, auto, values).get("note") or ""
-        except ValueError:
-            note = ""
-        return {**args, key: org_rule_check.warned_note(gate, note)}
+        return args
     return {**args, key: org_rule_check.warned_text(gate, str(said or "")).rstrip()}
+
+
+def _warned_run(c, auto, run_id, gate, do, args, values, step=None):
+    """A step's write (`A.run`) with its warning line: an assign that says nothing of its own puts the line before the
+    task's note, which stays whole, in one savepoint with the hand-off, so a refused hand-off leaves the note as it
+    was. Any other step carries its line in its arguments (`_warned_args`)."""
+    from . import org_rule_check
+
+    if not (gate and gate.get("warn") and do == "assign" and not any(args.get(k) for k in RULE_CHECKED["assign"])):
+        return A.run(c, auto, run_id, do, args, values, step=step)
+    c.execute("SAVEPOINT warned_hand_off")
+    try:
+        task = A.task_of(c, auto, values)
+        if task:
+            note = org_rule_check.warned_note(gate, task.get("note") or "")
+            H.task_update(c, A._actor(c, auto), task["id"], note=note, seen_version=task["version"])
+        result = A.run(c, auto, run_id, do, args, values, step=step)
+    except (H.Refused, Problem, ValueError) as exc:
+        result = A._fail(getattr(exc, "detail", None) or exc)
+    if isinstance(result, dict) and result.get("ok") is False:
+        c.execute("ROLLBACK TO warned_hand_off")
+    c.execute("RELEASE warned_hand_off")
+    return result
 
 
 class TaskMoved(Exception):
@@ -2259,7 +2230,7 @@ def replay_step(c, bot, hold, replay, ingest, gate=None):
     )
     chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
     try:
-        return A.run(c, auto, replay["run"], replay["do"], args, replay["values"], step=replay.get("step"))
+        return _warned_run(c, auto, replay["run"], gate, replay["do"], args, replay["values"], step=replay.get("step"))
     finally:
         H.VIA.reset(via)
         CHAIN.reset(chain)
@@ -2338,9 +2309,9 @@ class HubServices:
         except (J.JudgeError, OSError, ValueError):
             return None
 
-    def judge(self, values, questions, label, level):
+    def judge(self, values, questions, label):
         from clients import judge as J
-        from .judge import ask, audit_detail, server_engine
+        from .judge import audit_detail, server_engine
 
         store = self.hub.store
         with store.read() as c:
@@ -2348,7 +2319,7 @@ class HubServices:
         if engine is None:  # no decision model, or the month's decision cap is reached
             return None
         J.validate(values, questions, label)
-        result = ask(engine, _trim(values), questions, label, level)
+        result = engine(_trim(values), questions, label)
         self.dirty = True
         self._write(
             lambda c: H.event(
@@ -2360,7 +2331,6 @@ class HubServices:
                     "label": label,
                     "automation": self.row["id"],
                     "run": self.run_id,
-                    "level": level,
                     **audit_detail(result),
                     "answers": J.summary(result["answers"]),
                 },
@@ -2416,9 +2386,10 @@ class HubServices:
             )
         return result
 
-    def _rule_text(self, c, do, args, values):
+    def _rule_text(self, c, do, args, values, hide_private=False):
         """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
-        new owner (`assign`) says its title and body to them, with or without a note."""
+        new owner (`assign`) says its title and body to them, with or without a note. `hide_private`: a private
+        task's title and body are left out (a hold's reviewer may not read the task)."""
         keys = RULE_CHECKED.get(do)
         if not keys:
             return "", None
@@ -2431,9 +2402,12 @@ class HubServices:
             except ValueError:
                 task = None
             if task:
-                text = "\n\n".join(
-                    filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip()))
+                said = (
+                    "Assigned: a private task"
+                    if hide_private and H.task_private(c, task)
+                    else f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip()
                 )
+                text = "\n\n".join(filter(None, (text, said)))
         return text, _rule_key(do, args)
 
     def _rule_check(self, do, args, values, step=None):
@@ -2484,7 +2458,9 @@ class HubServices:
         if rule:
             from . import org_rule_check
 
-            text, key = self._rule_text(c, do, args, values)
+            # The reviewer's copy leaves a private task's words out; the hold keeps what was judged for its recheck.
+            judged, key = self._rule_text(c, do, args, values)
+            text, _ = self._rule_text(c, do, args, values, hide_private=True)
             gate = org_rule_check.apply(
                 c,
                 rule,
@@ -2500,12 +2476,14 @@ class HubServices:
                 },
                 tell=True,
                 obj_now=org_rule_check.current_obj(c, rule.get("obj")),
+                judged=judged,
             )
             if gate and gate.get("moved"):
                 raise TaskMoved()
             if gate and gate.get("held"):
                 return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
             args = _warned_args(c, self.auto, gate, do, args, key, values)
+            return _warned_run(c, self.auto, self.run_id, gate, do, args, values, step=step)
         return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):
@@ -3834,7 +3812,7 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/automations/{aid}/delete")
     def automations_delete_post(request: Request, aid: str, body: Empty | None = None):
-        """The same delete for clients that only POST (the hub CLI and MCP)."""
+        """The same delete for clients that only POST (the tico CLI and MCP)."""
         return delete(request, aid, body or Empty())
 
     @app.post("/api/v2/automations/{aid}/run")

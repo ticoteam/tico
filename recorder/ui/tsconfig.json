@@ -1,0 +1,9 @@
+{
+  "//": "The Recorder window's TypeScript: app/ and preview/ page scripts (classic scripts; recorder/build-ui.cjs strips their types into recorder/dist) and the bridge types in types/. The shared strict options of tsconfig.node.json (every option ui/tsconfig.strict.json sets, plus erasableSyntaxOnly and verbatimModuleSyntax), with the DOM and no Node types; scripts/check_node_types.py checks it with the other projects. preview/shoot.mts runs under Node and stays in recorder/tsconfig.json.",
+  "extends": "../../tsconfig.node.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": []
+  },
+  "include": ["./app/**/*.ts", "./preview/**/*.ts", "./types/**/*.d.ts"]
+}

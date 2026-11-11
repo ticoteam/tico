@@ -1,40 +1,16 @@
 """GET /api/v2/health reads each computer, its bots and its failed runs in batches, so the statements it takes grow by a
 constant (at most one a computer, for a computer's login hold) rather than by a few a computer or a bot."""
 
-import contextlib
 import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from backend import health, queue_refusals as Q
 from backend.store import H, encode
-from backend.tests.test_api import api, headers, post, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_run_backoff import at, setup
-from backend.tests.test_status_reads import busy
-
-
-def counted(api, monkeypatch, path, token="ana-test"):
-    """GET `path` as `token`: the body, and the statements on the page's read snapshot. Each request starts from cold
-    roster caches, as a poll from a new process would."""
-    store, seen = api.app.state.store, []
-    store.roster_rows.clear()
-    with monkeypatch.context() as patched:
-        opened = store.read_transaction
-
-        @contextlib.contextmanager
-        def traced():
-            with opened() as c:
-                c.set_trace_callback(seen.append)
-                try:
-                    yield c
-                finally:
-                    c.set_trace_callback(None)
-
-        # Background workers borrow store.read too; their periodic reads are not the page's work.
-        patched.setattr(store, "read_transaction", traced)
-        response = api.get(path, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
+from backend.tests.helpers.api import post, runner
+from backend.tests.helpers.run_backoff import at, setup
+from backend.tests.helpers.status_reads import busy
+from backend.tests.helpers.health_queries import counted
 
 
 def test_health_statement_count_excludes_background_media_reads(api, monkeypatch):
@@ -125,8 +101,18 @@ def test_health_takes_the_same_statements_however_many_refused_queues_it_shows(a
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
     busy(api, machine, 0, 40)
-    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     store = api.app.state.store
+    with store.transaction() as c:
+        # Every bot is held for its failed runs until its next try (backend/run_backoff.py), so the claim passes
+        # over its queue: a refusal v3 keeps (the claim no longer judges a task's waits; the engine wakes only the
+        # bot whose turn it is).
+        for k in range(40):
+            c.execute(
+                "INSERT OR REPLACE INTO run_backoff(bot,fails,wait_until,error_class,last_failed_at,held_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (f"busy-{k}", 3, "2026-10-26T00:00:00.000000Z", "crash", *["2026-10-24T12:10:00.000000Z"] * 2),
+            )
+    at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with store.read() as c:
         values = {f"busy-{k}": Q.current(c, store.settings, f"busy-{k}") for k in range(40)}
     refusable = sorted(slug for slug, value in values.items() if value and value["reason"] != "lane_held")

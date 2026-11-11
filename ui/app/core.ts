@@ -19,8 +19,6 @@ const NEEDS_YOU = '#/tasks?view=foryou';   // everything waiting on me; answerab
 const GOALS = '#/goals';              // the team chart with everyone's goals and a colour
 const ASSISTANT = '#/assistant';      // your private chat with the assistant (ui/app/assistant-page.ts)
 const LEARNED = '#/assistant/learned';   // what your chat bot has learned (ui/app/learned.ts)
-const BOARD = '#/board';              // the old links still work, each opening its view
-const ISSUES = '#/issues';
 const SETTINGS = '#/settings';
 const HELP = '#/help';                // old Help links: Company with the Support pop-up open (ui/support.ts)
 const CREDENTIALS = '#/credentials';   // the owner's connections: what is connected and whether it works

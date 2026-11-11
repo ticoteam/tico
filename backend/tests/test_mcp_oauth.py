@@ -5,7 +5,7 @@ import hashlib
 import re
 from urllib.parse import parse_qs, urlsplit
 
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
 
 REDIRECT = "https://agent.example/callback"
 VERIFIER = "v" * 50
@@ -47,7 +47,7 @@ def token(api, **form):
 def whoami(api, access):
     r = api.post(
         "/api/v2/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "hub_whoami", "arguments": {}}},
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "tico_whoami", "arguments": {}}},
         headers={"Authorization": "Bearer " + access},
     )
     return r.status_code, r.text

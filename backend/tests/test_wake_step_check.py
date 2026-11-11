@@ -1,43 +1,48 @@
-"""A wake rule names a step its task type must have (backend/redesign_migration.py check_wakes, wake_problems): an edit
-that names a missing step is refused with the type's real steps; a rule that already names one is flagged in every
-automation payload, not silently idle; renaming a step moves the rules that name it; deleting a step a rule names is
-refused and says which rules."""
+"""A wake rule names a stage its pipeline must have (backend/redesign_migration.py check_wakes, wake_problems): an
+edit that names a missing stage is refused with the pipeline's real stages; a rule that already names one, or names a
+stage since renamed or removed, is flagged in every automation payload, not silently idle."""
 
 import copy
 import json
 
 import pytest
 
-from backend import redesign_migration as M
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_redesign_migration import db, first_start
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.redesign_migration import db, first_start
 
-STEPS = [("Ready", "open"), ("QA/PR Rejected", "open"), ("Done", "done")]
-
-
-def build_type(api):
-    typ = post(api, "task-types", {"name": "Build", "steps": [{"name": n, "status": s} for n, s in STEPS]})["type"]
-    return typ
+STAGES = ["Ready", "QA/PR Rejected"]
 
 
-def step_id(typ, name):
-    return next(s["id"] for s in typ["steps"] if s["name"] == name)
+def build_pipeline(api, stages=STAGES):
+    """A Build pipeline with these stages (and its own Done and Closed), as its record reads back."""
+    general = get(api, "pipelines/general")["pipeline"]
+    [todo] = general["stages"]
+    record = {
+        "name": "Build",
+        "goal": "Ship what the team builds.",
+        "stages": [{**{k: v for k, v in todo.items() if k not in ("id", "requirements")}, "name": n} for n in stages],
+    }
+    return post(api, "pipelines/build", record)["pipeline"]
 
 
-def convert(api, typ, rules):
-    """Write wake rules the old way, naming a step each, and run the cutover that moves them into a What wakes
+def stage_id(pipe, name):
+    return next(s["id"] for s in pipe["stages"] if s["name"] == name)
+
+
+def convert(api, pipe, rules):
+    """Write wake rules the old way, naming a stage each, and run the cutover that moves them into a What wakes
     automation (as an install's rules move at upgrade)."""
     with db(api).transaction() as c:
-        for position, (rid, step) in enumerate(rules):
+        for position, (rid, stage) in enumerate(rules):
             c.execute(
                 "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
                 "created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,1)",
                 (
                     rid,
-                    "type",
-                    typ["id"],
-                    "step_entered",
-                    json.dumps({"step": step}),
+                    "pipeline",
+                    pipe["id"],
+                    "task_turn",
+                    json.dumps({"stage": stage}),
                     "wake",
                     "{}",
                     position,
@@ -49,11 +54,11 @@ def convert(api, typ, rules):
     first_start(api)
 
 
-def wake_id(api, typ):
+def wake_id(api, pipe):
     [found] = [
         a
         for a in get(api, "automations?limit=500")["automations"]
-        if (a.get("wakes") or {}).get("scope_id") == typ["id"]
+        if (a.get("wakes") or {}).get("scope_id") == pipe["id"]
     ]
     return found["id"]
 
@@ -62,23 +67,23 @@ def detail(api, aid):
     return get(api, f"automations/{aid}")
 
 
-def rule_steps(flow):
-    """[(rule id, the rule's step condition)] for a What wakes automation's rules, as the editor shows them."""
+def rule_stages(flow):
+    """[(rule id, the rule's stage condition)] for a What wakes automation's rules, as the editor shows them."""
     out = []
     for step in flow["steps"]:
         for rule in step["rules"]:
-            cond = [c for c in rule["when"] if c["field"] == "task.step"]
+            cond = [c for c in rule["when"] if c["field"] == "task.stage"]
             out.append((rule["then"][0]["args"]["rule"]["id"], cond[0]["value"] if cond else None))
     return out
 
 
-def set_step(flow, index, value):
-    """The steps with rule `index` naming `value`, as the editor saves them (the condition and the rule's own record)."""
+def set_stage(flow, index, value):
+    """The automation steps with rule `index` naming stage `value`, as the editor saves them (the condition and the rule's own record)."""
     steps = copy.deepcopy(flow["steps"])
     rule = steps[0]["rules"][index]
-    [cond] = [c for c in rule["when"] if c["field"] == "task.step"]
+    [cond] = [c for c in rule["when"] if c["field"] == "task.stage"]
     cond["value"] = value
-    rule["then"][0]["args"]["rule"]["when"]["step"] = value
+    rule["then"][0]["args"]["rule"]["when"]["stage"] = value
     return steps
 
 
@@ -88,57 +93,57 @@ def patch(api, aid, body, expected=200):
     return r
 
 
-def test_a_rule_that_names_no_step_is_flagged_in_the_list_and_the_detail_and_still_converted(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_qa", "QA Fixes")])
-    aid = wake_id(api, typ)
+def test_a_rule_that_names_no_stage_is_flagged_in_the_list_and_the_detail_and_still_converted(api):
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_qa", "QA Fixes")])
+    aid = wake_id(api, pipe)
     listed = [a for a in get(api, "automations?limit=500")["automations"] if a["id"] == aid][0]
     [problem] = listed["problems"]
-    assert problem["rule"] == "rule_qa" and problem["step"] == "QA Fixes"
+    assert problem["rule"] == "rule_qa" and problem["stage"] == "QA Fixes"
     assert "QA/PR Rejected" in problem["why"] and "Ready" in problem["why"]
     assert detail(api, aid)["problems"] == listed["problems"]
 
 
-def test_an_edit_that_names_a_step_the_type_does_not_have_is_refused_with_its_real_steps(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_ok", "Ready")])
-    aid = wake_id(api, typ)
+def test_an_edit_that_names_a_stage_the_pipeline_does_not_have_is_refused_with_its_real_stages(api):
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_ok", "Ready")])
+    aid = wake_id(api, pipe)
     flow = detail(api, aid)
-    r = patch(api, aid, {"steps": set_step(flow, 0, "Pending Review")}, expected=422)
-    assert "Pending Review" in r.text and "QA/PR Rejected" in r.text and "Done" in r.text
+    r = patch(api, aid, {"steps": set_stage(flow, 0, "Pending Review")}, expected=422)
+    assert "Pending Review" in r.text and "QA/PR Rejected" in r.text and "Ready" in r.text
     assert detail(api, aid)["problems"] == [], "a refused edit saves nothing"
 
 
-def test_a_valid_step_saves_by_name_ignoring_case_or_by_id(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_ok", "Ready")])
-    aid = wake_id(api, typ)
+def test_a_valid_stage_saves_by_name_ignoring_case_or_by_id(api):
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_ok", "Ready")])
+    aid = wake_id(api, pipe)
     flow = detail(api, aid)
-    patch(api, aid, {"steps": set_step(flow, 0, "qa/pr rejected")})
+    patch(api, aid, {"steps": set_stage(flow, 0, "qa/pr rejected")})
     assert detail(api, aid)["problems"] == []
-    patch(api, aid, {"steps": set_step(detail(api, aid), 0, step_id(typ, "Done"))})
-    assert rule_steps(detail(api, aid)) == [("rule_ok", step_id(typ, "Done"))]
+    patch(api, aid, {"steps": set_stage(detail(api, aid), 0, stage_id(pipe, "Ready"))})
+    assert rule_stages(detail(api, aid)) == [("rule_ok", stage_id(pipe, "Ready"))]
     assert detail(api, aid)["problems"] == []
 
 
 def test_a_flagged_rule_does_not_block_an_unrelated_edit(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_qa", "QA Fixes")])
-    aid = wake_id(api, typ)
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_qa", "QA Fixes")])
+    aid = wake_id(api, pipe)
     patch(api, aid, {"name": "Renamed wakes"})
     patch(api, aid, {"steps": detail(api, aid)["steps"]})
     assert [p["rule"] for p in detail(api, aid)["problems"]] == ["rule_qa"]
 
 
-def test_a_new_rule_naming_a_missing_step_is_refused(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_ok", "Ready")])
-    aid = wake_id(api, typ)
+def test_a_new_rule_naming_a_missing_stage_is_refused(api):
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_ok", "Ready")])
+    aid = wake_id(api, pipe)
     flow = detail(api, aid)
     added = copy.deepcopy(flow["steps"][0]["rules"][0])
     added["when"] = [
-        {"field": "event", "op": "is", "value": "step_entered"},
-        {"field": "task.step", "op": "is", "value": "In Review"},
+        {"field": "event", "op": "is", "value": "task_turn"},
+        {"field": "task.stage", "op": "is", "value": "In Review"},
     ]
     added["then"][0]["args"]["rule"] = {}
     flow["steps"][0]["rules"].append(added)
@@ -150,9 +155,9 @@ def test_a_new_rule_naming_a_missing_step_is_refused(api):
 def test_a_wake_rule_takes_no_destination_to_or_next_so_an_edit_adding_one_is_refused(api, edit):
     """The wake executor runs one action per rule and no destination: an edit that adds one is refused (422, as every
     refused wake edit is), and nothing changes."""
-    typ = build_type(api)
-    convert(api, typ, [("rule_ok", "Ready")])
-    aid = wake_id(api, typ)
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_ok", "Ready")])
+    aid = wake_id(api, pipe)
     before = detail(api, aid)
     steps = copy.deepcopy(before["steps"])
     rule = steps[0]["rules"][0]
@@ -172,46 +177,18 @@ def test_a_wake_rule_takes_no_destination_to_or_next_so_an_edit_adding_one_is_re
     assert after["steps"] == before["steps"] and not after.get("destinations"), "a refused edit saves nothing"
 
 
-def test_renaming_a_step_moves_the_rules_that_name_it(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_rej", "QA/PR Rejected")])
-    aid = wake_id(api, typ)
-    renamed = [
-        {"id": s["id"], "name": "Rejected" if s["name"] == "QA/PR Rejected" else s["name"], "status": s["status"]}
-        for s in typ["steps"]
-    ]
-    r = api.post("/api/v2/task-types/" + typ["id"], headers=headers(), json={"steps": renamed})
-    assert r.status_code == 200, r.text
-    assert rule_steps(detail(api, aid)) == [("rule_rej", "Rejected")]
+def test_renaming_or_removing_a_stage_a_wake_rule_names_flags_the_rule(api):
+    """A pipeline's stages are its owner's to change; a rule left naming a stage that is gone says so."""
+    pipe = build_pipeline(api)
+    convert(api, pipe, [("rule_rej", "QA/PR Rejected")])
+    aid = wake_id(api, pipe)
     assert detail(api, aid)["problems"] == []
-
-
-def test_deleting_a_step_a_wake_rule_names_is_refused_and_an_unnamed_step_goes(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_rej", "QA/PR Rejected")])
-    keep = [s for s in typ["steps"] if s["name"] != "QA/PR Rejected"]
-    r = api.post(
-        "/api/v2/task-types/" + typ["id"],
-        headers=headers(),
-        json={"steps": [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in keep]},
-    )
-    assert r.status_code >= 400 and "QA/PR Rejected" in r.text and "wake rules" in r.text, r.text
-    assert "QA/PR Rejected" in [s["name"] for s in get(api, "task-types/" + typ["id"])["type"]["steps"]]
-
-    keep = [s for s in typ["steps"] if s["name"] != "Ready"]
-    r = api.post(
-        "/api/v2/task-types/" + typ["id"],
-        headers=headers(),
-        json={"steps": [{"id": s["id"], "name": s["name"], "status": s["status"]} for s in keep]},
-    )
-    assert r.status_code == 200, r.text
-    assert "Ready" not in [s["name"] for s in get(api, "task-types/" + typ["id"])["type"]["steps"]]
-
-
-def test_the_migration_helper_names_the_rules_a_step_is_named_by(api):
-    typ = build_type(api)
-    convert(api, typ, [("rule_rej", "QA/PR Rejected")])
-    with db(api).read() as c:
-        named = M.wakes_naming(c, typ["id"], [(step_id(typ, "QA/PR Rejected"), "QA/PR Rejected")])
-        assert named and named[0].endswith(": QA/PR Rejected")
-        assert M.wakes_naming(c, typ["id"], [(step_id(typ, "Done"), "Done")]) == []
+    record = {
+        **pipe,
+        "stages": [{**s, "name": "Rejected" if s["name"] == "QA/PR Rejected" else s["name"]} for s in pipe["stages"]],
+    }
+    record.pop("may_change", None)
+    post(api, "pipelines/" + pipe["id"], record)
+    [problem] = detail(api, aid)["problems"]
+    assert (problem["rule"], problem["stage"]) == ("rule_rej", "QA/PR Rejected")
+    assert "Rejected" in problem["why"] and "Ready" in problem["why"]

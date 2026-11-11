@@ -446,6 +446,22 @@ class Doctor(Base):
         (self.profile / "memories").mkdir()
         (self.profile / "memories" / "MEMORY.md").write_text("- a\n- mark with hub_ack, status via hub_status_set\n")
 
+    def test_the_old_tool_names_in_a_profile_are_found_with_what_to_use_now(self):
+        self.seed_old_names()
+        found = {(path.name, word, new) for path, _, word, new in H.scan_old_tool_names(self.profile)}
+        self.assertEqual(
+            found,
+            {
+                ("SOUL.md", "hub_say", "tico_message_send"),
+                ("SKILL.md", "hub_docs_search", "tico_doc_search"),
+                ("SKILL.md", "hub_message_send", "tico_message_send"),
+                ("jobs.json", "hub_inbox", "tico_message_list"),
+                ("jobs.json", "hub_fleet-check", "tico_health_check"),
+                ("MEMORY.md", "hub_ack", "tico_message_mark_read"),
+                ("MEMORY.md", "hub_status_set", "tico_bot_status_set"),
+            },
+        )
+
 
 class OldCredential(Base):
     def test_a_credential_file_saved_with_bot_still_loads_as_bot_id(self):
@@ -755,13 +771,13 @@ class OpenClaw(Base):
                 "result": {"content": [{"type": "text", "text": '{"messages": [{"id": "m1"}]}'}], "isError": False},
             },
         )
-        code, out, err = self.run_cli("call", "--harness", "openclaw", "--profile", "claw", "hub_message_list", "{}")
+        code, out, err = self.run_cli("call", "--harness", "openclaw", "--profile", "claw", "tico_message_list", "{}")
         self.assertEqual(code, 0, err)
         self.assertEqual(json.loads(out), {"messages": [{"id": "m1"}]})
         sent = [r for r in self.hub.requests if r["path"] == "/api/v2/mcp"][0]
         self.assertEqual(sent["headers"]["authorization"], "Bearer " + TOKEN)
         self.assertEqual(sent["body"]["method"], "tools/call")
-        self.assertEqual(sent["body"]["params"], {"name": "hub_message_list", "arguments": {}})
+        self.assertEqual(sent["body"]["params"], {"name": "tico_message_list", "arguments": {}})
         self.assertTrue(sent["headers"]["user-agent"].startswith("tico-hermes-agent/"))
         self.run_cli(
             "call",
@@ -769,7 +785,7 @@ class OpenClaw(Base):
             "openclaw",
             "--profile",
             "claw",
-            "hub_message_send",
+            "tico_message_send",
             '{"to": "human:ana", "text": "On it."}',
         )
         self.assertEqual(
@@ -954,7 +970,7 @@ class SkillFile(unittest.TestCase):
         from clients import hubtools
 
         text = self.PATH.read_text()
-        names = set(re.findall(r"\bhub_[a-z_]+\b", text))
+        names = set(re.findall(r"\btico_[a-z_]+\b", text))
         self.assertLessEqual(names, set(hubtools.BY_NAME), sorted(names - set(hubtools.BY_NAME)))
         self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)), {"connector", "profile"})
         rendered = H.render_skill(text, "openclaw", "claw", "/usr/bin/python3")
@@ -966,10 +982,16 @@ class SkillFile(unittest.TestCase):
         from clients import hubtools
 
         text = " ".join(self.PATH.read_text().split())
-        examples = re.findall(r"`(hub_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
+        examples = re.findall(r"`(tico_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
         self.assertGreaterEqual(
             {name for name, _ in examples},
-            {"hub_message_mark_read", "hub_conversation_show", "hub_message_send", "hub_task_update"},
+            {
+                "tico_message_mark_read",
+                "tico_conversation_show",
+                "tico_message_send",
+                "tico_task_show",
+                "tico_task_done",
+            },
         )
         for name, example in examples:
             schema = hubtools.BY_NAME[name]["inputSchema"]

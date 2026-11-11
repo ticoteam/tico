@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from backend import threads
 from backend.models import Completion
 from backend.store import H, encode
-from backend.tests.test_api import api, setup_attempt, post, get, ready, claim, runner, assign, headers
+from backend.tests.helpers.api import setup_attempt, post, get, ready, claim, runner, assign, headers
 from backend import bot_settings as BS
 
 
@@ -50,12 +50,7 @@ def test_equal_answers_to_distinct_inputs_are_delivered_once(api, kind):
     attempt = claim(api, runner)
     start(api, runner, attempt)
     if kind == "task":
-        post(
-            api,
-            "tasks/" + task["id"],
-            {"version": attempt["task"]["version"], "status": "done", "quiet": True},
-            attempt["token"],
-        )
+        post(api, f"tasks/{task['id']}/done", {"version": attempt["task"]["version"]}, attempt["token"])
     if kind == "folded":
         folded = post(api, "chat/ops", {"text": "Include the archive"})
         inputs = post(api, f"attempts/{attempt['id']}/inputs", {}, runner["token"])["messages"]
@@ -130,12 +125,7 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     )
     attempt = claim(api, machine)
     start(api, machine, attempt)
-    task = post(
-        api,
-        "tasks/" + task["id"],
-        {"version": attempt["task"]["version"], "status": "done", "quiet": True},
-        attempt["token"],
-    )
+    task = post(api, f"tasks/{task['id']}/done", {"version": attempt["task"]["version"]}, attempt["token"])
     reply = finish(api, machine, attempt, "Fixture task result")
     assert reply and reply["refs"]["task"] == task["id"]
     # A replay identity is only for reading this receipt; the runner gains no domain credentials.
@@ -146,7 +136,11 @@ def test_task_completion_replay_requires_current_runner_ownership_and_private_ac
     elif revocation == "runner":
         post(api, f"runners/{machine['runner_id']}/revoke", {})
     elif revocation == "private-task":
-        post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "finance"})
+        # A done task keeps its owner: reopened, it goes to someone else and the runner loses the private task.
+        task = post(
+            api, f"tasks/{task['id']}/move", {"version": task["version"], "to": "reopen", "why": "Finance takes it"}
+        )
+        post(api, f"tasks/{task['id']}/owner", {"version": task["version"], "owner": "finance"})
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
@@ -174,7 +168,7 @@ def test_routine_reply_in_a_personal_room_is_not_lost_to_an_unrelated_private_ta
     runner, origin, attempt = setup_attempt(api)
     start(api, runner, attempt)
     finish(api, runner, attempt)
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)

@@ -9,11 +9,11 @@ import json
 
 from backend import slack_channels as SC
 from backend.auth import Identity
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixture)
-from backend.tests.test_slack_gateway import CHANNELS, MARKETING, QUIET, channel_message, digests, readers  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixture)
+from backend.tests.helpers.slack_gateway import CHANNELS, MARKETING, QUIET, channel_message, digests, readers  # noqa: F401  (fixture)
 
 
 # ------------------------------------------------------------------ who may change the list, and what an entry holds
@@ -61,18 +61,18 @@ def test_an_owner_or_admin_lists_a_channel_and_a_member_may_read_the_list_but_no
 def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, botops):
     err, added = mcp(
         api,
-        "hub_slack_channel_add",
+        "tico_slack_channel_add",
         {"channel": "#customer_success", "readers": ["ops"], "note": "Onboarding"},
         token="ben-test",
     )
     assert not err and added["created"] and added["readers"] == ["ops"], added
-    err, refused = mcp(api, "hub_slack_channel_add", {"channel": "#sales", "readers": ["ops"]}, token="cara-test")
+    err, refused = mcp(api, "tico_slack_channel_add", {"channel": "#sales", "readers": ["ops"]}, token="cara-test")
     assert err and "owner or an admin" in json.dumps(refused)
     # BotOps is an admin's hands when an admin asks, and a member's when a member does.
     ben = turn(api, botops, person="ben-test", text="Let the CPO read #customer_success")
     err, done = mcp(
         api,
-        "hub_slack_channel_add",
+        "tico_slack_channel_add",
         {"channel": "#customer_success", "readers": ["cpo"], "post": False},
         token=ben["token"],
     )
@@ -83,10 +83,10 @@ def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, b
         ).fetchone()
     assert event["actor"] == "human:ben" and '"via": "botops"' in event["detail"]
     err, removed = mcp(
-        api, "hub_slack_channel_remove", {"channel": "#customer_success", "reader": "cpo"}, token=ben["token"]
+        api, "tico_slack_channel_remove", {"channel": "#customer_success", "reader": "cpo"}, token=ben["token"]
     )
     assert not err and removed["readers"] == ["ops"]
-    err, listing = mcp(api, "hub_slack_channel_list", {}, token=ben["token"])
+    err, listing = mcp(api, "tico_slack_channel_list", {}, token=ben["token"])
     assert not err and [r["channel"] for r in listing["channels"]] == ["#customer_success"]
     finish(api, botops, ben)
     cara = turn(api, botops, person="cara-test", text="Let ops read #sales")

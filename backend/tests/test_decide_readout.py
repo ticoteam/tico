@@ -5,11 +5,9 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import hubdb as H
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
-from backend.tests.test_judge import QUESTIONS, FakeJudge, fake
-from backend.tests.test_mcp import call
-from backend.tests.test_judge_spend import DOWN
-from backend import judge as B
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS, FakeJudge, fake
+from backend.tests.helpers.mcp import call
 from backend.decide_readout import readout
 
 NOW = datetime.now(timezone.utc)
@@ -39,7 +37,7 @@ def answered(label, model, cost, answers, fallback=None):
 
 
 def a_week_of_use(api):
-    """Support triage: 3 on Jev, 1 on the fallback, 1 failed; idea triage once, matched to an open roadmap item;
+    """Support triage: 3 on Jev, 1 on the fallback, 1 failed; a dedupe once, matched to an open item;
     a night of learnings; a Slack message per bot; a free-text label; and a call from before the week."""
     kind = lambda value, urgency, spam: {  # noqa: E731
         "spam_or_injection": {"type": "noul", "value": spam, "confidence": 0.8},
@@ -76,18 +74,17 @@ def a_week_of_use(api):
     audit(
         api,
         "judge.call",
-        "idea-triage@1",
+        "covered@1",
         answered(
-            "idea-triage@1",
+            "covered@1",
             "jev-1.14",
             0.002,
             {
-                "kind": {"type": "choice", "value": "product", "confidence": 0.9},
-                "covered": {"type": "choice", "value": "8a75c5fd-roadmap-item", "confidence": 0.8},
+                "covered": {"type": "choice", "value": "8a75c5fd-open-task", "confidence": 0.8},
             },
         ),
     )
-    audit(api, "judge.spend", "idea-triage@1", {"label": "idea-triage@1", "model": "jev-1.14", "cost_usd": 0.002})
+    audit(api, "judge.spend", "covered@1", {"label": "covered@1", "model": "jev-1.14", "cost_usd": 0.002})
 
     # One audit row for a night of learnings, with its calls added up; its spend rows carry the set's own label.
     audit(
@@ -175,7 +172,7 @@ def test_given_a_week_of_use_the_readout_lists_calls_cost_and_answer_spread_per_
     assert out["days"] == 7
     sets = {row["set"]: row for row in out["sets"]}
     assert list(sets) == [
-        "idea-triage",
+        "covered",
         "learnings-route",
         "live-meeting-route",
         "slack-route",
@@ -192,9 +189,9 @@ def test_given_a_week_of_use_the_readout_lists_calls_cost_and_answer_spread_per_
         "urgency": {"0": 1, "1": 2, "2": 1},
     }
 
-    idea = sets["idea-triage"]
-    assert (idea["calls"], idea["jev"], idea["cost_usd"]) == (1, 1, 0.002)
-    assert idea["answers"] == {"covered": {"(an open item)": 1}, "kind": {"product": 1}}
+    covered = sets["covered"]
+    assert (covered["calls"], covered["jev"], covered["cost_usd"]) == (1, 1, 0.002)
+    assert covered["answers"] == {"covered": {"(an open item)": 1}}
 
     learnings = sets["learnings-route"]
     assert (learnings["calls"], learnings["jev"], learnings["fallback"], learnings["failed"]) == (
@@ -281,14 +278,13 @@ def test_the_window_is_the_days_asked_and_a_route_call_reads_back(api, monkeypat
     get(api, "decisions/readout?days=0", expected=422)
     get(api, "decisions/readout?days=32", expected=422)
 
-    # A real route call on Jev, one on the fallback: both read back under their set.
+    # A real route call on Jev at the Gateway, one on Jev at the own TypeSafe key after the Gateway failed: both read
+    # back under their set.
     jev = fake(api)
     first = jev.__call__
     api.app.state.judge = lambda s, q, label=None: {**first(s, q, label), "model": "jev-1.14"}
     post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
-    jev.fail = DOWN
-    api.app.state.judge = jev
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: FakeJudge())
+    api.app.state.judge = lambda s, q, label=None: {**FakeJudge()(s, q, label), "fallback": "unavailable"}
     post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
     mail = {row["set"]: row for row in get(api, "decisions/readout?days=1")["sets"]}["mail-triage"]
     assert (mail["calls"], mail["jev"], mail["fallback"]) == (2, 1, 1)
@@ -306,7 +302,7 @@ def test_an_empty_week_says_so_and_still_gives_the_months_spend(api):
 def test_a_bot_reads_it_through_the_tool(api):
     a_week_of_use(api)
     r, msg, attempt = setup_attempt(api)
-    err, out = call(api, "hub_decision_readout", {"days": 7}, token=attempt["token"])
+    err, out = call(api, "tico_decision_readout", {"days": 7}, token=attempt["token"])
     assert not err and out["total"]["calls"] == 21 and out["text"].startswith("Decide readout, ")
 
 

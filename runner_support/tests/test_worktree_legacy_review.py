@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from backend.tests.test_github_app import api, gh  # noqa: F401
-from backend.tests.test_worktrees import prepared, post  # noqa: F401
+from backend.tests.helpers.github_app import api, gh  # noqa: F401
+from backend.tests.helpers.worktrees import prepared, post  # noqa: F401
 from runner_support import worktrees as W
-from runner_support.tests.test_worktrees import git, trees  # noqa: F401
+from runner_support.tests.helpers.worktrees import git, trees  # noqa: F401
 
 
 @pytest.mark.parametrize('pending', [False, True])

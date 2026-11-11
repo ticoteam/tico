@@ -9,7 +9,7 @@ slack_channel: "#agents"
 # model: <model id>
 # reasoning_effort: high
 # max_run_minutes: 90
-# Routines are automations in Tico, not lines here: `hub automation create --file -` from a run,
+# Routines are automations in Tico, not lines here: `tico automation create --file -` from a run,
 # or the Automations page on the site (docs/routines.md).
 # What this bot may touch. Shown in the Tico app. Not listed = not allowed. See Tico policies/access.md.
 # tools:

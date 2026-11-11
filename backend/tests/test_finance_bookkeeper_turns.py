@@ -1,7 +1,7 @@
 """Scripted turns of the built-in Bookkeeper (slug `bookkeeper`; templates/catalog/bookkeeper/AGENT.md and playbooks).
 
 Each test is one accounting job from spec section 11. The Bookkeeper runs with its own run token and only its
-hub_finance_* tools (the `call` helper of test_mcp.py, the same MCP door a bot uses), against a fake Mercury. Each call
+tico_finance_* tools (the `call` helper of test_mcp.py, the same MCP door a bot uses), against a fake Mercury. Each call
 asserts what the tool returned. Tests named `test_gap_*` check an instruction the product does not carry out: they are
 strict xfails whose reason says what is missing, so the run stays green, and a fix makes them XPASS and fail until the
 marker is removed.
@@ -15,11 +15,12 @@ from backend import bot_settings as BS
 from backend import bookkeeper as BK
 from backend.finance import actions as FA
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
-from backend.tests.test_mcp import call, rpc
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, account, act, connect, sync_once  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
+from backend.tests.helpers.finance_bookkeeper_turns import CONFIG, _library_file, ask, chart, hire, mercury  # noqa: F401
+from backend.tests.helpers.finance_oks import give, the_ok
 
-CONFIG = {"template": "bookkeeper", "name": "bookkeeper", "runtime": "fake", "status": "active"}
 PAYEE = {
     "name": "Northwind Hosting",
     "method": "ach",
@@ -27,53 +28,6 @@ PAYEE = {
     "routing_number": "000000000",
     "address": {"address1": "1 Hosting Way", "city": "Austin", "region": "TX", "postalCode": "78701", "country": "US"},
 }
-
-
-def hire(api):
-    """The Bookkeeper as the product makes it once Finance is set up: its template, its default rights (book, ap, ar,
-    pay, cards: backend/bookkeeper.py grant_defaults), and the Everything view the owner is asked to grant. Returns a
-    run token for the bot, the credential its hub calls carry."""
-    store = api.app.state.store
-    with store.transaction() as c:
-        assert FA.ensure_setup(c, store.settings.owner_email)
-        c.execute(
-            "INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')"
-        )
-        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('bookkeeper','ana')")
-        BS.write(c, "bookkeeper", CONFIG)
-        assert BK.grant_defaults(c)
-        granted = act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"})
-        assert granted.status == "committed", granted
-    machine = runner(api)  # enrolling a computer can place the bot already: take its generation
-    with store.read() as c:
-        placed = c.execute("SELECT runner_id, generation FROM assignments WHERE bot=?", (BK.SLUG,)).fetchone()
-    if not placed or placed["runner_id"] != machine["runner_id"]:
-        assign(api, machine, BK.SLUG, generation=placed["generation"] if placed else 0)
-    ready(api, machine, [BK.SLUG])
-    post(api, "chat/" + BK.SLUG, {"text": "Books check: work the queue."})
-    return claim(api, machine, BK.SLUG)["token"]
-
-
-def mercury(api):
-    """Acme's Mercury connected as the owner, with a customer deposit and a wire fee in the feed, synced once."""
-    store = api.app.state.store
-    fake = FakeMercury()
-    connect(store, fake)
-    fake.txns["txn-dep"] = dict(MERCURY["txn_deposit"])
-    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])
-    sync_once(store, fake)
-    return fake
-
-
-def chart(api, code):
-    """A chart account's id, read from the books (no hub tool lists the chart: see test_gap_the_bot_can_list_accounts)."""
-    with api.app.state.store.read() as c:
-        return account(c, code)
-
-
-def ask(api, token, kind, payload, op, **extra):
-    """The bot asks for one Finance action, its operation id as the action's key: (tool error flag, result)."""
-    return call(api, "hub_finance_act", {"kind": kind, "payload": payload, "operation_id": op, **extra}, token=token)
 
 
 def vendor_bill(api, token, number="NW-1042", amount=45_000):
@@ -105,9 +59,9 @@ def vendor_bill(api, token, number="NW-1042", amount=45_000):
 def test_categorize_turn(api):
     token = hire(api)
     mercury(api)
-    err, queue = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, queue = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and {r["label"].split(" · ")[0] for r in queue["items"]} == {"Acme Customer", "Mercury"}, queue
-    err, found = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
+    err, found = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = next(r for r in found["results"] if r["provider_kind"] == "wireFee")
     # A posted row: tag its line (the lines form of categorize: no account id needed).
     err, tagged = ask(
@@ -136,7 +90,7 @@ def test_categorize_turn(api):
         f"categorize:{deposit['feed_id']}",
     )
     assert not err and again["action_id"] == posted["action_id"], again  # a retry acts once
-    err, left = call(api, "hub_finance_inbox", {"kind": "uncategorized"}, token=token)
+    err, left = call(api, "tico_finance_inbox", {"kind": "uncategorized"}, token=token)
     assert not err and deposit["feed_id"] not in {r["feed_id"] for r in left["items"]}, left
 
 
@@ -166,9 +120,9 @@ def test_bills_turn(api):
         api, token, "bill_update", {"bill_id": bill_id, "memo": "October hosting"}, f"bill-update:{bill_id}"
     )
     assert not err and edited["status"] == "committed", edited
-    err, found = call(api, "hub_finance_search", {"kind": "bill", "q": "NW-1042"}, token=token)
+    err, found = call(api, "tico_finance_search", {"kind": "bill", "q": "NW-1042"}, token=token)
     assert not err and [r["id"] for r in found["results"]] == [bill_id], found
-    err, queue = call(api, "hub_finance_inbox", {"kind": "bill_to_enter"}, token=token)
+    err, queue = call(api, "tico_finance_inbox", {"kind": "bill_to_enter"}, token=token)
     assert not err and queue["items"] == [], queue
 
 
@@ -177,10 +131,10 @@ def test_pay_turn(api):
     token = hire(api)
     fake = mercury(api)
     bill_id = vendor_bill(api, token)
-    err, bill = call(api, "hub_finance_search", {"kind": "bill", "q": "NW-1042"}, token=token)
+    err, bill = call(api, "tico_finance_search", {"kind": "bill", "q": "NW-1042"}, token=token)
     assert not err and bill["results"][0]["id"] == bill_id, bill
     # The payee is the bill's vendor: a payment to any other recipient is refused ("that recipient is not this bill's vendor").
-    err, vendor = call(api, "hub_finance_search", {"kind": "contact", "q": "Northwind"}, token=token)
+    err, vendor = call(api, "tico_finance_search", {"kind": "contact", "q": "Northwind"}, token=token)
     assert not err and vendor["results"], vendor
     err, payee = ask(
         api, token, "recipient_add", {**PAYEE, "contact_id": vendor["results"][0]["id"]}, "recipient:northwind"
@@ -203,7 +157,7 @@ def test_pay_turn(api):
     assert not err and asked["status"] == "needs_approval" and asked["kind"] == "payment_create", asked
     assert asked["approver"] == OWNER, asked  # money out waits for one person: the owner here
     assert fake.sent("request_send_money") == []  # nothing was sent to the bank
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "spend"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
 
 
 # ----------------------------------------------------------------------------- invoices (playbook: invoice-overdue.md)
@@ -232,13 +186,13 @@ def test_invoices_turn(api):
     assert not err and sent["status"] == "needs_approval" and sent["rule"] == "default:bot-invoice-email", sent
     assert sent["approver"] == OWNER, sent
     with api.app.state.store.transaction() as c:
-        H.approval_decide(c, OWNER, sent["approval_id"], "approved")
+        give(c, OWNER, sent["approval_id"])
         done = FA.approval_decided(c, sent["approval_id"])
     assert done is not None and done.status == "committed", done
-    err, found = call(api, "hub_finance_search", {"kind": "invoice", "q": "INV-1042"}, token=token)
+    err, found = call(api, "tico_finance_search", {"kind": "invoice", "q": "INV-1042"}, token=token)
     assert not err and found["results"][0]["id"] == invoice_id and found["results"][0]["status"] == "sent", found
     # The payment is in the feed: record it against the invoice (invoice-overdue.md, step 2).
-    err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Acme Customer"}, token=token)
+    err, feed = call(api, "tico_finance_search", {"kind": "feed", "q": "Acme Customer"}, token=token)
     deposit = next(r for r in feed["results"] if r["amount"] == 50_000)
     err, paid = ask(
         api,
@@ -253,7 +207,7 @@ def test_invoices_turn(api):
 
 def test_invoice_reminder_is_a_finance_action(api):
     token = hire(api)
-    err, helped = call(api, "hub_finance_act", {"kind": "help"}, token=token)
+    err, helped = call(api, "tico_finance_act", {"kind": "help"}, token=token)
     assert not err and "invoice_remind" in {k["kind"] for k in helped["kinds"]}, helped
 
 
@@ -261,9 +215,9 @@ def test_invoice_reminder_is_a_finance_action(api):
 def test_receipts_turn(api):
     token = hire(api)
     mercury(api)
-    err, queue = call(api, "hub_finance_inbox", {"kind": "unmatched_receipt"}, token=token)
+    err, queue = call(api, "tico_finance_inbox", {"kind": "unmatched_receipt"}, token=token)
     assert not err and queue["items"] == [], queue
-    err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
+    err, feed = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     assert not err and feed["results"], feed
 
 
@@ -289,25 +243,12 @@ def test_receipts_are_found_by_the_hourly_check(api):
     assert quiet["task"] is None and quiet["items"] == 0, quiet
 
 
-def _library_file(api, fid, bot):
-    """A Library file of `bot` (bot-wide scope, no versions): enough for the file check, which reads the row."""
-    now = H.now()
-    with api.app.state.store.transaction() as c:
-        if c.execute("SELECT 1 FROM bots WHERE id=?", (bot,)).fetchone() is None:
-            c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (bot, bot, bot.title()))
-        c.execute(
-            "INSERT INTO bot_files(id,bot_id,scope,identity,title,kind,locator,first_activity_at,last_activity_at) "
-            "VALUES(?,?,'bot',?,'receipt.pdf','file','',?,?)",
-            (fid, bot, fid, now, now),
-        )
-
-
 def test_attach_files_only_a_library_file_the_bot_may_read(api):
     """attach checks each file before filing it: a missing id, another bot's own file and a deleted file are refused
     (nothing is attached); the Bookkeeper's own file is filed."""
     token = hire(api)
     mercury(api)
-    err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
+    err, feed = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = feed["results"][0]
     _library_file(api, "file-mine", "bookkeeper")
     _library_file(api, "file-theirs", "writer")
@@ -331,19 +272,19 @@ def test_attach_files_only_a_library_file_the_bot_may_read(api):
 
 
 def test_the_bot_reads_a_file_with_hub_file_read(api):
-    """AGENT.md's bill and receipt steps read a Library file with `hub file read` (clients/hubcli.py): the tool is
-    offered to the bot, and the instructions name no command the hub does not have (`hub file get` was one)."""
+    """AGENT.md's bill and receipt steps read a Library file with `tico file read` (clients/hubcli.py): the tool is
+    offered to the bot, and the instructions name no command the hub does not have (`tico file get` was one)."""
     token = hire(api)
     names = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
     agent = (Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper" / "AGENT.md").read_text()
-    assert "hub_file_read" in names and "hub file read" in agent and "hub file get" not in agent
+    assert "tico_file_read" in names and "tico file read" in agent and "tico file get" not in agent
 
 
 # ----------------------------------------------------------------------------- reconcile (Books check 6)
 def test_reconcile_turn(api):
     token = hire(api)
     mercury(api)
-    err, feed = call(api, "hub_finance_search", {"kind": "feed", "q": "Acme"}, token=token)
+    err, feed = call(api, "tico_finance_search", {"kind": "feed", "q": "Acme"}, token=token)
     deposit = feed["results"][0]
     money = deposit["money_account"]["id"]
     # Reconciling covers posted rows: post the deposit first, as the categorize turn does.
@@ -355,7 +296,7 @@ def test_reconcile_turn(api):
         f"categorize:{deposit['id']}",
     )
     assert not err and posted["status"] == "committed", posted
-    err, fee = call(api, "hub_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
+    err, fee = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     # The statement balance is Mercury's balance after both rows: the opening entry (124,765.50) plus 500.00 less 15.00,
     # which is the fixture's currentBalance 125,250.50. Amounts are minor units.
     err, done = ask(
@@ -372,7 +313,7 @@ def test_reconcile_turn(api):
     )
     assert not err and done["status"] == "committed" and done["result"]["difference"] == 0, done
     assert done["result"]["status"] == "done", done
-    err, metric = call(api, "hub_finance_metric", {"name": "unreconciled_days"}, token=token)
+    err, metric = call(api, "tico_finance_metric", {"name": "unreconciled_days"}, token=token)
     assert not err and "value" in metric, metric
 
 
@@ -380,10 +321,13 @@ def test_reconcile_turn(api):
 def test_close_turn(api):
     token = hire(api)
     mercury(api)
-    err, checklist = call(api, "hub_finance_report", {"kind": "close", "month": "2026-10"}, token=token)
+    err, checklist = call(api, "tico_finance_report", {"kind": "close", "month": "2026-10"}, token=token)
     assert not err, checklist
     err, variance = call(
-        api, "hub_finance_report", {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"}, token=token
+        api,
+        "tico_finance_report",
+        {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"},
+        token=token,
     )
     assert not err, variance
     # The checklist is not ready: a money account is not reconciled and a settled row waits for a category (spec 11), so
@@ -401,7 +345,7 @@ def test_close_period_takes_the_month_and_nothing_else(api):
     err, asked = ask(api, token, "close_period", {"month": "2026-10"}, "close:2026-10")
     assert not err and asked["status"] == "needs_approval" and asked["rule"] == "default:close", asked
     assert asked["approver"] == OWNER, asked
-    assert get(api, f"approvals/{asked['approval_id']}")["kind"] == "finance"
+    assert the_ok(api, asked["approval_id"])["subject"].startswith("finance:")
     err, noted = ask(
         api, token, "close_period", {"month": "2026-10", "note": "Software over plan by 12%"}, "close:2026-10:note"
     )
@@ -414,7 +358,7 @@ def test_monthly_report_turn(api):
     mercury(api)
     err, pnl = call(
         api,
-        "hub_finance_report",
+        "tico_finance_report",
         {"kind": "pnl", "start": "2026-10-01", "end": "2026-10-31", "compare": "prior"},
         token=token,
     )
@@ -424,9 +368,9 @@ def test_monthly_report_turn(api):
         {"kind": "cash_flow", "start": "2026-10-01", "end": "2026-10-31"},
         {"kind": "budget_vs_actual", "start": "2026-10-01", "end": "2026-10-31"},
     ):
-        err, report = call(api, "hub_finance_report", args, token=token)
+        err, report = call(api, "tico_finance_report", args, token=token)
         assert not err, (args, report)
-    err, runway = call(api, "hub_finance_metric", {"name": "runway_months"}, token=token)
+    err, runway = call(api, "tico_finance_metric", {"name": "runway_months"}, token=token)
     assert not err and runway["unit"] == "months" and "as_of" in runway and "value" in runway, runway
 
 
@@ -435,9 +379,9 @@ def test_watch_turn(api):
     token = hire(api)
     mercury(api)
     for name in ("runway_months", "uncategorized_count", "unreconciled_days", "cash"):
-        err, metric = call(api, "hub_finance_metric", {"name": name}, token=token)
+        err, metric = call(api, "tico_finance_metric", {"name": name}, token=token)
         assert not err and "as_of" in metric, (name, metric)
-    err, queue = call(api, "hub_finance_inbox", {}, token=token)
+    err, queue = call(api, "tico_finance_inbox", {}, token=token)
     assert not err and queue["counts"]["uncategorized"] == 2, queue
 
 
@@ -452,10 +396,10 @@ def test_watch_duplicates_and_price_rises_are_readable(api):
     fake.txns["txn-card-1"] = dict(MERCURY["txn_card_posted"])
     fake.txns["txn-card-2"] = dict(MERCURY["txn_card_posted"], id="txn-card-2")
     sync_once(store, fake)
-    err, dupes = call(api, "hub_finance_metric", {"name": "duplicate_charges"}, token=token)
+    err, dupes = call(api, "tico_finance_metric", {"name": "duplicate_charges"}, token=token)
     assert not err and dupes["unit"] == "count" and dupes["value"] == 1 and "as_of" in dupes, dupes
     assert "Acme Cloud" in dupes["labels"][0], dupes
-    err, rises = call(api, "hub_finance_metric", {"name": "price_increases"}, token=token)
+    err, rises = call(api, "tico_finance_metric", {"name": "price_increases"}, token=token)
     assert not err and rises["unit"] == "count" and rises["value"] == 0 and "as_of" in rises, rises
 
 
@@ -507,7 +451,7 @@ def test_gap_sales_tax_is_readable_before_approval(api):
         "tax-jurisdiction:US-CA",
     )
     assert not err and jurisdiction["status"] == "committed", jurisdiction
-    err, report = call(api, "hub_finance_report", {"kind": "sales_tax", "year": 2026}, token=token)
+    err, report = call(api, "tico_finance_report", {"kind": "sales_tax", "year": 2026}, token=token)
     assert not err and report["year"] == 2026 and "rows" in report, report
     assert any(r["code"] == "US-CA" for r in report["rows"]), report
 
@@ -524,7 +468,7 @@ def test_gap_year_end_1099_list_is_readable(api):
         "vendor:northwind-1099",
     )
     assert not err and vendor["status"] == "committed", vendor
-    err, flagged = call(api, "hub_finance_report", {"kind": "1099", "year": 2026}, token=token)
+    err, flagged = call(api, "tico_finance_report", {"kind": "1099", "year": 2026}, token=token)
     assert not err and flagged["year"] == 2026 and "threshold" in flagged and "rows" in flagged, flagged
     assert any(r["vendor"] == "Northwind Hosting" for r in flagged["rows"]), flagged
 
@@ -547,7 +491,7 @@ def test_bookkeeper_is_refused_what_it_may_never_do(api):
 # ----------------------------------------------------------------------------- gaps in what the tools can read
 def test_gap_books_check_kinds_can_be_paged(api):
     """The Books check lists books not reconciled for over a month and emailed bills Finance did not take. Each is a
-    kind of hub_finance_inbox, paged like the others: one page of bill_email holds one bill, and next_cursor goes on."""
+    kind of tico_finance_inbox, paged like the others: one page of bill_email holds one bill, and next_cursor goes on."""
     store = api.app.state.store
     token = hire(api)
     fake = FakeMercury()
@@ -564,13 +508,13 @@ def test_gap_books_check_kinds_can_be_paged(api):
                 "'needs_entry','',?)",
                 (f"bin_{n}", received, "a" * 64, received),
             )
-    err, late = call(api, "hub_finance_inbox", {"kind": "unreconciled"}, token=token)
+    err, late = call(api, "tico_finance_inbox", {"kind": "unreconciled"}, token=token)
     assert not err and [(i["kind"], i["id"]) for i in late["items"]] == [("unreconciled", "books")], late
     assert late["items"][0]["label"] == "Books not reconciled yet", late  # never reconciled: no day count
-    err, first = call(api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
+    err, first = call(api, "tico_finance_inbox", {"kind": "bill_email", "limit": 1}, token=token)
     assert not err and [i["id"] for i in first["items"]] == ["bin_1"] and first["next_cursor"], first
     err, second = call(
-        api, "hub_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]}, token=token
+        api, "tico_finance_inbox", {"kind": "bill_email", "limit": 1, "cursor": first["next_cursor"]}, token=token
     )
     assert not err and [i["id"] for i in second["items"]] == ["bin_2"] and second["next_cursor"] is None, second
 
@@ -579,13 +523,13 @@ def test_gap_the_bot_can_list_accounts(api):
     """categorize, bill_create and rule_create take account ids: the bot finds the chart's lines by code or name with the
     named search kind, paged. The first few of each kind without a kind leave accounts out."""
     token = hire(api)
-    err, out = call(api, "hub_finance_search", {"kind": "account", "q": "Software"}, token=token)
+    err, out = call(api, "tico_finance_search", {"kind": "account", "q": "Software"}, token=token)
     assert not err and any(r.get("code") == "6100" and r["id"] for r in out["results"]), out
-    err, page = call(api, "hub_finance_search", {"kind": "account", "limit": 2}, token=token)
+    err, page = call(api, "tico_finance_search", {"kind": "account", "limit": 2}, token=token)
     assert not err and len(page["results"]) == 2 and page["next_cursor"], page
     err, rest = call(
-        api, "hub_finance_search", {"kind": "account", "limit": 2, "cursor": page["next_cursor"]}, token=token
+        api, "tico_finance_search", {"kind": "account", "limit": 2, "cursor": page["next_cursor"]}, token=token
     )
     assert not err and not {r["id"] for r in rest["results"]} & {r["id"] for r in page["results"]}, rest
-    err, every = call(api, "hub_finance_search", {"q": "Software"}, token=token)
+    err, every = call(api, "tico_finance_search", {"q": "Software"}, token=token)
     assert not err and not any(r.get("kind") == "account" for r in every["results"]), every

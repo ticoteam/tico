@@ -15,7 +15,7 @@ the queue is published, and the task says which pull requests you could not read
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/standards.md`, `knowledge/patterns.md` and yesterday's queue in `reports/`, so you skip what
 has not changed since you last read it.
@@ -24,7 +24,8 @@ has not changed since you last read it.
 
     gh pr list -R <repo> --state open --json number,title,author,createdAt,additions,deletions,reviewDecision,isDraft,statusCheckRollup
 
-Leave out drafts and pull requests that are not against a branch in scope. For each, record the age in working
+Leave out drafts, pull requests that are not against a branch in scope, and pull requests on an Engineering
+task (`tico task list --q "<title words>"` finds one): those get their review in the pipeline. For each, record the age in working
 days, changed lines, files touched (`gh pr view <n> -R <repo> --json files`), review state and whether checks pass.
 
 ## 3. Order the queue
@@ -46,8 +47,8 @@ read the new commits and say which commit the draft now covers.
 ## 5. Write the queue and hand it over
 
 `reports/YYYY-MM-DD-review-queue.md` in the shape of `knowledge/examples/review-queue.md`: the headline (open, blocking,
-too large), the blocking findings, then the queue. Then `hub file publish reports/YYYY-MM-DD-review-queue.md`. A pull request
-waiting more than three days goes to its reviewer as `hub task create --owner <person> --title "Review waiting: <pull request title>" --link <pull request url>`.
+too large), the blocking findings, then the queue. Then `tico file publish reports/YYYY-MM-DD-review-queue.md`. A pull request
+waiting more than three days goes to its reviewer as `tico task create --owner <person> --title "Review waiting: <pull request title>" --link <pull request url>`.
 
 ## 6. Learn
 
@@ -55,7 +56,7 @@ Add a mistake to `knowledge/patterns.md` when it appeared in a second pull reque
 
 ## 7. Finish
 
-Commit, then `hub task update <id> --status done --note`: pull requests read, drafts made, how many block a
+Commit, then `tico task done <id> -m "..." --version N`: pull requests read, drafts made, how many block a
 merge, and which you could not read. Always finish it.
 
 ## When a source fails

@@ -10,7 +10,7 @@ from backend.finance import budgeting, tab
 from backend.finance import reads as FR
 from backend.finance.store import actions as SX
 from backend.finance.context import load
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     ACME_ADDRESS,
     AT,
     MERCURY,
@@ -26,6 +26,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_oks import give
 
 SALARY = -812_345
 
@@ -170,7 +171,7 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
     """Codex round 6 #3: a 100.00 card charge re-categorized onto a private line, attributed to someone else. The
     holder's Transactions leave it out, so their Cards read shows no spent total either (it would give the amount
     away); the owner, with full detail, still sees it."""
-    from backend.tests.test_finance_banking import LATER, _arrives, _card_for_eve, _txn
+    from backend.tests.helpers.finance_banking import LATER, _arrives, _card_for_eve, _txn
 
     fake = FakeMercury()
     connect(books, fake)
@@ -201,7 +202,7 @@ OCT_END = "2026-10-31T12:00:00.000000Z"
 def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
     """A 40.00 debit posted to Other expenses in October; October closed in November; a private payroll bill dated
     November is paid from that row, so the "Pays bill" reclass posts in November. Gus sees the P&L, not payroll."""
-    from backend.tests.test_finance_ap import _ingest, _txn
+    from backend.tests.helpers.finance_ap import _ingest, _txn
 
     made = act(
         c,
@@ -785,7 +786,7 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
             ).status
             == "committed"
         )
-        H.approval_decide(c, OWNER, held.approval_id, "approved")
+        give(c, OWNER, held.approval_id)
         done = FA.approval_decided(c, held.approval_id, OCT_END)
         assert done.status in ("failed", "denied") and done.code == "invalid", done
         reason, result = c.execute(
@@ -908,7 +909,7 @@ def test_a_card_limit_refusal_keeps_a_private_charge_hidden_when_read_in_a_later
             c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 3_000}, at=OCT_END, key="gus-limit"
         )
         assert asked.status == "needs_approval" and asked.action_id and asked.approval_id, asked
-        H.approval_decide(c, str(asked.approver), asked.approval_id, "approved")
+        give(c, str(asked.approver), asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, OCT_END)
     assert done is not None and (done.status, done.code) == ("failed", "invalid"), done and done.reason
     with books.read() as c:
@@ -1133,9 +1134,9 @@ def test_a_hidden_child_budget_is_judged_on_the_true_figures_when_its_owner_appr
                 at=AT,
             )
             assert (asked[amount].status, asked[amount].approver) == ("needs_approval", OWNER), asked[amount]
-        H.approval_decide(c, OWNER, asked[6_001].approval_id, "approved")
+        give(c, OWNER, asked[6_001].approval_id)
         too_big = FA.approval_decided(c, asked[6_001].approval_id, AT)
         assert too_big.status in ("failed", "denied") and too_big.code == "invalid", too_big
-        H.approval_decide(c, OWNER, asked[6_000].approval_id, "approved")
+        give(c, OWNER, asked[6_000].approval_id)
         fits = FA.approval_decided(c, asked[6_000].approval_id, AT)
         assert fits.status == "committed", fits

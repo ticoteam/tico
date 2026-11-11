@@ -7,10 +7,10 @@ outcome is five recorded answers, the controls register written, a first monthly
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub doc search "security policy"
-    hub doc search "SOC 2"
-    hub team show
+    tico task show <id>
+    tico doc search "security policy"
+    tico doc search "SOC 2"
+    tico team show
 
 Find the last audit report or readiness assessment, the policies and any evidence folder. What they already say is not
 asked again.
@@ -47,17 +47,17 @@ nothing from owners yet: the first page shows who would be asked for what.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id>
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id>
 --enable`) and tell the human in one line: "I will run the controls page on the first of every month, and send each control
 owner an evidence request for their own control." They can change it or turn it off any time.
 
 Record it in `memory/decisions.md`, with the list of control owners who may receive evidence requests, and set `state.md` to
-`Setup: finished`. If they asked for a different schedule or to leave it off, change the routine to match (`hub automation
+`Setup: finished`. If they asked for a different schedule or to leave it off, change the routine to match (`tico automation
 update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you
 have runs on its own. Run it once the answers and the first result are recorded, not before.

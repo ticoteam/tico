@@ -11,8 +11,8 @@ from backend import task_privacy, thread_attention, threads, updates, views
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.old_asks import old_ask
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_teammate_access import NOBODY, acme, set_access, sql_column, who  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.teammate_access import NOBODY, acme, set_access, sql_column, who  # noqa: F401
 from backend.tests.threads_e2e import add_member, call, create_thread, ok, remove_member, say, timeline
 
 
@@ -383,19 +383,15 @@ def test_needs_you_names_a_hidden_person_only_to_someone_in_the_thread_with_them
     made = dm(api, "cara-test", "human:eve")
     set_access(api, "humans/cara", token="cara-test", see=LEGAL, read=LEGAL, write=LEGAL)
     thread = create_thread(api, "cara-test", audience="company")
-    say(api, "cara-test", thread["id"], "Can you check the lease?", to="human:eve")
-    say(api, "cara-test", made["id"], "A word?", to="human:eve")
+    say(api, "cara-test", thread["id"], "@eve can you check the lease?", to="human:eve")
+    say(api, "cara-test", made["id"], "@eve a word?", to="human:eve")
 
-    item = next(i for i in needs(api, "eve-test", "thread_mention") if i["conversation_id"] == thread["id"])
-    assert item["first_line"] == "Can you check the lease?"
-    assert (item["requester_id"], item["origin_actor"], item["from_person"]) == ("", "", None)
+    item = next(i for i in needs(api, "eve-test", "mention") if i["conversation_id"] == thread["id"])
+    assert item["line"] == "@eve can you check the lease?"
+    assert not item["from_id"] and "human:cara" not in str(item)
     # Eve is in the DM with her, so there she is told who it is.
-    item = next(
-        i
-        for i in needs(api, "eve-test", "thread_mention") + needs(api, "eve-test", "thread_dm")
-        if i["conversation_id"] == made["id"]
-    )
-    assert (item["requester_id"], item["from_person"]) == ("human:cara", "human:cara")
+    item = next(i for i in needs(api, "eve-test", "mention") if i["conversation_id"] == made["id"])
+    assert item["from_id"] == "human:cara"
 
 
 def test_needs_you_names_a_held_writes_author_only_to_someone_who_may_see_them(acme, monkeypatch):

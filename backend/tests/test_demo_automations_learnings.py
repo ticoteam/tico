@@ -43,7 +43,7 @@ def runs_of(api, aid):
     return body["runs"], body["daily"]
 
 
-def test_each_automation_shows_its_runs_and_drops(built):
+def _each_automation_shows_its_runs_and_drops(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
@@ -58,7 +58,7 @@ def test_each_automation_shows_its_runs_and_drops(built):
         assert len(reviews) == 2 and sum(day["dropped"] for day in daily) == 4
 
 
-def test_review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
+def _review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
     _, settings = built
     with signed_in(settings) as api:
         runs, _ = runs_of(api, automation_ids(api)["1-star reviews to reputation"])
@@ -75,7 +75,7 @@ def test_review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
             }
 
 
-def test_the_run_guard_held_a_loop_and_ben_dropped_it(built):
+def _the_run_guard_held_a_loop_and_ben_dropped_it(built):
     _, settings = built
     with signed_in(settings) as api:
         orders = automation_ids(api)["Marketplace orders to inventory"]
@@ -86,7 +86,7 @@ def test_the_run_guard_held_a_loop_and_ben_dropped_it(built):
         assert api.get(f"/api/v2/automations/{orders}").json().get("hold") is None
 
 
-def test_learnings_shows_a_week_of_nights(built):
+def _learnings_shows_a_week_of_nights(built):
     _, settings = built
     with signed_in(settings) as api:
         nights = api.get("/api/v2/learnings").json()["nights"]
@@ -102,7 +102,7 @@ def task_of(run):
     return next(step["outputs"]["task"] for step in run["steps"] if (step.get("outputs") or {}).get("task"))
 
 
-def test_last_night_shows_the_routed_correction_with_its_source(built):
+def _last_night_shows_the_routed_correction_with_its_source(built):
     _, settings = built
     with signed_in(settings) as api:
         nights = api.get("/api/v2/learnings").json()["nights"]
@@ -118,7 +118,7 @@ def test_last_night_shows_the_routed_correction_with_its_source(built):
         assert "Before calibrating" in entry["change"]["diff"]
 
 
-def test_the_night_before_saves_a_smaller_change(built):
+def _the_night_before_saves_a_smaller_change(built):
     _, settings = built
     with signed_in(settings) as api:
         night = next(n for n in api.get("/api/v2/learnings").json()["nights"] if n["night"] == "2026-09-23")
@@ -137,7 +137,7 @@ def test_the_night_before_saves_a_smaller_change(built):
 LAST_HOUR = "2026-09-25T17:30:00.000000Z"  # the build's now is 18:30 UTC
 
 
-def test_runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
+def _runs_spread_over_the_week_and_some_fall_in_the_last_hour(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
@@ -178,7 +178,7 @@ def sweep_automation_id(settings):
     return aid
 
 
-def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
+def _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future(built):
     _, settings = built
     with signed_in(settings) as api:
         rows = api.get("/api/v2/automations?limit=100").json()["automations"]
@@ -192,11 +192,13 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
         for row in schedules:
             trigger = row["trigger"]
             if row["id"] == sweep:
-                # Created at boot after the demo window (onboarding.ensure_builtin_routines), on the real clock, so it
-                # has no run in the window. It is next at its first time after its creation.
+                # Made when the sample company is completed (onboarding.complete_company), on the build's clock and
+                # not by a demo section, so it has no seeded run. It is next at its first time after both its creation
+                # and the build's now: never in the past.
                 made = at_time(row["created_at"])
-                assert at_time(row["next_run"]) > made, row["name"]
-                assert at_time(row["next_run"]) == next_due(trigger["cron"], made, trigger["tz"]), row["name"]
+                after = max(made, NOW)
+                assert at_time(row["next_run"]) > after, row["name"]
+                assert at_time(row["next_run"]) == next_due(trigger["cron"], after, trigger["tz"]), row["name"]
                 continue
             # Next is the schedule's first time after the build's now.
             assert at_time(row["next_run"]) > NOW, row["name"]
@@ -211,7 +213,7 @@ def test_every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_fu
             assert row["last_run"] and at_time(row["last_run"]["started_at"]).replace(microsecond=0) == due[-1]
 
 
-def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
+def _the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
     _, settings = built
     with signed_in(settings) as api:
         ids = automation_ids(api)
@@ -225,7 +227,7 @@ def test_the_ledger_and_declined_card_tasks_are_done_and_read_by_ana(built):
                 assert thread["me"]["unread"] == 0
 
 
-def test_each_deploy_closes_its_own_release_notes_task(built):
+def _each_deploy_closes_its_own_release_notes_task(built):
     _, settings = built
     with signed_in(settings) as api:
         runs, _ = runs_of(api, automation_ids(api)["Finished deploys to release notes"])
@@ -240,14 +242,14 @@ def test_each_deploy_closes_its_own_release_notes_task(built):
         }
 
 
-def test_the_packet_runs_leave_technical_support_its_focus(built):
+def _the_packet_runs_leave_technical_support_its_focus(built):
     _, settings = built
     with signed_in(settings) as api:
         status = {row["bot"]: row for row in api.get("/api/v2/status").json()["bots"]}
         assert status["technical-support"]["focus"] == "Calibration callbacks"
 
 
-def test_learning_deliveries_leave_later_assignments_unstarted(built):
+def _learning_deliveries_leave_later_assignments_unstarted(built):
     _, settings = built
     expected = {
         title: status
@@ -260,8 +262,29 @@ def test_learning_deliveries_leave_later_assignments_unstarted(built):
     assert all(at_time(updated) > NOW - timedelta(days=1) for _title, _status, updated in rows)
 
 
-def test_two_bots_hear_each_tico_release_after_the_first(built):
+def _two_bots_hear_each_tico_release_after_the_first(built):
     directory, settings = built
     with sqlite3.connect(settings.db_path) as db:
         notes = sorted(to for (to,) in db.execute("SELECT to_actor FROM notes WHERE body LIKE 'Subscribed update%'"))
     assert notes == ["bot:botops", "bot:botops", "bot:product-manager", "bot:product-manager"]
+
+
+def test_the_demo_automations_and_learnings_tell_their_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _each_automation_shows_its_runs_and_drops,
+        _review_replies_are_done_while_bens_read_tasks_wait_for_him,
+        _the_run_guard_held_a_loop_and_ben_dropped_it,
+        _learnings_shows_a_week_of_nights,
+        _last_night_shows_the_routed_correction_with_its_source,
+        _the_night_before_saves_a_smaller_change,
+        _runs_spread_over_the_week_and_some_fall_in_the_last_hour,
+        _every_enabled_schedule_ran_at_its_times_this_week_and_is_next_in_the_future,
+        _the_ledger_and_declined_card_tasks_are_done_and_read_by_ana,
+        _each_deploy_closes_its_own_release_notes_task,
+        _the_packet_runs_leave_technical_support_its_focus,
+        _learning_deliveries_leave_later_assignments_unstarted,
+        _two_bots_hear_each_tico_release_after_the_first,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

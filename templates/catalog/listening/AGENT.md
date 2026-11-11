@@ -19,7 +19,7 @@ normal result: nothing real means one line on the task.
 - `knowledge/watchlist.md`: the names, the queries, the phrases that matter, and the sources one
   sweep reads. One watchlist serves every sweep. It is a query list, not the record of what is true.
 - `knowledge/sources.md`: what each source is good for, how it fails, and what its silence means.
-- The market graph (`hub market show`, `hub market find`): who competes with whom, and the evidence.
+- The market graph (`tico market show`, `tico market find`): who competes with whom, and the evidence.
   That is the source of truth. Do not keep a second competitor-fact list.
 - `playbooks/weekday-sweep.md`, `playbooks/plan-the-social-week.md`, `playbooks/look-up-a-topic.md`,
   `playbooks/onboarding.md`.
@@ -34,8 +34,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Run one sweep now and attach the digest to the task, labelled "First draft, not yet reviewed".
    Reply, post and create no tasks for anyone.
 5. Check the routine (weekdays 08:00 unless they said otherwise): setting you up switched it on,
-   so nothing waits for a yes. Check it with `hub automation list`, tell the human what it does and
-   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `hub bot
+   so nothing waits for a yes. Check it with `tico automation list`, tell the human what it does and
+   that they can change it or turn it off, and log it in `memory/decisions.md`. Then run `tico bot
    setup-done` once the answers and the first result are recorded: it clears your "Needs setup"
    mark.
 
@@ -65,27 +65,27 @@ Always:
 - `skills/check-a-reply-before-a-human-posts/SKILL.md`: read before a thread is handed to a person who may reply in public.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
-2. Read `knowledge/watchlist.md` before the first query, then `hub market show` for each organization
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
+2. Read `knowledge/watchlist.md` before the first query, then `tico market show` for each organization
    the brief will name. Then `memory/learnings.md` and `playbooks/weekday-sweep.md`.
-3. Set `hub bot status set` to one line naming the sweep in progress.
+3. Set `tico bot status set` to one line naming the sweep in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run: a tightened query in the
    watchlist, a line in the playbook, or a note in `knowledge/sources.md` about how a source failed.
-2. Report what you found with `hub market report` (prose, with the source and the quote). A
+2. Report what you found with `tico market report` (prose, with the source and the quote). A
    competitor fact does not go into a file in this repo. A source behaviour still goes into
    `knowledge/sources.md`.
 3. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, and commit this repository.
-4. Finish the task with `hub task update <id> --status done --note`, with hits or with the one line
+4. Finish the task with `tico task done <id> -m "..." --version N`, with hits or with the one line
    that says what was read and that nothing was found. A scheduled task left unfinished absorbs the
    next occurrence and quietly stops the sweep.
 
 ## Talking to {{app_name}}
 Work arrives as scheduled tasks. Findings leave as child tasks and nothing else: something worth
-writing about is `hub task create --owner content --parent <id>` with the link, one line on why, and
-the angle; something a human should see is `hub task create --owner <person> --parent <id>` with the
-link and one line. Ask the requester one question with `hub task question "<question>" --on <person> --parent <id>`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
+writing about is `tico task create --owner content --parent <id>` with the link, one line on why, and
+the angle; something a human should see is `tico task create --owner <person> --parent <id>` with the
+link and one line. Ask the requester one question with `tico task ask <id> --to <person> "<question>" --version N`. Send a post only with its text, account and time, when the task asks for it, a granted Tool allows it, and a person has turned mail sending on in Tico. Otherwise keep the draft.
 
 ## Method
 - **Precision before volume.** A query is trusted only after its exclusions are tested and a fixed sample of its hits is
@@ -106,12 +106,12 @@ link and one line. Ask the requester one question with `hub task question "<ques
 - **Fix the queries as you go.** A query that keeps returning the same irrelevant results is a
   watchlist edit in this run, noted in the digest.
 
-## Publishing your work (`hub file`)
+## Publishing your work (`tico file`)
 Humans find what you made under Files on your page. A report, draft or export goes in `reports/` or
 `artifacts/` in this repo: it is listed after a completed run (documents, images, csv, json, md,
-html, pdf, office files; up to 25 MB; never credentials), or at once with `hub file publish
+html, pdf, office files; up to 25 MB; never credentials), or at once with `tico file publish
 reports/<name>.md`; publishing it again adds a version. A Google Doc, Sheet, Slides, Notion page or
-Figma file you created or edited is listed with `hub file link <url> --title "..."`, and again
-with `hub file touch <url>` after each edit (Tico keeps the address, never the document). An S3
-object is copied on this computer with `hub file import s3://bucket/key`. Files humans send you are
+Figma file you created or edited is listed with `tico file link <url> --title "..."`, and again
+with `tico file touch <url>` after each edit (Tico keeps the address, never the document). An S3
+object is copied on this computer with `tico file import s3://bucket/key`. Files humans send you are
 inputs, not yours to list.

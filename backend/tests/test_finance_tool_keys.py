@@ -6,8 +6,8 @@ Ana owns the company; Ben is an admin (both credential administrators)."""
 
 import json
 
-from backend.tests.test_api import api, get, headers  # noqa: F401  (fixture)
-from backend.tests.test_tool_visibility import SECRET_R, bank
+from backend.tests.helpers.api import get, headers  # noqa: F401  (fixture)
+from backend.tests.helpers.tool_visibility import SECRET_R, bank
 
 
 def finance_source(api, credential, name=""):

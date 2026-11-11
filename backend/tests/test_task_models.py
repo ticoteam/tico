@@ -8,45 +8,13 @@ import pytest
 
 from backend import usage_limits
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
-from backend.tests.test_check_models import company, finish, heartbeat
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.check_models import company, finish, heartbeat
 from backend import bot_settings as BS
+from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
-
-
-def revision(api, bot="ops"):
-    return get(api, f"bots/{bot}/access")["revision"]
-
-
-def set_task_model(api, choice, bot="ops", expected=200):
-    return post(
-        api,
-        f"bots/{bot}/task-model",
-        {"task_model": choice, "expected_revision": revision(api, bot)},
-        expected=expected,
-    )
-
-
-def ops_on_sonnet(api):
-    """ops on Claude Sonnet at high effort, on a computer signed in to Claude and Grok."""
-    company(api, "anthropic", "xai")
-    with api.app.state.store.transaction() as c:
-        config = BS.read(c, 'ops')
-        config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5", reasoning_effort="high")
-        BS.write(c, 'ops', config)
-    machine = runner(api)
-    assign(api, machine, "ops")
-    heartbeat(api, machine)
-    return machine
-
-
-def task_turn(api, machine, title="Tidy the changelog"):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Sort the entries."})
-    turn = claim(api, machine)
-    assert turn["task"]["id"] == task["id"]
-    return task, turn
 
 
 def test_a_cross_runtime_task_model_is_required_until_cleared_and_runs_after_sync(api):
@@ -438,20 +406,26 @@ def test_a_check_subtask_keeps_its_check_model_over_the_task_model_and_says_so(a
     set_task_model(api, HAIKU)
     parent, turn = task_turn(api, machine, "Ship the import fix")
     assert turn["config"]["model"] == "claude-haiku-5-5", "the builder's own task follows the task model set on it"
-    sub = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "Review PR 700 with another model",
-            "body": "Read it.",
-            "check_model": "grok",
-            "check_role": "review",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
-        },
-        turn["token"],
-    )
-    finish(api, machine, turn, HAIKU_RAN)
+    made = {}
+
+    def file_the_check():
+        # The started turn files it: once filed, its parent waits on it, and a turn not yet started would not start.
+        made["sub"] = post(
+            api,
+            "tasks",
+            {
+                "owner": "ops",
+                "title": "Review PR 700 with another model",
+                "body": "Read it.",
+                "check_model": "grok",
+                "check_role": "review",
+                "parent": parent["id"],
+            },
+            turn["token"],
+        )
+
+    finish(api, machine, turn, HAIKU_RAN, during=file_the_check)
+    sub = made["sub"]
     check = claim(api, machine)
     assert check["task"]["id"] == sub["id"]
     assert (check["config"]["runtime"], check["config"]["model"]) == ("grok", "grok-4.6")
@@ -561,7 +535,7 @@ def test_a_task_model_its_computer_has_not_installed_falls_back_rather_than_wait
 
 def test_under_the_gateway_preset_a_task_model_not_signed_in_runs_on_the_bots_model_not_the_gateway(api, monkeypatch):
     from backend import models_preset
-    from backend.tests.test_models_preset import choose, connected
+    from backend.tests.helpers.models_preset import choose, connected
 
     connected(api, monkeypatch)
     choose(api, models_preset.RECOMMENDED)
@@ -672,14 +646,13 @@ def test_a_cheaper_task_model_on_a_bot_that_sends_warns_in_plain_words_and_still
     assert set_task_model(api, HAIKU)["warning"] == ""
     set_task_model(api, None)
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO approvals(id,kind,requested_by_id,created_at) VALUES('ap-1','send','bot:ops',?)", (H.now(),)
-        )
+        asked = H.task_create(c, "bot:ops", "Send the launch note", "To the list.", "bot:ops", lint=False)
+        H.task_ask(c, "bot:ops", asked["id"], "human:ana", "OK to send it?", kind="ok", seen_version=asked["version"])
     saved = set_task_model(api, HAIKU)
     assert saved["task_model"]["model"] == "claude-haiku-5-5", "it still saves"
     assert saved["warning"] == (
-        "This bot sends messages for you. Haiku 5.5 is a cheaper model than its own Sonnet 5.5, "
-        "and may word things badly. It still saves, and its tasks run on it."
+        "This bot asks you to OK what it sends, spends or publishes. Haiku 5.5 is a cheaper model than its own "
+        "Sonnet 5.5, and may get it wrong. It still saves, and its tasks run on it."
     )
     assert get(api, "bots/ops")["task_model_warning"] == saved["warning"], "the bot view carries it too"
     task, turn = task_turn(api, machine)

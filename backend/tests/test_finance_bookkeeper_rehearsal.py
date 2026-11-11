@@ -12,20 +12,20 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import kinds as K
 from backend.store import H
-from backend.tests.test_bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
-from backend.tests.test_mcp import call, rpc
-from backend.tests.test_onboarding import draft, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.bookkeeper import DEFAULT_RIGHTS, built, check, checks, ensure
+from backend.tests.helpers.mcp import call, rpc
+from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 SPEC_TOOLS = (
-    "hub_finance_search",
-    "hub_finance_report",
-    "hub_finance_metric",
-    "hub_finance_act",
-    "hub_finance_action",
-    "hub_finance_inbox",
+    "tico_finance_search",
+    "tico_finance_report",
+    "tico_finance_metric",
+    "tico_finance_act",
+    "tico_finance_action",
+    "tico_finance_inbox",
 )
-NEVER_OFFERED = ("hub_approval_approve", "hub_approval_decline", "hub_group_update", "hub_bot_archive")
+NEVER_OFFERED = ("tico_approval_approve", "tico_approval_decline", "tico_group_update", "tico_bot_archive")
 INSTRUCTIONS = [p for p in sorted(TEMPLATE.rglob("*.md"))] + [TEMPLATE / "card.yaml", TEMPLATE / "bot.yaml"]
 
 
@@ -59,7 +59,7 @@ def _names(api, token):
 
 
 def _kinds(api, token):
-    err, out = call(api, "hub_finance_act", {"kind": "help"}, token=token)
+    err, out = call(api, "tico_finance_act", {"kind": "help"}, token=token)
     assert not err, out
     return {k["kind"] for k in out["kinds"]}
 
@@ -110,7 +110,7 @@ def _c1_no_delete_route_for_the_bot(api, token):
 def _c2_the_bot_is_offered_the_six_server_finance_tools(api, token):
     names = _names(api, token)
     assert set(SPEC_TOOLS) <= names, sorted(set(SPEC_TOOLS) - names)
-    assert "hub_finance_card_fill" not in names  # unlisted: no bot is offered card fill
+    assert "tico_finance_card_fill" not in names  # unlisted: no bot is offered card fill
 
 
 def _c2_the_bot_is_not_offered_approvals_group_edits_or_archive(api, token):
@@ -121,13 +121,13 @@ def _c5_the_bot_holds_pay_but_cannot_decide_an_approval(api, token):
     with api.app.state.store.read() as c:
         rights = _bot_rights(c)
     assert "finance.pay" in rights
-    assert "hub_approval_approve" not in _names(api, token)
+    assert "tico_approval_approve" not in _names(api, token)
 
 
 def _c2_close_period_by_the_bot_is_not_committed(api, token):
     err, out = call(
         api,
-        "hub_finance_act",
+        "tico_finance_act",
         {"kind": "close_period", "operation_id": "close-1", "payload": {"month": "2026-09"}},
         token=token,
     )
@@ -145,7 +145,7 @@ def _c2_rule_create_is_refused_once_finance_rules_is_revoked(api, token):
             == "committed"
         )
     err, out = call(
-        api, "hub_finance_act", {"kind": "rule_create", "operation_id": "rule-1", "payload": {}}, token=token
+        api, "tico_finance_act", {"kind": "rule_create", "operation_id": "rule-1", "payload": {}}, token=token
     )
     assert out.get("status") == "denied" and "finance.rules" in out.get("reason", ""), out
 
@@ -259,8 +259,8 @@ def _c4_every_hub_command_the_instructions_name_exists(api, token):
     names = _names(api, token)
     named = set()
     for path in INSTRUCTIONS:
-        named |= {(a, b) for a, b in re.findall(r"hub ([a-z]+) ([a-z]+)", path.read_text())}
-    missing = sorted(f"hub {a} {b}" for a, b in named if f"hub_{a}_{b}" not in names)
+        named |= {(a, b) for a, b in re.findall(r"\btico ([a-z]+) ([a-z]+)", path.read_text())}
+    missing = sorted(f"tico {a} {b}" for a, b in named if f"tico_{a}_{b}" not in names)
     assert not missing, missing
 
 
@@ -285,7 +285,7 @@ def _c4_every_act_kind_the_playbooks_name_exists(api, token):
 def _c4_close_period_is_asked_with_the_fields_it_takes(api, token):
     """The kind takes only `month`; the close playbook asks for close_period with that alone and puts the variance note
     on the task, so no playbook line asks for a note on the close."""
-    err, out = call(api, "hub_finance_act", {"kind": "help", "payload": {"kind": "close_period"}}, token=token)
+    err, out = call(api, "tico_finance_act", {"kind": "help", "payload": {"kind": "close_period"}}, token=token)
     fields = {f["name"] for f in out["fields"]}
     assert fields == {"month"}, sorted(fields)
     asks = [
@@ -295,13 +295,13 @@ def _c4_close_period_is_asked_with_the_fields_it_takes(api, token):
 
 
 def _c4_the_payloads_the_playbooks_show_take_those_fields(api, token):
-    """Each `hub finance act <kind> --payload '<json>'` a playbook or AGENT.md shows is a kind with a shape, its JSON names
+    """Each `tico finance act <kind> --payload '<json>'` a playbook or AGENT.md shows is a kind with a shape, its JSON names
     only fields that kind takes and gives every required one: the example is what a bot copies. Examples wrap over lines,
     so the text is read as one line."""
     text = " ".join(p.read_text() for p in INSTRUCTIONS).replace("\n", " ")
     shown = [
         (kind, raw)
-        for kind, raw in re.findall(r"hub finance act ([a-z_]+)\s+--payload\s+'(\{.*?\})'", text)
+        for kind, raw in re.findall(r"tico finance act ([a-z_]+)\s+--payload\s+'(\{.*?\})'", text)
         if kind != "help"
     ]
     assert len(shown) >= 6, shown  # bill_schedule, payment_create, reconcile, contact_create, ...

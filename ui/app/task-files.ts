@@ -22,11 +22,10 @@ interface TfDialog extends TaskDialog {
   tfEl?: HTMLElement | null;
   tfOpen?: {id: string; n: number | null; cmp: number | null} | null;
   tfLoadSeq?: number;
-  taskOpening?: number;
+  taskOpening?: unknown;
   liveTask?: (PropTask & {attachments?: TfAttachment[] | null}) | null;
   taskFiles?: TfFile[] | null;
   canComment?: boolean;
-  askDrafts?: Map<string, {choices: Record<string, string[]>; other: string; again: boolean}>;
   tfJustClosed?: boolean;
 }
 type TfDiffLine = [' ' | '+' | '-', string];
@@ -35,7 +34,7 @@ type TfCommentFile = {f: TfFile; v: TfVersion; title?: string; loose?: undefined
 interface TfMessage { id: string; ask?: TfAsk | null; refs?: {attachments?: TfAttachment[] | null; questions?: TfQuestion[] | null; who?: string | null; target?: {file?: string | null; version?: number | string | null} | null} | null; sender_id?: string | null; answers?: TfAnswer[] | null; body?: string | null; }
 
 // ---- thumbnails: lazy, sized, a skeleton until they arrive. A versioned address never changes, so the browser's cache
-// serves a revisit; this keeps the decoded picture too, so the peek, the modal and the board redraw it at once.
+// serves a revisit; this keeps the decoded picture too, so the modal and the pipeline redraw it at once.
 const TF_THUMBS = new Map<string, HTMLImageElement>();          // url -> decoded Image, newest use last
 function tfThumbLoad(url: string): Promise<HTMLImageElement> {
   const hit = TF_THUMBS.get(url);
@@ -149,7 +148,6 @@ async function tfLoad(d: TfDialog, id: string | number): Promise<void> {
   if (TASK_CHAT?.dialog === d && TASK_CHAT.data) { TASK_CHAT.rendered = ''; taskCommentsRender(TASK_CHAT, TASK_CHAT.data); }
 }
 function tfPaint(d: TfDialog): void {
-  qcardPaintPictures(d, tfFiles(d));       // the Needs you card's option pictures (question-card.js)
   const el = d.tfEl;
   if (!el) return;
   const files = tfFiles(d);
@@ -175,13 +173,13 @@ function tfOpen(d: TfDialog, id: string | undefined, n: string | number | null =
   d.tfOpen = {id: f.id, n: n == null ? null : Number(n), cmp: null};
   tfPaint(d);
   if (opts.scroll) { if (!d.tfEl) throw new Error('The task has no files section'); d.tfEl.scrollIntoView({block: 'nearest', behavior: 'smooth'}); }
-  if (opts.focus) $(`.tf-tile[data-tf-file="${CSS.escape(f.id)}"]`, d.tfEl)?.focus({preventScroll: true});
+  if (opts.focus && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(f.id)}"]`, d.tfEl)?.focus({preventScroll: true});
   return true;
 }
 function tfClose(d: TfDialog): void {
   const id = d.tfOpen?.id;
   d.tfOpen = null; tfPaint(d);
-  if (id) $(`.tf-tile[data-tf-file="${CSS.escape(id)}"]`, d.tfEl)?.focus({preventScroll: true});
+  if (id && d.tfEl) $(`.tf-tile[data-tf-file="${CSS.escape(id)}"]`, d.tfEl)?.focus({preventScroll: true});
 }
 
 // ---- adding files: the + on Files, a drop anywhere on the task, or a pasted screenshot. One upload per file; a name
@@ -206,7 +204,7 @@ async function tfAdd(d: TfDialog, files: File[]): Promise<void> {
   if (!added) return;
   if (added === files.length) toast(`Added ${plural(added, 'file')}`);
   if (d.open && d.taskOpening === opening && String(d.dataset.task) === id) await tfLoad(d, id);
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Taking a file off a task: its owner, its requester, or someone who may move tasks (the server's rule).
 function tfCanRemove(d: TfDialog): boolean {
@@ -231,7 +229,7 @@ async function tfRemove(d: TfDialog, fid: string, button: HTMLButtonElement): Pr
   tfClose(d);
   await tfLoad(d, id);
   if (TASK_CHAT?.dialog === d) { TASK_CHAT.rendered = ''; void taskChatRead(TASK_CHAT); }
-  if (TASKS_ST) void tasksLoad(TASKS_ST);
+  if (TASKS_ST) void tasksCatchUp(TASKS_ST);
 }
 // Files dragged onto a task or the new-task form land there; the zone lights up while they hover.
 function fileDropTarget(zone: HTMLElement, take: (files: File[]) => void): void {
@@ -273,13 +271,15 @@ function tfViewModal(box: HTMLDialogElement | null | undefined): void {
   box.close(); box.showModal();
 }
 function tfViewPaint(d: TfDialog, force = false): void {
-  const box = $('[data-tf-view]', d.tfEl);
+  const el = d.tfEl;
+  if (!el) throw new Error('The task has no files section');
+  const box = $('[data-tf-view]', el);
   if (!box) return;
   const open = d.tfOpen, f = open && tfFiles(d).find(x => x.id === open.id);
   if (!f) { if (box.open || box.dataset.sig) { box.querySelector('video, audio')?.pause(); if (box.open) box.close(); box.innerHTML = ''; box.dataset.sig = ''; } return; }
   const v = tfVersion(f, open.n), sig = JSON.stringify([f, open, d.canComment !== false]);
   if (!force && box.dataset.sig === sig) { tfViewModal(box); return; }
-  if (!force && d.canComment !== false && (askBusy(box) || tfPlaying(box))) return;   // never under someone answering or watching
+  if (!force && tfPlaying(box)) return;   // never under someone watching
   const kind = tfKind(f.name, v.mime || f.mime);
   const asc = f.versions.slice().reverse();
   const cmp = open.cmp != null ? tfVersion(f, open.cmp) : null;
@@ -298,10 +298,10 @@ function tfViewPaint(d: TfDialog, force = false): void {
       <span class="spacer"></span><span class="tf-break" aria-hidden="true"></span>${tfCanRemove(d) ? '<button type="button" class="ghost danger tf-rm" data-tf-remove>Remove</button>' : ''}<a class="tf-dl" href="${esc(v.url)}" download aria-label="Download ${esc(f.name)} v${v.n}">↓</a>
       <button type="button" class="ghost tf-x" data-tf-close aria-label="Close" title="Close (Esc)" autofocus>✕</button></div>
     ${cmp ? tfCompareHTML(f, cmp, v, kind) : `<div class="tf-body">${tfBodyHTML(f, v, kind, d)}</div>`}
-    ${tfVersionMetaHTML(d, f, v)}`;
+    ${tfVersionMetaHTML(d, v)}`;
   tfBodyWire(box);
   if (!box.open && box.isConnected && d.open) box.showModal();
-  if (refocus) $(refocus, d.tfEl)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
+  if (refocus) $(refocus, el)?.focus({preventScroll: true});      // the redraw never drops the focus on the page
 }
 function tfBodyHTML(f: TfFile, v: TfVersion, kind: TfKind, d: TfDialog | null | undefined): string {
   const url = esc(v.url), name = esc(f.name);
@@ -325,12 +325,12 @@ function tfCompareHTML(f: TfFile, a: TfVersion, b: TfVersion, kind: TfKind): str
   if (['markdown', 'csv', 'json', 'text'].includes(kind)) return `<div class="tf-body"><div class="tf-diff" data-tf-diff="${esc(a.url)}" data-tf-diff-b="${esc(b.url)}" aria-busy="true"><div class="tf-doc-skel"></div></div></div>`;
   return `<div class="tf-body tf-pair">${[a, b].map(x => `<div class="tf-side"><span class="tf-side-v tnum">v${x.n}</span>${tfBodyHTML(f, x, kind, null)}</div>`).join('')}</div>`;
 }
-function tfVersionMetaHTML(d: TfDialog, f: TfFile, v: TfVersion): string {
+function tfVersionMetaHTML(d: TfDialog, v: TfVersion): string {
   const who = v.by ? actorLabel(v.by) : '';
   const line = [who, v.created_at ? ago(v.created_at) : '', v.size != null ? bytes(Number(v.size)) : ''].filter(Boolean).map(esc).join(' · ');
   return `<div class="tf-vmeta">${line ? `<div class="tf-vline muted">${v.by ? actorFace(v.by, 14) : ''}<span>${line}</span></div>` : ''}
     ${v.note ? `<div class="tf-note">${esc(v.note)}</div>` : ''}
-    ${v.ask ? askHTML(v.ask, v.answers, {file: f.id, version: v.n}, v.ask.by || v.by, d.dataset.task, tfFiles(d), d.canComment !== false) : ''}</div>`;
+    ${v.ask ? askHTML(v.ask, v.answers, v.ask.by || v.by, tfFiles(d)) : ''}</div>`;
 }
 const TF_TEXT = new Map<string, Promise<string>>();          // versioned url -> Promise<text>, for the visit
 function tfText(url: string): Promise<string> {
@@ -380,6 +380,12 @@ function tfBodyWire(box: HTMLElement): void {
   }
   tfLazy(box);
 }
+// An index the loops below bound themselves, so a miss is a bug: it throws rather than reading undefined.
+function tfAt<T>(xs: ArrayLike<T>, i: number): T {
+  const x = xs[i];
+  if (x === undefined) throw new Error('The diff index is out of range');
+  return x;
+}
 // A line diff: common head and tail trimmed, the middle by longest common subsequence (a very long middle shows as
 // replaced). Unchanged runs longer than six lines fold to a count.
 function tfDiff(a: string, b: string): TfDiffLine[] {
@@ -390,15 +396,19 @@ function tfDiff(a: string, b: string): TfDiffLine[] {
   if (a1.length * b1.length > 4e6) { out.push(...a1.map((l): TfDiffLine => ['-', l]), ...b1.map((l): TfDiffLine => ['+', l])); }
   else {
     const n = a1.length, m = b1.length, L = Array.from({length: n + 1}, () => new Uint32Array(m + 1));
-    for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a1[i] === b1[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+    for (let i = n - 1; i >= 0; i--) {
+      const row = tfAt(L, i), below = tfAt(L, i + 1), x = tfAt(a1, i);
+      for (let j = m - 1; j >= 0; j--) row[j] = x === tfAt(b1, j) ? tfAt(below, j + 1) + 1 : Math.max(tfAt(below, j), tfAt(row, j + 1));
+    }
     let i = 0, j = 0;
     while (i < n && j < m) {
-      if (a1[i] === b1[j]) { out.push([' ', a1[i]]); i++; j++; }
-      else if (L[i + 1][j] >= L[i][j + 1]) out.push(['-', a1[i++]]);
-      else out.push(['+', b1[j++]]);
+      const x = tfAt(a1, i), y = tfAt(b1, j);
+      if (x === y) { out.push([' ', x]); i++; j++; }
+      else if (tfAt(tfAt(L, i + 1), j) >= tfAt(tfAt(L, i), j + 1)) out.push(['-', tfAt(a1, i++)]);
+      else out.push(['+', tfAt(b1, j++)]);
     }
-    while (i < n) out.push(['-', a1[i++]]);
-    while (j < m) out.push(['+', b1[j++]]);
+    while (i < n) out.push(['-', tfAt(a1, i++)]);
+    while (j < m) out.push(['+', tfAt(b1, j++)]);
   }
   out.push(...A.slice(A.length - tail).map((l): TfDiffLine => [' ', l]));
   return out;
@@ -407,8 +417,8 @@ function tfDiffHTML(a: string, b: string): string {
   const lines = tfDiff(a, b), html = [];
   if (!lines.some(([op]) => op !== ' ')) return '<p class="muted">No changes.</p>';
   for (let i = 0; i < lines.length;) {
-    if (lines[i][0] === ' ') {
-      let j = i; while (j < lines.length && lines[j][0] === ' ') j++;
+    if (tfAt(lines, i)[0] === ' ') {
+      let j = i; while (j < lines.length && tfAt(lines, j)[0] === ' ') j++;
       const run = j - i, edge = i === 0 || j === lines.length;
       if (run > 6) {
         const keepA = i === 0 ? 0 : 3, keepB = j === lines.length ? 0 : 3;
@@ -418,7 +428,7 @@ function tfDiffHTML(a: string, b: string): string {
       } else for (const [, l] of lines.slice(i, j)) html.push(`<span class="ctx">  ${esc(l)}</span>`);
       void edge; i = j; continue;
     }
-    const [op, l] = lines[i++];
+    const [op, l] = tfAt(lines, i++);
     html.push(`<span class="${op === '+' ? 'add' : 'del'}">${op} ${esc(l)}</span>`);
   }
   return `<pre class="tf-diff-lines">${html.join('')}</pre>`;
@@ -473,7 +483,7 @@ function tfWire(d: TfDialog): void {
 // a redraw can leave the focus on the page, and the task must not see the key.
 document.addEventListener('keydown', ev => {
   if (ev.defaultPrevented || ev.metaKey || ev.ctrlKey || ev.altKey || ev.isComposing) return;
-  const d = eventElement(ev)?.closest?.('dialog:not(.tf-view)') || $('dialog:modal:not(.tf-view)') || $('#task-peek[open]');
+  const d = eventElement(ev)?.closest?.('dialog:not(.tf-view)') || $('dialog:modal:not(.tf-view)');
   if (!d?.tfOpen || !d.tfEl || eventElement(ev)?.closest?.('.prop-pop')) return;
   const typing = eventElement(ev)?.closest?.('input, textarea, [contenteditable]');
   if (ev.key === 'Escape' && !typing) {
@@ -518,7 +528,7 @@ function tfCommentFiles(m: TfMessage, files: TfFile[]): TfCommentFile[] {
 }
 // The comment's first visuals are cards (ui/app/visual-cards.ts); its other files stay thumbs and chips.
 function tfCommentFilesHTML(m: TfMessage, files: TfFile[]): string {
-  return visualCardsHTML(m.refs?.attachments || [], {key: m.id || '', chips: (rest: unknown, shown: Set<string>) => tfCommentChipsHTML(m, files, shown)});
+  return visualCardsHTML(m.refs?.attachments || [], {key: m.id || '', chips: (_rest, shown) => tfCommentChipsHTML(m, files, shown instanceof Set ? shown : undefined)});
 }
 function tfCommentChipsHTML(m: TfMessage, files: TfFile[], shown: Set<string> = new Set()): string {
   const list = tfCommentFiles(m, files).filter(x => x.loose ? !shown.has(`${x.loose.file_id}@${x.loose.version}`) : !shown.has(`${x.f.id}@${x.v.n}`));
@@ -542,42 +552,12 @@ document.addEventListener('click', ev => {
 
 // ---- questions. An ask: {questions: [{id, header, question, options: [{label, description, file}], multi, other}],
 // who}. On a comment it is that comment's (an 'ask' message, its refs.questions); on a file version it is the
-// version's. Anyone who may comment answers, except whoever asked; the answer is a comment the thread then shows.
-// Readers (no comment rights: GET /v2/tasks/{id} `can_comment`) see the question, its choices and the answers, no controls.
-// Someone is part-way through an answer: focus in a question, a choice picked or words typed but not sent. A redraw
-// then waits; a question being sent (aria-busy) does not count, so the thread redraws once it lands.
-// Drafts belong to one dialog opening and one question target; a task switch or close drops them.
-const askDraftKey = (el: HTMLElement): string => (el.closest('.task-comments') ? 'comment:' : 'file:') + el.dataset.ask;
-function askDraftCapture(d: TfDialog): void {
-  if (!d.askDrafts) d.askDrafts = new Map();
-  for (const el of d.querySelectorAll<HTMLElement>('.ask:not([aria-busy]):not(.ro):not(.mine)')) {
-    const choices: Record<string, string[]> = {};
-    for (const q of el.querySelectorAll<HTMLElement>('.ask-q')) choices[q.dataset.qid ?? ''] = [...q.querySelectorAll<HTMLElement>('.ask-opt[aria-pressed="true"]')].map(b => b.dataset.label ?? '');
-    d.askDrafts.set(askDraftKey(el), {choices, other: $('.ask-other', el)?.value || '', again: el.classList.contains('again')});
-  }
-}
-function askDraftRestore(root: ParentNode, d: TfDialog): void {
-  for (const el of root.querySelectorAll<HTMLElement>('.ask:not(.ro):not(.mine)')) {
-    const draft = d.askDrafts?.get(askDraftKey(el));
-    if (!draft || el.dataset.task !== String(d.dataset.task) || d.canComment === false) continue;
-    for (const q of el.querySelectorAll<HTMLElement>('.ask-q')) for (const opt of q.querySelectorAll<HTMLElement>('.ask-opt'))
-      opt.setAttribute('aria-pressed', String((draft.choices[q.dataset.qid ?? ''] || []).includes(opt.dataset.label ?? '')));
-    const other = $('.ask-other', el); if (other) other.value = draft.other;
-    el.classList.toggle('again', draft.again);
-  }
-}
-function askBusy(root: ParentNode): boolean {
-  return [...root.querySelectorAll('.ask:not([aria-busy])')].some(el => el.contains(document.activeElement) || el.classList.contains('again')
-    || el.querySelector('.ask-opt[aria-pressed="true"]') || $('.ask-other', el)?.value.trim());
-}
+// version's. It shows the question, its choices and the answers given; a person answers in the thread, and a bot that
+// needs an answer to go on asks on the task (docs/pipelines-v3.md: the ask screen), so there are no controls here.
 function askOf(m: TfMessage | null | undefined): TfAsk | null {
   if (!m) throw new Error('The question has no message');
   if (m.ask?.questions) return m.ask;
   const refs = m.refs; return Array.isArray(refs?.questions) ? {questions: refs.questions, who: refs.who || null} : null;
-}
-function askTargetOf(m: TfMessage): {file: string; version: number} | {comment: string | number} {
-  const t = m.refs?.target;
-  return t?.file ? {file: t.file, version: Number(t.version)} : {comment: m.id};
 }
 function askAnswerWords(a: TfAnswer, ask: TfAsk | null | undefined): string {
   if (a.dismiss) return 'dismissed';
@@ -590,7 +570,7 @@ function askAnswerWords(a: TfAnswer, ask: TfAsk | null | undefined): string {
   });
   return parts.join('; ');
 }
-function askOptionHTML(o: TfOption, files: TfFile[], ro = false): string {
+function askOptionHTML(o: TfOption, files: TfFile[]): string {
   let pic = '';
   const [fid, fn] = String(o.file || '').split('@');
   const f = fid && files.find(x => x.id === fid);
@@ -598,100 +578,20 @@ function askOptionHTML(o: TfOption, files: TfFile[], ro = false): string {
     const v = tfVersion(f, fn), kind = tfKind(f.name, v.mime || f.mime), src = tfPicture(v, kind);
     if (src) pic = `<span class="ask-pic tf-skel"><img alt="" data-tf-src="${esc(src)}"></span>`;
   }
-  if (ro) return `<span class="ask-opt ro"${o.description ? ` title="${esc(o.description)}"` : ''}>${pic}<span class="ask-l">${esc(o.label)}</span>${o.description ? `<span class="ask-d">${esc(o.description)}</span>` : ''}</span>`;
-  return `<button type="button" class="ask-opt" data-label="${esc(o.label)}" aria-pressed="false"${o.description ? ` title="${esc(o.description)}"` : ''}>${pic}<span class="ask-l">${esc(o.label)}</span>${o.description ? `<span class="ask-d">${esc(o.description)}</span>` : ''}</button>`;
+  return `<span class="ask-opt ro"${o.description ? ` title="${esc(o.description)}"` : ''}>${pic}<span class="ask-l">${esc(o.label)}</span>${o.description ? `<span class="ask-d">${esc(o.description)}</span>` : ''}</span>`;
 }
-function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | undefined, target: object, asker: string | null | undefined, taskId: string | number | null | undefined, files: TfFile[] = [], canAnswer = true): string {
+function askHTML(ask: TfAsk | null | undefined, answers: TfAnswer[] | null | undefined, asker: string | null | undefined, files: TfFile[] = []): string {
   const qs = (ask?.questions || []).filter(q => q && q.id);
   if (!qs.length) return '';
   answers = answers || [];
-  const mine = !!asker && asker === myActor(), ro = !mine && !canAnswer;
+  const mine = !!asker && asker === myActor();
   const answered = answers.length > 0;
-  const other = qs.some(q => q.other !== false);
-  const instant = qs.length === 1 && !qs[0]?.multi;
-  const body = qs.map(q => `<div class="ask-q" data-qid="${esc(q.id)}" data-multi="${q.multi ? 1 : 0}">
+  const body = qs.map(q => `<div class="ask-q" data-qid="${esc(q.id)}">
       <div class="ask-line">${q.header ? `<span class="ask-chip">${esc(q.header)}</span>` : ''}<span class="ask-text">${esc(q.question || '')}</span></div>
-      ${mine || !(q.options || []).length ? '' : `<div class="ask-opts"${ro ? '' : ` role="group" aria-label="${esc(q.header || q.question || 'Options')}"`}${q.multi ? ' data-multi' : ''}>${(q.options ?? []).map(o => askOptionHTML(o, files, ro)).join('')}</div>`}
+      ${mine || !(q.options || []).length ? '' : `<div class="ask-opts">${(q.options ?? []).map(o => askOptionHTML(o, files)).join('')}</div>`}
     </div>`).join('');
-  const form = mine || ro ? '' : `<div class="ask-form">${other ? '<input class="ask-other" type="text" maxlength="2000" placeholder="Other…" aria-label="Other answer">' : ''}
-      <div class="ask-foot">${!instant || other ? '<button type="button" class="primary ask-send" data-ask-send>Send</button>' : ''}<button type="button" class="linkish ask-dismiss" data-ask-dismiss>Dismiss</button><span class="muted ask-status" role="status"></span></div></div>`;
   const list = answered ? `<ul class="ask-answers">${answers.map(a => `<li>${a.by ? actorFace(a.by, 14) : ''}<b>${esc(a.by ? actorLabel(a.by) : 'Someone')}</b>${a.quoted_by ? `<span class="muted">(quoted by ${esc(actorLabel(a.quoted_by))})</span>` : ''}
       <span class="${a.dismiss ? 'muted' : ''}">${esc(askAnswerWords(a, ask))}</span>${a.other ? `<span class="ask-o">${esc(a.other)}</span>` : ''}${a.at ? `<time class="muted tnum" title="${esc(fmt(a.at))}">${esc(ageShort(a.at))}</time>` : ''}</li>`).join('')}</ul>` : '';
-  return `<div class="ask${answered ? ' answered' : ''}${mine ? ' mine' : ''}${ro ? ' ro' : ''}" data-ask="${esc(JSON.stringify(target))}" data-task="${esc(taskId)}"${instant ? ' data-instant' : ''}>
-    ${body}${list}${!mine && !ro && answered ? '<button type="button" class="linkish ask-again" data-ask-again>Answer</button>' : ''}${form}</div>`;
+  return `<div class="ask ro${answered ? ' answered' : ''}${mine ? ' mine' : ''}">${body}${list}</div>`;
 }
-async function askSubmit(el: HTMLElement, dismiss = false): Promise<void> {
-  const status = $('.ask-status', el), dialog = el.closest('dialog:not(.tf-view)') as TfDialog | null, opening = dialog?.taskOpening;
-  const answers: Record<string, string[]> = {};
-  for (const q of el.querySelectorAll<HTMLElement>('.ask-q')) {
-    const picked = [...q.querySelectorAll<HTMLElement>('.ask-opt[aria-pressed="true"]')].map(b => b.dataset.label ?? '');
-    if (picked.length) answers[q.dataset.qid ?? ''] = picked;
-  }
-  const other = $('.ask-other', el)?.value.trim() || '';
-  // An Other answer names the questions it answers, so it is bound to the wording shown (a reworded question has new ids).
-  if (other) for (const q of el.querySelectorAll<HTMLElement>('.ask-q')) answers[q.dataset.qid ?? ''] ||= [];
-  if (!dismiss && !Object.keys(answers).length && !other) { if (status) status.textContent = 'Pick an answer'; return; }
-  const target = JSON.parse(el.dataset.ask ?? ''), task = el.dataset.task ?? '';
-  const body = dismiss ? {target, answers: {}, dismiss: true} : {target, answers, ...(other ? {other} : {})};
-  const buttons = [...el.querySelectorAll<HTMLButtonElement | HTMLInputElement>('button, input')];
-  buttons.forEach(b => { b.disabled = true; });
-  el.setAttribute('aria-busy', 'true');
-  if (status) status.textContent = '';
-  try {
-    await post(`/v2/tasks/${encodeURIComponent(task)}/answers`, body);
-    const d = dialog;
-    if (d?.taskOpening !== opening || !d?.open || String(d.dataset.task) !== String(task)) return;
-    for (const prefix of ['comment:', 'file:']) d.askDrafts?.delete(prefix + el.dataset.ask);
-    for (const current of d.querySelectorAll<HTMLElement>('.ask')) if (current.dataset.ask === el.dataset.ask) {
-      for (const opt of current.querySelectorAll('.ask-opt')) opt.setAttribute('aria-pressed', 'false');
-      const other = $('.ask-other', current); if (other) other.value = '';
-      current.classList.remove('again');
-    }
-    if (el.contains(document.activeElement)) (document.activeElement as HTMLElement | null)?.blur();
-    if (TASK_CHAT && TASK_CHAT.dialog === d && taskChatCurrent(TASK_CHAT)) { TASK_CHAT.rendered = ''; await taskChatRead(TASK_CHAT); }
-    if (d) await tfLoad(d, task);
-    if (TASKS_ST) void tasksLoad(TASKS_ST);
-  } catch (e) {
-    buttons.forEach(b => { b.disabled = false; });
-    el.removeAttribute('aria-busy');
-    if (status?.isConnected) status.textContent = `Not sent: ${errorMessage(e, '')}`;
-  }
-}
-document.addEventListener('click', ev => {
-  const el = eventElement(ev)?.closest<HTMLElement>('.ask');
-  if (!el || el.getAttribute('aria-busy') || el.classList.contains('ro')) return;
-  const opt = eventElement(ev)?.closest<HTMLElement>('.ask-opt');
-  if (opt) {
-    const group = opt.closest<HTMLElement>('.ask-opts')!;
-    if (!group.hasAttribute('data-multi')) for (const b of group.querySelectorAll<HTMLElement>('.ask-opt')) if (b !== opt) b.setAttribute('aria-pressed', 'false');
-    opt.setAttribute('aria-pressed', String(opt.getAttribute('aria-pressed') !== 'true'));
-    if (el.hasAttribute('data-instant') && opt.getAttribute('aria-pressed') === 'true') void askSubmit(el);
-    return;
-  }
-  if (eventElement(ev)?.closest('[data-ask-send]')) { void askSubmit(el); return; }
-  if (eventElement(ev)?.closest('[data-ask-dismiss]')) { void askSubmit(el, true); return; }
-  if (eventElement(ev)?.closest('[data-ask-again]')) { el.classList.add('again'); $('.ask-opt, .ask-other', el)?.focus(); }
-});
-document.addEventListener('keydown', ev => {
-  if (ev.key !== 'Enter' || !eventElement(ev)?.matches?.('.ask-other') || ev.isComposing) return;
-  ev.preventDefault(); const ask = eventElement(ev)?.closest<HTMLElement>('.ask'); if (!ask) throw new Error('The answer box is not on the page'); void askSubmit(ask);
-});
 
-// ---- the board: a cover from the newest picture (an image's thumb or a video's poster), and a dot for an open question.
-// `cover` ({url, width, height}) when the server sends one; else the newest image or video among the attachments.
-function taskCover(t: {cover?: {url: string; width?: number | null; height?: number | null; alt?: string} | null; attachments?: TfAttachment[] | null; open_asks?: unknown}): {url: string; width?: number | null; height?: number | null; alt?: string} | null {
-  if (t.cover?.url) return t.cover;
-  const list = (t.attachments || []).filter(a => ['image', 'video'].includes(tfKind(a.name, a.content_type)));
-  const a = list.at(-1);
-  if (!a) return null;
-  const base = String(a.url || `${API}/v2/files/${encodeURIComponent(a.id)}`).split('?')[0] ?? '';
-  const image = tfKind(a.name, a.content_type) === 'image';
-  return {url: base + (image ? '/thumb' : '/poster'), alt: image && Number(a.size || 0) <= TF_INLINE_IMAGE ? base : ''};
-}
-function taskCoverHTML(t: Parameters<typeof taskCover>[0]): string {
-  const c = taskCover(t);
-  if (!c) return '';
-  const ratio = c.width && c.height ? ` style="aspect-ratio:${Number(c.width)}/${Number(c.height)}"` : '';
-  return `<div class="bcard-cover tf-skel"${ratio}><img alt="" data-tf-src="${esc(c.url)}"${c.alt ? ` data-tf-alt="${esc(c.alt)}"` : ''}></div>`;
-}
-const taskAskDot = (t: {open_asks?: unknown} | null | undefined): string => Number(t?.open_asks) > 0 ? '<span class="ask-dot" title="Open question" aria-label="Open question"></span>' : '';

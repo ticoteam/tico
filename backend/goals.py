@@ -3,7 +3,7 @@
 A goal has an owner (a person, a bot, or `company`; one field), the goal it serves (`parent_id`,
 optional: a goal with none is simply not linked), and a colour. What level a goal is at comes from
 its owner: `company` is a company goal, `human:x` a person's, `bot:x` a bot's. A company goal is
-optional. Bots read theirs with `hub goal list`; nothing is pushed into a run.
+optional. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
 Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
@@ -16,7 +16,7 @@ Rows are appended, never deleted: `dropped` is a status. Every change leaves a `
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import timezone
 
 from .batch_work import isolated
 from . import strategy_bot
@@ -178,7 +178,7 @@ def _proposal_view(row, conn=None):
 
 
 def view(conn, row, visible="coalesce(private,1)=0"):
-    """One goal with everything the page and `hub goal show` print."""
+    """One goal with everything the page and `tico goal show` print."""
     return {
         **row,
         "kpis": kpis(conn, row["id"]),
@@ -192,7 +192,7 @@ def view(conn, row, visible="coalesce(private,1)=0"):
 
 
 def for_actor(conn, actor, roster=None, entries=None, archived=()):
-    """`hub goal list`: the actor's own goals in rank order, the chain above each, and the goals of
+    """`tico goal list`: the actor's own goals in rank order, the chain above each, and the goals of
     whoever reports to it. That is the whole of what a bot needs to know what it is for."""
     mine = goals(conn, owner=actor, live_only=True)
     above, seen = [], {g["id"] for g in mine}
@@ -528,7 +528,7 @@ def reads_due(conn, actor, goal_ids, every=600):
 
 
 def mark_read(conn, actor, goal_ids):
-    """`hub goal list` and `hub goal show` from a bot: the signal that the mandate was read."""
+    """`tico goal list` and `tico goal show` from a bot: the signal that the mandate was read."""
     ts = H.now()
     for gid in goal_ids:
         conn.execute("UPDATE goals SET last_read_at=?, last_read_by_id=? WHERE id=?", (ts, actor, gid))
@@ -701,15 +701,16 @@ def _from_owner(conn, row, at):
             "basis": "checkin",
             "reason": f"Check-in {_age(said['created_at'], at)} ago: {said['signal'].replace('_', ' ')}",
         }
+    # A closed task was dropped, not finished: it earns no credit and is not counted. Done is finished.
     tasks = conn.execute(
-        "SELECT status, done_at, closed_at, updated_at FROM tasks WHERE goal_id=? "
-        "AND status!='declined' AND coalesce(private,1)=0",
+        "SELECT status, coalesce(done_at, updated_at) AS done_at, updated_at FROM tasks "
+        "WHERE goal_id=? AND coalesce(private,1)=0 AND status!='closed'",
         (row["id"],),
     ).fetchall()
     if not tasks:
         return None
-    finished = [t["done_at"] or t["closed_at"] for t in tasks if t["done_at"] or t["closed_at"]]
-    waiting = [t for t in tasks if not (t["done_at"] or t["closed_at"])]
+    finished = [t["done_at"] for t in tasks if t["status"] == "done"]
+    waiting = [t for t in tasks if t["status"] != "done"]
     if not waiting:
         return {"status": "green", "basis": "tasks", "reason": f"All {len(tasks)} tasks done"}
     latest = max(finished, default=None)
@@ -1314,7 +1315,7 @@ REASON_MAX = 280  # one line: a tweet's length is room for "no billing yet, don'
 
 def add_reason(conn, actor, proposal_id, note):
     """The reason someone adds after turning a suggestion down ("Tell the Strategy Bot why?"): theirs alone, once, while
-    the rejection has none. One line; the Strategy Bot reads it before suggesting again (hub proposal list --status rejected)."""
+    the rejection has none. One line; the Strategy Bot reads it before suggesting again (tico proposal list --status rejected)."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:

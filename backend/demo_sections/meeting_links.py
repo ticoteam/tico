@@ -1,7 +1,10 @@
 """The task and Meetings pages share one existing project meeting in the demo."""
 
 from .. import hubdb as H
-from .. import question_tasks as QT
+from ..demo_seed import version
+
+
+SHARED = 'fw24'  # the firmware rollout (demo_content.TASKS): the task the meeting and its page share
 
 
 def seed(b):
@@ -14,7 +17,7 @@ def seed(b):
             "SELECT id FROM meetings WHERE review_state='live' ORDER BY created_at DESC LIMIT 1"
         ).fetchone()
     if meeting and b.tasks:
-        task_id = next(iter(b.tasks.values()))
+        task_id = b.tasks[SHARED]
         b.call('POST', f"meetings/{meeting['id']}/tasks", {'task_ids': [task_id]})
         b.call(
             'POST',
@@ -28,15 +31,19 @@ def seed(b):
             f'tasks/{task_id}',
             {'version': task['version'], 'due': b.ago(days=1).isoformat().replace('+00:00', 'Z')},
         )
-        # An answerable follow-up puts the shared task in the personal card queue and its Tasks badge.
+        # Eli, who handed the shared task to its bot, asks Ana on it, so it is in her Needs you and its Tasks badge. A
+        # person asks: the bots' messages already seeded today use up Everyone's 3 a day to Ana (Rules › Internal), and
+        # a bot's ask counts against that line like its messages do (reach.check), so the bot's ask would be refused.
         b.at(hours=1)
         b.write(
-            lambda c: QT.ask_plain(
+            lambda c: H.task_ask(
                 c,
-                H.task(c, task_id)['owner_id'],
+                H.task(c, task_id)['requester_id'],
+                task_id,
                 'human:ana',
-                "Can we use the meeting's agreed follow-up for the launch? If you agree, I'll add it to the plan.",
-                parent=H.task(c, task_id),
+                "Can we use the meeting's agreed follow-up for the launch? If you agree, Firmware adds it to the plan.",
+                kind='ok',
+                seen_version=version(c, task_id),
             )
         )
     # Settings > People shows each person's Tico Recorder (backend/recorder_installs.py); Ana and Cara use one.

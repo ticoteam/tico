@@ -6,10 +6,10 @@ import pytest
 
 from backend import goals as G
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_assistant import asked, turn_message
-from backend.tests.test_goal_read_back import goal
-from backend.tests.test_strategy_bot_chat import strategy_bot, turn
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.assistant import asked, turn_message
+from backend.tests.helpers.goal_read_back import goal
+from backend.tests.helpers.strategy_bot_chat import strategy_bot, turn
 
 
 def suggestion(goal_id, **extra):

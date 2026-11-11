@@ -66,7 +66,7 @@ running on the Gateway. They never fail for it. The missing sign-in is the only 
 whose checkout is missing, whose settings differ from the server's, or whose computer doesn't have pi waits as before,
 and Health says which.
 
-When a used-up login has its bots on the Gateway, **Settings → Health** says so in one line, for example "Team box's
+When a used-up login has its bots on the Gateway, **Settings → General → Health → Details** says so in one line, for example "Team box's
 Claude login is used up. Bots are on Tico Gateway until it resets." When the bot's computer can't run Gateway work,
 Health says the bot stopped and what to do: sign in another login, or add a Docker runner. When the gateway key reaches
 its monthly cap, the Gateway work stops and Health says **Gateway cap reached** ([What the card says](#what-the-card-says)).
@@ -126,7 +126,7 @@ Gateway use spends that company's credit.
 The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
-[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
+[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → General → Health → Details**;
 the company Gateway endpoint also needs to be available at Tico HQ.
 
 An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
@@ -184,9 +184,9 @@ A bot on the Gateway with no model of its own, for example one that waits for a 
 version. A template can start a bot on another level: its `bot.yaml` may hold
 `gateway: {level: low, fast: true}` (level `xlow`, `low`, `medium`, `high` or `xhigh`) ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
-**Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
-`tico-decide-low`, on Jev), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
-seconds per try instead of 8). Higher costs more per question and answers slower.
+Every decision Tico makes (Decide, rule checks, pipeline judges, automation Decide steps, Slack routing) runs on Jev,
+`tico-decide-low`, and nothing else: there is no setting for it, and no other model answers when Jev fails. Skill
+screening is the one exception: it asks Decide High alone ([Skills](skills.md)).
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
@@ -214,7 +214,7 @@ status and **Needs you** say so.
 ## What the card says
 
 Tico asks the Gateway about the key when you save it, when you press **Check now**, when the owner opens the page
-(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → Health** shows the
+(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → General → Health → Details** shows the
 same warnings to the owner, with **Open Models**.
 
 | The card says | What it means | What to do |
@@ -259,8 +259,8 @@ Services today: **Decide** (live), **Inbox** email addresses (live) and numbers 
 **Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
 enrichment and voice coming soon.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
-the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
-`hub gateway search QUERY`, `hub gateway fetch URL`, `hub gateway digest --items-file FILE`, the `hub_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
+the same list with the `tico_gateway_catalog` tool and search the web with `tico_gateway_search` (`tico gateway catalog [query]`,
+`tico gateway search QUERY`, `tico gateway fetch URL`, `tico gateway digest --items-file FILE`, the `tico_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `tico_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
 
 ## API keys
@@ -301,7 +301,7 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 ## Images
 
-`hub gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
+`tico gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
 - **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
   Good for frames and quick pictures.
@@ -317,23 +317,23 @@ category or quality, cost, the reference names and their sha256. An existing fil
 `--category` and no `--model` keeps the older door's choice (`storyboard`, `photo`, `character` or `graphic`).
 
 Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
-varies with the model and size, so it is not one number. The catalog lists the services (`hub gateway catalog images`
-and `hub gateway catalog svg`). Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and
+varies with the model and size, so it is not one number. The catalog lists the services (`tico gateway catalog images`
+and `tico gateway catalog svg`). Bots use the same thing with the `tico_gateway_image` tool, which runs on the computer and
 answers the saved paths, never the image bytes.
 
 ## Videos
 
-`hub gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
+`tico gateway video PROMPT` starts a short video: 3 to 15 seconds (8 by default), 360p, 720p (the default), 1080p or 4k,
 16:9 or 9:16, with sound unless `--no-audio`. Optional `--first-frame` and `--last-frame` are PNG or JPEG files the video
 starts or ends on. It answers a job id at once. A video takes minutes, so the command does not wait: check it with
-`hub gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
+`tico gateway video-status ID --out PATH.mp4`. While the job runs the answer says so and nothing is saved; once it is done
 the MP4 is saved to `PATH.mp4` (never overwritten) with a sidecar `PATH.mp4.json`, and the answer gives its seconds and cost.
 The Gateway keeps no video: save it when it is done, as the status command does. A video that fails costs nothing;
 one still open after 15 minutes is given up and charged its hold, since the provider may still finish it. Only the key
 that started a job can read it.
 
-Bots use the same two things with the `hub_gateway_video` and `hub_gateway_video_status` tools. The video is priced per
-second at what the video model costs plus 25% (`hub gateway catalog video`), held when the job starts and charged when it
+Bots use the same two things with the `tico_gateway_video` and `tico_gateway_video_status` tools. The video is priced per
+second at what the video model costs plus 25% (`tico gateway catalog video`), held when the job starts and charged when it
 ends, from the same cap as the other Gateway services.
 
 When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,

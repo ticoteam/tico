@@ -1,4 +1,4 @@
-"""MongoDB (Atlas first) for `hub db`: read-only find, aggregate, count, distinct and collections.
+"""MongoDB (Atlas first) for `tico db`: read-only find, aggregate, count, distinct and collections.
 
 Bots cannot send SQL here, and they cannot send a command either: the verb is one of five, the
 filter and pipeline are Extended JSON, and every operator that writes or runs JavaScript on the
@@ -183,7 +183,7 @@ def check_operators(node, depth=0):
             if key in FORBIDDEN:
                 raise Refusal(
                     "read_only",
-                    f"`{key}` {FORBIDDEN[key]} and is never available through `hub db`; read the documents instead",
+                    f"`{key}` {FORBIDDEN[key]} and is never available through `tico db`; read the documents instead",
                 )
             check_operators(value, depth + 1)
     elif isinstance(node, list):
@@ -200,7 +200,7 @@ def check_pipeline(pipeline):
         name = next(iter(stage))
         if name in ADMIN_STAGES:
             raise Refusal(
-                "read_only", f"`{name}` reports on the deployment, not the data, and is not available through `hub db`"
+                "read_only", f"`{name}` reports on the deployment, not the data, and is not available through `tico db`"
             )
     check_operators(pipeline)
     return pipeline
@@ -403,10 +403,10 @@ def validate(call, max_rows):
         raise Refusal("usage", f"`{op}` is not a MongoDB operation here; use one of {', '.join(VERBS)}")
     if op != "collections" and not re.fullmatch(r"[A-Za-z0-9_.\-]{1,120}", str(call.get("collection") or "")):
         raise Refusal(
-            "usage", f"`hub db <name> {op} <collection> ...` needs a collection name (`collections` lists them)"
+            "usage", f"`tico db <name> {op} <collection> ...` needs a collection name (`collections` lists them)"
         )
     if str(call.get("collection") or "").startswith("system."):
-        raise Refusal("read_only", "system collections are not available through `hub db`")
+        raise Refusal("read_only", "system collections are not available through `tico db`")
     if op in ("find", "count", "distinct"):
         call["filter"] = document(call.get("filter") if call.get("filter") is not None else {}, "the filter")
     if op == "find":
@@ -424,7 +424,7 @@ def validate(call, max_rows):
 
 
 def call_from_args(verb, rest, args):
-    """The call `hub db <name> <verb> <collection> ...` asks for; raises Refusal for a bad shape."""
+    """The call `tico db <name> <verb> <collection> ...` asks for; raises Refusal for a bad shape."""
     if verb not in VERBS:
         raise Refusal(
             "usage",
@@ -438,21 +438,21 @@ def call_from_args(verb, rest, args):
             raise Refusal("usage", "`collections` takes no arguments")
         return call
     if not rest:
-        raise Refusal("usage", f"hub db <name> {verb} <collection> ...")
+        raise Refusal("usage", f"tico db <name> {verb} <collection> ...")
     call["collection"], rest = rest[0], rest[1:]
     limit = getattr(args, "limit", None)
     if verb == "aggregate":
         if len(rest) != 1:
-            raise Refusal("usage", "hub db <name> aggregate <collection> '<pipeline-json>'")
+            raise Refusal("usage", "tico db <name> aggregate <collection> '<pipeline-json>'")
         call["pipeline"] = loads(rest[0], "the pipeline")
     elif verb == "distinct":
         if not rest or len(rest) > 2:
-            raise Refusal("usage", "hub db <name> distinct <collection> <field> ['<filter-json>']")
+            raise Refusal("usage", "tico db <name> distinct <collection> <field> ['<filter-json>']")
         call["field"] = rest[0]
         call["filter"] = loads(rest[1], "the filter") if len(rest) > 1 else {}
     else:
         if len(rest) > 1:
-            raise Refusal("usage", f"hub db <name> {verb} <collection> ['<filter-json>']")
+            raise Refusal("usage", f"tico db <name> {verb} <collection> ['<filter-json>']")
         call["filter"] = loads(rest[0], "the filter") if rest else {}
     if verb == "find":
         if getattr(args, "projection", None):
@@ -465,7 +465,7 @@ def call_from_args(verb, rest, args):
 
 
 def execute(db, call, max_rows=None, timeout=None):
-    """Validate and run `call`; returns the result dict `hub db` returns, with `operation` and `collection`."""
+    """Validate and run `call`; returns the result dict `tico db` returns, with `operation` and `collection`."""
     max_rows = min(int(max_rows or db.max_rows), db.max_rows, MAX_ROWS_CEILING)
     timeout = min(float(timeout or db.timeout), db.timeout, 120)
     call = validate(dict(call), max_rows)

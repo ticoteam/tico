@@ -4,14 +4,14 @@ Runs once, on the first message or task you receive, while `state.md` says onboa
 finished. Budget 15 minutes. The outcome is five recorded answers, one real write-up on the task,
 and the first routine checked.
 
-Done when: all five answers are in `state.md` under `## Answers`, `knowledge/coverage.md` holds them as rules, the first write-up is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and `hub bot setup-done` has run.
+Done when: all five answers are in `state.md` under `## Answers`, `knowledge/coverage.md` holds them as rules, the first write-up is attached and labelled, the routine is checked and logged in `memory/decisions.md`, and `tico bot setup-done` has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub meeting search --limit 10
-    hub team show
+    tico meeting search --limit 10
+    tico team show
 
 See which meetings exist, which tool they came from, and who attends. Do not ask what this already
 says. If there are no meetings, say so and tell the human how to get one in: turn on a meeting
@@ -48,17 +48,17 @@ draft, not yet reviewed". Nothing is posted or assigned.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; a recap to anyone outside the team stays a draft for a person to send." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write up each meeting as it is imported and create requested action tasks; a recap to anyone outside the team stays a draft for a person to send." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/coverage.md` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

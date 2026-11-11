@@ -1,7 +1,7 @@
 # pyright: strict
 """The Heartbeat (docs/heartbeat.md): one short beat, every 10 s by default, that runs in order the steps that must happen
 within seconds but have no push event to start them:
-  - due: time passing (a due date, a snooze's end, an hour gone by);
+  - due: time passing (a deferred run, an hour gone by);
   - recovery: crashes nothing announces (a dead turn, a silent run, a lost wake);
   - poll: outside systems that do not push (GitHub, HQ paging).
 
@@ -162,18 +162,6 @@ def github_sync(ctx: Context) -> tuple[str, bool]:
     refresh_conflicts(github_app)
     # A worktree is released by its pull requests' state, so a missed webhook must heal unread.
     reconcile_worktree_prs(github_app)
-    # A merge or release a task waits for whose webhook never came is asked of GitHub (Dev 256).
-    from . import milestone_waits
-
-    milestone_waits.recover(github_app)
-    # A review move refused for pending checks or a missing receipt, retried once that clears (Dev 534 C).
-    from . import move_retry
-
-    move_retry.tick(github_app)
-    # A gate hold whose current head has every hosted check passing clears on a fresh GitHub read.
-    from . import task_blocked
-
-    task_blocked.fresh(github_app)
     return "Done", True
 
 
@@ -189,10 +177,6 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
     from .repositories import daily
 
     daily(github_app)
-    # A bot waiting for its GitHub repository finishes once a person has made it or granted the permission.
-    from . import repo_waits
-
-    repo_waits.tick(github_app)
     # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
     from . import worktree_waits
 
@@ -202,6 +186,17 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
 
     setup_stuck.tick(ctx.store)
     return "Done", True
+
+
+def entity_links(ctx: Context) -> tuple[str | None, bool]:
+    # The Directory's linker (backend/entities/linker.py) reads the texts written since its cursors and writes their
+    # mentions in one short transaction of its own, so no text's write waits for it.
+    from .entities import linker
+
+    done = linker.run_pass(ctx.store, lambda: ctx.locked("entity_links"))
+    if not done["texts"]:
+        return None, True
+    return f"Linked {done['texts']} texts", False
 
 
 def call_sweeps(ctx: Context) -> tuple[str, bool]:
@@ -223,8 +218,58 @@ def call_sweeps(ctx: Context) -> tuple[str, bool]:
     return "Done", True
 
 
+def _engine_github(ctx: Context) -> Any:
+    """The engine's GitHub (backend/github.py `AppGitHub`) through the company's GitHub App, or None without one."""
+    app: Any = ctx.github_app
+    if app is None or app.row() is None:
+        return None
+    from .github import AppGitHub
+
+    return AppGitHub(ctx.github_app)
+
+
+def pr_facts(ctx: Context) -> tuple[str, bool]:
+    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/task_facts.py `refresh`): a webhook
+    # GitHub never sent, or one Tico missed, still reaches the task.
+    github = _engine_github(ctx)
+    if github is None:
+        return "No GitHub app", True
+    from . import task_facts
+
+    changed = task_facts.refresh(ctx.store, github)
+    return (f"{changed} facts changed", False) if changed else ("Nothing due", True)
+
+
+def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
+    # The Merge stage's owed queue and dequeue calls (backend/merge_queue.py `run`).
+    github = _engine_github(ctx)
+    if github is None:
+        return "No GitHub app", True
+    from . import merge_queue
+
+    done = merge_queue.run(ctx.store, github)
+    return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
+
+
+def jev_verdicts(ctx: Context) -> tuple[str | None, bool]:
+    # Jev's verdicts on pages attached to page requirements (backend/page_verdicts.py): a few a beat, each model call
+    # made with no transaction held, each verdict recorded in its own short write.
+    from . import page_verdicts
+
+    at = ctx.at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    given = page_verdicts.run(ctx.store, at)
+    if not given:
+        return None, True
+    return f"Jev gave {given} verdicts", False
+
+
 # ----------------------------------------------------------------------------- the steps, in the order they run
-MINUTE, TEN_MINUTES, HOUR = timedelta(minutes=1), timedelta(minutes=10), timedelta(hours=1)
+MINUTE, FIVE_MINUTES, TEN_MINUTES, HOUR = (
+    timedelta(minutes=1),
+    timedelta(minutes=5),
+    timedelta(minutes=10),
+    timedelta(hours=1),
+)
 STEPS = [
     Step("github_sync", "GitHub sync", "poll", None, github_sync, capture="github_wakes", loop=True),
     Step("personal_alerts", "Personal alerts", "poll", None, personal_alerts, capture="scheduler", loop=True),
@@ -249,42 +294,24 @@ STEPS = [
         capture="scheduler",
     ),
     Step(
-        "task_loops", "Task loop alerts", "recovery", None, S.step_task_loops, failure="task_loops", capture="scheduler"
+        "never_stuck",
+        "Never-stuck check",
+        "recovery",
+        None,
+        S.step_never_stuck,
+        failure="never_stuck",
+        capture="scheduler",
     ),
-    Step("snooze_ends", "Snooze ends", "due", None, S.step_snooze_ends, failure="snooze_ends", capture="scheduler"),
+    Step("deferred", "Deferred runs", "due", None, S.step_deferred, failure="deferred", capture="scheduler"),
     Step(
         "queue_check", "Queue check", "recovery", None, S.step_queue_check, failure="queue_check", capture="scheduler"
     ),
+    # CI build time: the repository's recent workflow runs recorded and priced into Finance (backend/ci_runs.py).
     Step(
-        "milestone_waits",
-        "Merge and release waits",
-        "recovery",
-        None,
-        S.step_milestone_waits,
-        failure="milestone_waits",
-        capture="scheduler",
-    ),
-    Step(
-        "due_reminders",
-        "Due reminders",
-        "due",
-        None,
-        S.step_due_reminders,
-        failure="due_reminders",
-        capture="scheduler",
+        "ci_sweep", "CI build time", "recovery", FIVE_MINUTES, S.step_ci_sweep, failure="ci_sweep", capture="scheduler"
     ),
     Step("updates", "Updates", "due", None, S.step_updates, failure="updates"),
     Step("company_page", "Company page editions", "due", None, S.step_company_page, failure="company_page"),
-    Step(
-        "ask_deadlines",
-        "Ask go-ahead",
-        "due",
-        HOUR,
-        S.step_ask_deadlines,
-        failure="ask_deadlines",
-        lasting=True,
-        control="ask_deadlines",
-    ),
     Step("thread_digest", "Email digest", "due", HOUR, S.step_thread_digest, failure="helper", lasting=True),
     Step(
         "thread_bot_digest", "Bot thread digest", "due", HOUR, S.step_thread_bot_digest, failure="helper", lasting=True
@@ -292,20 +319,39 @@ STEPS = [
     Step("thread_loop_guard", "Paused bot replies", "due", None, S.step_thread_loop_guard, failure="thread_loop_guard"),
     Step("go_live_expiry", "Go-live expiry", "due", TEN_MINUTES, S.step_go_live_expiry, failure="go_live"),
     Step(
-        "stall_checks",
-        "Stall checks",
+        "drop_unreadable",
+        "Unreadable queued work",
         "recovery",
         MINUTE,
-        S.step_stall_checks,
-        failure="stall_checks",
+        S.step_drop_unreadable,
+        failure="drop_unreadable",
         capture="scheduler",
     ),
-    Step("approval_expiry", "Approval expiry", "due", HOUR, S.step_approval_expiry, failure="approval_expiry"),
     Step(
         "repository_waits", "Repository and setup waits", "poll", None, repository_waits, capture="scheduler", loop=True
     ),
+    Step(
+        "entity_links",
+        "Directory links",
+        "recovery",
+        None,
+        entity_links,
+        failure="entity_links",
+        capture="entity_links",
+    ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
+    Step("pr_facts", "PR and release facts", "poll", MINUTE, pr_facts, failure="pr_facts", capture="scheduler"),
+    Step(
+        "merge_queue_effects",
+        "Merge queue",
+        "due",
+        None,
+        merge_queue_effects,
+        failure="merge_queue_effects",
+        capture="scheduler",
+    ),
+    Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}
 CONTROLLED = {step.control: step for step in STEPS if step.control}
@@ -573,7 +619,7 @@ def merged_steps(c: "sqlite3.Connection", store: "Store", at: datetime | None = 
 
 
 def _timed(key: str) -> bool:
-    """A step timed from its last recorded run (the digests, Ask go-ahead): its row is written each run, hourly at most,
+    """A step timed from its last recorded run (the digests): its row is written each run, hourly at most,
     so a restart keeps its hour (system_routines.last_started reads heartbeat_steps.last_run_at)."""
     step = BY_KEY.get(key)
     return bool(step and (step.lasting or step.control))

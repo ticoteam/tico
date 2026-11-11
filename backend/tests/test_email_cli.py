@@ -5,12 +5,11 @@ import shlex
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_automation_cli import Client
-from backend.tests.test_gmail_live import BOX, NEXT, gmail_http  # noqa: F401
-from backend.tests.test_google_workspace_authz import workspace_key  # noqa: F401
-from backend.tests.test_mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.automation_cli import Client
+from backend.tests.helpers.gmail_live import BOX, NEXT, gmail_http  # noqa: F401
+from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: F401
+from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubcli, hubtools, remotecli
 
 
@@ -65,7 +64,7 @@ def test_email_cli_returns_refusal_for_a_member_without_mailbox_access(email_cli
 
 
 def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(api, live, assistant_token):
-    names = {"hub_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
+    names = {"tico_email_" + action for action in ("mailboxes", "inbox", "search", "thread", "message")}
     assert names <= {tool["name"] for tool in hubtools.listing(kind="assistant")}
     assert not names & {tool["name"] for tool in hubtools.listing(kind="bot")}
     for name, args in (
@@ -75,17 +74,17 @@ def test_email_mcp_reads_share_the_same_rights_and_are_offered_to_the_assistant(
         ("thread", {"mailbox": SHARED, "id": "t1"}),
         ("message", {"mailbox": SHARED, "id": "m1"}),
     ):
-        error, result = call(api, "hub_email_" + name, args, token=assistant_token)
+        error, result = call(api, "tico_email_" + name, args, token=assistant_token)
         assert not error, result
-    error, result = call(api, "hub_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
+    error, result = call(api, "tico_email_message", {"mailbox": SHARED, "id": "m1"}, token="cara-test")
     assert error and result["error"] == "forbidden"
 
 
 def test_archive_cli_reports_count_and_a_runnable_undo(email_cli, live, capsys, assistant_token):
     assert email_cli(assistant_token, "archive", BOX, "m1", "m2") == 0
     text = capsys.readouterr().out.strip()
-    assert text == f"Archived 2 messages in {BOX}. Undo: hub email unarchive {BOX} m1 m2"
-    assert email_cli(assistant_token, *shlex.split(text.split("Undo: hub email ")[1])) == 0
+    assert text == f"Archived 2 messages in {BOX}. Undo: tico email unarchive {BOX} m1 m2"
+    assert email_cli(assistant_token, *shlex.split(text.split("Undo: tico email ")[1])) == 0
     assert capsys.readouterr().out.startswith(f"Unarchived 2 messages in {BOX}.")
     assert live["writes"][-1][1] == {"ids": ["m1", "m2"], "addLabelIds": ["INBOX"], "removeLabelIds": []}
 
@@ -103,7 +102,7 @@ def test_organize_cli_query_limits_json_and_mark_read_commands(email_cli, live, 
         ("mark-unread", "mark-read", ["UNREAD"], []),
     ):
         assert email_cli("ana-test", action, BOX, "m1") == 0
-        assert f"Undo: hub email {inverse} {BOX} m1" in capsys.readouterr().out
+        assert f"Undo: tico email {inverse} {BOX} m1" in capsys.readouterr().out
         assert live["writes"][-1][1] == {"ids": ["m1"], "addLabelIds": add, "removeLabelIds": remove}
 
 
@@ -111,7 +110,7 @@ def test_label_cli_undo_quotes_label_names_and_is_runnable(email_cli, live, caps
     assert email_cli("ana-test", "label", BOX, "Review later", "m1") == 0
     text = capsys.readouterr().out
     assert "Labeled 1 messages" in text and "'Review later'" in text
-    assert email_cli("ana-test", *shlex.split(text.split("Undo: hub email ")[1])) == 0
+    assert email_cli("ana-test", *shlex.split(text.split("Undo: tico email ")[1])) == 0
     assert "Unlabeled 1 messages" in capsys.readouterr().out
     assert live["writes"][-1][1]["removeLabelIds"]
 
@@ -126,18 +125,18 @@ def test_organize_cli_refuses_missing_or_conflicting_selections(email_cli, live,
 
 def test_email_organize_mcp_tools_are_available_and_use_the_callers_rights(api, live, assistant_token):
     actions = ("archive", "unarchive", "mark_read", "mark_unread", "label", "unlabel")
-    names = {"hub_email_" + action for action in actions}
+    names = {"tico_email_" + action for action in actions}
     for kind in ("owner", "member", "assistant", "bot", "botops", "agent"):
         assert names <= {tool["name"] for tool in hubtools.listing(kind=kind)}
     for action in actions:
         args = {"mailbox": BOX, "ids": ["m1"]}
         if action in ("label", "unlabel"):
             args["label"] = "Review later"
-        error, result = call(api, "hub_email_" + action, args, token=assistant_token)
+        error, result = call(api, "tico_email_" + action, args, token=assistant_token)
         assert not error, result
         assert result["count"] == 1 and result["ids"] == ["m1"]
     before = len(live["writes"])
-    error, result = call(api, "hub_email_archive", {"mailbox": SHARED, "ids": ["m1"]}, token="cara-test")
+    error, result = call(api, "tico_email_archive", {"mailbox": SHARED, "ids": ["m1"]}, token="cara-test")
     assert error and result["error"] == "forbidden" and len(live["writes"]) == before
 
 

@@ -316,62 +316,43 @@ class Checker:
 
 CHECKER = Checker()
 
-RELEASES_URL = "https://api.github.com/repos/ticoteam/tico/releases?per_page=100"
-PUBLISHED_EVERY = 10 * 60  # the release list is asked for at most this often; the last answer is kept meanwhile
+
+# 0.6 starts fresh (docs/updates.md, "From 0.5 to 0.6"): a 0.6 server refuses a 0.5 database that has tasks. So a server
+# below FRESH_START whose database has tasks is not offered a release at or past it, and does not start one: not by the
+# owner, an update key, or Tico support's target. scripts/release_train.py keeps the same line for Tico's own installs.
+FRESH_START = (0, 6, 0)
+FRESH_WORDS = "0.6 starts fresh: this company's tasks would not carry over"
 
 
-class Published:
-    """Each release's GitHub publish time by version, for the Changelog's time line. One list call, made in the
-    background and never on a request's path. A failed call keeps the last answer; a version GitHub did not list has
-    no time, and its entry stays date-only."""
-
-    def __init__(self, clock=time.time):
-        self.clock = clock
-        self.lock = threading.Lock()
-        self.times = {}
-        self.checked = 0.0
-        self.running = False
-
-    def published(self, version):
-        """The publish time (ISO 8601) of `version`, or "" when unknown. Returns at once."""
-        now = self.clock()
-        if (
-            not self.running
-            and now - self.checked >= PUBLISHED_EVERY
-            and CHECKER.enabled()
-            and not os.environ.get("TICO_RELEASES_URL", "").strip()
-        ):
-            with self.lock:
-                if not self.running:
-                    self.running = True
-                    threading.Thread(target=self.refresh, daemon=True, name="release-times").start()
-        return self.times.get(version, "")
-
-    def refresh(self):
-        """One request for the release list, with the same headers and timeout as the newest-release check."""
-        try:
-            with _client(5) as http:
-                r = http.get(
-                    RELEASES_URL,
-                    headers={"Accept": "application/vnd.github+json", "User-Agent": "tico-update-check"},
-                )
-            if r.status_code != 200 or not isinstance(r.json(), list):
-                raise httpx.HTTPError("status %s" % r.status_code)
-            times = {}
-            for rel in r.json():
-                tag = str(rel.get("tag_name") or "") if isinstance(rel, dict) else ""
-                if parse(tag) and not rel.get("draft") and rel.get("published_at"):
-                    times[tag.lstrip("v")] = str(rel["published_at"])
-            with self.lock:
-                self.times = times
-        except (httpx.HTTPError, ValueError, TypeError, AttributeError) as exc:
-            log.debug("Release times unavailable: %s", type(exc).__name__)
-        finally:
-            self.checked = self.clock()
-            self.running = False
+def crosses_fresh_start(current, target):
+    """Whether moving from `current` to `target` crosses FRESH_START (an rc of 0.6 included)."""
+    have, want = parse(current), parse(str(target or "").strip().lstrip("v"))
+    if have is None or want is None:
+        return False
+    return have[:3] < FRESH_START <= want[:3]
 
 
-PUBLISHED = Published()
+def held(c, target, current=None):
+    """FRESH_WORDS when this server may not move to `target`: it crosses FRESH_START and the database has tasks."""
+    if not crosses_fresh_start(current or version(), target):
+        return ""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='tasks'").fetchone():
+        return ""
+    return FRESH_WORDS if c.execute("SELECT 1 FROM tasks LIMIT 1").fetchone() else ""
+
+
+def offered(c, out):
+    """A notice (`notice`, `check_now`) as this server may take it: a release it may not move to is not `available`,
+    and `held` says why."""
+    why = held(c, out.get("latest") or "", out.get("current")) if out.get("available") else ""
+    return {**out, "available": False, "held": why} if why else {**out, "held": ""}
+
+
+def refuse_held(c, target):
+    """Problem `fresh_start` (409) when `held` says this server may not move to `target`."""
+    why = held(c, target)
+    if why:
+        raise Problem("fresh_start", why + ".", 409)
 
 
 def managed():

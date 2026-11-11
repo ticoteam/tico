@@ -20,7 +20,10 @@
       "INBOX",
       "UNREAD",
       "IMPORTANT"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": true
   },
   "note": "An internal money decision with a deadline: needs the owner, and urgent."
 }

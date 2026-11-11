@@ -1,244 +1,573 @@
-/* ui/app/tasks-page.ts — pageTasks: loading, tools, needs you, Done, render
+/* ui/app/tasks-page.ts — the Tasks page (docs/pipelines-v3.md S2, S7): the header, You, a pipeline, the archive, search
+   and filter, and New task (S6).
+   The header, left to right: "Tasks", the view button ("You 7 ▾" or a pipeline's name), the pencil on a pipeline,
+   then search, filter, list or columns on a pipeline, archive, play (Catch up) and +.
+   You is Needs you in three groups, Answer, Review and Do; a row is the sentence asked, and opens the ask screen
+   (decide.ts). A pipeline is drawn by task-pipelines.ts through TASK_PAGE_HOOKS (task-row.ts), else as a list grouped
+   by stage; its manager's rail sits beside it. The archive is Snoozed, Done and Closed, of the pipeline in view or of every pipeline from You.
+   Reads: GET /api/v2/needs-you, GET /api/v2/pipelines, GET /api/v2/tasks (through task-api.ts).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// openId opens one task in full as soon as the list is loaded: the #/task/<id> address a bot or
-// the setup progress screen links to, which is the Tasks page with that item already open.
-const TASK_PREF = 'tasks.view';
-function pageTasks(forced, openId = '') {
-  TASKS_ST?.layoutAbort?.abort();
-  PROP_TASKS = null;                       // the pickers' copy of the open tasks starts fresh with the page
-  const state = TASKS_ST = {view: 'foryou', tasks: [], labels: [], open: openId, q: '', who: 'me', side: 'plate',
-    loading: true, doneLoaded: false, doneLoading: false, doneNext: null, loadSeq: 0,
-    filters: tasksEmptyFilters(), group: {...TASK_GROUP_DEFAULT}, collapsed: new Set(), folded: new Set(),
-    selected: new Set(), anchor: '', cursor: '', since: null, tabKey: '', peek: '', bulkFail: new Map(), bulkMsg: '', memo: new Map(),
-    fullAt: 0, stale: false, fullRead: null};
-  const query = tasksFiltersFromURL(state);
-  const hadQuery = [...query.keys()].length > 0;
-  if (state.urlView && TASK_VIEWS.some(([k]) => k === state.urlView)) forced = state.urlView;
-  try { state.view = forced || localStorage.getItem('hub.tasks.view2') || 'foryou'; } catch { state.view = forced || 'foryou'; }
-  taskPipelineState(state);
-  if (hadQuery) state.type = state.urlType || 'general';
-  tasksPrefsFromLocal(state);
-  // Filters an older page saved (Mine, Asked by me, an owner, a tag) come over once as chips, unless the address has its own.
-  state.migrate = !hadQuery;
-  if (state.migrate && tasksMigrateOldFilters(state, null)) state.migrated = true;
-  tasksNormalise(state, forced);
-  // A return visit: the remembered view as the server last answered it, and the list as it was left, painted with the
-  // shell. The reads below still go out and patch what changed.
-  const keptPref = S.lastRead.tasksPref || null, kept = S.lastRead.tasks?.key === activeTasksPath() ? S.lastRead.tasks : null;
-  const prefApply = value => {
-    if (!hadQuery && !state.typeChosen && value.type != null) state.type = String(value.type) || 'general';
-    // Before `views: 2`, List and Board both showed Needs you, so an old choice means Needs you.
-    if (!forced && value.view) state.view = value.views === 2 ? String(value.view) : 'foryou';
-    tasksPrefsApply(state, value);
-    tasksNormalise(state, forced);
-    tasksTypeCheck(state);
+type TasksLayout = 'list' | 'columns';
+type TasksArchive = '' | 'snoozed' | 'done' | 'closed';
+interface TasksPageState {
+  /** The pipeline in view, by id; '' is You. */
+  pipeline: string;
+  layout: TasksLayout;
+  archive: TasksArchive;
+  q: string;
+  filters: TaskFilters;
+  needs: NeedsEntry[];
+  /** The archive's tasks, or the pipeline's open tasks. */
+  tasks: TaskBriefV3[];
+  pipelines: PipelineRec[];
+  loading: boolean;
+  /** What is drawn while the view's read is out is its last read (S.lastRead.tasks), so no skeleton. */
+  kept: boolean;
+  failed: string;
+  /** The view's reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event. */
+  feed: TaskFeed;
+  /** Where the list's catch-up resumes (GET /v2/tasks?changed_after); '' until a full read gave one. */
+  cursor: string;
+  /** A live change came while a read was on its way: catch up once it lands. */
+  behind: boolean;
+  /** The server holds more of the view than `tasks` (a pipeline over 500 open tasks, an archive over 200). */
+  more: boolean;
+  /** The last row the server gave: the next page starts after the rows held up to it. */
+  edge: TaskBriefV3 | null;
+  /** The next page's read, while it is out. */
+  paging: Promise<void> | null;
+  /** A page read failed or was overtaken: a search reads on only when More is pressed. */
+  stalled: boolean;
+  abort: AbortController;
+  /** The popover menu's anchor and the filter whose values it shows (task-list-menus.ts). */
+  menuAnchor?: HTMLElement | null | undefined;
+  menuField?: string | undefined;
+  searchTimer?: ReturnType<typeof setTimeout>;
+}
+let TASKS_ST: TasksPageState | null = null;
+const TASKS_KEPT = 'tico.tasks.view';
+const TASK_ARCHIVES: [TasksArchive, string][] = [['snoozed', 'Snoozed'], ['done', 'Done'], ['closed', 'Closed']];
+let TASK_PIPELINES: PipelineRec[] | null = null;
+const tasksPipelinesRead = async (): Promise<PipelineRec[]> => (TASK_PIPELINES = (await pipelinesAll()).filter(p => !p.retired_at));
+
+// The view comes from the address (#/tasks?pipeline=<id>&layout=columns&archive=done), else as it was last left.
+function tasksViewFromURL(): Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'> {
+  const q = new URLSearchParams(S.route.split('?')[1] || '');
+  let kept: {pipeline?: string; layout?: string} = {};
+  try { kept = JSON.parse(localStorage.getItem(TASKS_KEPT) || '{}') as typeof kept; } catch { kept = {}; }
+  const named = q.has('pipeline') || q.has('archive');
+  const layout = q.get('layout') || kept.layout;
+  const archive = q.get('archive') || '';
+  return {
+    pipeline: named ? q.get('pipeline') || '' : kept.pipeline || '',
+    layout: layout === 'columns' ? 'columns' : 'list',
+    archive: TASK_ARCHIVES.some(([k]) => k === archive) ? archive as TasksArchive : '',
   };
-  if (keptPref) { prefApply(keptPref); state.migrate = false; }
-  // A kept list read to its end keeps its cursor too, so coming back asks only for what changed since (a delta read),
-  // and the 15-minute clock (refresh.js tasksFreshen) runs on from its last full read.
-  if (kept) Object.assign(state, {tasks: kept.tasks, labels: kept.labels, tags: kept.tags, filtered: kept.filtered, loading: false, kept: true,
-    since: kept.since || null, fullAt: kept.since ? kept.fullAt || 0 : 0, activeComplete: !!kept.since});
+}
+function tasksURLWrite(state: TasksPageState) {
+  const q = new URLSearchParams();
+  if (state.pipeline) q.set('pipeline', state.pipeline);
+  if (state.pipeline && state.layout === 'columns') q.set('layout', 'columns');
+  if (state.archive) q.set('archive', state.archive);
+  const want = TASKS + (q.toString() ? '?' + q.toString() : '');
+  if (location.hash !== want) { history.replaceState(null, '', want); S.route = LAST_ROUTE = want; }
+  try { localStorage.setItem(TASKS_KEPT, JSON.stringify({pipeline: state.pipeline, layout: state.layout})); } catch { /* the view is still in the address */ }
+}
+
+// openId opens one task in full over the page: the #/task/<id> address.
+function pageTasks(openId = '') {
+  tasksLeave();
+  const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, paging: null, stalled: false, abort: new AbortController()};
+  tasksKept(state);
+  TASKS_ST = state;
   const main = $('#main');
   main.classList.add('tasks-layout');
   main.innerHTML = `<div class="tasks-page"><div class="tasks-pane" id="tasks-pane">
       <header class="tl-head">
         <h1>Tasks</h1>
         <button type="button" class="tl-scope" id="task-scope" aria-haspopup="menu" aria-expanded="false"></button>
-        <button type="button" class="tl-ib tl-pipeline-edit" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden>✎</button>
-        <span class="tl-play" id="task-play" hidden></span>
+        <button type="button" class="tl-ib" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
         <span class="spacer"></span>
-        <span class="tl-who-wrap" id="task-who-wrap" hidden></span>
         <div class="tl-search">${TL_ICON.search}<input type="search" id="task-q" spellcheck="false" aria-label="Search tasks" placeholder="Search" autocomplete="off"><kbd aria-hidden="true">/</kbd></div>
-        <button type="button" class="tl-ib tl-filter" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>
-        <div class="tl-pair" id="task-layout" role="group" aria-label="Layout">
-          <button type="button" data-layout="list" aria-pressed="false" aria-label="List" title="List">${TL_ICON.list}</button>
-          <button type="button" data-layout="board" aria-pressed="false" aria-label="Board" title="Board">${TL_ICON.board}</button></div>
-        <span class="tl-finished-slot"><span class="tl-pair tl-finished" id="task-finished" role="group" aria-label="Finished" hidden></span></span>
-        <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Finished" title="Finished tasks">${TL_ICON.archive}</button>
-        <button type="button" class="tl-decide" data-go-through hidden></button>
-        <button type="button" class="tl-ib" id="task-more" aria-haspopup="menu" aria-expanded="false" aria-label="More" title="More">${TL_ICON.dots}</button>
-        <button class="primary tl-new" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
+        <button type="button" class="tl-ib" id="task-filter" aria-haspopup="true" aria-label="Filter" title="Filter">${TL_ICON.filter}<span class="tl-fbadge tnum" aria-hidden="true" hidden></span></button>
+        <div class="tl-pair" id="task-layout" role="group" aria-label="Layout" hidden>
+          <button type="button" data-layout="list" aria-label="List" title="List">${TL_ICON.list}</button>
+          <button type="button" data-layout="columns" aria-label="Columns" title="Columns">${TL_ICON.board}</button></div>
+        <button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Archive" title="Snoozed, Done and Closed">${TL_ICON.archive}</button>
+        <button type="button" class="tl-ib" id="task-play" aria-label="Catch up" title="Catch up"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg></button>
+        <button class="primary add-ctl" type="button" id="task-new" aria-label="New task" title="New task (C)">${TL_ICON.plus}</button>
       </header>
       <div class="tl-bar" id="task-bar" hidden>
-        <span class="tl-finished-bar"></span>
-        <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span>
-          <button type="button" class="linkish tl-clear" id="task-filter-clear" hidden>Clear</button></div>
+        <div class="tl-pair" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
+          `<button type="button" data-archive="${k}">${label}</button>`).join('')}</div>
+        <div class="tl-filters" role="group" aria-label="Filters"><span class="tl-chipset" id="task-chips"></span></div>
       </div>
-      <span id="tl-sel-word" hidden>Selected</span>
-      <div id="task-body"></div>
-      <div class="tl-bulk" id="task-bulk" role="toolbar" aria-label="Selected tasks" hidden></div>
-    </div></div>
-    <div id="task-filter-pop" class="tl-pop" popover></div><div id="task-card-pops"></div>`;
-  const bar = $('#task-bar');
-  bar.onscroll = () => tasksBarEdge(bar);
-  if (window.ResizeObserver) {
-    new ResizeObserver(() => tasksBarEdge(bar)).observe(bar);
-    // A narrower row folds the search to its icon; measured on the next frame, outside the observer's own delivery.
-    new ResizeObserver(() => requestAnimationFrame(() => tasksHeadFit(state))).observe($('#tasks-pane .tl-head'));
-  }
-  $('#task-scope').onclick = ev => tasksScopeMenu(state, ev.currentTarget);
-  $('#task-layout').onclick = ev => { const b = ev.target.closest('[data-layout]'); if (b && b.dataset.layout !== state.view) tasksSetView(state, b.dataset.layout); };
-  $('#task-archive').onclick = () => tasksArchiveToggle(state);
-  $('#tasks-pane').addEventListener('click', ev => {
-    const b = ev.target.closest('#task-finished [data-view]');
-    if (b && b.dataset.view !== state.view) { tasksSetView(state, b.dataset.view); $(`#task-finished [data-view="${b.dataset.view}"]`)?.focus(); }
-  });
-  $('#task-more').onclick = ev => tasksMoreMenu(state, ev.currentTarget);
-  // Catch up: the Needs you cards from the first, one at a time (decide.js).
-  for (const b of document.querySelectorAll('#tasks-pane [data-go-through]')) b.onclick = () => decideGoThrough();
-  $('#task-new').onclick = () => { const p = tasksCreatePrefill(state); openTaskCreate(p.owner_id, {labels: p.labels}); };
+      <div id="task-body" role="region" aria-label="Tasks"></div>
+      <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
+    </div><aside class="tl-rail" id="task-rail" hidden></aside></div>
+    <div id="task-filter-pop" class="tl-pop" popover></div>`;
+  const signal = state.abort.signal;
+  const anchorOf = (ev: Event) => ev.currentTarget as HTMLElement;
+  $('#task-scope').onclick = (ev: MouseEvent) => tasksScopeMenu(state, anchorOf(ev));
+  $('#task-pipeline-edit').onclick = () => { const p = tasksPipeline(state); if (p) TASK_PAGE_HOOKS.pipeline?.edit?.(p); };
+  $('#task-layout').onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-layout]');
+    if (b) tasksShow(state, {layout: b.dataset.layout === 'columns' ? 'columns' : 'list'});
+  };
+  $('#task-archive').onclick = () => tasksShow(state, {archive: state.archive ? '' : 'snoozed'});
+  $('#task-archives').onclick = (ev: MouseEvent) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-archive]');
+    const want = TASK_ARCHIVES.find(([k]) => k === b?.dataset.archive)?.[0];
+    if (want) tasksShow(state, {archive: want});
+  };
+  $('#task-play').onclick = () => decideGoThrough();
+  $('#task-more button').onclick = () => { state.stalled = false; void tasksMore(state, !!state.q.trim() || taskFiltersOn(state.filters)); };
+  $('#task-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
   const search = $('#task-q');
   search.oninput = () => {
     state.q = search.value;
     clearTimeout(state.searchTimer);
-    state.searchTimer = setTimeout(() => {
-      tasksRender(state);
-      if (tasksFinishedView(state.view) && state.q && state.doneNext != null) void tasksLoadAllDone(state);
-    }, 150);
+    state.searchTimer = setTimeout(() => tasksRender(state), 150);
   };
-  search.onkeydown = ev => {
-    if (ev.key === 'ArrowDown' && !search.value.includes('\n')) { ev.preventDefault(); search.blur(); tasksMove(state, 1); return; }
+  search.onkeydown = (ev: KeyboardEvent) => {
     if (ev.key !== 'Escape') return;
-    if (search.value) ev.stopPropagation();
-    else search.blur();
+    if (search.value) ev.stopPropagation(); else search.blur();
     search.value = state.q = '';
-    clearTimeout(state.searchTimer);
     tasksRender(state);
   };
-  $('#task-filter').onclick = ev => tasksFieldMenu(state, ev.currentTarget);
-  $('#task-chips').onclick = ev => {
-    const drop = ev.target.closest('[data-chip-drop]');
-    if (drop) {
-      const field = drop.dataset.chipDrop;
-      state.filters[field] = [];
-      tasksFiltersChanged(state);
-      $('#task-filter')?.focus();
-      return;
-    }
-    const edit = ev.target.closest('[data-chip-edit]');
-    if (edit) tasksFilterMenu(state, edit.dataset.chipEdit, edit);
-  };
-  $('#task-filter-clear').onclick = () => {
-    state.filters = tasksEmptyFilters();
-    tasksFiltersChanged(state);
-    $('#task-filter')?.focus();
-  };
-  $('#task-who-wrap').onclick = ev => { const b = ev.target.closest('#task-who'); if (b) tasksWhoMenu(state, b); };
-  $('#task-bulk').onclick = ev => {
-    const b = ev.target.closest('[data-bulk]'); if (!b) return;
-    tasksBulkMenu(state, b.dataset.bulk, b);
+  $('#task-filter').onclick = (ev: MouseEvent) => tasksFieldMenu(state, anchorOf(ev));
+  $('#task-chips').onclick = (ev: MouseEvent) => {
+    const drop = eventElement(ev)?.closest<HTMLElement>('[data-chip-drop]');
+    const field = TASK_FILTER_NAMES.find(([k]) => k === (drop || eventElement(ev)?.closest<HTMLElement>('[data-chip-edit]'))?.dataset[drop ? 'chipDrop' : 'chipEdit'])?.[0];
+    if (!field) return;
+    if (drop) { delete state.filters[field]; tasksRender(state); $('#task-filter')?.focus(); }
+    else tasksFilterMenu(state, field, eventElement(ev)?.closest<HTMLElement>('[data-chip-edit]'));
   };
   const pop = $('#task-filter-pop');
   pop.addEventListener('keydown', tasksMenuKeys);
-  pop.addEventListener('toggle', ev => {
+  pop.addEventListener('toggle', (ev: Event & {newState?: string}) => {
     if (ev.newState !== 'closed') return;
-    for (const id of ['#task-scope', '#task-more']) $(id)?.setAttribute('aria-expanded', 'false');
+    $('#task-scope')?.setAttribute('aria-expanded', 'false');
     const anchor = state.menuAnchor; state.menuAnchor = null;
     if (anchor?.isConnected && (pop.contains(document.activeElement) || document.activeElement === document.body)) anchor.focus();
   });
   const body = $('#task-body');
-  body.addEventListener('focusin', ev => {
-    const row = ev.target.closest('[data-task-key]');
-    if (row && row.dataset.taskKey !== state.cursor) { state.cursor = row.dataset.taskKey; tasksCursorPaint(state); }
-  });
-  body.addEventListener('click', ev => {
-    if (TASKS_ST !== state) return;
-    if (ev.target.closest('#board-more')) { void tasksLoadDone(state); return; }
-    tasksBodyClick(state, ev);
-  });
-  state.layoutAbort = new AbortController();
-  taskBoardBind(state, body);
-  pullToRefresh($('#tasks-pane'), () => tasksPulled(state), {signal: state.layoutAbort.signal, skip: () => taskBoardHolding(state)});
-  document.addEventListener('keydown', ev => tasksKeys(state, ev), {signal: state.layoutAbort.signal});
-  tasksTools(state); tasksRender(state);
-  if (!openId && (hadQuery || state.type !== 'general' || state.migrated)) tasksURLWrite(state);
-  if (state.migrated) tasksRemember(state);
-  // the remembered view lives with the person, not the browser; the local copy is the fallback
-  void (async () => {
-    // Start the task request immediately. A slow preference read must never hold the board blank.
-    const loading = tasksLoad(state);
-    const pref = await v2Get('/v2/preferences/' + TASK_PREF);
-    if (TASKS_ST !== state) return;
-    const value = pref?.value && typeof pref.value === 'object' ? pref.value : null;
-    // The same answer as the one already applied draws nothing again: the header is painted once.
-    if (value && !sameData(value, keptPref)) {
-      S.lastRead.tasksPref = value;
-      prefApply(value);
-      const migrated = state.migrate && tasksMigrateOldFilters(state, value);
-      if (!openId && (hadQuery || state.type !== 'general' || migrated)) tasksURLWrite(state);
-      if (migrated) tasksRemember(state);       // the saved value is written again without the old keys
-      tasksTools(state);
-      tasksRender(state);
-    } else if (!value && !keptPref) { tasksTools(state); tasksRender(state); }
-    tasksDoneEnsure(state);
-    await loading;
-    // An old Decide link to one item (#/decide?item=<id>): its card over Needs you.
+  body.addEventListener('click', (ev: MouseEvent) => void tasksBodyClick(state, ev), {signal});
+  body.addEventListener('keydown', (ev: KeyboardEvent) => {
+    const row = eventElement(ev)?.closest<HTMLElement>('[data-task], [data-need]');
+    if ((ev.key === 'Enter' || ev.key === ' ') && row && row === eventElement(ev)) { ev.preventDefault(); row.click(); }
+  }, {signal});
+  document.addEventListener('keydown', (ev: KeyboardEvent) => {
+    if (TASKS_ST !== state || ev.metaKey || ev.ctrlKey || ev.altKey || document.querySelector('dialog[open]')) return;
+    if (eventElement(ev)?.closest('input, textarea, select, [contenteditable]')) return;
+    if (ev.key === '/') { ev.preventDefault(); search.focus(); }
+    else if (ev.key === 'c') { ev.preventDefault(); $('#task-new')?.click(); }
+  }, {signal});
+  pullToRefresh($('#tasks-pane'), () => tasksLoad(state), {signal});
+  tasksRender(state);
+  void tasksLoad(state).then(async () => {
+    // An old Decide link to one item (#/decide?item=<id>), or #/task/<id>: that item over the page.
     const want = DECIDE_WANT; DECIDE_WANT = '';
     if (want && TASKS_ST === state) await decideWanted(want);
-  })();
+  });
+  if (openId) taskModalOpen(openId);
 }
-// The views are the scope (You, or a type's open tasks), the layout (list or board) and the finished feed (Done,
-// Closed, Snoozed): the layout is kept for the next type picked, and leaving the finished feed goes back to where it was.
-const tasksLayoutView = view => view === 'list' || view === 'board';
-const tasksArchived = view => tasksFinishedView(view) || view === 'snoozed';
-function tasksSetView(state, view) {
-  if (tasksArchived(view) && !tasksArchived(state.view)) state.back = state.view;
-  if (tasksLayoutView(view)) state.layout = view;
-  state.view = view;
+// The page goes: its listeners, its pipeline view and its timers with it.
+function tasksLeave() {
+  const state = TASKS_ST;
+  if (!state) return;
+  state.abort.abort();
+  clearTimeout(state.searchTimer);
+  tasksRailOff();
+  TASKS_ST = null;
+}
+/** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. */
+function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'>>) {
+  Object.assign(state, change);
+  if ('pipeline' in change) state.filters = {};
   tasksMenuClose();
-  state.selectMode = false;
-  if (state.selected.size || state.bulkMsg) tasksSelectionClear(state);
-  tasksRemember(state); tasksURLWrite(state); tasksTools(state); tasksRender(state);
-  if (tasksFinishedShown(state) && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
-  else if (tasksFinishedShown(state)) void tasksDoneMerge(state);
+  tasksURLWrite(state);
+  state.tasks = [];
+  state.more = false; state.edge = null; state.stalled = false;
+  state.loading = true;
+  tasksKept(state);
+  tasksRender(state);
+  void tasksLoad(state);
 }
-// Finished tasks are on screen: the Done or Closed tab, or a board with its finished steps unfolded.
-const tasksFinishedShown = state => tasksFinishedView(state.view) || taskBoardFinishedShown(state);
-// The Done list's newest page is read once finished tasks are on screen, through the one loading guard.
-function tasksDoneEnsure(state) {
-  if (tasksFinishedShown(state) && !state.doneLoaded && !state.doneLoading) void tasksLoadDone(state, true);
+// A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
+const tasksViewKey = (state: Pick<TasksPageState, 'pipeline' | 'archive'>) => state.pipeline + '|' + state.archive;
+function tasksKept(state: TasksPageState) {
+  const kept = S.lastRead.tasks;
+  state.kept = kept?.view === tasksViewKey(state);
+  if (!kept || !state.kept) return;
+  state.tasks = kept.tasks.slice();
+  if (!S.v2.needs) state.needs = kept.needs.slice();
 }
-function tasksNormalise(state, forced) {
-  if (!TASK_VIEWS.some(([k]) => k === state.view)) state.view = forced || 'foryou';
-  if (tasksLayoutView(state.view)) state.layout = state.view;
-  if (!tasksLayoutView(state.layout)) state.layout = 'list';
+
+// ---- reads
+// A list fed by the live stream applies each event's task in place and never reads the whole list because an event came
+// (Chris, Nov 3: whole-list reads per event cost 1.5 GB/h). Full reads: the page's first, a change of view, pull to
+// refresh, and the stream's `reset`. Otherwise the 2-minute refresh, a tab back from sleep, a bulk change and this
+// tab's own writes catch up with a changed_after delta from the cursor the last read gave.
+/** The view's server filters: the archive's (of the pipeline in view, if any), or the pipeline's open tasks; You is
+ * Needs you's. */
+function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
+  const of = state.pipeline ? {pipeline: state.pipeline} : {};
+  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of};
+  if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of};
+  return null;
 }
-// The archive button: the finished feed of the type in view, and pressed again, back to the list it left.
-function tasksArchiveToggle(state) {
-  if (!tasksArchived(state.view)) { tasksSetView(state, 'done'); return; }
-  tasksSetView(state, state.back === 'foryou' || tasksLayoutView(state.back) ? state.back : state.layout);
+/** A page of the view: Done and Closed most recent first, the rest in queue order; the archive 200 at a time, a
+ * pipeline 500 (the server's most), and 500 when reading the rest. */
+const tasksPageQuery = (state: TasksPageState, query: TaskBriefQuery, rest = false): TaskBriefQuery =>
+  ({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive && !rest ? 200 : 500});
+/** The view's order, as its read asks for it: Done and Closed most recent first, the rest in queue order. */
+const tasksOrder = (state: TasksPageState): TaskRowOrder => state.archive && state.archive !== 'snoozed' ? taskFinishedOrder : taskQueueOrder;
+/** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
+function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
+  if (state.pipeline && t.pipeline_id !== state.pipeline) return false;
+  if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
+  if (state.archive) return t.status === state.archive;
+  return !!state.pipeline && t.status === 'open' && !t.snoozed;
 }
-// The scope menu's type: that type's open tasks in the layout last used.
-function tasksScopeType(state, id) {
-  taskPipelineSelect(state, id);
-  if (!tasksLayoutView(state.view)) tasksSetView(state, state.layout || 'list');
-}
-function tasksRemember(state) {
-  taskPipelineRemember(state);
-  S.lastRead.tasksPref = {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)};   // the next visit opens as left
+/** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
+ * the pipeline's open tasks. */
+async function tasksLoad(state: TasksPageState): Promise<void> {
+  const ticket = taskFeedRead(state.feed);
+  state.behind = false;
+  let held: LiveTaskEvent[] | null = [];
   try {
-    localStorage.setItem('hub.tasks.view2', state.view);
-    localStorage.setItem('hub.tasks.layout', JSON.stringify(tasksPrefsValue(state)));
-  } catch {}
-  clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(() => { void post('/v2/preferences/' + TASK_PREF,
-    {value: {type: state.type, view: state.view, views: 2, ...tasksPrefsValue(state)}}).catch(() => {}); }, 400);
+    const query = tasksQuery(state);
+    const [pipelines, rows] = await Promise.all([
+      tasksPipelinesRead().catch(() => state.pipelines),
+      query ? taskBriefsPage(tasksPageQuery(state, query)) : needsYou(),
+    ]);
+    // Kept for the next visit even when the page was left before it landed.
+    S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
+      tasks: Array.isArray(rows) ? [] : rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline)};
+    if (TASKS_ST !== state) return;
+    held = taskFeedLanded(state.feed, ticket, Array.isArray(rows) ? '' : rows.cursor);
+    if (!held) return;
+    state.pipelines = pipelines;
+    if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
+    state.stalled = false;
+    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; state.more = false; state.edge = null; }
+    else {
+      state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor;
+      state.more = rows.more; state.edge = rows.tasks.at(-1) ?? null;
+    }
+    state.failed = '';
+  } catch (e) {
+    if (TASKS_ST !== state || ticket !== state.feed.ticket) return;
+    taskFeedFailed(state.feed, ticket);
+    state.failed = errorMessage(e, 'Tasks did not load.');
+  }
+  state.loading = false;
+  // What came while the read was out goes over it: a task removed meanwhile stays removed.
+  if (held?.length) tasksEventsPut(state, held);
+  tasksRender(state);
+  if (state.behind) void tasksCatchUp(state);
 }
-// Leaving the page keeps its list for the next visit (S.lastRead), unless the list was never read (a read again under
-// way when leaving still keeps the last one).
-function tasksKeep(state) {
-  if (!state?.read && !state?.kept) return;
-  S.lastRead.tasks = {key: activeTasksPath(), tasks: state.tasks, labels: state.labels, tags: state.tags, filtered: state.filtered,
-    since: state.activeComplete ? state.since : null, fullAt: state.fullAt};
+/** The view's next page, or with `rest` every page left (a search or a filter reads them all first, so it finds every
+ * task). It starts after the rows held that sort at or before the last row read, so a task put in or taken out live
+ * since moves it with them; a row read twice goes in once. Nothing is re-read: the rows held stay, and the events that
+ * came meanwhile go over the page as over any read. */
+function tasksMore(state: TasksPageState, rest = false): Promise<void> {
+  if (state.paging) return state.paging;
+  const run = async () => {
+    while (state.more && state.edge && TASKS_ST === state && !state.loading) {
+      const query = tasksQuery(state), view = tasksViewKey(state);
+      if (!query) return;
+      let held: Awaited<ReturnType<typeof taskPageNext>>;
+      try {
+        held = await taskPageNext(state, state.tasks, tasksPageQuery(state, query, rest), state.feed, row => tasksViewHas(state, row), tasksOrder(state),
+          () => TASKS_ST === state && !state.loading && tasksViewKey(state) === view);
+      } catch (e) { state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
+      if (held === 'left') return;
+      if (!held) { state.stalled = true; return; }   // a newer read is out; More stays
+      if (held.length) tasksEventsPut(state, held);
+      if (!rest) return;
+    }
+  };
+  state.paging = run().finally(() => { state.paging = null; tasksRender(state); });
+  tasksRender(state);
+  return state.paging;
 }
+/** Catch up from the cursor: the changed rows that still match go in, the rest come out. A full read only when the
+ * server says the cursor is too old (`reset`). You follows Needs you's own version (hub-v2.ts), already mended. */
+async function tasksCatchUp(state: TasksPageState | null): Promise<void> {
+  if (!state || TASKS_ST !== state) return;
+  if (state.loading) { state.behind = true; return; }
+  const query = tasksQuery(state);
+  if (!query) { tasksNeedsLive(); return; }
+  if (!state.cursor) { await tasksLoad(state); return; }
+  try {
+    const out = await taskRowsCatchUp(state.tasks, state.cursor, query, t => tasksViewHas(state, t), () => TASKS_ST === state && !state.loading, state.feed, tasksOrder(state));
+    if (!out) return;
+    if (out === 'reset') { await tasksLoad(state); return; }
+    state.cursor = out.cursor;
+    tasksRender(state);
+    if (out.again) void tasksCatchUp(state);
+  } catch { /* the next refresh tries again */ }
+}
+/** One task as the viewer reads it now (an event's, a delta's, a write's reply): in place, added, or out of the view. */
+function tasksTaskPut(state: TasksPageState, given: TaskAny | null, id: string | null = null, draw = true): boolean {
+  const t = given && taskListRow(given), key = String(t?.id ?? id ?? '');
+  let moved = false;
+  // You: Needs you says what is on it; a task's change only redraws the item that shows it.
+  for (const it of state.needs) if (t && it.task && String(it.task.id) === key) { it.task = {...it.task, ...t} as typeof it.task; moved = true; }
+  // A full task carries every list field.
+  if (state.pipeline || state.archive) moved = taskRowsPut(state.tasks, t as TaskBriefV3 | null, key, row => tasksViewHas(state, row), tasksOrder(state)) || moved;
+  if (moved && draw) tasksRender(state);
+  return moved;
+}
+/** Live task events (refresh.ts liveTasksApply): each carries the task as this viewer reads it, or says it is gone. While
+ * a read is out they are held for it too; before the first read lands there is nothing to put them on. */
+function tasksLiveApply(events: LiveTaskEvent[]): void {
+  const state = TASKS_ST;
+  if (!state || !isTasksRoute(S.route)) return;
+  events = taskFeedEvents(state.feed, events);
+  if (state.loading) return;
+  tasksEventsPut(state, events);
+}
+function tasksEventsPut(state: TasksPageState, events: LiveTaskEvent[]): void {
+  if (events.some(d => d.bulk)) { void tasksCatchUp(state); return; }
+  let moved = false;
+  for (const d of events) moved = tasksTaskPut(state, d.gone ? null : (d.task as TaskAny | null | undefined) ?? null, String(d.id ?? ''), false) || moved;
+  if (moved) tasksRender(state);
+}
+/** Needs you changed (mended from the ids the event named, hub-v2.ts): You draws it; nothing is read. */
+function tasksNeedsLive(): void {
+  const state = TASKS_ST;
+  if (!state || !isTasksRoute(S.route) || state.pipeline || state.archive || state.loading) return;
+  state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
+  tasksRender(state);
+}
+
+// ---- drawing
+const tasksPipeline = (state: TasksPageState) => state.pipelines.find(p => p.id === state.pipeline) || null;
+const tasksStageName = (state: TasksPageState, id: string | null | undefined) => {
+  for (const p of state.pipelines) {
+    const s = p.stages.find(x => x.id === id) || (p.done?.id === id ? p.done : p.closed?.id === id ? p.closed : null);
+    if (s) return s.name;
+  }
+  return '';
+};
+function tasksHeadPaint(state: TasksPageState) {
+  const p = tasksPipeline(state), n = state.needs.length;
+  const scope = $('#task-scope');
+  const label = p ? `<span class="tl-scope-l">${esc(p.name)}</span>`
+    : `<span class="tl-scope-l">You</span>${n ? `<span class="cnt hot tnum">${n}</span>` : ''}`;
+  if (scope.dataset.label !== label) { scope.dataset.label = label; scope.innerHTML = label + TL_ICON.caret; }
+  scope.setAttribute('aria-label', p ? `Showing ${p.name}` : `Showing You${n ? `, ${n}` : ''}`);
+  $('#task-pipeline-edit').hidden = !p || p.may_change === false || !TASK_PAGE_HOOKS.pipeline?.edit || !!state.archive;
+  const layout = $('#task-layout');
+  layout.hidden = !state.pipeline || !!state.archive;
+  for (const b of document.querySelectorAll<HTMLElement>('#task-layout [data-layout]')) b.setAttribute('aria-pressed', String(b.dataset.layout === state.layout));
+  $('#task-archive').setAttribute('aria-pressed', String(!!state.archive));
+  $('#task-play').hidden = !n;
+  const archives = $('#task-archives');
+  archives.hidden = !state.archive;
+  for (const b of document.querySelectorAll<HTMLElement>('#task-archives [data-archive]')) b.setAttribute('aria-pressed', String(b.dataset.archive === state.archive));
+  const on = TASK_FILTER_NAMES.filter(([k]) => tasksFilterOn(state.filters, k));
+  $('#task-chips').innerHTML = on.map(([k, name]) => {
+    const words = tasksFilterWords(state, k), shown = words.length > 2 ? `${words[0]} +${words.length - 1}` : words.join(', ');
+    return `<span class="tl-chip" data-chip="${k}"><button type="button" class="tl-chip-main" data-chip-edit="${k}" aria-haspopup="true" title="${esc(`${name}: ${words.join(', ')}`)}"><span class="k">${esc(name)}</span>${shown ? `<span class="v">${esc(shown)}</span>` : ''}</button><button type="button" class="tl-chip-x" data-chip-drop="${k}" aria-label="Remove ${esc(name)}">${TL_ICON.x}</button></span>`;
+  }).join('');
+  const badge = $('#task-filter .tl-fbadge');
+  badge.hidden = !on.length; badge.textContent = String(on.length);
+  $('#task-bar').hidden = !on.length && !state.archive;
+}
+function tasksRender(state: TasksPageState | null) {
+  const body = $('#task-body');
+  if (!body || !state || TASKS_ST !== state) return;
+  tasksHeadPaint(state);
+  needsBadgePaint();
+  // A search or a filter over part of the view reads the rest first; More reads the next page.
+  const narrowed = !!state.q.trim() || taskFiltersOn(state.filters);
+  if (narrowed && state.more && !state.paging && !state.stalled && !state.loading && !state.failed) void tasksMore(state, true);
+  const more = $('#task-more');
+  if (more) {
+    more.hidden = !state.more || (narrowed && !state.stalled) || !!state.failed || state.loading;
+    ($('button', more) as HTMLButtonElement).disabled = !!state.paging;
+  }
+  body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
+  const p = state.archive ? null : tasksPipeline(state), hooks = TASK_PAGE_HOOKS.pipeline;
+  if (p && hooks?.rail) { const rail = $('#task-rail'); rail.hidden = false; hooks.rail(rail, p); } else tasksRailOff();
+  if (p && hooks && !state.failed && !(state.loading && !state.kept && !state.tasks.length)) {
+    // The view keeps what is being done in it (a drag, a phone's stage) and draws itself again into the root it is bound to.
+    const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
+    if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
+    hooks.bind?.(body, p);
+    return;
+  }
+  const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
+    : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
+    : state.archive ? tasksArchiveHTML(state)
+    : state.pipeline ? tasksPipelineHTML(state)
+    : tasksYouHTML(state);
+  if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
+}
+/** The rail's host is emptied and hidden away from a pipeline (and the rail's own reads stop, pipeline-rail.ts). */
+function tasksRailOff() {
+  const rail = document.getElementById('task-rail');
+  if (rail && !rail.hidden) { rail.hidden = true; rail.replaceChildren(); }
+  if (typeof pipelineRailLeave === 'function') pipelineRailLeave();
+}
+const tasksGroupHTML = (name: string, rows: string[]) => !rows.length ? ''
+  : `<section class="tk-section"><h2 class="tk-group">${esc(name)} <span class="n">${rows.length}</span></h2>${rows.join('')}</section>`;
+const tasksNone = (state: TasksPageState) => `<p class="empty muted">${state.q || taskFiltersOn(state.filters) ? 'No matches' : 'Nothing here'}</p>`;
+/** Which group of You an item is in: Answer (questions, mentions, stuck tasks), Review (OKs of a page or a draft) or Do. */
+function needsGroup(it: NeedsEntry): 'answer' | 'review' | 'do' {
+  if (it.kind === 'ask') return it.ask?.kind === 'answer' ? 'answer' : 'review';
+  if (it.kind === 'mention') return 'answer';
+  if (it.kind === 'task' && it.task?.turn?.state === 'paused') return 'answer';
+  return 'do';
+}
+function needsMatch(state: TasksPageState, it: NeedsEntry): boolean {
+  if (it.task) return taskFilterMatch({...it.task, title: `${it.line} ${it.task.title}`}, state.q, state.filters);
+  const words = state.q.toLowerCase().split(/\s+/).filter(Boolean), line = it.line.toLowerCase();
+  return !taskFiltersOn(state.filters) && words.every(w => line.includes(w));
+}
+/** One row of You: the sentence asked; a question with two choices answers in place (S1.8). */
+function needsRowHTML(it: NeedsEntry): string {
+  const ask = it.ask, two = it.kind === 'ask' && ask?.kind === 'answer' && ask.choices?.length === 2 && ask.may.includes('answer');
+  const after = two ? ask!.choices!.map((c, i) => `<button type="button" class="${i ? 'ghost' : 'primary'} sm" data-need-answer="${esc(c)}">${esc(c)}</button>`).join('') : '';
+  const who = it.kind === 'mention' ? it.from_id || '' : ask?.asked_by || it.task?.owner_id || (it.bots?.[0] ? 'bot:' + it.bots[0] : '');
+  return `<div class="tk-row" data-need="${esc(it.id)}" role="button" tabindex="0">`
+    + `<span class="tk-title">${esc(it.line)}</span>${it.task ? lateTagHTML(it.task) : ''}`
+    + (after ? `<span class="tk-after">${after}</span>` : '')
+    + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
+}
+function tasksYouHTML(state: TasksPageState): string {
+  const shown = state.needs.filter(it => needsMatch(state, it));
+  if (!shown.length) return tasksNone(state);
+  const of = (g: string) => shown.filter(it => needsGroup(it) === g).map(needsRowHTML);
+  return tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
+}
+/** A pipeline's open tasks by stage, in the pipeline's order, until task-pipelines.ts draws it. */
+function tasksPipelineHTML(state: TasksPageState): string {
+  const p = tasksPipeline(state), shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
+  if (!p || !shown.length) return tasksNone(state);
+  const known = new Set(p.stages.map(s => s.id));
+  return p.stages.map(s => tasksGroupHTML(s.name, shown.filter(t => t.stage_id === s.id).map(t => taskRowHTML(t)))).join('')
+    + tasksGroupHTML('Other', shown.filter(t => !known.has(t.stage_id || undefined)).map(t => taskRowHTML(t)));
+}
+function tasksArchiveHTML(state: TasksPageState): string {
+  const shown = state.tasks.filter(t => taskFilterMatch(t, state.q, state.filters));
+  return shown.length ? shown.map(t => taskRowHTML(t, {look: 'archive'})).join('') : tasksNone(state);
+}
+
+// ---- clicks
+async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
+  const el = eventElement(ev);
+  if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
+  const answer = el?.closest<HTMLButtonElement>('[data-need-answer]');
+  const row = el?.closest<HTMLElement>('[data-need]');
+  const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;
+  if (answer && it?.task_id && it.requirement_id) {
+    ev.stopPropagation();
+    answer.disabled = true;
+    try {
+      await taskAnswer(it.task_id, it.requirement_id, answer.dataset.needAnswer || '', it.task?.version ?? null);
+      state.needs = state.needs.filter(n => n !== it);
+      tasksRender(state);
+      void v2Refresh();
+    } catch (e) { answer.disabled = false; toast(errorMessage(e, 'Not answered.')); }
+    return;
+  }
+  if (it) { decideOpen(it.id); return; }
+  const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
+  if (task) taskModalOpen(task);
+}
+
+// ---- the view button, filters
+function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
+  const item = (attr: string, label: string, on: boolean, count = 0) => `<button type="button" role="menuitemradio" aria-checked="${on}" class="tl-mi" ${attr}><span class="tl-mi-t">${esc(label)}</span>${count ? `<span class="tl-mi-n tnum">${count}</span>` : ''}${on ? '<span class="tl-mi-on" aria-hidden="true">✓</span>' : ''}</button>`;
+  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Show">
+    ${item('data-scope=""', 'You', !state.pipeline, state.needs.length)}<div class="tl-menu-sep" role="separator"></div>
+    ${state.pipelines.map(p => item(`data-scope="${esc(p.id)}"`, p.name, state.pipeline === p.id)).join('')}</div>`, pop => {
+    pop.onclick = ev => {
+      const b = eventElement(ev)?.closest<HTMLElement>('[data-scope]');
+      if (!b) return;
+      pop.hidePopover();
+      const id = b.dataset.scope || '';
+      if (id !== state.pipeline) tasksShow(state, {pipeline: id});
+      $('#task-scope')?.focus();
+    };
+  });
+  anchor.setAttribute('aria-expanded', 'true');
+}
+const tasksFilterOn = (f: TaskFilters, k: keyof TaskFilters) => { const v = f[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
+/** The rows a filter's values come from: what the view lists. */
+const tasksFilterRows = (state: TasksPageState): TaskBriefV3[] =>
+  state.archive || state.pipeline ? state.tasks : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
+type TaskFilterValue = {value: string; label: string; face?: string};
+function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFilterValue[] {
+  if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];
+  if (k === 'late') return [{value: '1', label: 'Late'}];
+  const rows = tasksFilterRows(state);
+  const of = (t: TaskBriefV3): string | null => k === 'owner' ? t.owner_id : k === 'waiting_on' ? t.turn?.who ?? null
+    : k === 'stage' ? t.stage_id : k === 'asked_by' ? t.requester_id : null;
+  const values = [...new Set(rows.map(of).filter((v): v is string => !!v))];
+  return values.map(v => k === 'stage' ? {value: v, label: tasksStageName(state, v) || v}
+    : {value: v, label: actorLabel(v), face: /^(bot|human):/.test(v) ? actorFace(v, 16) : ''})
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+function tasksFilterWords(state: TasksPageState, k: keyof TaskFilters): string[] {
+  const v = state.filters[k];
+  if (!Array.isArray(v)) return k === 'due' && typeof v === 'string' ? [tasksFilterValues(state, 'due').find(o => o.value === v)?.label || v] : [];
+  const known = new Map(tasksFilterValues(state, k).map(o => [o.value, o.label]));
+  return v.map(x => known.get(x) || (k === 'stage' ? tasksStageName(state, x) : actorLabel(x)) || x);
+}
+/** The filter button: the fields that have values in this view; a field opens its values in the same menu. */
+function tasksFieldMenu(state: TasksPageState, anchor: HTMLElement) {
+  const fields = TASK_FILTER_NAMES.filter(([k]) => tasksFilterValues(state, k).length);
+  tasksMenu(state, anchor, `<div class="tl-menu" role="menu" aria-label="Filter">
+    ${fields.map(([k, name]) => `<button type="button" role="menuitem" class="tl-mi" data-pick-field="${k}">${esc(name)}</button>`).join('') || '<div class="tl-menu-none">Nothing to choose</div>'}</div>`, pop => {
+    pop.onclick = ev => {
+      const k = fields.find(([f]) => f === eventElement(ev)?.closest<HTMLElement>('[data-pick-field]')?.dataset.pickField)?.[0];
+      if (k) tasksFilterMenu(state, k, anchor, false);
+    };
+  });
+}
+function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HTMLElement | null | undefined, toggle = true) {
+  const name = TASK_FILTER_NAMES.find(([f]) => f === k)?.[1] || k;
+  const opts = tasksFilterValues(state, k), one = k === 'due' || k === 'late';
+  const cur = state.filters[k];
+  const chosen = new Set(Array.isArray(cur) ? cur : cur === true ? ['1'] : typeof cur === 'string' ? [cur] : []);
+  const html = `<div class="tl-menu" role="group" aria-label="${esc(name)}">
+    <div class="tl-menu-h" aria-hidden="true">${esc(name)}</div>
+    ${opts.length > 7 ? `<input type="search" class="tl-menu-q" placeholder="Find" aria-label="Find ${esc(name.toLowerCase())}" autocomplete="off" spellcheck="false">` : ''}
+    <div class="tl-menu-list">${opts.map(o => `<label class="tl-opt" data-label="${esc(o.label.toLowerCase())}"><input type="${one ? 'radio' : 'checkbox'}" name="tl-${k}" value="${esc(o.value)}"${chosen.has(o.value) ? ' checked' : ''}>${o.face ? `<span class="tl-opt-face">${o.face}</span>` : ''}<span>${esc(o.label)}</span></label>`).join('')}</div>
+  </div>`;
+  tasksMenu(state, anchor, html, pop => {
+    const q = pop.querySelector<HTMLInputElement>('.tl-menu-q');
+    if (q) q.oninput = () => { for (const o of pop.querySelectorAll<HTMLElement>('.tl-opt')) o.hidden = !(o.dataset.label || '').includes(q.value.trim().toLowerCase()); };
+    pop.onchange = () => {
+      const picked = [...pop.querySelectorAll<HTMLInputElement>(`input[name="tl-${k}"]:checked`)].map(i => i.value);
+      if (k === 'late') state.filters.late = picked.length > 0;
+      else if (k === 'due') { const v = picked[0]; if (v === 'overdue' || v === 'week' || v === 'any') state.filters.due = v; else delete state.filters.due; }
+      else if (k !== 'pushed') state.filters[k] = picked;
+      tasksRender(state);
+      state.menuAnchor = $(`[data-chip-edit="${k}"]`) || $('#task-filter');
+      tasksMenuPlace(pop, state.menuAnchor);
+    };
+  }, toggle);
+  state.menuField = k;
+}
+
+// ---- New task (S6): a title, the details, and one row: who it is for, the pipeline, Create. No due date here; it is
+// added on the task. A new task starts in its pipeline's first stage. `parent` files it from that task.
 function taskOwnerOptions(selected = '', blank = 'Who is this for?') {
   const people = (S.people || []).filter(p => !p.hidden)
     .slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
   const bots = (S.emps || []).filter(e => e.status !== 'archived' && (!isHiddenBot(e.id) || [e.id, 'bot:' + e.id].includes(selected)))
     .slice().sort((a, b) => byBotOrder(a, b) || String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
-  const pick = value => value === selected ? ' selected' : '';
+  const pick = (value: string) => value === selected ? ' selected' : '';
   return `<option value="">${esc(blank)}</option>
     <optgroup label="Humans">${people.map(p =>
       `<option value="human:${esc(p.id)}"${pick('human:' + p.id) || pick(p.id)}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
@@ -251,411 +580,67 @@ function taskCreateModal() {
   if (d) return d;
   d = document.createElement('dialog');
   d.id = 'task-create'; d.className = 'tmodal';
-  d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
+  d.addEventListener('click', (ev: MouseEvent) => { if (ev.target === d) d.close(); });
   document.body.appendChild(d);
   return d;
 }
-// The new-task form's file input also takes files dropped on the form and images pasted into it, and lists what it
-// holds, so the submit reads one FileList.
-function taskFormFiles(form) {
-  const input = form.querySelector('input[type=file]');
-  const list = document.createElement('div');
-  list.className = 'files';
-  input.closest('label').after(list);
-  const show = () => { list.innerHTML = [...input.files].map(f => `<span>${esc(f.name)}</span>`).join(''); };
-  const add = files => {
-    if (!files.length) return;
-    const merged = new DataTransfer();
-    [...input.files, ...files].forEach(f => merged.items.add(f));
-    input.files = merged.files; show();
-  };
-  input.addEventListener('change', show);
-  fileDropTarget(form, add);
-  pasteImages(form, add);
+interface TaskCreateOptions {
+  parent?: {id: string; title?: string | null; private?: boolean | null} | null | undefined;
+  labels?: unknown[] | undefined;
+  /** The pipeline it goes in, by id: General when none is named. */
+  pipeline?: string | null | undefined;
 }
-function openTaskCreate(owner = '', opts = {}) {
+function openTaskCreate(owner = '', opts: TaskCreateOptions = {}) {
   const d = taskCreateModal();
   const parent = opts.parent || null;
-  d.innerHTML = `<div class="tmodal-head"><h2 class="tmodal-title" style="margin:0">${parent ? 'New subtask' : 'New task'}</h2>
-      <span class="spacer"></span>
+  const forWho = owner && !owner.includes(':') && botRow(owner) ? 'bot:' + owner : owner;
+  d.innerHTML = `<div class="tmodal-head"><span class="spacer"></span>
       <button class="ghost tmodal-x" type="button" data-modal-close aria-label="Close">✕</button></div>
     <div class="tmodal-body">
-      <form class="task" id="task-create-form">
-        ${parent ? `<p class="muted">Part of <b>${esc(parent.title)}</b></p>` : ''}
-        <div class="r1" style="grid-template-columns:1fr"><input type="text" name="title" required aria-label="Title" placeholder="Email Dana the renewal brief"></div>
-        <label>For <select name="owner" required aria-label="Who this task is for">${taskOwnerOptions(owner)}</select></label>
-        <label class="task-private"><span class="privacy-row"><input type="checkbox" name="private" ${parent?.private ? 'checked' : ''}> Private</span><small>Only the requester and assignee can see this task.</small></label>
-        <div class="r3">
-          <label>Tags <input type="text" name="labels" list="task-label-list-new" placeholder="bug, pricing-page" aria-label="Tag keys, comma separated" size="18" value="${esc((opts.labels || []).join(', '))}"><datalist id="task-label-list-new">${(TASKS_ST?.labels || []).map(l => `<option value="${esc(l)}">`).join('')}</datalist></label>
-          <label><input type="checkbox" name="top"> Top of their queue</label>
-          <label><input type="checkbox" name="follow"> Follow</label>
+      <form class="task tc-form" id="task-create-form">
+        <input type="text" name="title" required aria-label="Title" placeholder="Title" maxlength="300">
+        <textarea name="body" required aria-label="Details" placeholder="Details" rows="6"></textarea>
+        <div class="tc-row">
+          <label class="tc-pick"><span>For:</span><select name="owner" required aria-label="For">${taskOwnerOptions(forWho, '…')}</select></label>
+          <label class="tc-pick"><select name="pipeline" aria-label="Pipeline"><option value="">General</option></select></label>
+          <span class="spacer"></span>
+          <button class="primary" type="submit">Create</button>
         </div>
-        <label>Serves <select name="goal" aria-label="The goal this task serves"><option value="">No goal</option></select></label>
-        <label>Details (required)<textarea name="body" required aria-label="Details" placeholder="Details"></textarea></label>
-        <input type="url" name="link" inputmode="url" autocomplete="off" spellcheck="false" placeholder="Link (pull request, doc)" aria-label="Link">
-        <label class="attach">Attach files <input type="file" name="files" multiple aria-label="Task attachments"></label><span class="muted"> or drop them on this form, or paste a screenshot</span>
-        <div class="r3"><button class="primary" type="submit">Create task</button><span class="muted" id="task-create-msg"></span></div>
-        <p class="muted hint">You close it. For a human, start the title with a verb.</p>
+        <p class="err" id="task-create-msg" role="alert" hidden></p>
       </form>
     </div>`;
   $('[data-modal-close]', d).onclick = () => d.close();
-  const creation = $('#task-create-form', d);
-  let privateTouched = false;
-  creation.elements.private.addEventListener('change', () => { privateTouched = true; });
-  const privateDefault = () => {
-    const bot = botRow(creation.elements.owner.value);
-    if (parent?.private || !privateTouched)
-      creation.elements.private.checked = !!parent?.private || !!bot?.private_tasks_default;
-    creation.elements.private.disabled = !!parent?.private;
+  const form: HTMLFormElement = $('#task-create-form', d);
+  const field = <T extends Element>(name: string) => form.elements.namedItem(name) as T;
+  const pick = field<HTMLSelectElement>('pipeline');
+  const fill = (list: PipelineRec[]) => {
+    const want = opts.pipeline || '';
+    pick.innerHTML = list.map(p => `<option value="${esc(p.id)}"${p.id === want || (!want && p.preset === 'general') ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
+      || '<option value="">General</option>';
   };
-  creation.elements.owner.addEventListener('change', privateDefault); privateDefault();
-  goalOptions().then(goals => {
-    const sel = $('#task-create-form select[name=goal]'); if (!sel || !goals.length) return;
-    sel.innerHTML = '<option value="">No goal</option>' + goals.map(g =>
-      `<option value="${esc(g.id)}">${esc(g.title)} · ${esc(goalOwnerInfo(g.owner_id).name)}</option>`).join('');
-  });
-  taskFormFiles(creation);
-  void taskPipelineCreate($('#task-create-form'), opts.type || TASKS_ST?.type);
-  $('#task-create-form').onsubmit = async ev => {
+  if (TASK_PIPELINES) fill(TASK_PIPELINES);
+  void tasksPipelinesRead().then(list => { if (d.open && form.isConnected) fill(list); }).catch(() => {});
+  form.onsubmit = async (ev: SubmitEvent) => {
     ev.preventDefault();
-    const form = ev.target, btn = form.querySelector('[type=submit]'), msg = $('#task-create-msg');
-    const title = form.title.value.trim(), owner = form.owner.value, body = form.body.value.trim();
-    if (!title || !owner) { msg.textContent = 'Choose who this is for.'; return; }
-    if (!body) { msg.textContent = 'Add details.'; form.body.focus(); return; }
-    btn.disabled = true; msg.textContent = 'Creating…';
-    const payload = {title, body, owner: owner.includes(':') ? owner : 'bot:' + owner};
-    payload.private = form.elements.private.checked;
-    taskPipelineCreatePayload(form, payload);
-    const labels = form.labels.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    if (labels.length) payload.labels = labels;
-    if (form.top.checked) payload.top = true;
-    if (form.elements.follow.checked) payload.follow = true;
-    if (form.link.value.trim()) payload.links = [form.link.value.trim()];
-    if (parent) payload.relations = [{task: parent.id, kind: 'parent'}];
+    const btn = form.querySelector<HTMLButtonElement>('[type=submit]'), msg = $('#task-create-msg', d);
+    const title = field<HTMLInputElement>('title').value.trim(), body = field<HTMLTextAreaElement>('body').value.trim();
+    const who = field<HTMLSelectElement>('owner').value;
+    if (!title || !who || !body || !btn) return;
+    btn.disabled = true; msg.hidden = true;
+    const labels = (opts.labels || []).map(String).filter(Boolean);
     try {
-      const goal = form.goal?.value || '';
-      if (goal) payload.goal_id = goal;
-      await cloudCompose('/v2/tasks', payload, Array.from(form.elements.files?.files || []));
+      const made = await taskCreate({title, body, owner: who.includes(':') ? who : 'bot:' + who,
+        ...(pick.value ? {pipeline: pick.value} : {}), ...(parent ? {parent: parent.id} : {}),
+        ...(labels.length ? {labels} : {}), ...(parent?.private ? {private: true} : {})});
       d.close();
-      toast('Task created');
-      if (TASKS_ST) await tasksLoad(TASKS_ST);
+      if (TASKS_ST) void tasksCatchUp(TASKS_ST);
       await v2Refresh();
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; btn.disabled = false; }
+      if (made?.id) taskModalOpen(made.id);
+    } catch (e) { msg.textContent = errorMessage(e, ''); msg.hidden = false; btn.disabled = false; }
   };
   if (!d.open) d.showModal();
   formFocus(d);
 }
-function formFocus(root) {
-  (root.querySelector('input[name=title], textarea, select') || {}).focus?.();
-}
-const mergeTaskRows = (...groups) => [...new Map(groups.flat().map(task => [task.id, task])).values()];
-// Snoozed tasks too: the Snoozed view shows them and every other view leaves them out (taskItems).
-// The first page is short so the list paints soon; the rest come 500 at a time (the server's most), so a full read of a
-// thousand open tasks is three requests, not eleven.
-const activeTasksPath = (offset = 0) => `/v2/tasks?lane=company&status=${ACTIVE_TASK_STATUSES}&snoozed=all&limit=${offset ? 500 : 100}&offset=${offset}`;
-// Every status: a task that finished comes back as finished (as a live event brings it), not as gone.
-const tasksChangedPath = cursor => `/v2/tasks?lane=company&snoozed=all&changed_after=${encodeURIComponent(cursor)}`;
-// One full read at a time (state.fullRead), the first one on opening the page included. A load asked for while one is
-// on its way never starts the list over: the 2-minute poll shares it, and a load after a save waits for it and then
-// reads what changed since its cursor, which takes in the save. A list with a cursor reads only what changed.
-function tasksLoad(state, opts = {}) {
-  if (state.fullRead) {
-    if (opts.poll) return state.fullRead;
-    return state.loadAfter ||= state.fullRead.then(() => {
-      state.loadAfter = null;
-      return TASKS_ST === state ? tasksLoad(state, opts) : false;
-    });
-  }
-  return state.since ? tasksRead(state, opts) : tasksFullStart(state, opts);
-}
-function tasksFullStart(state, opts) {
-  const read = state.fullRead = tasksRead(state, opts).finally(() => { if (state.fullRead === read) state.fullRead = null; });
-  return read;
-}
-async function tasksRead(state, opts = {}) {
-  const seq = ++state.loadSeq;
-  // A list read in full keeps the cursor it was read at (`since`; `cursor` is the keyboard's row); from then on a load
-  // asks only for what changed since (backend/task_reads.py), unless the server says to read in full again (`reset`).
-  const cursor = state.since;
-  if (!cursor) state.activeComplete = false;
-  // A list kept from the last visit is shown, never a skeleton, while it is read again.
-  state.loading = !state.kept && !(state.tasks || []).some(t => !['done', 'closed'].includes(String(t.status)));
-  if (!cursor) tasksRender(state);
-  const others = () => [v2Get('/v2/tasks/labels'),
-    taskTypesLoad().then(t => { state.typesLoaded = true; return t; }).catch(() => TASK_TYPES),
-    // A load after a save also reads the personal queue: its membership comes from the feed, including other boards.
-    // The first load and polls already read it in refresh(), alongside the task request.
-    ...(state.read && !opts.poll ? [v2NeedsRead()] : [])];
-  let changed = null, active = null, lab, held = null;
-  const seen = new Set(), isFinished = t => ['done', 'closed'].includes(String(t.status));
-  if (cursor) {
-    [changed, lab] = await Promise.all([v2Get(tasksChangedPath(cursor)), ...others()]);
-    if (TASKS_ST !== state || state.loadSeq !== seq) return;
-    // The server says to read in full again: that read is the one full read (tasksLoad).
-    if (!changed || changed.reset) { state.since = null; state.activeComplete = false; return tasksLoad(state, opts); }
-  }
-  if (!changed) {
-    [active, lab] = await Promise.all([v2Get(activeTasksPath()), ...others()]);
-    // A first read that lands after the page was left is kept for the next visit, as leaving would have kept it.
-    if (TASKS_ST !== state && state.loadSeq === seq && active && !state.read && !state.kept && !S.lastRead.tasks)
-      S.lastRead.tasks = {key: activeTasksPath(), tasks: active.tasks || [], labels: lab?.labels || [], tags: lab?.tags || []};
-    if (TASKS_ST !== state || state.loadSeq !== seq) return;
-  }
-  if (changed) {
-    const gone = new Set((changed.gone || []).map(String));
-    state.tasks = mergeTaskRows((state.tasks || []).filter(t => !gone.has(String(t.id))), changed.tasks || []);
-    state.since = changed.cursor;
-  } else if (active) {
-    // Read in full. The open tasks already held stay until every page has come, so a later page that fails leaves the
-    // list as long as it was; only a list read to its end drops the ones the server no longer lists as open (below).
-    // A finished copy held is replaced when the task is open again.
-    held = new Set((state.tasks || []).filter(t => !isFinished(t)).map(t => String(t.id)));
-    (active.tasks || []).forEach(t => seen.add(String(t.id)));
-    state.tasks = mergeTaskRows(state.tasks || [], active.tasks || []);
-  }
-  // A read that failed (offline, the server away) leaves the list as it was rather than empty; the next poll reads again.
-  state.labels = lab?.labels || [];
-  state.tags = lab?.tags || [];
-  state.loading = false; state.read = true;
-  tasksTypeCheck(state);
-  tasksTools(state); tasksRender(state);
-  tasksFilterMenuLoaded(state);
-  tasksPeekSync(state);
-  tasksFinishPending(state, seq);
-
-  if (state.open) {
-    const id = state.open; state.open = '';
-    if (!state.tasks.some(t => t.id === id)) {
-      const detail = await v2Get(`/v2/tasks/${encodeURIComponent(id)}`);
-      if (TASKS_ST !== state || state.loadSeq !== seq) return;
-      if (detail?.task) state.tasks = mergeTaskRows(state.tasks, [detail.task]);
-    }
-    taskModalOpen('t' + id);
-  }
-
-  const drain = async next => {
-    while (next != null && TASKS_ST === state && state.loadSeq === seq) {
-      const page = await v2Get(activeTasksPath(next));
-      if (!page || TASKS_ST !== state || state.loadSeq !== seq) return false;
-      state.tasks = mergeTaskRows(state.tasks, page.tasks || []);
-      (page.tasks || []).forEach(t => seen.add(String(t.id)));
-      next = page.next_offset;
-      tasksTools(state); tasksRender(state);
-    }
-    return next == null;
-  };
-  let complete = true;
-  if (active) {
-    complete = await drain(active.next_offset);
-    if (TASKS_ST !== state || state.loadSeq !== seq) return;      // a newer read took over
-    // Only a list read to its end can be caught up from its cursor, drops what left it, and starts the clock for the
-    // next full read again (refresh.js tasksFreshen).
-    state.activeComplete = complete;
-    state.since = complete ? active.cursor || null : null;
-    if (complete) {
-      state.tasks = state.tasks.filter(t => !held.has(String(t.id)) || seen.has(String(t.id)) || isFinished(t));
-      state.fullAt = Date.now(); state.stale = false;
-      tasksTools(state); tasksRender(state);
-    }
-  }
-  // Done and Closed keep their own paging. A reload after a change folds in the newest page; the poll does that too, but
-  // only while finished tasks are on screen (Done, Closed, or an unfolded board), and never more than that one page.
-  // Asked only now: the board's type is known once the task types have loaded.
-  const doneShown = tasksFinishedShown(state);
-  const reloadDone = opts.poll ? doneShown && state.doneLoaded : (state.doneLoaded || doneShown);
-  if (reloadDone && TASKS_ST === state && state.loadSeq === seq) await (state.doneLoaded ? tasksDoneMerge(state) : tasksLoadDone(state, true));
-  return changed ? true : active ? complete : false;
-}
-// The whole list read again, as on opening the page: the cursor is dropped and the kept copies of the task paths are
-// forgotten, so the server reads every row afresh rather than answering 304. A delta read and the live stream carry
-// only what the change log names; a fact a row shows that changes without a task change (a run of the task's own
-// starting, a question growing stale) reaches an open list only this way. One full read at a time: a second call
-// while one is on its way shares it.
-function tasksReadFull(state, opts = {}) {
-  if (state.fullRead) return state.fullRead;
-  state.since = null;
-  getForget();
-  getForgetTagged(p => p.startsWith('/v2/tasks'));
-  return tasksFullStart(state, opts);
-}
-// Pulled down at the top on a touch screen (pull-refresh.ts): the list, Needs you and the counts read again.
-async function tasksPulled(state) {
-  const [ok] = await Promise.all([tasksReadFull(state), v2Refresh().catch(() => {})]);
-  if (TASKS_ST !== state) return;
-  tasksTools(state); tasksRender(state);
-  if (ok === false) toast('Could not refresh the tasks. Check the connection and pull again.', true);
-}
-// A save took its task out of the view? Once a load that started after the save has drawn, the list and the peek
-// move on (tasksAfterFinish). Any load may land it: an older one overtaken by the poll returns before it gets here.
-function tasksFinishPending(state, seq) {
-  const p = state.pendingFinish;
-  if (!p || seq <= p.after) return;
-  state.pendingFinish = null;
-  if (state.peek === p.key) tasksAfterFinish(state, p.key, p.at);
-}
-// Old combined views and deleted types fall back to General, never a mixture of types.
-function tasksTypeCheck(state) {
-  if (state.type === 'general' || TASK_TYPES.some(type => type.id === state.type)) return;
-  if (!state.type || !S.me?.cloud || state.typesLoaded) {
-    state.type = 'general';
-    taskPipelineRemember(state); tasksRemember(state);
-    if (isTasksRoute(location.hash)) tasksURLWrite(state);
-  }
-}
-async function tasksLoadDone(state, reset = false) {
-  if (TASKS_ST !== state || state.doneLoading || (!reset && state.doneNext == null)) return false;
-  state.doneLoading = true;
-  tasksRender(state);
-  const offset = reset ? 0 : state.doneNext;
-  const page = await v2Get(`/v2/tasks?lane=company&status=done,closed&sort=finished&limit=${DONE_CAP}&offset=${offset}`);
-  if (TASKS_ST !== state) return false;
-  if (page) {
-    const keep = (state.tasks || []).filter(t => !['done', 'closed'].includes(String(t.status)));
-    const previous = reset ? [] : (state.tasks || []).filter(t => ['done', 'closed'].includes(String(t.status)));
-    state.tasks = mergeTaskRows(keep, previous, page.tasks || []);
-    state.doneNext = page.next_offset;
-    state.doneLoaded = true;
-  }
-  state.doneLoading = false;
-  tasksTools(state); tasksRender(state);
-  if (page && tasksFinishedView(state.view) && state.q && state.doneNext != null && !state.doneDrain) {
-    void tasksLoadAllDone(state);
-  }
-  return !!page;
-}
-// The newest finished tasks folded into what Done already shows: nothing older is dropped, the paging is untouched.
-async function tasksDoneMerge(state) {
-  if (TASKS_ST !== state || state.doneLoading) return;
-  const page = await v2Get(`/v2/tasks?lane=company&status=done,closed&sort=finished&limit=${DONE_CAP}&offset=0`);
-  if (!page || TASKS_ST !== state) return;
-  const fresh = new Map((page.tasks || []).map(t => [String(t.id), t]));
-  state.tasks = mergeTaskRows((state.tasks || []).filter(t => !fresh.has(String(t.id)) || !['done', 'closed'].includes(String(t.status))), page.tasks || []);
-  tasksTools(state); tasksRender(state);
-}
-async function tasksLoadAllDone(state) {
-  if (state.doneDrain) return;
-  state.doneDrain = true;
-  try {
-    while (TASKS_ST === state && state.doneNext != null) {
-      if (!await tasksLoadDone(state)) break;
-    }
-  } finally { state.doneDrain = false; }
-}
-function companyNeedActor(task, need) {
-  const me = myActor();
-  // A task waiting on me waits with the bot that owns it, whoever asked for it.
-  const candidates = taskWaitingOn(task) === me || taskWaitingOn(need) === me ? [task.owner_id]
-    : [need?.ask?.sender_id, task?.ask?.sender_id, taskRequester(task), task?.owner_id];
-  return candidates.find(actor => actorSlug(actor) && actor !== me)
-    || candidates.find(actor => actor && actor !== me)
-    || me;
-}
-function companyNeedGroups(items) {
-  const needOrder = new Map((S.v2.needs || []).map((item, index) => [String(item.id), index]));
-  const needById = new Map((S.v2.needs || []).map(item => [String(item.id), item]));
-  const groups = new Map();
-  for (const it of items) {
-    // The server's queue already includes every counted task, including bot-owned escalations to their manager.
-    if (!it.task) continue;
-    const need = needById.get(String(it.id)), actor = companyNeedActor(it.task, need);
-    if (!groups.has(actor)) groups.set(actor, {actor, items: [], firstNeed: Infinity, firstRank: Infinity, updated_at: ''});
-    const group = groups.get(actor);
-    group.items.push(it);
-    group.firstNeed = Math.min(group.firstNeed, needOrder.get(String(it.id)) ?? Infinity);
-    group.firstRank = Math.min(group.firstRank, it.rank == null ? Infinity : Number(it.rank));
-    if (String(it.updated_at || '') > group.updated_at) group.updated_at = String(it.updated_at || '');
-  }
-  return [...groups.values()].sort((a, b) => a.firstNeed - b.firstNeed || a.firstRank - b.firstRank
-    || String(b.updated_at).localeCompare(String(a.updated_at)) || actorLabel(a.actor).localeCompare(actorLabel(b.actor)));
-}
-// The body redraws on every load (the 30-second poll reloads the list): only rows that changed are replaced, so the
-// focus, the scroll, the cursor, the selection and the open peek all stay. A hidden row leaves the selection.
-// A `data-patch-key` node keeps what the person did in it (opened, typed) through redraws. With a `data-patch-sig` its
-// content can still change (the Stale tickets card): a new sig patches it in place, and a <details> stays open or
-// shut as the person left it.
-function tasksPatchNode(live, next) {
-  if (live.nodeType !== next.nodeType || live.nodeName !== next.nodeName
-      || (live.nodeType === 1 && (live.dataset.taskKey || '') !== (next.dataset.taskKey || ''))) { live.replaceWith(next); return; }
-  if (live.nodeType === 3) { if (live.data !== next.data) live.data = next.data; return; }
-  if (live.nodeType !== 1) return;
-  const keep = !!live.dataset.patchKey && live.nodeName === 'DETAILS';
-  if (live.dataset.patchKey || next.dataset.patchKey) {
-    if (live.dataset.patchKey !== next.dataset.patchKey) { live.replaceWith(next); return; }
-    if ((live.dataset.patchSig || '') === (next.dataset.patchSig || '')) return;
-  }
-  if (live.dataset.taskKey) { if (!next.dataset.sig || live.dataset.sig !== next.dataset.sig) live.replaceWith(next); return; }   // a row: whole, or not at all
-  for (const {name} of [...live.attributes]) if (!next.hasAttribute(name) && !(keep && name === 'open')) live.removeAttribute(name);
-  for (const {name, value} of [...next.attributes]) if (live.getAttribute(name) !== value && !(keep && name === 'open')) live.setAttribute(name, value);
-  const a = [...live.childNodes], b = [...next.childNodes];
-  if (tasksPatchKeyed(live, a, b)) return;
-  if (a.length !== b.length) { live.replaceChildren(...b); return; }
-  a.forEach((node, i) => tasksPatchNode(node, b[i]));
-}
-// Children that all carry a key (a `data-patch-key`, as the Stale tickets card's rows do, or a task's `data-task-key`,
-// as a board column's cards do) are matched by it: a row that went is removed, a new one inserted, and one that stayed
-// is patched where it is, so focus on it is not lost, also when one row goes and another comes in the same redraw.
-// A card moved to another step rebuilds that one card, not both columns.
-function tasksPatchKeyed(live, a, b) {
-  const key = n => n.nodeType === 1 ? n.dataset.patchKey || (n.dataset.taskKey ? 't:' + n.dataset.taskKey : '') : '';
-  if (!a.length || !b.length || !a.every(key) || !b.every(key)) return false;
-  const old = new Map(a.map(n => [key(n), n]));
-  if (old.size !== a.length || new Set(b.map(key)).size !== b.length) return false;
-  const want = new Set(b.map(key));
-  for (const n of a) if (!want.has(key(n))) n.remove();
-  b.forEach((n, i) => {
-    const o = old.get(key(n)), at = live.childNodes[i] || null;
-    if (!o) { live.insertBefore(n, at); return; }
-    if (o !== at) live.insertBefore(o, at);
-    tasksPatchNode(o, n);
-  });
-  return true;
-}
-function tasksPatch(el, html) {
-  const next = document.createElement('div');
-  next.innerHTML = html;
-  const a = [...el.childNodes], b = [...next.childNodes];
-  if (!a.length || a.length !== b.length) { el.replaceChildren(...b); return; }
-  a.forEach((node, i) => tasksPatchNode(node, b[i]));
-}
-function tasksRender(state) {
-  const el = $('#task-body');
-  if (!el || TASKS_ST !== state) return;
-  if (taskBoardHolding(state)) return;      // a card is being dragged: the board redraws once it is let go
-  state.memo = new Map();
-  const active = document.activeElement, inBody = el.contains(active);
-  const focusKey = inBody ? active.closest('[data-task-key]')?.dataset.taskKey || '' : '';
-  const focusWhat = !inBody ? '' : active.matches('[data-select]') ? '[data-select]' : active.matches('[data-expand]') ? '[data-expand]'
-    : active.matches('[data-open-task]') ? '[data-open-task]' : active.dataset.groupToggle ? `[data-group-toggle="${CSS.escape(active.dataset.groupToggle)}"]`
-    : active.dataset.groupAdd ? `[data-group-add="${CSS.escape(active.dataset.groupAdd)}"]` : active.matches('.tl-gchat') ? `.tl-gchat[href="${CSS.escape(active.getAttribute('href'))}"]`
-    : active.id === 'board-more' ? '#board-more' : active.matches('[data-clear-filters]') ? '[data-clear-filters]' : '';
-  decidePaintButton();
-  el.dataset.view = state.view;
-  el.setAttribute('role', 'region');
-  const items = taskItems(state);
-  let html = state.loading && !tasksFinishedView(state.view) && !items.length
-    ? skelRows(6)
-    : tasksFinishedView(state.view) ? tasksDoneHTML(items, state)
-    : state.view === 'board' ? tasksBoardHTML(items, state)
-    : tasksListHTML(items, state);
-  // The whole-list count includes unread pages, which load as the list scrolls or through Show more.
-  const paged = tasksNeedsQueue(state) && !state.loading;
-  if (paged) html += needsMoreButton();
-  tasksPatch(el, html);
-  if (state.view === 'board') boardReleaseSlots();
-  needsMoreWatch(paged ? el : null);
-  if (focusWhat && !el.contains(document.activeElement)) {
-    const host = focusKey ? el.querySelector(`[data-task-key="${CSS.escape(focusKey)}"]`) : el;
-    host?.querySelector(focusWhat)?.focus({preventScroll: true});
-  }
-  tasksSelectionPrune(state);
-  tasksCursorPaint(state);
-  if (state.peek) {
-    const row = el.querySelector(`[data-task-key="${CSS.escape(state.peek)}"]`);
-    row?.classList.add('peeked'); row?.querySelector('[data-open-task]')?.setAttribute('aria-current', 'true');
-  }
-  tasksSelectionPaint(state);
-  const scopeChanged = tasksScopePaint(state), playChanged = pipelinePlayPaint(state);
-  if (scopeChanged || playChanged) tasksHeadFit(state);
-  pipelineRailSync(state);
-  fbSync();
+function formFocus(root: ParentNode) {
+  root.querySelector<HTMLElement>('input[name=title], textarea, select')?.focus();
 }

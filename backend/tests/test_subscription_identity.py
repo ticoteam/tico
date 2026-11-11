@@ -2,7 +2,7 @@
 
 from backend import hubdb as H
 from backend.subscription_identity import connection_id
-from backend.tests.test_api import api, assign, get, post, put, runner  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, put, runner  # noqa: F401
 from backend.enqueue import enqueue_stored
 
 

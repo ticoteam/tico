@@ -1,7 +1,8 @@
 """The cleanup's startup renames (backend/migrations/renames.py) upgrade a database from before the cleanup in place.
 
 The old database is backend/tests/fixtures/schema_pre_cleanup.sql, a dump of a fresh hub at the last release
-before the renames (schema 71), with a few rows written under the old column names. One boot renames every
+before the renames (schema 71), with a few rows written under the old column names (no task: Tico 0.6 refuses a
+database that has tasks from 0.5). One boot renames every
 column, keeps the rows, keeps every index, rewrites every trigger and view so it still works, and a second boot
 changes nothing."""
 
@@ -53,10 +54,6 @@ def restore(path):
         VALUES('runner-1', 'Acme Mac', 'ana', 'hash', '{NOW}', '{{"ok":true}}');
         INSERT INTO conversations(id, kind, subject, participants_json, created, scope)
         VALUES('conv-1', 'task', 'Acme launch', '["human:ana","bot:ops"]', '{NOW}', 'direct');
-        INSERT INTO tasks(id, title, body, requester, owner, status, due, conversation_id, created, updated,
-                          labels_json, acceptance_json)
-        VALUES('task-1', 'Ship the Acme launch', 'body', 'human:ana', 'bot:ops', 'open', '2026-10-09',
-               'conv-1', '{NOW}', '{NOW}', '["launch"]', '["it ships"]');
         INSERT INTO messages(id, conversation_id, from_actor, to_actor, kind, body, refs_json, created)
         VALUES('msg-1', 'conv-1', 'human:ana', 'human:ben', 'chat', 'hello', '{{"task":"task-1"}}', '{NOW}');
         INSERT INTO jobs(id, message_id, bot, state, created) VALUES('job-1', 'msg-1', 'ops', 'completed', '{NOW}');
@@ -86,6 +83,14 @@ DROPPED_INDEXES = {
     "idempotency_by_created",
     # learning_runs drops its night UNIQUE in 20261105010100_learn_beta: Learn can run more than once a day.
     "sqlite_autoindex_learning_runs_2",
+    # 20261108203140_finance_fold_in makes fin_contacts and fin_vendor_aliases views over the Directory: their tables
+    # go, and their indexes with them.
+    "fin_contacts_name",
+    "fin_vendor_aliases_contact",
+    "sqlite_autoindex_fin_contacts_1",
+    "sqlite_autoindex_fin_vendor_aliases_1",
+    # The Pipelines v3 cut-over drops the due-date reminder pass, and its index with it (hubdb.py, ensure_schema).
+    "tasks_due_active",
 }
 # Dropped by backend/migrations/0052_drop_queue_bot_message.sql: backend/enqueue.py queues the job in Python now.
 DROPPED_TRIGGERS = {"queue_bot_message"}
@@ -158,6 +163,23 @@ DROPPED_TRIGGERS |= {"changes_task_asks_insert", "changes_task_asks_update"}
 # Dropped by backend/migrations/20261108044824_directory_rules.py: rule sources are organization entities now.
 DROPPED_INDEXES |= {"org_rules_source", "rule_sources_name", "sqlite_autoindex_rule_sources_1"}
 
+# Dropped by backend/migrations/20261110054000_pipelines_v3_cutover.py: the old task engine's tables and task columns
+# (tasks is made again, so its old indexes go with it), and by 20261110110625_drop_old_engine_leftovers.py.
+_CUTOVER = importlib.import_module("backend.migrations.20261110054000_pipelines_v3_cutover")
+RETIRED |= set(_CUTOVER.OLD_TABLES) | {"task_rules", "first_start_seeds"}
+DROPPED |= {("tasks", column) for column in _CUTOVER.DEAD_COLUMNS}
+# Old indexes on tasks that the new table does not make again: over dead columns, the old statuses or the close rule.
+DROPPED_INDEXES |= {
+    "tasks_step_rank",
+    "tasks_blocker_key",
+    "tasks_resume_due",
+    "tasks_type_step",
+    "tasks_carried_by",
+    "tasks_rule_done_due",
+    "invariants_doing",
+}
+DROPPED_TRIGGERS |= {"changes_attempts_carried"}
+
 
 @pytest.fixture(scope="module")
 def upgraded(tmp_path_factory):
@@ -203,10 +225,6 @@ def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
             continue
         assert renamed in have and old not in have, (table, old, renamed)
     assert conn.execute("SELECT readiness FROM runners_with_state WHERE id='runner-1'").fetchone()[0] == '{"ok":true}'
-    task = conn.execute("SELECT * FROM tasks WHERE id='task-1'").fetchone()
-    assert json.loads(task[new("tasks", "labels_json")]) == ["launch"]
-    assert json.loads(task[new("tasks", "acceptance_json")]) == ["it ships"]
-    assert task[new("tasks", "due")] == "2026-10-09" and task[new("tasks", "created")] == NOW
     message = conn.execute("SELECT * FROM messages WHERE id='msg-1'").fetchone()
     assert json.loads(message[new("messages", "refs_json")]) == {"task": "task-1"}
     attempt = conn.execute("SELECT * FROM attempts WHERE id='att-1'").fetchone()

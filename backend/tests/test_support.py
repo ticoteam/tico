@@ -1,109 +1,18 @@
 """Contact support (PRIVACY.md, "Support tickets"): the form's request is forwarded to HQ, only on submit and never in demo
 mode, and a person sees their own tickets and HQ's replies, and no one else's."""
 
-import importlib
 import json
 import logging
-import re
-import secrets
-from pathlib import Path
 
 import httpx
 import pytest
 
 from backend import support
 from backend.auth import Identity
-from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401
 from backend import bot_settings as BS
-
-
-class FakeHQ:
-    """Just enough of HQ's ticket routes (docs/telemetry.md, "Support tickets"): keeps tickets, answers by secret, and
-    can be told to fail."""
-
-    def __init__(self):
-        self.tickets, self.seen, self.down, self.status_override = {}, [], False, None
-        self.read_status = None  # answers every ticket read with this status (429: HQ asking us to slow down)
-        self.fields = None  # an older HQ: refuses a ticket carrying a field beyond these
-        self.refuse_field = None  # refuses every ticket, naming this field as the wrong one
-
-    def __call__(self, request):
-        self.seen.append(request)
-        if self.down:
-            raise httpx.ConnectTimeout("down")
-        path, secret = request.url.path, request.headers.get("x-ticket-secret", "")
-        if request.method == "POST" and path == "/v1/support":
-            if self.status_override:
-                return httpx.Response(self.status_override, json={"error": "x"})
-            body = json.loads(request.content)
-            if self.refuse_field:
-                return httpx.Response(422, json={"error": "invalid", "field": self.refuse_field})
-            if self.fields is not None and set(body) - self.fields:
-                return httpx.Response(422, json={"error": "invalid", "field": "fields"})
-            tid = self.new_ticket_id()
-            self.tickets[tid] = {"secret": self.new_secret(), "status": "open", "input": body, "messages": []}
-            return httpx.Response(201, json={"ticket_id": tid, "secret": self.tickets[tid]["secret"], "status": "open"})
-        parts = path.strip("/").split("/")
-        ticket = self.tickets.get(parts[2]) if len(parts) > 2 else None
-        if not ticket or ticket["secret"] != secret:
-            return httpx.Response(404, json={"error": "not_found"})
-        if request.method == "GET" and self.read_status:
-            return httpx.Response(self.read_status, json={"error": "rate_limited"})
-        if request.method == "GET":
-            return httpx.Response(
-                200,
-                json={
-                    "ticket_id": parts[2],
-                    "status": ticket["status"],
-                    "created": "x",
-                    "updated": "y",
-                    "messages": ticket["messages"],
-                },
-            )
-        if request.method == "DELETE":
-            del self.tickets[parts[2]]
-            return httpx.Response(200, json={"deleted": True})
-        if parts[-1] == "messages":
-            ticket["messages"].append(
-                {
-                    "id": len(ticket["messages"]) + 1,
-                    "created": "z",
-                    "from": "person",
-                    "body": json.loads(request.content)["message"],
-                }
-            )
-            ticket["status"] = "open"
-            return httpx.Response(
-                201, json={"ticket_id": parts[2], "status": "open", "message_id": len(ticket["messages"])}
-            )
-        return httpx.Response(404, json={})
-
-    def new_ticket_id(self):
-        return "TK-%08d" % (len(self.tickets) + 1)
-
-    def new_secret(self):
-        return "s" * 20 + str(len(self.tickets))
-
-    def staff_replies(self, tid, body):
-        messages = self.tickets[tid]["messages"]
-        messages.append({"id": len(messages) + 1, "created": "later", "from": "staff", "body": body})
-        self.tickets[tid]["status"] = "answered"
-
-
-@pytest.fixture(autouse=True)
-def hq(monkeypatch):
-    fake = FakeHQ()
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(fake))
-    for name in ("TICO_SUPPORT", "TICO_TELEMETRY", "DO_NOT_TRACK", "TICO_HQ_URL"):
-        monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("TICO_VERSION", "0.2.17")
-    return fake
-
-
-def file(api, headers=None, **body):
-    return api.post(
-        "/api/v2/support/tickets", json={"message": "The board will not load", **body}, headers=headers or signed_in()
-    )
+from backend.tests.helpers.support import ContractHQ, TICKET_ID, documented, file, hq
 
 
 def test_submit_forwards_exactly_what_the_form_showed_and_keeps_the_secret_on_the_server(environment, hq):
@@ -284,41 +193,6 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
     assert asked() == ([hq_of["busy"]], True)
 
 
-ROOT = Path(__file__).resolve().parents[2]
-TICKET_ID = re.compile(r"TK-[A-Z2-7]{8}")  # docs/telemetry.md: "Ticket ids look like TK-AB12CD34"
-
-
-def documented(doc, *routes):
-    """Each route is a row of HQ's documented API (docs/<doc>), the contract an install is held to. HQ's code is not in
-    this repository (it is in ticoteam/tico-services); the docs are what both sides agree on."""
-    text = (ROOT / "docs" / doc).read_text()
-    for route in routes:
-        assert f"`{route}`" in text, f"{route} is not documented in docs/{doc}"
-
-
-class ContractHQ(FakeHQ):
-    """FakeHQ with ticket ids and secrets made as HQ makes them, and each request it was sent as
-    (method, path, query, X-Ticket-Secret, JSON body), so a test can compare it with the documented contract."""
-
-    def new_ticket_id(self):
-        return "TK-" + "".join(secrets.choice("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") for _ in range(8))
-
-    def new_secret(self):
-        return secrets.token_urlsafe(24)
-
-    def calls(self, start=0):
-        return [
-            (
-                r.method,
-                r.url.path,
-                r.url.query.decode(),
-                r.headers.get("x-ticket-secret"),
-                json.loads(r.content) if r.content else None,
-            )
-            for r in self.seen[start:]
-        ]
-
-
 def test_the_ticket_round_trip_keeps_to_hq_s_documented_contract(environment, monkeypatch):
     """The page's whole ticket round trip, with every request the install makes held exactly to HQ's ticket routes as
     docs/telemetry.md ("Support tickets") documents them: the method and path, the ticket's secret in `X-Ticket-Secret`
@@ -476,7 +350,7 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
 
 
 # ----------------------------------------------------------------------------- a bot's report, approved by a person
-REPORT = "hub task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
+REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
 
 
 def as_bot(api, slug="coo"):
@@ -492,24 +366,40 @@ def as_bot(api, slug="coo"):
 
 
 def draft(api, headers, message=REPORT, **extra):
+    """A report drafted through POST /api/v2/support/reports: with the team rule off, an OK asked of a person
+    (backend/task_asks.py); the answer's `id` is the OK's requirement id."""
     import hashlib
 
     payload = {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest(), **extra}
-    import uuid
-
-    return api.post(
-        "/api/v2/approvals",
-        json={"kind": "support", "payload": payload},
-        headers={**headers, "Idempotency-Key": str(uuid.uuid4())},
-    )
+    return api.post("/api/v2/support/reports", json={"payload": payload}, headers=signed_in(_token(headers)))
 
 
-def decide(api, approval_id, decision="approved"):
+def _token(headers):
+    return headers["Authorization"].split(" ", 1)[1]
+
+
+def decide(api, approval_id, decision="approved", token=TOKEN):
+    """The person asked answers through the real OK routes: OK from the preview (GET /api/v2/oks/{rid}, POST
+    /api/v2/tasks/{id}/asks/{rid}/ok), or a send back. Returns (whom it was asked of, the answer)."""
+    from backend import task_asks
+
     with api.app.state.store.read() as c:
-        to = c.execute(
-            "SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?", (approval_id,)
-        ).fetchone()[0]
-    return to, api.post(f"/api/v2/approvals/{approval_id}", json={"decision": decision}, headers=signed_in())
+        to = task_asks.grant(c, approval_id)["asked_of_id"]
+        tid = task_asks.task_of(c, approval_id)
+    if decision != "approved":
+        return to, api.post(
+            f"/api/v2/tasks/{tid}/asks/{approval_id}/answer",
+            json={"value": "no", "note": "Not this one."},
+            headers=signed_in(token),
+        )
+    shown = api.get(f"/api/v2/oks/{approval_id}", headers=signed_in(token))
+    if shown.status_code != 200:
+        return to, shown
+    return to, api.post(
+        f"/api/v2/tasks/{tid}/asks/{approval_id}/ok",
+        json={"shown_hash": shown.json()["shown_hash"]},
+        headers=signed_in(token),
+    )
 
 
 def send(api, headers, approval_id):
@@ -517,8 +407,10 @@ def send(api, headers, approval_id):
 
 
 def consumed(api, approval_id):
+    from backend import task_asks
+
     with api.app.state.store.read() as c:
-        return c.execute("SELECT consumed_at FROM approvals WHERE id=?", (approval_id,)).fetchone()[0]
+        return (task_asks.grant(c, approval_id) or {}).get("used_at")
 
 
 def drafts_only(api):
@@ -534,12 +426,12 @@ def test_a_bot_drafts_a_person_approves_and_the_bot_sends_one_ticket_owned_by_th
     r = draft(api, bot)
     assert r.status_code == 200, r.text
     approval = r.json()
-    assert approval["kind"] == "support" and hq.seen == []  # drafting sends nothing
-    assert send(api, bot, approval["id"]).json()["error"]["code"] == "approval"  # not approved yet
+    assert approval["status"] == "pending" and hq.seen == []  # drafting sends nothing
+    assert send(api, bot, approval["id"]).json()["error"]["code"] == "approval"  # not OK'd yet
     assert hq.seen == [] and not consumed(api, approval["id"])
-    needs = api.get("/api/v2/needs-you", headers=signed_in()).json()["items"]
-    card = next(i for i in needs if i.get("id") == approval["id"])
-    assert card["title"] == "Send this to Tico support?" and card["support"] == {"to": "updates.tico.team"}
+    with api.app.state.store.read() as c:
+        filed = c.execute("SELECT title, private FROM tasks WHERE id=?", (approval["task_id"],)).fetchone()
+    assert tuple(filed) == ("Send a report to Tico support", 1)
     approver, decided = decide(api, approval["id"])
     assert decided.status_code == 200, decided.text
     r = send(api, bot, approval["id"])
@@ -582,7 +474,7 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     declined = draft(api, bot, message="Declined report").json()
     decide(api, declined["id"], "declined")
     r = send(api, bot, declined["id"])
-    assert r.status_code == 409 and "declined" in r.json()["error"]["detail"]
+    assert r.status_code == 409 and "sent back" in r.json()["error"]["detail"]
     approval = draft(api, bot).json()
     decide(api, approval["id"])
     for other in (as_bot(api, "botops"), signed_in()):  # another bot, or the approver themselves
@@ -590,14 +482,17 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     assert send(api, bot, "nope").status_code == 404
     # The stored message changed after the person read it: its hash no longer matches.
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT payload FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+        row = c.execute("SELECT content FROM ok_grants WHERE requirement_id=?", (approval["id"],)).fetchone()[0]
         c.execute(
-            "UPDATE approvals SET payload=? WHERE id=?",
-            (row.replace("hub task update", "hub task delete"), approval["id"]),
+            "UPDATE ok_grants SET content=? WHERE requirement_id=?",
+            (row.replace("tico task update", "tico task delete"), approval["id"]),
         )
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
-    assert hq.seen == [] and not consumed(api, approval["id"])
+    # The person's click claimed the OK (support.ok_given), but nothing was sent and no ticket is kept.
+    assert hq.seen == [] and not consumed(api, declined["id"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 0
 
 
 def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # noqa: F811  (the fixture)
@@ -611,18 +506,21 @@ def test_a_draft_that_is_not_exactly_a_report_is_refused(environment, hq):  # no
     for payload, why in [
         ({"message": REPORT, "content_sha256": "0" * 64}, "doesn't match"),
         ({"message": REPORT, "content_sha256": "ABC"}, "64 lower-case hex"),
-        ({"message": REPORT}, "support needs content_sha256"),
+        ({"message": REPORT}, "needs content_sha256"),
         ({"message": " padded ", "content_sha256": sha(" padded ")}, "blank space"),
         ({"message": "x" * 4001, "content_sha256": sha("x" * 4001)}, "4000"),
         ({"message": REPORT, "content_sha256": sha(REPORT), "diagnostics": "abc"}, "not diagnostics"),
         ({"message": REPORT, "content_sha256": sha(REPORT), "include_ids": "yes"}, "true or false"),
     ]:
         r = api.post(
-            "/api/v2/approvals",
-            json={"kind": "support", "payload": payload},
+            "/api/v2/support/reports",
+            json={"payload": payload},
             headers={**bot, "Idempotency-Key": str(uuid.uuid4())},
         )
         assert r.status_code >= 400 and why in r.text, (why, r.status_code, r.text)
+    assert hq.seen == []
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM ok_grants").fetchone()[0] == 0  # nobody is asked about it either
 
 
 def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
@@ -634,25 +532,127 @@ def test_support_off_refuses_drafting_and_sending(environment, hq, monkeypatch):
     monkeypatch.setenv("TICO_SUPPORT", "off")
     assert draft(api, bot, message="Another").status_code == 409
     assert send(api, bot, approval["id"]).status_code == 409
-    assert hq.seen == [] and not consumed(api, approval["id"])
+    # The person's click claimed it (support.ok_given); with support off nothing is sent.
+    assert hq.seen == [] and consumed(api, approval["id"])
 
 
-def test_hq_down_or_refusing_spends_nothing_and_a_retry_sends_it(environment, hq):  # noqa: F811  (the fixture)
+def test_an_okd_report_is_claimed_before_it_leaves_and_a_retry_sends_the_same_report_once(environment, hq):  # noqa: F811  (the fixture)
+    """Claim, then send (rule D): the OK is used and committed before HQ hears anything, every send of it carries
+    Idempotency-Key tico-support:<rid>, HQ down or refusing leaves it claimed with no ticket, and a retry sends the
+    same report, even once the person who OK'd it has left: nothing is refused after it may have gone."""
     api = environment()
     drafts_only(api)
     bot = as_bot(api)
     approval = draft(api, bot).json()
-    decide(api, approval["id"])
+    rid = approval["id"]
+    approver, given = decide(api, rid)
+    assert given.status_code == 200, given.text
     hq.down = True
-    r = send(api, bot, approval["id"])
-    assert r.status_code == 502 and r.json()["error"]["retryable"] is True and not consumed(api, approval["id"])
+    r = send(api, bot, rid)
+    assert r.status_code == 502 and r.json()["error"]["retryable"] is True and consumed(api, rid)
     hq.down, hq.status_override = False, 429
-    assert send(api, bot, approval["id"]).status_code == 429 and not consumed(api, approval["id"])
+    assert send(api, bot, rid).status_code == 429
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 0
     hq.status_override = None
-    r = send(api, bot, approval["id"])
-    assert r.status_code == 200 and consumed(api, approval["id"]) and len(hq.tickets) == 1
+    from backend.tests.helpers import engine as X
+
+    with api.app.state.store.transaction() as c:  # the person who OK'd it can no longer sign in after the claim
+        X.no_sign_in(c, approver)
+    r = send(api, bot, rid)
+    assert r.status_code == 200 and not r.json()["again"] and len(hq.tickets) == 1, r.text
+    assert {q.headers.get("idempotency-key") for q in hq.seen} == {"tico-support:" + rid}
+    again = send(api, bot, rid)
+    assert again.status_code == 200 and again.json()["again"] and len(hq.seen) == 3
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
+
+
+def _rule(api, on):
+    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": on}, headers=signed_in()).status_code == 200
+
+
+def test_an_okd_report_not_yet_delivered_is_sent_once_when_the_bot_then_sends_it_under_the_rule(environment, hq):  # noqa: F811
+    """A person OK'd a bot's report (their click claimed it) and Maintenance has not delivered it yet. The team rule
+    is turned on and the bot sends the same report: one report, one send, whichever path gets there first."""
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    rid = draft(api, bot).json()["id"]
+    assert decide(api, rid)[1].status_code == 200 and consumed(api, rid)
+    _rule(api, True)
+    r = draft(api, bot)
+    assert r.status_code == 200 and r.json()["status"] == "sent", r.text
+    assert len(hq.tickets) == 1 and {q.headers.get("idempotency-key") for q in hq.seen} == {"tico-support:" + rid}
+    again = send(api, bot, rid)  # Maintenance's delivery, later: the ticket it already has
+    assert again.status_code == 200 and again.json()["again"] and len(hq.tickets) == 1
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []
+    # The other order: sent under the rule first, then a person's claimed OK of the same report is that one send.
+    _rule(api, False)
+    other = draft(api, bot, message=REPORT + " Again.").json()["id"]
+    assert decide(api, other)[1].status_code == 200
+    _rule(api, True)
+    with api.app.state.store.read() as c:
+        assert [r["requirement_id"] for r in support.claimed(c)] == [other]
+    sent = draft(api, bot, message=REPORT + " Again.")
+    assert sent.json()["status"] == "sent" and len(hq.tickets) == 2
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []
+    assert send(api, bot, other).json()["again"] and len(hq.tickets) == 2
+
+
+def test_a_claimed_report_that_no_longer_matches_its_hash_is_refused_once_and_said_on_its_task(environment, hq):  # noqa: F811
+    from backend import health, task_asks
+    from backend.store import H
+
+    api = environment()
+    drafts_only(api)
+    bot = as_bot(api)
+    rid = draft(api, bot).json()["id"]
+    assert decide(api, rid)[1].status_code == 200
+    with api.app.state.store.transaction() as c:  # the stored report changed after it was OK'd
+        c.execute(
+            "UPDATE ok_grants SET content=json_set(content, '$.message', 'Something else') WHERE requirement_id=?",
+            (rid,),
+        )
+    r = send(api, bot, rid)
+    assert r.status_code == 409 and "no longer matches its hash" in r.text and hq.seen == []
+    with api.app.state.store.read() as c:
+        assert support.claimed(c) == []  # out of the queue: Maintenance does not try it again
+        assert (
+            c.execute("SELECT count(*) FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone()[0] == 1
+        )
+        task_id = task_asks.task_of(c, rid)
+        why = [e for e in H.task_history(c, task_id) if "no longer matches its hash" in (e.get("note") or "")] or [
+            v for v in c.execute("SELECT why FROM visits WHERE task_id=? AND how='closed'", (task_id,))
+        ]
+        assert why, "the task says why it was not sent"
+        assert health._claimed_oks_check(c)["counts"] == {"claimed_not_delivered": 0, "claimed_refused": 1}
+    assert send(api, bot, rid).status_code == 409
+    with api.app.state.store.read() as c:  # refused once: a second try records nothing new
+        assert (
+            c.execute("SELECT count(*) FROM events WHERE action='ok.not_done' AND target=?", (rid,)).fetchone()[0] == 1
+        )
+
+
+def test_a_refusal_while_drafting_a_report_comes_back_as_a_clean_refusal(environment, hq, monkeypatch):  # noqa: F811
+    """A rule that refuses the ask (the task engine's, here faked) is the caller's 409 with its words, never an
+    uncaught error: the MCP and CLI sweeps call this route with whatever they generate."""
+    from backend.store import H
+
+    api = environment()
+    drafts_only(api)
+    headers = as_bot(api)
+
+    def refuses(c, by, payload, **_):
+        raise H.Refused("task_requirement", "Nobody answers their own ask: ask someone else")
+
+    monkeypatch.setattr(support, "ask_report", refuses)
+    r = draft(api, headers)
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "task_requirement", r.text  # a bot's agent reads the flat shape
+    assert "Nobody answers their own ask" in r.json()["detail"], r.text
 
 
 def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F811  (the fixture)
@@ -665,25 +665,25 @@ def test_the_person_only_routes_still_refuse_a_bot(environment, hq):  # noqa: F8
 
 
 def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the fixture)
-    from backend.tests.test_mcp import call, rpc
+    from backend.tests.helpers.mcp import call, rpc
 
     api = environment()
     drafts_only(api)
     as_bot(api)
     tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
-    assert {"hub_support_report", "hub_support_send"} <= tools
+    assert {"tico_support_report", "tico_support_send"} <= tools
     err, drafted = call(
-        api, "hub_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
+        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
     )
     assert not err, drafted
-    assert "approve" in drafted["next"] and hq.seen == []
-    err, early = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    assert "must OK it" in drafted["next"] and hq.seen == []
+    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert err and hq.seen == []
-    decide(api, drafted["approval"])
-    err, sent = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    decide(api, drafted["ok"])
+    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert not err, sent
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")  # what the person read
-    err, again = call(api, "hub_support_send", {"approval": drafted["approval"]}, token="bot-coo")
+    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 
@@ -697,34 +697,23 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
     api.app.state.store.settings.test_identities.update(tokens)
     # The Assistant drafts nothing on its own: like any write it may not make, it proposes it on a Confirm card.
     assert draft(api, signed_in("riley-assistant")).json()["error"]["code"] == "confirm_required"
+    from backend import task_asks
+
     for token, message in (("riley-token", REPORT), ("riley-token", "A second report from Riley's token")):
         approval = draft(api, signed_in(token), message=message).json()
         with api.app.state.store.read() as c:
-            to = c.execute(
-                "SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
-                (approval["id"],),
-            ).fetchone()[0]
+            to = task_asks.grant(c, approval["id"])["asked_of_id"]
         assert to == "human:riley"  # not the default person
-        # Neither their token nor the Assistant says yes for them: only Riley at their browser.
-        for proxy in (token, "riley-assistant"):
-            assert (
-                api.post(
-                    f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"}, headers=signed_in(proxy)
-                ).status_code
-                == 403
-            )
-        assert (
-            api.post(
-                f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"}, headers=signed_in()
-            ).status_code
-            == 403
-        )  # nor the owner: it isn't theirs
-        assert (
-            api.post(
-                f"/api/v2/approvals/{approval['id']}", json={"decision": "approved"}, headers=signed_in("riley")
-            ).status_code
-            == 200
-        )
+        # Neither their token nor the Assistant says yes for them, nor the owner (it isn't theirs): only Riley at
+        # their browser.
+        for proxy in (token, "riley-assistant", TOKEN):
+            _, refused = decide(api, approval["id"], token=proxy)
+            assert refused.status_code in (403, 404), (proxy, refused.text)
+            assert consumed(api, approval["id"]) is None
+        with api.app.state.store.read() as c:
+            assert task_asks.standing(c, approval["id"]) == task_asks.WAITING
+        _, given = decide(api, approval["id"], token="riley")
+        assert given.status_code == 200, given.text
         sent = send(api, signed_in(token), approval["id"])
         assert sent.status_code == 200, sent.text
         assert sent.json()["filed_as"] == "human:riley"
@@ -743,25 +732,24 @@ def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  
 def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     drafts_only(api)
+    from backend import task_asks
+
     approval = draft(api, as_bot(api)).json()
     with api.app.state.store.read() as c:
-        approver = c.execute(
-            "SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
-            (approval["id"],),
-        ).fetchone()[0]
+        approver = task_asks.grant(c, approval["id"])["asked_of_id"]
     me = api.get("/api/me", headers=signed_in()).json()
     api.app.state.store.settings.test_identities["approver-token"] = Identity(
         approver, me.get("role") or "owner", email=me.get("email") or "", via_token=True
     )
     token = signed_in("approver-token")
     b = api.post("/api/v2/batch", json={}, headers=token).json()
-    assert b.get("item", {}).get("key") == "approval:" + approval["id"], b
-    r = api.post(f"/api/v2/batch/{b['id']}/respond", json={"kind": "decide", "decision": "approve"}, headers=token)
-    assert r.status_code == 200, r.text
-    done = api.post(f"/api/v2/batch/{b['id']}/commit", json={}, headers=token).json()
-    assert done["committed"] and len(done["errors"]) == 1 and "in Tico itself" in done["errors"][0], done
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
+        assert b.get("item", {}).get("key") == X.ask_key(c, approval["id"]), b
+    # A report's OK is bound to its preview: walking the list, an OK is refused as it is said.
+    r = api.post(f"/api/v2/batch/{b['id']}/respond", json={"kind": "decide", "decision": "ok"}, headers=token)
+    assert r.status_code == 422 and task_asks.FROM_PREVIEW in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert task_asks.standing(c, approval["id"]) == task_asks.WAITING
     assert send(api, as_bot(api), approval["id"]).status_code != 200
     assert hq.seen == [] and not consumed(api, approval["id"])
 
@@ -799,7 +787,7 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     environment, hq, monkeypatch
 ):  # noqa: F811
     from backend.store import H
-    from backend.tests.test_usage_count import complete_a_bot_turn
+    from backend.tests.helpers.usage_count import complete_a_bot_turn
 
     api = environment()
     store = api.app.state.store
@@ -895,7 +883,7 @@ def test_each_filing_says_its_source_and_an_older_hq_still_gets_the_ticket(envir
 
 
 def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypatch):
-    """Criterion 3: `hub support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
+    """Criterion 3: `tico support file` sends `source: botops` beside the `[BotOps] ` prefix older HQs read."""
     from clients import hubtools
 
     calls = []
@@ -910,57 +898,54 @@ def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypat
     assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
 
 
+def grants(api):
+    """The OKs asked for reports (task_asks): (requirement id, its standing, used_at), oldest first."""
+    from backend import task_asks
+
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT requirement_id FROM ok_grants WHERE subject LIKE 'support:%' ORDER BY created_at")
+        return [(r[0], task_asks.standing(c, r[0]), consumed(api, r[0])) for r in rows.fetchall()]
+
+
 def test_with_the_team_rule_on_a_bots_report_is_sent_at_once_filed_as_the_default_person(environment, hq):  # noqa: F811
-    import hashlib
     from backend.store import H
 
     api = environment()
     bot = as_bot(api)
     assert api.get("/api/v2/access", headers=signed_in()).json()["rules"]["bot_reports_direct"] is True
-    report = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
-
-    def direct(key, payload=report):
-        return api.post(
-            "/api/v2/approvals", json={"kind": "support", "payload": payload}, headers={**bot, "Idempotency-Key": key}
-        )
-
-    r = direct("bot-report-1")
+    r = draft(api, bot)
     assert r.status_code == 200, r.text
     body = r.json()
     with api.app.state.store.read() as c:
         person = H.human_actor(H.default_human(c))
-        (decided,) = c.execute("SELECT decision, decided_by_id, decided_via, consumed_at FROM approvals").fetchall()
-        note = c.execute("SELECT detail FROM events WHERE action='approval.decide'").fetchone()[0]
-    # The draft is decided by the team rule as the install's default person, and spent by its send: nothing waits in Needs you.
-    assert decided[0] == "approved" and decided[1] == person and decided[2] == "team rule" and decided[3]
-    assert support.RULE_NOTE in note
-    assert body["sent"] is True and body["filed_as"] == person and body["ticket"]["message"] == REPORT
+    # Filed as the install's default person, with no OK asked of anyone: nothing waits in Needs you.
+    assert body["sent"] is True and body["status"] == "sent" and body["filed_as"] == person
+    assert body["ticket"]["message"] == REPORT and grants(api) == []
     (request,) = hq.seen
     sent = json.loads(request.content)
     assert set(sent) == {"message", "version", "install_id", "source"} and sent["source"] == "bot_report"
-    # A retry with the same key is the same ticket, and nothing more reaches HQ.
-    again = direct("bot-report-1")
+    # The same report again is the same ticket, and nothing more reaches HQ.
+    again = draft(api, bot)
     assert again.status_code == 200 and again.json()["ticket"]["id"] == body["ticket"]["id"]
     assert len(hq.seen) == 1 and len(hq.tickets) == 1
-    # Without a key the route asks for one, as every write does; a report that does not match is refused and sends nothing.
-    keyless = {"Authorization": bot["Authorization"]}  # signed_in() always adds a key; this call sends none
-    assert (
-        api.post("/api/v2/approvals", json={"kind": "support", "payload": report}, headers=keyless).status_code == 422
+    # A report that does not match its hash is refused and sends nothing.
+    bad = api.post(
+        "/api/v2/support/reports", json={"payload": {"message": REPORT, "content_sha256": "0" * 64}}, headers=bot
     )
-    bad = direct("bot-report-2", {"message": REPORT, "content_sha256": "0" * 64})
     assert bad.status_code >= 400 and "doesn't match" in bad.text and len(hq.seen) == 1
 
 
 def test_a_copy_run_from_source_sends_no_bots_report_by_the_rule_until_it_names_an_hq(environment, hq, monkeypatch):  # noqa: F811
+    from backend import task_asks
+
     # A checkout, a test or the factory simulation runs as "dev": with the rule on, its bot's report waits for a person.
     monkeypatch.setenv("TICO_VERSION", "dev")
     api = environment()
     bot = as_bot(api)
     waiting = draft(api, bot)
     assert waiting.status_code == 200, waiting.text
-    assert waiting.json()["kind"] == "support" and "sent" not in waiting.json() and hq.seen == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals").fetchone()[0] is None
+    assert waiting.json()["status"] == "pending" and "sent" not in waiting.json() and hq.seen == []
+    assert grants(api) == [(waiting.json()["id"], task_asks.WAITING, None)]
     # TICO_HQ_URL set on purpose sends as a release does.
     monkeypatch.setenv("TICO_HQ_URL", "https://updates.tico.team")
     sent = draft(api, bot, message="A second report, once an HQ is named.")
@@ -968,63 +953,59 @@ def test_a_copy_run_from_source_sends_no_bots_report_by_the_rule_until_it_names_
 
 
 def test_with_the_team_rule_off_a_bots_report_waits_for_a_yes_and_only_the_owner_turns_the_rule_on(environment, hq):  # noqa: F811
+    from backend import task_asks
+
     api = environment()
     bot = as_bot(api)
     drafts_only(api)
     approval = draft(api, bot).json()
-    assert approval["kind"] == "support" and hq.seen == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 1
+    assert approval["status"] == "pending" and hq.seen == []
+    assert grants(api) == [(approval["id"], task_asks.WAITING, None)]
     assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=bot).status_code >= 400
 
 
 def test_a_persons_token_may_decline_a_report_and_nothing_is_sent(environment, hq):  # noqa: F811
+    from backend import task_asks
+
     api = environment()
     bot = as_bot(api)
     drafts_only(api)
     declined, waiting = draft(api, bot, message="Declined through a token").json(), draft(api, bot).json()
     with api.app.state.store.read() as c:
-        approver = c.execute(
-            "SELECT m.recipient_id FROM approvals a JOIN messages m ON m.id=a.message_id WHERE a.id=?",
-            (declined["id"],),
-        ).fetchone()[0]
+        approver = task_asks.grant(c, declined["id"])["asked_of_id"]
     me = api.get("/api/me", headers=signed_in()).json()
     api.app.state.store.settings.test_identities["approver-token"] = Identity(
         approver, me.get("role") or "owner", email=me.get("email") or "", via_token=True
     )
-    token = signed_in("approver-token")
-    assert (
-        api.post(f"/api/v2/approvals/{declined['id']}", json={"decision": "declined"}, headers=token).status_code == 200
-    )
-    assert (
-        api.post(f"/api/v2/approvals/{waiting['id']}", json={"decision": "approved"}, headers=token).status_code == 403
-    )
+    _, sent_back = decide(api, declined["id"], "declined", token="approver-token")
+    assert sent_back.status_code == 200, sent_back.text
+    _, refused = decide(api, waiting["id"], token="approver-token")
+    assert refused.status_code == 403, refused.text
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (declined["id"],)).fetchone()[0] == "declined"
-    assert hq.seen == [] and not consumed(api, declined["id"])
+        assert task_asks.standing(c, declined["id"]) == task_asks.SENT_BACK
+        assert task_asks.standing(c, waiting["id"]) == task_asks.WAITING
+    assert hq.seen == [] and not consumed(api, declined["id"]) and not consumed(api, waiting["id"])
 
 
-def test_a_bots_key_used_for_other_content_is_refused_and_nothing_more_is_sent(environment, hq):  # noqa: F811  (the fixture)
-    import hashlib
-
+def test_a_report_is_its_content_the_same_one_again_is_one_ticket(environment, hq):  # noqa: F811  (the fixture)
+    """The route keeps no request keys: a report is known by who drafted it and its content. The same report sent
+    again is the same ticket; another report is another."""
     api = environment()
     bot = as_bot(api)
-
-    def report(message, key):
-        payload = {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest()}
-        return api.post(
-            "/api/v2/approvals", json={"kind": "support", "payload": payload}, headers={**bot, "Idempotency-Key": key}
-        )
-
-    first = report(REPORT, "one-key")
-    assert first.status_code == 200, first.text
-    other = report("Another report, under the same key", "one-key")
-    assert other.status_code == 409 and other.json()["error"]["code"] == "idempotency_conflict"
-    assert len(hq.seen) == 1 and len(hq.tickets) == 1
-    # The same content under the key is the same ticket, and still nothing more reaches HQ.
-    again = report(REPORT, "one-key")
+    first = draft(api, bot)
+    assert first.status_code == 200 and first.json()["sent"] is True, first.text
+    again = draft(api, bot)
     assert again.status_code == 200 and again.json()["ticket"]["id"] == first.json()["ticket"]["id"]
     assert len(hq.seen) == 1
+    other = draft(api, bot, message="Another report, with other words")
+    assert other.status_code == 200 and other.json()["ticket"]["id"] != first.json()["ticket"]["id"]
+    assert len(hq.seen) == 2 and len(hq.tickets) == 2
+
+
+def _payload(message=REPORT):
+    import hashlib
+
+    return {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest()}
 
 
 def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
@@ -1032,10 +1013,7 @@ def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, mo
     import time
 
     api = environment()
-    bot = as_bot(api)
-    drafts_only(api)
-    approval = draft(api, bot).json()
-    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
+    as_bot(api)
     who = Identity("bot:coo", "bot", agent="hermes")
     entered, release = threading.Event(), threading.Event()
 
@@ -1048,7 +1026,7 @@ def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, mo
     answers = {}
 
     def send_it(name):
-        answers[name] = api.app.state.support.send_by_rule(who, approval["id"])
+        answers[name] = api.app.state.support.report(who, _payload())
 
     first = threading.Thread(target=send_it, args=("first",))
     first.start()
@@ -1060,12 +1038,13 @@ def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, mo
     first.join(10)
     retry.join(10)
     assert len(hq.seen) == 1 and len(hq.tickets) == 1
-    assert answers["first"]["sent"] is True
+    assert answers["first"]["sent"] is True and answers["retry"]["sent"] is True
     assert answers["first"]["ticket"]["id"] == answers["retry"]["ticket"]["id"]
 
 
 @pytest.mark.parametrize("ending", ["credential", "bot"])
-def test_a_bots_waiting_report_is_refused_once_its_credential_or_its_bot_has_ended(environment, hq, ending):  # noqa: F811  (the fixture)
+def test_a_bot_whose_credential_or_self_has_ended_sends_nothing_by_the_rule(environment, hq, ending):  # noqa: F811  (the fixture)
+    from backend import task_asks
     from backend.store import Problem
 
     api = environment()
@@ -1079,57 +1058,40 @@ def test_a_bots_waiting_report_is_refused_once_its_credential_or_its_bot_has_end
         else:
             c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("coo",))
     with pytest.raises(Problem) as ended:
-        api.app.state.support.send_by_rule(Identity("bot:coo", "bot", agent="hermes"), approval["id"])
+        api.app.state.support.report(Identity("bot:coo", "bot", agent="hermes"), _payload())
     assert ended.value.code == ("revoked" if ending == "credential" else "paused")
     assert hq.seen == [] and not consumed(api, approval["id"])
-    with api.app.state.store.read() as c:  # the draft waits for a person, undecided
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
+    assert grants(api) == [(approval["id"], task_asks.WAITING, None)]  # its earlier draft still waits for a person
 
 
 def test_a_retry_after_the_owner_turns_direct_reports_off_gets_the_same_ticket(environment, hq):  # noqa: F811  (the fixture)
-    import hashlib
-
     api = environment()
     bot = as_bot(api)
-    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
-
-    def direct(key):
-        return api.post(
-            "/api/v2/approvals", json={"kind": "support", "payload": payload}, headers={**bot, "Idempotency-Key": key}
-        )
-
-    first = direct("receipt-1")
+    first = draft(api, bot)
     assert first.status_code == 200 and first.json()["sent"] is True, first.text
     drafts_only(api)  # the owner turns direct reports off
-    again = direct("receipt-1")
+    again = draft(api, bot)
     assert again.status_code == 200, again.text
     assert again.json()["sent"] is True and again.json()["ticket"]["id"] == first.json()["ticket"]["id"]
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM approvals").fetchone()[0] == 1  # the same decided draft, no second one
-    assert len(hq.seen) == 1
+    assert grants(api) == [] and len(hq.seen) == 1  # no person is asked to OK a report HQ already has
 
 
-def test_a_retry_after_the_owner_turns_direct_reports_on_sends_the_waiting_draft_once(environment, hq):  # noqa: F811  (the fixture)
-    import hashlib
+def test_a_retry_after_the_owner_turns_direct_reports_on_sends_it_once_and_the_waiting_ok_goes(environment, hq):  # noqa: F811  (the fixture)
+    from backend import task_asks
 
     api = environment()
     bot = as_bot(api)
     drafts_only(api)
-    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
-    headers = {**bot, "Idempotency-Key": "draft-1"}
-    drafted = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
-    assert drafted.status_code == 200 and drafted.json()["kind"] == "support" and "sent" not in drafted.json()
+    drafted = draft(api, bot)
+    assert drafted.status_code == 200 and drafted.json()["status"] == "pending" and "sent" not in drafted.json()
     assert hq.seen == []
     assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
-    again = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
+    again = draft(api, bot)
     assert again.status_code == 200 and again.json()["sent"] is True, again.text
     assert again.json()["ticket"]["message"] == REPORT and len(hq.seen) == 1
-    with api.app.state.store.read() as c:
-        assert (
-            c.execute("SELECT decided_via FROM approvals WHERE id=?", (drafted.json()["id"],)).fetchone()[0]
-            == "team rule"
-        )
-    once_more = api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
+    # The OK it asked for before is not needed now: it leaves Needs you, and can never send the report a second time.
+    assert grants(api) == [(drafted.json()["id"], task_asks.WITHDRAWN, None)]
+    once_more = draft(api, bot)
     assert once_more.json()["ticket"]["id"] == again.json()["ticket"]["id"] and len(hq.seen) == 1
 
 
@@ -1137,12 +1099,10 @@ def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_pe
     import threading
     import time
 
+    from backend import task_asks
+
     api = environment()
-    bot = as_bot(api)
-    drafts_only(api)
-    in_flight = draft(api, bot, message=REPORT).json()
-    queued = draft(api, bot, message="A report queued behind the first one").json()
-    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
+    as_bot(api)
     who = Identity("bot:coo", "bot", agent="hermes")
     entered, release = threading.Event(), threading.Event()
 
@@ -1154,13 +1114,13 @@ def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_pe
     monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
     answers = {}
 
-    def send_it(name, approval_id):
-        answers[name] = api.app.state.support.send_by_rule(who, approval_id)
+    def send_it(name, message):
+        answers[name] = api.app.state.support.report(who, _payload(message))
 
-    first = threading.Thread(target=send_it, args=("first", in_flight["id"]))
+    first = threading.Thread(target=send_it, args=("first", REPORT))
     first.start()
     assert entered.wait(5)
-    waiting = threading.Thread(target=send_it, args=("queued", queued["id"]))
+    waiting = threading.Thread(target=send_it, args=("queued", "A report queued behind the first one"))
     waiting.start()
     time.sleep(0.3)  # the queued report is waiting for the send's lock
     drafts_only(api)  # the owner turns direct reports off while it waits
@@ -1168,89 +1128,40 @@ def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_pe
     first.join(10)
     waiting.join(10)
     assert answers["first"]["sent"] is True
-    assert answers["queued"] is None  # the rule is read under the lock: the draft waits for a person
-    assert len(hq.seen) == 1 and not consumed(api, queued["id"])
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (queued["id"],)).fetchone()[0] is None
+    assert answers["queued"]["status"] == "pending"  # the rule is read under the lock: a person OKs it
+    assert len(hq.seen) == 1
+    assert grants(api) == [(answers["queued"]["id"], task_asks.WAITING, None)]
 
 
-def test_a_send_that_fails_takes_the_rule_decision_back_and_a_retry_sends_it_once(environment, hq):  # noqa: F811  (the fixture)
-    import hashlib
-
+def test_a_send_that_fails_asks_nobody_and_a_retry_sends_it_once(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
-    payload = {"message": REPORT, "content_sha256": hashlib.sha256(REPORT.encode()).hexdigest()}
-    headers = {**bot, "Idempotency-Key": "down-1"}
-
-    def direct():
-        return api.post("/api/v2/approvals", json={"kind": "support", "payload": payload}, headers=headers)
-
     hq.down = True
-    failed = direct()
+    failed = draft(api, bot)
     assert failed.status_code == 502 and failed.json()["error"]["retryable"] is True
-    with api.app.state.store.read() as c:  # the rule's decision is taken back: the draft waits for a person
-        (approval_id, decision, decided_via) = c.execute("SELECT id, decision, decided_via FROM approvals").fetchone()
-    assert decision is None and decided_via is None and not consumed(api, approval_id)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 0
+    assert grants(api) == []
     hq.down = False
-    again = direct()
+    again = draft(api, bot)
     assert again.status_code == 200 and again.json()["sent"] is True, again.text
     assert again.json()["ticket"]["message"] == REPORT and len(hq.tickets) == 1
-    assert consumed(api, approval_id)
 
 
-def test_a_waiting_report_the_privacy_check_refuses_stays_a_draft(environment, hq):  # noqa: F811  (the fixture)
+def test_a_report_the_privacy_check_refuses_waits_for_a_person(environment, hq):  # noqa: F811  (the fixture)
+    from backend import task_asks
     from backend.store import Problem
 
     api = environment()
-    bot = as_bot(api)
-    drafts_only(api)
-    approval = draft(api, bot).json()
-    assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
+    as_bot(api)
 
     def refuses(c):
         raise Problem("privacy", "This report may not leave the install from here.", 403)
 
     who = Identity("bot:coo", "bot", agent="hermes")
-    assert api.app.state.support.send_by_rule(who, approval["id"], check=refuses) is None
-    assert hq.seen == [] and not consumed(api, approval["id"])
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
-
-
-def test_a_rule_decision_left_unsent_is_taken_back_once_the_rule_is_off(environment, hq):  # noqa: F811  (the fixture)
-    from backend.store import H, Problem
-
-    api = environment()
-    bot = as_bot(api)
-    drafts_only(api)
-    approval = draft(api, bot).json()
-    who = Identity("bot:coo", "bot", agent="hermes")
-
-    def decided_by_the_rule_and_never_sent():
-        # What a send leaves when it was cut short after the rule decided it (the decision is committed first).
-        with api.app.state.store.transaction() as c:
-            person = H.human_actor(H.default_human(c))
-            c.execute(
-                "UPDATE approvals SET decision='approved', decided_by_id=?, decided_at=?, decided_via='team rule' "
-                "WHERE id=?",
-                (person, "2026-01-02T00:00:00Z", approval["id"]),
-            )
-
-    decided_by_the_rule_and_never_sent()
-    with pytest.raises(Problem) as waiting:
-        api.app.state.support.file_approved(who, approval["id"])
-    assert waiting.value.code == "approval" and waiting.value.status == 409
-    assert hq.seen == [] and not consumed(api, approval["id"])
-    with api.app.state.store.read() as c:
-        decision, via = c.execute(
-            "SELECT decision, decided_via FROM approvals WHERE id=?", (approval["id"],)
-        ).fetchone()
-        assert (decision, via) == (None, None)
-    decided_by_the_rule_and_never_sent()
-    assert api.app.state.support.send_by_rule(who, approval["id"]) is None  # the rule is off here too: a person decides
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT decision FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0] is None
-    assert hq.seen == []
+    asked = api.app.state.support.report(who, _payload(), check=refuses)
+    assert asked["status"] == "pending" and "sent" not in asked
+    assert hq.seen == [] and grants(api) == [(asked["id"], task_asks.WAITING, None)]
 
 
 def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_you_unchanged(environment, hq):  # noqa: F811  (the fixture)
@@ -1259,21 +1170,15 @@ def test_a_rule_send_leaves_no_unread_notice_for_the_default_person_and_needs_yo
     api = environment()
     bot = as_bot(api)
     with api.app.state.store.read() as c:
-        pending_before = c.execute("SELECT count(*) FROM approvals WHERE decision IS NULL").fetchone()[0]
+        person = H.human_actor(H.default_human(c))
+        unread_before = {m["id"] for m in H.inbox(c, person)["messages"]}
     needs_before = api.get("/api/v2/needs-you?count=1", headers=signed_in()).json()["count"]
-    r = draft(api, bot)  # the team rule is on by default: the draft is decided and sent in this request
+    r = draft(api, bot)  # the team rule is on by default: the report is sent in this request
     assert r.status_code == 200 and r.json()["sent"] is True, r.text
     assert api.get("/api/v2/needs-you?count=1", headers=signed_in()).json()["count"] == needs_before
+    assert grants(api) == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM approvals WHERE decision IS NULL").fetchone()[0] == pending_before
-        person = H.human_actor(H.default_human(c))
-        mid = c.execute("SELECT message_id FROM approvals").fetchone()[0]
-        kind, read_at, delivered_at = c.execute(
-            "SELECT kind, read_at, delivered_at FROM messages WHERE id=?", (mid,)
-        ).fetchone()
-        unread = {m["id"] for m in H.inbox(c, person)["messages"]}
-    assert kind == "notice" and read_at and delivered_at  # the message stays, as history, and it is read
-    assert mid not in unread  # no unread notice for the default person
+        assert {m["id"] for m in H.inbox(c, person)["messages"]} == unread_before
 
 
 def test_a_bots_ticket_is_not_in_the_persons_chat_and_its_replies_do_not_count(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
@@ -1388,72 +1293,3 @@ def test_a_retry_across_the_upgrade_finds_the_ticket_filed_under_the_bare_key(en
     assert len(hq.seen) == sent  # nothing new reached HQ
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM support_tickets").fetchone()[0] == 1
-
-
-def test_a_persons_draft_filed_before_the_upgrade_under_the_approval_key_replays_and_is_not_filed_again(
-    environment, hq
-):  # noqa: F811  (the fixture)
-    api = environment()
-    riley = as_person(api, "riley")
-    approval = draft(api, riley).json()["id"]
-    assert api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
-    sent = send(api, riley, approval)
-    assert sent.status_code == 200, sent.text
-    ticket = sent.json()["ticket"]["id"]
-    with api.app.state.store.transaction() as c:  # as an older release kept it
-        c.execute(
-            "UPDATE support_tickets SET request_key=? WHERE request_key=?",
-            ("approval:" + approval, "draft:" + approval),
-        )
-    before = len(hq.seen)
-    replay = send(api, riley, approval)
-    assert replay.status_code == 200, replay.text
-    assert replay.json()["ticket"]["id"] == ticket and replay.json()["again"] is True
-    assert len(hq.seen) == before
-    with api.app.state.store.read() as c:  # the replay moved the row to the key a draft has now
-        assert (
-            c.execute("SELECT request_key FROM support_tickets WHERE id=?", (ticket,)).fetchone()[0]
-            == "draft:" + approval
-        )
-    assert [t["id"] for t in api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]] == [ticket]
-
-
-def test_a_request_a_person_sent_under_approval_before_the_upgrade_is_back_in_their_chat(environment, hq):  # noqa: F811  (the fixture)
-    """Before this change a person's approved request was filed under `approval:<id>`, where their chat does not list it.
-    Migration 0072 moves each such ticket to `draft:<id>`, the key a draft gets now, so the chat lists it again. A bot's
-    report under `approval:` stays the bot's, and a report the Health Monitor filed (health_reports) keeps its key."""
-    api = environment()
-    riley = as_person(api, "riley")
-    bot = as_bot(api)
-    asked = draft(api, riley).json()["id"]
-    monitored = draft(api, riley, message="Sync stalled since 0.3.47").json()["id"]
-    for approval in (asked, monitored):
-        assert (
-            api.post(f"/api/v2/approvals/{approval}", json={"decision": "approved"}, headers=riley).status_code == 200
-        )
-    mine = send(api, riley, asked).json()["ticket"]["id"]
-    watched = send(api, riley, monitored).json()["ticket"]["id"]
-    filed = draft(api, bot, message="The checkout button does nothing").json()  # sent at once, filed as the bot's
-    with api.app.state.store.transaction() as c:  # as the release before this change filed them
-        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + asked, mine))
-        c.execute("UPDATE support_tickets SET request_key=? WHERE id=?", ("approval:" + monitored, watched))
-        c.execute(
-            "INSERT INTO health_reports(signature, ticket_id, approval_id, created_at) VALUES('sig-sync', ?, ?, ?)",
-            (watched, monitored, "2026-01-01T00:00:00Z"),
-        )
-    assert api.get("/api/v2/support/tickets", headers=riley).json()["tickets"] == []  # under approval: , so unlisted
-    migration = importlib.import_module("backend.migrations.0073_person_draft_keys")
-    with api.app.state.store.transaction() as c:
-        migration.up(c)
-        migration.up(c)  # a second run changes nothing
-    listed = api.get("/api/v2/support/tickets", headers=riley).json()["tickets"]
-    assert [(t["id"], t["source"]) for t in listed] == [(mine, "person")]
-    with api.app.state.store.read() as c:
-        keys = {r["id"]: r["request_key"] for r in c.execute("SELECT id, request_key FROM support_tickets")}
-    assert keys[mine] == "draft:" + asked
-    assert keys[watched] == "approval:" + monitored
-    with api.app.state.store.read() as c:  # the bot's approval, whose id its send-at-once draft did not echo
-        bot_approval = c.execute(
-            "SELECT id FROM approvals WHERE requested_by_id='bot:coo' AND kind='support'"
-        ).fetchone()[0]
-    assert keys[filed["ticket"]["id"]] == "approval:" + bot_approval

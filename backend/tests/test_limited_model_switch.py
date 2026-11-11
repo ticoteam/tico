@@ -8,8 +8,8 @@ old model's and never lands on the new one."""
 
 from backend import login_holds
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401 (fixture)
-from backend.tests.test_login_holds import CLAUDE, at, limit, providers_on, signed_in
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401 (fixture)
+from backend.tests.helpers.login_holds import CLAUDE, at, limit, providers_on, signed_in
 from backend import bot_settings as BS
 
 
@@ -145,7 +145,7 @@ def finish_limited(api, machine, turn):
 
 
 def test_the_hub_and_mcp_model_change_also_moves_a_limited_bot_while_its_turn_runs(api, monkeypatch):
-    # The hub CLI and MCP model tool (POST bots/{bot}/model) follow the Settings rule (Dev 353, Dev 334).
+    # The tico CLI and MCP model tool (POST bots/{bot}/model) follow the Settings rule (Dev 353, Dev 334).
     providers_on(api)
     at(monkeypatch, "2026-10-21T23:16:00.000000Z")
     machine = runner(api)

@@ -7,7 +7,7 @@ description: Pick at most five items for the Monday meeting, give each one owner
 When to use: as the last section of the weekly brief, or when a task asks for Monday's agenda.
 
 Steps:
-1. Read `knowledge/rhythm.md` for the attendees and the length, this week's brief, `hub calendar list` for what is
+1. Read `knowledge/rhythm.md` for the attendees and the length, this week's brief, `tico calendar list` for what is
    booked, and last Monday's agenda in `reports/`.
 2. Pick at most five items. An item earns its place when it is a decision only this group can take and has waited
    more than a few days, a goal that is red or yellow for two weeks running, a stalled item that needs a person in

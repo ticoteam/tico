@@ -60,14 +60,19 @@ def policy(bucket: str) -> dict:
     }
 
 
-def aws_plan_lines(domain: str, region: str, account_id: str = "<account>") -> list[str]:
-    bucket = bucket_name(domain, account_id)
+def aws_plan_lines(
+    domain: str, region: str, account_id: str = "<account>", names: awsmod.Names | None = None, name: str = ""
+) -> list[str]:
+    """`names`/`name`: strict mode's (owned.create_s3); without them, the default prefix's."""
+    bucket = names.backup_bucket(domain, account_id) if names else bucket_name(domain, account_id)
+    user = names.backup_user(name) if names else user_name(awsmod.slug(domain))
+    folder = names.backup_key_prefix if names else KEY_PREFIX
     return [
         f"S3 bucket {bucket} in {region}: versioning on, AES-256 encryption, all public access blocked, TLS only, "
         f"older versions expire after {NONCURRENT_DAYS} days ({LITESTREAM_NONCURRENT_DAYS} for database copies)",
-        f"IAM user {user_name(awsmod.slug(domain))} allowed to read and write that bucket only; its access key goes into .env "
+        f"IAM user {user} allowed to read and write that bucket only; its access key goes into .env "
         "(containers cannot use the instance role)",
-        f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{KEY_PREFIX}",
+        f"The server copies its database (Litestream, about every minute) and attachments (every 30 seconds) to s3://{bucket}/{folder}",
     ]
 
 
@@ -144,15 +149,15 @@ def create_s3(
             }
         ),
     )
-    s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": awsmod.tags(name)})
+    s3.put_bucket_tagging(Bucket=bucket, Tagging={"TagSet": awsmod.DEFAULT_NAMES.tags(name)})
 
     user = user_name(name)
     try:
         iam.get_user(UserName=user)
-        if not awsmod.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
+        if not awsmod.DEFAULT_NAMES.is_ours(iam.list_user_tags(UserName=user).get("Tags"), name):
             raise RuntimeError(f"IAM user {user} exists but was not created by tico setup; refusing to touch it")
     except iam.exceptions.NoSuchEntityException:
-        iam.create_user(UserName=user, Tags=awsmod.tags(name))
+        iam.create_user(UserName=user, Tags=awsmod.DEFAULT_NAMES.tags(name))
         say(f"  created IAM user {user}")
     iam.put_user_policy(UserName=user, PolicyName="tico-backup", PolicyDocument=json.dumps(policy(bucket)))
     keys = sorted(iam.list_access_keys(UserName=user)["AccessKeyMetadata"], key=lambda k: k["CreateDate"])

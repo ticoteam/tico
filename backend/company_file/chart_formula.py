@@ -9,8 +9,8 @@
 """The org chart formula: the chart a company's picks make, the same way every time.
 
 `build(inputs, removed)` returns `{"employees": [...], "uncovered": [...]}`. Each employee is a company file `employees`
-row: id, template, title, department, reports_to, team, reason and start (true). `uncovered` names what no seat owns. A
-pure function: no database, no network, no model. The data (teams, titles, templates, reasons, channels, phrases, limits)
+row: id, template, title, department, reports_to, team, reason, start (true) and live. `live` is true for a seat that starts
+with a bot at setup (the chart's live seats); the others stay open seats. `uncovered` names what no seat owns. A pure function: no database, no network, no model. The data (teams, titles, templates, reasons, channels, phrases, limits)
 is chart_formula.json; this file holds the rules.
 
 inputs (`inputs_from_draft` makes them from a setup draft):
@@ -21,9 +21,10 @@ inputs (`inputs_from_draft` makes them from a setup draft):
 removed: the ids of employees the visitor took off the chart, as a list (a string is refused). Their direct reports move
 up to the seat above them, and `uncovered` is worked out without them.
 
-What the chart keeps: a title is unique (the second of a repeat gets " 2", the third " 3"), and an id is a slug of the
-title. The fixed seats claim their titles and ids first (every seat but the initiative and industry Owners), so a clash
-gives the initiative or industry seat the " 2". Channel seats follow the channel list's order, not the order they were
+What the chart keeps: a title is unique (the second of a repeat gets " 2", the third " 3"). An id is the formula's own id
+for the seat (a team's singleton, a channel, a segment's seat with {seg} filled in), else a slug of the title; a repeat
+gets "-2", "-3". The fixed seats claim their titles and ids first (every seat but the initiative and industry Owners), so
+a clash gives the initiative or industry seat the " 2" or "-2". Channel seats follow the channel list's order, not the order they were
 picked in. An initiative tagged to a picked segment is owned by that segment's Product Owner and has no seat of its own;
 a product owner's reason names those initiatives and their bet ids, or counts them when the names would not fit a reason.
 An initiative Owner's reason names its bet (its id and statement). Its `first_job` is not set: the setup draft allows one
@@ -54,6 +55,7 @@ class Phrases(TypedDict):
 
 class Channel(TypedDict):
     key: str
+    id: str
     title: str
     template: str
     department: str
@@ -61,12 +63,17 @@ class Channel(TypedDict):
 
 
 class Spec(TypedDict, total=False):
-    """One seat in a team: a singleton (no `per`), or made once per segment, channel, initiative or industry Owner."""
+    """One seat in a team: a singleton (no `per`), or made once per segment, channel, initiative or industry Owner.
+    `id` is the seat's id (a placeholder {seg} for a segment's), `live` is true, or "first" for the first segment's seat
+    only, and `unless` is "segment" for a seat made only when no segment is picked."""
 
     key: Required[str]
     reports_to: Required[str | None]
     per: str
     covers: str
+    id: str
+    live: bool | str
+    unless: str
     title: str
     template: str
     department: str
@@ -127,6 +134,7 @@ class Seat(TypedDict):
     reports_to: str | None
     team: str
     reason: str
+    live: bool
     tags: list[Tag]
 
 
@@ -139,6 +147,7 @@ class Employee(TypedDict):
     team: str
     reason: str
     start: bool
+    live: bool
 
 
 class Result(TypedDict):
@@ -331,7 +340,7 @@ class _Names:
 @dataclass
 class _Slot:
     """A seat before its title and id are claimed. An initiative or industry Owner is `late`: it claims after the fixed
-    seats."""
+    seats. A seat with an `id_base` keeps that id; the others take the slug of their title."""
 
     team: str
     boss: str | None
@@ -341,7 +350,8 @@ class _Slot:
     reason: str
     tags: list[Tag]
     key: str = ""  # a team's singleton key: the seats under it report to this seat
-    id_base: str = ""  # the slug of the id when the title's own slug is empty (a name with no ASCII letter or digit)
+    id_base: str = ""  # the seat's id when the formula gives one (else the slug of its title)
+    live: bool = False  # the seat starts with a bot at setup
     late: bool = False
     title: str = ""
     id: str = ""
@@ -358,6 +368,8 @@ def _slots(
             per = spec.get("per")
             boss = spec.get("reports_to")
             if per is None:
+                if spec.get("unless") == "segment" and segments:
+                    continue  # a seat that stands in only when no segment is picked
                 key = spec.get("key", "")
                 slots.append(
                     _Slot(
@@ -369,6 +381,8 @@ def _slots(
                         spec.get("reason", ""),
                         [("seat", key)],
                         key=key,
+                        id_base=spec.get("id", ""),
+                        live=spec.get("live") is True,
                     )
                 )
             elif per == "segment":
@@ -392,6 +406,9 @@ def _slots(
                     title_spec = spec.get("title", "")
                     tags: list[Tag] = [(covers, i)]
                     tags.extend(("initiative", j) for j in tagged)
+                    # A segment with no slug (no ASCII letter or digit) gets its number instead of a label in its id.
+                    seg = slugify(segment["label"]) if _has_slug(segment["label"]) else "segment-%d" % (i + 1)
+                    live = spec.get("live")
                     slots.append(
                         _Slot(
                             team["team"],
@@ -401,9 +418,8 @@ def _slots(
                             spec.get("department", ""),
                             reason,
                             tags,
-                            id_base=""
-                            if _has_slug(segment["label"])
-                            else "segment-%d-%s" % (i + 1, slugify(_fill(title_spec, {"label": ""}))),
+                            id_base=_fill(spec.get("id", ""), {"seg": seg}),
+                            live=live is True or (live == "first" and i == 0),
                         )
                     )
             elif per == "channel":
@@ -418,6 +434,7 @@ def _slots(
                             channel["department"],
                             channel["reason"],
                             [("channel", key)],
+                            id_base=channel["id"],
                         )
                     )
             elif per == "initiative":
@@ -485,6 +502,7 @@ def _seats(
             "reports_to": by_key.get(slot.boss) if slot.boss else None,
             "team": slot.team,
             "reason": slot.reason,
+            "live": slot.live,
             "tags": slot.tags,
         }
         for slot in slots
@@ -544,6 +562,7 @@ def build(inputs: object, removed: Iterable[str] = ()) -> Result:
             "team": seat["team"],
             "reason": seat["reason"],
             "start": True,
+            "live": seat["live"],
         }
         for seat in kept
     ]

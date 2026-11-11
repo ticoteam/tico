@@ -25,7 +25,7 @@ What it does:
     python3 hermes_agent.py heartbeat --profile scout    # what the timer runs
     python3 hermes_agent.py status --profile scout       # the last reply, and what is waiting
     python3 hermes_agent.py check --profile scout        # what the sync job asks first: what is waiting
-    python3 hermes_agent.py call --profile scout hub_whoami '{}'   # one Tico tool, for agents with no MCP client
+    python3 hermes_agent.py call --profile scout tico_whoami '{}'   # one Tico tool, for agents with no MCP client
     python3 hermes_agent.py reinstall --profile scout --sync 30m   # change how often the agent looks
     python3 hermes_agent.py uninstall --profile scout    # timer, sync job, skill, config entry and env line
 
@@ -1313,59 +1313,74 @@ def cmd_reinstall(args):
     )
 
 
-# Tools renamed in Tico 0.2.21 (CHANGELOG, Breaking changes) or taken away with asks (0.5), old -> new. Names ending
-# in `_` are prefixes.
+# Every tool was `hub_*` before Tico 0.6.0 and is `tico_*` now (`hub_task_show` is `tico_task_show`). These are the
+# ones renamed or taken away on top of that, in 0.2.21, with asks (0.5) and with the old task engine (0.6),
+# old -> new. Names ending in `_` are prefixes.
 RENAMED_TOOLS = {
-    "hub_say": "hub_message_send",
-    "hub_notice": "hub_message_send (fyi)",
-    "hub_inbox": "hub_message_list",
-    "hub_ack": "hub_message_mark_read",
-    "hub_history": "hub_conversation_show",
-    "hub_ask": "hub_task_question (a person) or hub_message_send (a bot)",
-    "hub_answer": "answer the question task in Tico",
-    "hub_question_ask": "hub_task_question (a person) or hub_message_send (a bot)",
-    "hub_question_answer": "answer the question task in Tico",
-    "hub_task_ask": "hub_task_question",
-    "hub_task_ask_resolve": "answer the question task in Tico",
-    "hub_board": "hub_task_list (all)",
-    "hub_task_stuck": "hub_task_list (stuck)",
-    "hub_goals": "hub_goal_list",
-    "hub_goal_auto": "hub_goal_status (auto)",
-    "hub_kpi_add": "hub_kpi_create",
-    "hub_context_search": "hub_doc_search",
-    "hub_context_show": "hub_doc_read",
-    "hub_meetings_transcript": "hub_meeting_read",
-    "hub_bot_register": "hub_bot_create",
-    "hub_bot_set": "hub_bot_update",
-    "hub_bot_onboarded": "hub_bot_setup_done",
-    "hub_turns": "hub_run_list",
-    "hub_fleet": "hub_health_check",
-    "hub_fleet-check": "hub_health_check",
-    "hub_fleet_check": "hub_health_check",
-    "hub_computers": "hub_computer_list",
-    "hub_catalog": "hub_template_list",
-    "hub_routine_on": "hub_automation_update (enabled)",
-    "hub_routine_off": "hub_automation_update (enabled)",
-    "hub_routine_": "hub_automation_",
-    "hub_rule_": "hub_automation_",
-    "hub_org": "hub_team_show",
-    "hub_updates": "hub_update_list",
-    "hub_integrations": "hub_tool_*",
-    "hub_integration": "hub_tool_*",
-    "hub_queries": "hub_tool_*",
-    "hub_learn": "hub_tool_*",
-    "hub_decisions": "hub_decision_ask",
-    "hub_judge": "hub_decision_ask",
-    "hub_listen_judge": "hub_listening_*",
-    "hub_docs_": "hub_doc_",
-    "hub_files_": "hub_file_",
-    "hub_status_": "hub_bot_status_",
-    "hub_people_": "hub_human_",
-    "hub_person_": "hub_human_",
-    "hub_tools_": "hub_tool_",
-    "hub_batch_": "hub_needs_you_",
-    "hub_listen_": "hub_listening_",
-    "hub_intake_": "hub_listening_",
+    "hub_say": "tico_message_send",
+    "hub_notice": "tico_message_send (fyi)",
+    "hub_inbox": "tico_message_list",
+    "hub_ack": "tico_message_mark_read",
+    "hub_history": "tico_conversation_show",
+    "hub_ask": "tico_task_ask (a person, on your task) or tico_message_send (a bot)",
+    "hub_answer": "tico_task_answer",
+    "hub_question_ask": "tico_task_ask (a person, on your task) or tico_message_send (a bot)",
+    "hub_question_answer": "tico_task_answer",
+    "hub_task_question": "tico_task_ask",
+    "hub_task_ask_resolve": "tico_task_answer",
+    "hub_task_answers": "tico_task_show (To leave)",
+    "hub_approval_": "tico_task_ask (asking) or tico_task_answer (answering)",
+    "hub_task_wait": "tico_task_file or tico_task_snooze",
+    "hub_task_check_back": "tico_task_snooze",
+    "hub_task_later": "tico_task_snooze",
+    "hub_task_defer": "tico_task_snooze",
+    "hub_task_bulk": "one task at a time",
+    "hub_task_waive_qa": "tico_task_move",
+    "hub_task_types": "tico_task_show (a task's pipeline and stage)",
+    "hub_task_type_": "tico_task_show (a task's pipeline and stage)",
+    "hub_requirements": "tico_task_show (To leave)",
+    "hub_requirement_": "tico_task_show (To leave)",
+    "hub_pipeline": "tico_task_show (a task's pipeline and stage)",
+    "hub_pipeline_": "tico_task_show (a task's pipeline and stage)",
+    "hub_board": "tico_task_list (all)",
+    "hub_task_stuck": "tico_task_list",
+    "hub_goals": "tico_goal_list",
+    "hub_goal_auto": "tico_goal_status (auto)",
+    "hub_kpi_add": "tico_kpi_create",
+    "hub_context_search": "tico_doc_search",
+    "hub_context_show": "tico_doc_read",
+    "hub_meetings_transcript": "tico_meeting_read",
+    "hub_bot_register": "tico_bot_create",
+    "hub_bot_set": "tico_bot_update",
+    "hub_bot_onboarded": "tico_bot_setup_done",
+    "hub_turns": "tico_run_list",
+    "hub_fleet": "tico_health_check",
+    "hub_fleet-check": "tico_health_check",
+    "hub_fleet_check": "tico_health_check",
+    "hub_computers": "tico_computer_list",
+    "hub_catalog": "tico_template_list",
+    "hub_routine_on": "tico_automation_update (enabled)",
+    "hub_routine_off": "tico_automation_update (enabled)",
+    "hub_routine_": "tico_automation_",
+    "hub_rule_": "tico_automation_",
+    "hub_org": "tico_team_show",
+    "hub_updates": "tico_update_list",
+    "hub_integrations": "tico_tool_*",
+    "hub_integration": "tico_tool_*",
+    "hub_queries": "tico_tool_*",
+    "hub_learn": "tico_tool_*",
+    "hub_decisions": "tico_decision_ask",
+    "hub_judge": "tico_decision_ask",
+    "hub_listen_judge": "tico_listening_*",
+    "hub_docs_": "tico_doc_",
+    "hub_files_": "tico_file_",
+    "hub_status_": "tico_bot_status_",
+    "hub_people_": "tico_human_",
+    "hub_person_": "tico_human_",
+    "hub_tools_": "tico_tool_",
+    "hub_batch_": "tico_needs_you_",
+    "hub_listen_": "tico_listening_",
+    "hub_intake_": "tico_listening_",
 }
 TOOL_WORD = re.compile(r"\bhub_[A-Za-z0-9_]+(?:-check)?")
 SCAN_LIMIT = 2_000_000
@@ -1373,16 +1388,17 @@ MAX_SHOWN = 100
 
 
 def new_tool_name(word):
+    """What to use for an old `hub_*` tool name: a later rename, or the same name as `tico_*`."""
     if word in RENAMED_TOOLS:
         return RENAMED_TOOLS[word]
     for old, new in RENAMED_TOOLS.items():
         if old.endswith("_") and word.startswith(old):
             return new + (word[len(old) :] or "*")
-    return ""
+    return "tico_" + word[len("hub_") :]
 
 
 def scan_old_tool_names(directory):
-    """(file, line number, old name, new name) for each renamed tool a profile's own text still uses:
+    """(file, line number, old name, new name) for each old tool name a profile's own text still uses:
     SOUL.md, skills/, cron definitions and memories/. Reads only; never edits."""
     roots = [directory / "SOUL.md", directory / "skills", directory / "cron", directory / "memories"]
     roots += (
@@ -1720,7 +1736,7 @@ def cmd_doctor(args):
 
     old = scan_old_tool_names(directory)
     if old:
-        say("warn", f"{len(old)} use(s) of tool names renamed in Tico 0.2.21 (not edited; change them by hand):")
+        say("warn", f"{len(old)} use(s) of old tool names (not edited; change them by hand):")
         for file, number, word, new in old[:MAX_SHOWN]:
             print(f"            {file}:{number}: {word} -> {new}")
         if len(old) > MAX_SHOWN:
@@ -1829,7 +1845,7 @@ def parser():
     s.set_defaults(fn=cmd_check)
     s = sub.add_parser("call", help="call one Tico tool over Tico's MCP endpoint (for an agent with no MCP client)")
     common(s)
-    s.add_argument("tool", help="the tool's name, for example hub_message_list")
+    s.add_argument("tool", help="the tool's name, for example tico_message_list")
     s.add_argument("arguments", nargs="?", default="{}", help="the tool's arguments as one JSON object")
     s.set_defaults(fn=cmd_call)
     for name, fn, help_text in (

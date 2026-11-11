@@ -6,13 +6,13 @@ from backend import blobs, meetings, threads
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_cards import page as seed_page
-from backend.tests.test_files import turn
-from backend.tests.test_meeting_items import record
-from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_mcp import call
-from backend.tests.test_pages import page
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.helpers.cards import page as seed_page
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.meeting_items import record
+from backend.tests.helpers.meeting_task_links import link, task
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.pages import page
 
 
 def pin(api, tid, fid):
@@ -81,7 +81,7 @@ def test_context_is_bounded_metadata_newest_first_and_claims_include_it(api):
     attempt = claim(api, machine, 'ops')
     assert attempt['task_context'] == result
     assert get(api, 'tasks/' + t['id'][:8] + '/context', attempt['token']) == result
-    error, mcp = call(api, 'hub_task_context', {'id': t['id']}, token=attempt['token'])
+    error, mcp = call(api, 'tico_task_context', {'id': t['id']}, token=attempt['token'])
     assert not error and mcp == result
     with api.app.state.store.transaction() as c:
         restrict(c, 'ops', people=['ana'])
@@ -212,5 +212,5 @@ def test_notes_are_paged_without_repeating_them_at_transcript_offsets(api):
     transcript = get(api, f'meetings/transcript?id={mid}&offset=1')
     assert 'notes' not in transcript and 'decision' not in transcript['text']
     _, attempt = turn(api)
-    error, notes = call(api, 'hub_meeting_read', {'id': mid, 'notes': True}, token=attempt['token'])
+    error, notes = call(api, 'tico_meeting_read', {'id': mid, 'notes': True}, token=attempt['token'])
     assert not error and notes['text'] == first['notes']

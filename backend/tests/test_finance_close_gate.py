@@ -9,7 +9,7 @@ from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core.errors import CONFLICT
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -23,6 +23,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_oks import give
 
 LATER = "2026-10-15T12:30:00.000000Z"
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
@@ -153,7 +154,7 @@ def test_an_approved_close_is_checked_again_when_it_commits(books):
     _arrives(fake, "txn-late-in", 40.0, "2026-09-12")  # a row arrives while the close waits for approval
     sync_once(books, fake, LATER)
     with books.transaction() as c:
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         decided = FA.approval_decided(c, asked.approval_id, AT)
         assert decided.code == CONFLICT and "waiting for a category" in decided.reason, decided
         assert (

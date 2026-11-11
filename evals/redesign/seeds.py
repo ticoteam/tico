@@ -426,7 +426,7 @@ def counsel(world):
 def roster(world):
     """A fourth person, Gina, on the roster and the sign-in list (as an invite leaves her), with the test token "gina".
     She reports to Dana, a plain member with no task of her own: the e2e role journeys make her the one guest of a
-    private bot-only task (ui/tests/e2e-roles.cjs), so she sees that task and nothing else of the private ones."""
+    private bot-only task (ui/tests/e2e-roles.cts), so she sees that task and nothing else of the private ones."""
     from backend.access import ACCESS, _load_json, _store
     from backend.auth import Identity
     from backend.store import H, encode
@@ -457,6 +457,24 @@ def finance(world):
             raise RuntimeError("finance setup found no owner on the scenario org")
 
 
+@seed("directory")
+def directory(world):
+    """The Directory's people, organizations and places, as the demo has them (backend/demo_sections/directory.py): Dana
+    makes them through the Directory's API, and the shared places tree writes the places they refer to."""
+    from backend.demo_sections.directory import fill
+
+    from .harness import DANA, DANA_ID
+
+    def call(method, path, body=None):
+        return _ok(world.api(method.lower(), "/api/v2/" + path, body, who=DANA), f"{method} {path}")
+
+    def write(work):
+        with world.store.transaction() as c:
+            return work(c)
+
+    fill(call, write, reviewer=f"human:{DANA_ID}")
+
+
 @seed("priya-leads")
 def priya_leads(world):
     """Priya is the engineering manager on the chart: engineering-lead reports to her, so she is above the bots under it
@@ -469,7 +487,7 @@ def priya_leads(world):
 # ---------------------------------------------------------------------------------------------- Tools
 VENDOR_HOST = "api.close.example"  # Close CRM at a made-up address: the vendor below answers it, nothing else can
 VENDOR_IP = "93.184.215.14"  # a public address for the name, so the proxy's egress check passes; never dialed
-TOOL_KEYS = {"close-read-test-0001": "read", "close-full-test-0002": "read_write"}  # made-up; ui/tests/e2e-tools.cjs
+TOOL_KEYS = {"close-read-test-0001": "read", "close-full-test-0002": "read_write"}  # made-up; ui/tests/e2e-tools.cts
 
 
 def _vendor(request):
@@ -499,7 +517,7 @@ def _vendor(request):
 
 @seed("tools")
 def tools(world):
-    """Tools with real data (ui/tests/e2e-tools.cjs). Close CRM, its known service at VENDOR_HOST, on the proxy with a
+    """Tools with real data (ui/tests/e2e-tools.cts). Close CRM, its known service at VENDOR_HOST, on the proxy with a
     Read and write key; the Engineering Lead at Read and Omar at Read and write. One run of the Lead's, as a runner runs
     it, takes its proxy token from credential-runtime and makes two calls through the proxy: a GET (sent) and a POST
     (refused: at Read with only the full key, only GET goes through). Then a read key is added, the Lead's Read moves to

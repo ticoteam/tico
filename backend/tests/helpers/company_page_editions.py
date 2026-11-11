@@ -1,0 +1,178 @@
+"""Helpers that other tests share, moved out of test_company_page_editions.py so they import no test file."""
+
+import pytest
+from backend import kpis as K
+from backend import task_asks
+from backend import updates
+from backend.auth import Identity
+from backend.company_page import disclosure as D
+from backend.company_page import readers
+from backend.company_page import release
+from backend.company_page import stats as ST
+from backend.store import H
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.org_rules import as_bot
+
+
+START, END = "2026-10-01", "2026-10-31"
+
+
+GOOD = {
+    "title": "October in review",
+    "sections": {
+        "highlights": ["Revenue reached $120,000."],
+        "lowlights": [],
+        "numbers": ["Revenue: $120,000"],
+        "asks": ["Intros to design partners, please."],
+        "next": ["We keep shipping."],
+    },
+}
+
+
+def plain_sections(*texts):
+    return [{"key": "highlights", "items": [{"body": t} for t in texts]}]
+
+
+class Page:
+    """One enabled audience with Ops as its source, a writer that answers `answer`, and the other tracks stubbed."""
+
+    def __init__(self, api, monkeypatch):
+        self.api, self.store = api, api.app.state.store
+        self.answer, self.engine = GOOD, True
+        self.calls, self.rebuilds, self.notified = [], [], []
+        self.refreshes, self.rebuilt_on = [], []
+        monkeypatch.setattr(updates, "writer_for", lambda c, s, st: self.write if self.engine else None)
+        at = H.now()
+        with self.store.transaction() as c:
+            c.execute("INSERT OR REPLACE INTO company_page_settings(id, transparency) VALUES('company','private')")
+            c.execute(
+                "INSERT INTO audiences(id,name,kind,due_rule,enabled,created_at,updated_at) "
+                "VALUES('board','Board','board','{\"business_day\": 5}',1,?,?)",
+                (at, at),
+            )
+            c.execute(
+                "INSERT INTO audience_sources(id,audience_id,author,created_at) VALUES('s1','board','ops',?)", (at,)
+            )
+            # Revenue is a KPI the board may show: the real projection and facts read it.
+            revenue = K.create(c, "human:ana", "human:ana", {"name": "Revenue", "unit": "$", "cadence": "monthly"})
+            K.add_reading(c, "human:ana", revenue, 120000, period_start=START, period_end=END)
+            D.set_rule(c, "human:ana", "board", "kpi", mode="show")
+            ST.create_stat(c, "human:ana", "kpi", revenue["id"], data_class="kpi", label="Revenue", chart="number")
+        real_rebuild = release.rebuild
+        real_notify = readers.notify_edition
+
+        def rebuild(store_or_c, why, at=None):
+            self.rebuilds.append(why)
+            self.rebuilt_on.append("store" if hasattr(store_or_c, "transaction") else "transaction")
+            return real_rebuild(store_or_c, why, at)
+
+        def notify(c, edition_id):
+            self.notified.append(edition_id)
+            return real_notify(c, edition_id)
+
+        real_refresh = release.refresh
+
+        def refresh(store, at):
+            self.refreshes.append(at)
+            return real_refresh(store, at)
+
+        monkeypatch.setattr(release, "rebuild", rebuild)
+        monkeypatch.setattr(release, "refresh", refresh)
+        monkeypatch.setattr(readers, "notify_edition", notify)
+        self.note("ops", "weekly", "2026-10-12", "We shipped the board page.")
+        settings = self.store.settings.test_identities
+        settings["ana-token"] = Identity("human:ana", "owner", "ana@acme.example", via_token=True)
+        settings["ana-assistant"] = Identity("human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True)
+        as_bot(api, "ops", "ops-test")
+
+    def write_sql(self, statement):
+        with self.store.transaction() as c:
+            c.execute(statement)
+
+    def write(self, system, user):
+        self.calls.append((system, user))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+    def note(self, bot, kind, day, body, meetings=0):
+        ident = H.new_id()
+        with self.store.transaction() as c:
+            c.execute(
+                "INSERT INTO updates(id,bot,kind,day,headline,body,created_at,updated_at,meetings) VALUES(?,?,?,?,?,?,?,?,?)",
+                (ident, bot, kind, day, "Headline", body, H.now(), H.now(), meetings),
+            )
+        return ident
+
+    def draft(self):
+        return post(
+            self.api, "editions", {"audience_id": "board", "author": "ops", "period_start": START, "period_end": END}
+        )
+
+    def ask(self, edition, token="ana-test"):
+        return post(self.api, f"editions/{edition['id']}/approval", {}, token=token)
+
+    def decide(self, aid, token="ana-test", expected=200, decision="approved", note=""):
+        """A person's answer to the OK, through the routes their own click takes: the preview (GET /oks/{rid}) and then
+        the OK bound to what it showed, or a send back with a note."""
+        with self.store.read() as c:
+            tid = task_asks.task_of(c, aid)
+        if decision == "approved":
+            shown = self.api.get(f"/api/v2/oks/{aid}", headers=headers(token))
+            shown_hash = (shown.json().get("shown_hash") if shown.status_code == 200 else None) or "0" * 64
+            r = self.api.post(
+                f"/api/v2/tasks/{tid}/asks/{aid}/ok", headers=headers(token), json={"shown_hash": shown_hash}
+            )
+        else:
+            r = self.api.post(
+                f"/api/v2/tasks/{tid}/asks/{aid}/answer",
+                headers=headers(token),
+                json={"value": "no", "note": note or "Not this."},
+            )
+        assert r.status_code in (expected if isinstance(expected, tuple) else (expected,)), (r.status_code, r.text)
+        return {**self.ok_of(aid), "response": r.json() if r.content else {}}
+
+    def ok_of(self, aid):
+        """Where an OK stands, in the old approval's words: decision (None while waiting), consumed_at, payload."""
+        with self.store.read() as c:
+            found = task_asks.grant(c, aid)
+            standing = task_asks.standing(c, aid) if found else None
+        decision = {
+            task_asks.WAITING: None,
+            task_asks.OK: "approved",
+            task_asks.USED: "approved",
+            task_asks.SENT_BACK: "declined",
+            task_asks.WITHDRAWN: "withdrawn",
+        }.get(standing)
+        return {
+            "decision": decision,
+            "consumed_at": (found or {}).get("used_at"),
+            "payload": (found or {}).get("content"),
+            "subject": (found or {}).get("subject"),
+        }
+
+    def approved(self):
+        edition = self.ask(self.draft())
+        self.decide(edition["approval"]["id"])
+        return get(self.api, f"editions/{edition['id']}")
+
+    def publish(self, edition, token="ana-test", expected=200):
+        return post(
+            self.api,
+            f"editions/{edition['id']}/publish",
+            {"approval_id": edition["approval"]["id"]},
+            token=token,
+            expected=expected,
+        )
+
+    def published(self):
+        return self.publish(self.approved())
+
+    def rows(self, query, args=()):
+        with self.store.read() as c:
+            return [dict(r) for r in c.execute(query, args)]
+
+
+@pytest.fixture
+def page(api, monkeypatch):
+    return Page(api, monkeypatch)

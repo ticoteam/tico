@@ -542,7 +542,7 @@ details.more[open] summary svg { transform: rotate(90deg); }
 
 .boot-error { margin: 96px auto; max-width: 420px; padding: 0 24px; color: var(--text-2); line-height: 1.5; text-align: center; user-select: text; }
 
-/* ---- Update banner (update.js) ---- */
+/* ---- Update banner (update.ts) ---- */
 .update-banner {
   display: flex; align-items: center; gap: 10px; min-height: 36px; width: fit-content; max-width: 100%;
   padding: 5px 6px 5px 12px; border-radius: 10px; background: var(--sheet); border: 1px solid var(--line-2); box-shadow: var(--shadow-sm);

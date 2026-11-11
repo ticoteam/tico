@@ -20,7 +20,7 @@ def conn(api):
         yield c
 
 
-from backend.tests.test_tasks_board import api  # noqa: E402,F401
+from backend.tests.helpers.tasks_board import api  # noqa: E402,F401
 
 
 def test_unfinished_titles_are_taken_whatever_their_case_and_spacing(conn):
@@ -44,7 +44,8 @@ def test_unfinished_titles_are_taken_whatever_their_case_and_spacing(conn):
 
     # A finished twin or one under another parent does not block.
     done = H.task_create(conn, ANA, "Patch login", "x", OPS)
-    H.task_update(conn, OPS, done["id"], status="done", note="Fixed.")
+    H.task_done(conn, OPS, done["id"], "Fixed.", H.task(conn, done["id"])["version"])
+    assert H.task(conn, done["id"])["status"] == "done"
     again = H.task_create(conn, ANA, "patch login", "x", OPS)
     parent = H.task_create(conn, ANA, "Plan the release", "x", OPS)
     child = H.task_create(conn, ANA, "PATCH LOGIN", "x", OPS, parent_id=parent["id"])

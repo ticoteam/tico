@@ -316,8 +316,8 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Takes a Dev ticket that Head of Engineering has put on its step, builds the change on a branch with a test that proves it, opens the pull request and carries the ticket through review and QA fixes. It merges only when the team's merge rules allow it and the checks pass at the head.",
-   "when": "Offer when GitHub is connected and the team turns Dev tickets into code.",
+   "summary": "Owns Build and the two Fixes stages of the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green and fixes what the two reviewers found. It never merges: the Merge stage queues the pull request.",
+   "when": "Offer when GitHub is connected and the team turns tasks into code.",
    "tags": [
     "saas",
     "github",
@@ -328,13 +328,13 @@
     "bugs and small changes wait in a queue before anyone starts on them",
     "a fix goes back and forth between the author and the reviewers for days",
     "a change is merged without a test that would have caught the bug",
-    "nobody can say which ticket a pull request came from or what it was meant to do"
+    "nobody can say which task a pull request came from or what it was meant to do"
    ],
    "recommend_when": [
     "sells_software",
     "uses_slack"
    ],
-   "first_routine": "Dev ticket build · When a Dev ticket reaches In Progress",
+   "first_routine": "Build a task · When it is given a task",
    "tools": [
     "github"
    ],
@@ -607,38 +607,66 @@
    "default": false
   },
   {
-   "slug": "cro",
-   "template": "cro",
+   "slug": "corporate-team-manager",
+   "template": "corporate-team-manager",
+   "name": "Corporate Team Manager",
+   "department": "corporate",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the corporate team's weekly review: legal, the books and partnerships against their own targets, the deadlines in the next 30 days, and the decisions needed. It proposes routing and hires, and never signs, pays, files or sends anything itself.",
+   "when": "A company with legal, finance and partner work that nobody sees together, where the owner needs one page on the company's obligations and deals each week.",
+   "tags": [
+    "corporate",
+    "legal",
+    "finance",
+    "partnerships",
+    "compliance",
+    "deadlines"
+   ],
+   "pains": [
+    "Legal, finance and partner work sit in different places and nobody sees the company's obligations together",
+    "A filing or contract deadline arrives before anyone notices it"
+   ],
+   "recommend_when": [],
+   "first_routine": "Weekly corporate summary · Mondays at 09:00 team time",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "cro-owner",
+   "template": "cro-owner",
    "name": "Conversion Rate Optimization Owner",
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Finds the step that loses the most visitors on the team's site each week, from the landing page to the signup, trial or purchase, and proposes one test with a written hypothesis and a stop rule. It reads each result honestly and never calls a winner early. Changes to the site stay drafts until a person ships them.",
-   "when": "A team whose visitors arrive steadily but whose signups, trials or sales do not, and that changes its site without checking whether the change helped.",
+   "summary": "Owns the conversion rates on the pages that turn visitors into sign-ups, leads and buyers. Each week it maps the funnel with a count on every rate, ranks the leaks, and writes experiment briefs whose sample size and stop rules are worked out before launch. Page changes are drafted for the page's owner to apply.",
+   "when": "A team that sends traffic to landing, sign-up, pricing or checkout pages and cannot say which step loses the most people, or whether a page change really helped.",
    "tags": [
     "conversion",
-    "funnel",
+    "cro",
     "landing-pages",
+    "pricing",
+    "checkout",
     "signup",
-    "ab-tests",
-    "ecommerce",
-    "saas"
+    "experiments",
+    "funnel",
+    "saas",
+    "ecommerce"
    ],
    "pains": [
-    "we get visitors but few of them sign up or buy",
-    "we don't know which step of the site loses the most people",
-    "we changed the page and never checked whether it helped",
-    "our A/B tests get called early and then reversed",
-    "nobody owns the signup or checkout flow"
+    "we get visitors but very few sign-ups",
+    "nobody knows which step of the funnel loses the most people",
+    "we ended a test early because the numbers looked good",
+    "page changes go live on opinion, not on a result",
+    "pricing page visitors leave without starting a trial or a purchase"
    ],
    "recommend_when": [
+    "sells_software",
     "sells_to_consumers",
-    "sells_to_businesses",
-    "sells_software"
+    "sells_to_businesses"
    ],
-   "first_routine": "Weekly conversion review · Wednesdays at 09:00 team time",
+   "first_routine": "Weekly conversion check · Mondays at 08:30 team time",
    "tools": [
-    "crm",
     "docs",
     "web"
    ],
@@ -935,7 +963,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Turns a requested change into a plan with one child task per repository, follows each engineer's pull requests to merge, and reports progress with links.",
+   "summary": "Manages the Engineering pipeline. Decides what happens to a task that is stuck, late or has no owner, splits outcomes that span repositories into Engineering tasks, and reports progress with links. Never merges.",
    "when": "Offer when engineer bots work across several repositories.",
    "tags": [
     "github",
@@ -946,6 +974,35 @@
     "Changes across repositories need one delivery plan",
     "Stuck child tasks and pull requests need follow-up",
     "Delivery reports miss dependencies between engineer tasks"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Daily delivery check · Daily at 09:00 team time",
+   "tools": [
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "engineering-team-manager",
+   "template": "engineering-team-manager",
+   "name": "Engineering Team Manager",
+   "department": "engineering",
+   "lead": true,
+   "core": false,
+   "summary": "Turns a requested change into a plan with one child task per repository, follows each builder's pull requests to merge, routes tests, security, CI and releases to their owners, and reports progress with links.",
+   "when": "Offer when builders work across several repositories, or when a team needs one seat to plan the engineering week.",
+   "tags": [
+    "github",
+    "delivery",
+    "developer-tools"
+   ],
+   "pains": [
+    "Changes across repositories need one delivery plan",
+    "Stuck child tasks and pull requests need follow-up",
+    "Delivery reports miss dependencies between builder tasks",
+    "Tests, security, CI and releases have no one owner"
    ],
    "recommend_when": [
     "sells_software"
@@ -1257,7 +1314,7 @@
   {
    "slug": "goal-manager",
    "template": "goal-manager",
-   "name": "Strategy Bot",
+   "name": "Strategy Owner",
    "department": "core",
    "lead": false,
    "core": true,
@@ -1269,6 +1326,47 @@
    "first_routine": "",
    "tools": [],
    "default": false
+  },
+  {
+   "slug": "growth-team-manager",
+   "template": "growth-team-manager",
+   "name": "Growth Team Manager",
+   "department": "marketing",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the growth team's week: one page on marketing and pipeline movement, the blocked work, the six-week calendar and the forecast call pack, plus routing and hiring proposals. Channel owners and pipeline managers do the work; routing and set-up tasks happen only when the task asks for them and a granted Tool allows it.",
+   "when": "A team that runs marketing and sales as one growth engine and wants one weekly page from first touch to closed deal, instead of separate marketing and sales reports.",
+   "tags": [
+    "marketing",
+    "sales",
+    "weekly-summary",
+    "pipeline",
+    "calendar",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "nobody sees marketing and sales as one funnel",
+    "marketing counts leads and sales counts deals, and the numbers never match",
+    "new leads sit unassigned for days",
+    "I can't tell which deals are really moving",
+    "campaigns and launches collide with the sales calendar"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "publishes_content",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly growth summary · Fridays at 14:00 team time",
+   "tools": [
+    "calendar",
+    "crm",
+    "meetings"
+   ],
+   "default": true
   },
   {
    "slug": "hr-business-partner",
@@ -1307,6 +1405,46 @@
    "default": false
   },
   {
+   "slug": "inbound-sales-owner",
+   "template": "inbound-sales-owner",
+   "name": "Inbound Sales Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns inbound conversion: answers every inbound lead inside the speed-to-lead target, sorts it on your own criteria, and works it to a booked call. Replies are prepared for review and sent only when a task asks and a granted Tool allows it.",
+   "when": "A team that gets demo requests, contact forms, trial sign-ups for help or inbound email, and loses some of them to slow replies or to no clear sorting.",
+   "tags": [
+    "b2b",
+    "inbound",
+    "lead-response",
+    "qualification",
+    "demos",
+    "pipeline",
+    "saas",
+    "services"
+   ],
+   "pains": [
+    "inbound leads wait a day or more for a first reply",
+    "we cannot tell which inbound leads are worth a call",
+    "a demo request goes quiet after the first email",
+    "nobody can say why we lose the inbound deals we lose"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm",
+    "uses_email"
+   ],
+   "first_routine": "Inbound sweep · Weekdays at 09:00, 11:00, 13:00, 15:00 and 17:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "incident-scribe",
    "template": "incident-scribe",
    "name": "Site Reliability Engineer",
@@ -1333,6 +1471,39 @@
     "uses_slack"
    ],
    "first_routine": "Weekly incident review · Mondays at 10:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "infrastructure-owner",
+   "template": "infrastructure-owner",
+   "name": "Infrastructure Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the GitHub Actions pipeline and its runners healthy: slow jobs, red-main streaks, workflow and runner faults, and deploy frequency, each with a fix plan. Flaky tests go to the QA Owner. It never reruns, cancels, deploys or merges.",
+   "when": "Offer to a software team whose GitHub Actions pipelines are slow or often red, and where nobody owns the runners and workflows.",
+   "tags": [
+    "saas",
+    "github",
+    "ci",
+    "build-times",
+    "deploys",
+    "developer-tools"
+   ],
+   "pains": [
+    "our CI is slow and people just hit rerun",
+    "the main branch is red and nobody knows why",
+    "deploys are scary so we do them rarely"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly CI health report · Tuesdays at 09:00 team time",
    "tools": [
     "chat",
     "github"
@@ -1515,38 +1686,39 @@
    "default": false
   },
   {
-   "slug": "lead-generation",
-   "template": "lead-generation",
+   "slug": "lead-generation-owner",
+   "template": "lead-generation-owner",
    "name": "Lead Generation Owner",
    "department": "sales",
    "lead": false,
    "core": false,
-   "summary": "Keeps the supply of qualified leads steady each week: says which sources bring the leads Sales accepts, drafts the forms and lead magnets that capture them, and builds sourced target lists. It never sends: first touch belongs to the Sales Development Representative, and every message stays a draft until a person turns mail sending on for this bot in Tico.",
-   "when": "A team that wants more qualified leads each week and has no one counting which sources bring the ones its sellers accept.",
+   "summary": "Owns the number of qualified leads each week and where they come from. Each week it counts them by source, writes the rule that makes a lead qualified, and hands each one to Inbound or Outbound Sales with its reasons attached. It does not work deals.",
+   "when": "A team that wants more qualified leads every week and cannot say which sources produce them, or whether a lead handed to sales was ready for it.",
    "tags": [
-    "b2b",
     "lead-generation",
-    "lead-magnets",
-    "forms",
-    "lists",
+    "qualified-leads",
+    "lead-sources",
+    "lead-scoring",
+    "hand-off",
     "pipeline",
+    "b2b",
     "saas",
-    "smb"
+    "lists"
    ],
    "pains": [
-    "we don't know which lead sources actually produce customers",
-    "sales says the leads we send are not good enough",
-    "our forms and lead magnets are out of date",
-    "we run out of new leads every quarter",
-    "nobody builds lists of the buyers we want to reach"
+    "we do not know how many qualified leads we got last week",
+    "leads reach sales without the reason they were passed on",
+    "nobody can say which source produces the leads that close",
+    "the lead lists we buy go stale and nobody checks them",
+    "sales says the leads are bad and marketing says sales is slow"
    ],
    "recommend_when": [
-    "sells_to_businesses"
+    "sells_to_businesses",
+    "has_pipeline"
    ],
-   "first_routine": "Weekly lead generation review · Mondays at 08:30 team time",
+   "first_routine": "Weekly lead report · Mondays at 09:00 team time",
    "tools": [
     "crm",
-    "docs",
     "web"
    ],
    "default": false
@@ -1622,6 +1794,46 @@
    "default": false
   },
   {
+   "slug": "legal-owner",
+   "template": "legal-owner",
+   "name": "Legal Owner",
+   "department": "corporate",
+   "lead": false,
+   "core": false,
+   "summary": "Runs the team's legal work: the private Legal pipeline and its one queue for every legal request, reviews of the contracts that matter, a watch on every legal deadline and policy drafts for a human to adopt. Summaries for a human, not legal advice; it sends and signs only what a task asks for and a granted Tool allows.",
+   "when": "A team of ten to two hundred people with no in-house lawyer, or one lawyer who needs the queue, the calendar and the first drafts handled.",
+   "tags": [
+    "legal",
+    "contracts",
+    "compliance",
+    "policy",
+    "risk",
+    "b2b",
+    "b2c",
+    "smb"
+   ],
+   "pains": [
+    "legal questions arrive in five places and some are never answered",
+    "we only call a lawyer when something is already on fire",
+    "nobody owns our internal policies",
+    "I don't know which legal deadlines are coming up",
+    "outside counsel bills pile up for routine questions"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "sells_to_consumers",
+    "uses_docs",
+    "uses_email"
+   ],
+   "first_routine": "Weekly legal summary · Mondays at 08:30 team time",
+   "tools": [
+    "calendar",
+    "docs",
+    "mail"
+   ],
+   "default": true
+  },
+  {
    "slug": "legal-review",
    "template": "legal-review",
    "name": "Contracts Manager",
@@ -1663,7 +1875,7 @@
    "department": "core",
    "lead": false,
    "core": true,
-   "summary": "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`hub doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report.",
+   "summary": "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`tico doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report.",
    "when": "Built-in: answers questions about the team from its docs, with a citation for every claim, and says plainly when the docs do not cover it.",
    "tags": [],
    "pains": [],
@@ -1962,6 +2174,45 @@
    "default": true
   },
   {
+   "slug": "outbound-sales-owner",
+   "template": "outbound-sales-owner",
+   "name": "Outbound Sales Owner",
+   "department": "sales",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the meetings booked from outbound each week: builds target account lists from your ideal customer profile, writes sequences with clear stop rules, reads every reply the same day, and reports sends, replies and meetings by sequence. Messages stay drafts until a task asks for a send and a granted Tool allows it.",
+   "when": "A team that wants a steady flow of first meetings from people who have not asked to hear from it, and nobody reading the sequence results each week.",
+   "tags": [
+    "b2b",
+    "outbound",
+    "prospecting",
+    "sequences",
+    "meetings-booked",
+    "cold-email",
+    "saas",
+    "services"
+   ],
+   "pains": [
+    "our outbound gets no replies and nobody knows why",
+    "we send the same sequence to every account",
+    "replies sit unread while the sequence keeps sending",
+    "we cannot say which sequence brought a meeting"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_email",
+    "uses_crm"
+   ],
+   "first_routine": "Weekday outbound run · Weekdays at 08:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "paid-media",
    "template": "paid-media",
    "name": "Paid Media Manager",
@@ -2041,6 +2292,44 @@
    "lead": false,
    "core": false,
    "summary": "Runs the partner channel: finds partners that fit, checks every deal registration against the rules of engagement, follows partner-sourced deals to close and lists referral fees owed. Requested payouts use Tools; outside messages stay drafts until a person turns mail sending on in Tico.",
+   "when": "A team that sells with or through agencies, resellers, referral partners or integration partners and wants that channel run, not remembered.",
+   "tags": [
+    "b2b",
+    "partners",
+    "channel",
+    "resellers",
+    "referrals",
+    "integrations",
+    "co-selling",
+    "agencies"
+   ],
+   "pains": [
+    "partners send leads and nobody follows up",
+    "two partners claim the same deal",
+    "we don't know which partners actually bring revenue",
+    "referral fees are paid late or wrongly"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly partner pipeline review · Thursdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "partnerships-owner",
+   "template": "partnerships-owner",
+   "name": "Partnerships Owner",
+   "department": "corporate",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps the partner channel running: the partner register, every deal registration checked against the rules of engagement, partner-sourced deals followed to close, and referral fees owed each month. Requested payouts use Tools; outside messages stay drafts until a person turns mail sending on in Tico.",
    "when": "A team that sells with or through agencies, resellers, referral partners or integration partners and wants that channel run, not remembered.",
    "tags": [
     "b2b",
@@ -2300,7 +2589,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Reads every open pull request each weekday morning and drafts a review for each: what the change does, what blocks a merge, and what it could not check. Posts only when a task asks and its Tools allow it. Merging stays with a human.",
+   "summary": "Reviews each pull request in its Engineering review stage and writes a Review page at the newest commit: what the change does, what blocks it, and what it could not check. Each weekday it also drafts reviews for pull requests outside the pipeline. Never merges.",
    "when": "Offer when GitHub is connected and pull requests wait for a reviewer.",
    "tags": [
     "saas",
@@ -2518,7 +2807,7 @@
    "department": "product",
    "lead": false,
    "core": false,
-   "summary": "Turns a chosen problem into a one-page spec engineers can build from: evidence, a time budget, non-goals and acceptance criteria that can be checked. Then it drives the spec to launch, with open questions closed by named humans and a readiness check signed line by line.",
+   "summary": "Runs the Product pipeline: turns an idea into a one-page Spec page engineers can build from (evidence, a time budget, non-goals, acceptance criteria that can be checked), hands it to Engineering once a person OKs it, and checks the result in production.",
    "when": "A software team where work starts before the problem is written down, or where launches slip because nobody owns the checklist.",
    "tags": [
     "saas",
@@ -2533,7 +2822,7 @@
     "specs are missing or out of date",
     "launches slip because nobody owns the checklist",
     "requirements live in someone's head",
-    "QA finds out what 'done' means after the build"
+    "engineers find out what 'done' means after the build"
    ],
    "recommend_when": [
     "sells_software",
@@ -2659,6 +2948,77 @@
    "default": false
   },
   {
+   "slug": "product-team-manager",
+   "template": "product-team-manager",
+   "name": "Product Team Manager",
+   "department": "product",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the product team's week: the roadmap, the decisions waiting on a person, what each Product Owner found, and evidence-scored proposals for what to build next. Routes each piece of product work to the Product Owner who owns it. Roadmap changes happen only when asked and a Tool allows them.",
+   "when": "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place.",
+   "tags": [
+    "saas",
+    "software",
+    "roadmap",
+    "prioritisation",
+    "discovery",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "nobody knows what's on the roadmap this quarter",
+    "every loud request jumps the queue",
+    "product decisions aren't written down anywhere",
+    "we can't say why we built what we built"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github",
+    "uses_docs"
+   ],
+   "first_routine": "Weekly product summary · Mondays at 09:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "meetings"
+   ],
+   "default": true
+  },
+  {
+   "slug": "qa-owner",
+   "template": "qa-owner",
+   "name": "QA Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns every automated test, from unit to end to end: keeps the flaky test register and decides fix or quarantine for each, reports the suite's health each week, and files each product bug a test exposes into the Engineering pipeline. It never merges, and it changes a test only when asked.",
+   "when": "Offer to a software team whose automated tests are flaky, slow or missing for the paths that matter, and where nobody owns the test suite as a whole.",
+   "tags": [
+    "saas",
+    "github",
+    "testing",
+    "quality",
+    "flaky-tests",
+    "developer-tools"
+   ],
+   "pains": [
+    "our tests are flaky and people just hit rerun",
+    "nobody knows which tests still matter",
+    "a bug got through because no test covered the path",
+    "the end to end suite is slow and nobody owns it"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly test health report · Tuesdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "github"
+   ],
+   "default": false
+  },
+  {
    "slug": "quality-inspections",
    "template": "quality-inspections",
    "name": "Quality & Inspections",
@@ -2765,7 +3125,7 @@
   {
    "slug": "release-notes",
    "template": "release-notes",
-   "name": "Release Manager",
+   "name": "Release Notes Writer",
    "department": "engineering",
    "lead": false,
    "core": false,
@@ -2790,6 +3150,44 @@
    ],
    "first_routine": "Weekly release notes draft · Fridays at 14:00 team time",
    "tools": [
+    "docs",
+    "github"
+   ],
+   "default": false
+  },
+  {
+   "slug": "release-owner",
+   "template": "release-owner",
+   "name": "Release Manager",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Owns Merge and Release in the Engineering pipeline: sees each pull request through the merge queue, pushes its own fix when the queue drops one, and gets it into a release. Each week it reports how long a merged change waits and takes to reach users, which checks gate merging, release cadence, and failed deploys and rollbacks. For each release it runs the readiness check, drafts the changelog and release notes from merged work, suggests a version, and rolls out the exact version the owner approves. It never runs a merge command, and never reruns, cancels, deploys or rolls back on its own.",
+   "when": "A software team whose merged changes wait days to reach users, whose merge queue is slow or distrusted, or who cut releases by hand and need one seat to get each release ready and out.",
+   "tags": [
+    "saas",
+    "github",
+    "delivery",
+    "merge-queue",
+    "releases",
+    "changelog",
+    "rollbacks",
+    "deploys"
+   ],
+   "pains": [
+    "a merged change waits days before users see it",
+    "the merge queue is slow and people stop trusting it",
+    "we release rarely because every release feels risky",
+    "release notes are written by hand at the last minute, or not at all",
+    "a rollback takes an afternoon and nobody is sure how",
+    "customers do not know what changed in each release"
+   ],
+   "recommend_when": [
+    "sells_software"
+   ],
+   "first_routine": "Weekly delivery report · Mondays at 09:30 team time",
+   "tools": [
+    "chat",
     "docs",
     "github"
    ],
@@ -3212,6 +3610,47 @@
    "default": true
   },
   {
+   "slug": "search-ads-owner",
+   "template": "search-ads-owner",
+   "name": "Search Ad Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns what paid search spend buys across every customer segment: reviews each campaign's cost per result against its target every week, cleans out the search terms that spend without converting, and sets bidding only where the conversion volume supports it. Every change is prepared for review and goes into an ad account only when a task asks for it and a granted Tool allows it.",
+   "when": "A team that spends on search ads every month for one or more customer segments, where nobody reads the search terms or the cost per result each week.",
+   "tags": [
+    "paid-search",
+    "google-ads",
+    "microsoft-ads",
+    "app-store-ads",
+    "keywords",
+    "negatives",
+    "bidding",
+    "performance",
+    "b2c",
+    "b2b"
+   ],
+   "pains": [
+    "our search ads spend on searches that never buy",
+    "the bidding target is set on a few conversions and the campaign never settles",
+    "Google and Microsoft report different conversions and nobody knows which one is right",
+    "the ad sends people to a page that does not match what they searched for",
+    "each segment wants its own keywords and they bid against each other"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_pipeline"
+   ],
+   "first_routine": "Weekly search ads review · Mondays at 09:30 team time",
+   "tools": [
+    "crm",
+    "google-ads",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "security-compliance",
    "template": "security-compliance",
    "name": "Security and Compliance Analyst",
@@ -3284,6 +3723,159 @@
    "default": false
   },
   {
+   "slug": "security-owner",
+   "template": "security-owner",
+   "name": "Security Owner",
+   "department": "engineering",
+   "lead": false,
+   "core": false,
+   "summary": "Works the security backlog: ranks dependency alerts by real exposure and whether the code reaches the flaw, writes the patch plan in merge order, and reports any credential committed to a repository by location only. A person merges every fix.",
+   "when": "Offer to a software team whose repositories are on GitHub and whose dependency alerts pile up with nobody owning them.",
+   "tags": [
+    "saas",
+    "github",
+    "dependencies",
+    "vulnerabilities",
+    "secrets",
+    "regulated",
+    "enterprise"
+   ],
+   "pains": [
+    "dependabot alerts pile up and nobody looks at them",
+    "we can't tell which vulnerabilities actually matter",
+    "a customer security review asks how fast we patch",
+    "someone committed an API key to the repository"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_github"
+   ],
+   "first_routine": "Weekly dependency and advisory report · Mondays at 08:00 team time",
+   "tools": [
+    "chat",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "segment-marketing-owner",
+   "template": "segment-marketing-owner",
+   "name": "Marketing Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns one customer segment's new customers and what each one costs. Each week it reads that segment's number and its growth tests, keeps its message and claims checked, and asks the channel Owners for channel work through tasks.",
+   "when": "A team that sells to two or more customer groups through paid or owned channels, where marketing numbers are reported by channel and nobody answers for what each group costs to win.",
+   "tags": [
+    "marketing",
+    "acquisition",
+    "segments",
+    "cost-per-customer",
+    "messaging",
+    "offers",
+    "growth",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "we know the total cost per customer, not what each customer group costs to win",
+    "channel reports and segment goals never meet in one number",
+    "one group's message is copied from another and nobody checks its claims",
+    "channel owners get vague requests with no outcome, no date and no spend limit",
+    "growth tests start without a measure, a baseline or a cost ceiling"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses",
+    "has_pipeline",
+    "uses_crm"
+   ],
+   "first_routine": "Weekly segment growth review · Tuesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "docs"
+   ],
+   "default": false
+  },
+  {
+   "slug": "segment-product-owner",
+   "template": "segment-product-owner",
+   "name": "Product Owner",
+   "department": "product",
+   "lead": false,
+   "core": false,
+   "summary": "Owns one customer segment's activation and retention. Each week it ranks that segment's problems from tickets, feedback, calls and usage, and writes one-page product briefs for its manager to approve, then writes the Spec page for each approved one.",
+   "when": "A team with two or more customer segments where the product works for one group and the others drop off before they get value, and nobody answers for each group's problems.",
+   "tags": [
+    "product",
+    "activation",
+    "retention",
+    "segments",
+    "customer-problems",
+    "discovery",
+    "saas",
+    "b2b",
+    "b2c"
+   ],
+   "pains": [
+    "we know activation is low, but not for which customers",
+    "one loud customer's request fills the roadmap",
+    "support, sales and calls each hold part of the problem and nobody adds them up",
+    "retention falls and nobody can say which customers left or why",
+    "briefs go from idea to build without the evidence written down"
+   ],
+   "recommend_when": [
+    "sells_software",
+    "uses_tickets",
+    "uses_meetings"
+   ],
+   "first_routine": "Weekly segment product review · Mondays at 08:00 team time",
+   "tools": [
+    "crm",
+    "github",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "seo-owner",
+   "template": "seo-owner",
+   "name": "SEO Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Checks how the team shows up in search and in AI answers each week, then hands over the three page fixes worth doing first, drafted to apply in minutes. It never edits a live page itself.",
+   "when": "A team whose buyers search or ask an AI assistant before they talk to anyone, and that has a website with content on it.",
+   "tags": [
+    "seo",
+    "ai-search",
+    "content",
+    "website",
+    "saas",
+    "ecommerce"
+   ],
+   "pains": [
+    "we don't know if AI assistants mention us",
+    "our website gets little organic traffic",
+    "competitors outrank us for what buyers search",
+    "nobody checks our pages for search problems",
+    "we don't know which pages to write to rank"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_businesses",
+    "sells_software"
+   ],
+   "first_routine": "Weekly search and AI visibility report · Mondays at 08:00 team time",
+   "tools": [
+    "docs",
+    "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
    "slug": "seo-visibility",
    "template": "seo-visibility",
    "name": "SEO Specialist",
@@ -3316,6 +3908,46 @@
    "tools": [
     "docs",
     "github",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "social-ads-owner",
+   "template": "social-ads-owner",
+   "name": "Social Ad Owner",
+   "department": "marketing",
+   "lead": false,
+   "core": false,
+   "summary": "Owns what paid social spend buys across every customer segment: reviews each campaign's cost per result against its target every week, catches creative fatigue before results fall, and prepares each budget, creative and audience change for review. Changes go into an ad account only when a task asks for them and a granted Tool allows it.",
+   "when": "A team that spends on paid social every month for one or more customer segments, where nobody reads creative fatigue and cost per result each week.",
+   "tags": [
+    "paid-social",
+    "meta-ads",
+    "tiktok-ads",
+    "linkedin-ads",
+    "youtube-ads",
+    "creative",
+    "audiences",
+    "b2c",
+    "b2b",
+    "performance"
+   ],
+   "pains": [
+    "our social ads cost more every month for the same results",
+    "the same ads have run for months and nobody has changed them",
+    "we can't tell which audience or creative is working",
+    "each segment wants its own campaign and they compete for one budget",
+    "social ad reports show clicks and views, not what the ads bought"
+   ],
+   "recommend_when": [
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Weekly paid social review · Mondays at 09:00 team time",
+   "tools": [
+    "crm",
+    "meta-ads",
     "web"
    ],
    "default": false
@@ -3462,6 +4094,73 @@
    "default": false
   },
   {
+   "slug": "success-owner",
+   "template": "success-owner",
+   "name": "Success Owner",
+   "department": "success",
+   "lead": false,
+   "core": false,
+   "summary": "Keeps customer health and adoption on track: a weekly brief of renewals due in 120 days, the accounts at risk and why, and a drafted next touch for each. Customer messages stay drafts until a person turns sending on; price and contract stay with the Account Manager.",
+   "when": "A team with subscription or recurring customers whose renewals arrive faster than anyone prepares for them, and where customer health needs one owner who keeps watching it.",
+   "tags": [
+    "b2b",
+    "saas",
+    "subscription",
+    "health",
+    "adoption",
+    "renewals",
+    "qbr"
+   ],
+   "pains": [
+    "renewals sneak up on us with no plan",
+    "we find out a customer is unhappy when they cancel",
+    "nobody prepares for quarterly customer reviews",
+    "customer health lives in five different places"
+   ],
+   "recommend_when": [
+    "sells_to_businesses",
+    "uses_crm",
+    "sells_software"
+   ],
+   "first_routine": "Weekly renewal and health brief · Tuesdays at 09:00 team time",
+   "tools": [
+    "crm",
+    "mail",
+    "meetings"
+   ],
+   "default": false
+  },
+  {
+   "slug": "success-team-manager",
+   "template": "success-team-manager",
+   "name": "Success Team Manager",
+   "department": "success",
+   "lead": true,
+   "core": false,
+   "summary": "Runs the success team's weekly review: support and customer health against target, the oldest waiting customers, repeats and the decisions needed. It proposes routing and hires, and never answers a customer or assigns a person itself.",
+   "when": "A team with customer support and customer success work in more than one place, where nobody has the week's picture of both and nobody decides which success role to add next.",
+   "tags": [
+    "success",
+    "customers",
+    "renewals",
+    "retention",
+    "health",
+    "support"
+   ],
+   "pains": [
+    "Support and customer success run apart, and nobody sees a customer's whole story",
+    "Renewals and at-risk accounts surface too late",
+    "The support backlog and the success work have no shared weekly view"
+   ],
+   "recommend_when": [
+    "uses_tickets",
+    "sells_to_consumers"
+   ],
+   "first_routine": "Weekly success summary · Mondays at 09:00 team time",
+   "tools": [],
+   "default": false
+  },
+  {
    "slug": "support",
    "template": "support",
    "name": "Support Agent",
@@ -3577,6 +4276,46 @@
     "mail"
    ],
    "default": false
+  },
+  {
+   "slug": "support-owner",
+   "template": "support-owner",
+   "name": "Support Owner",
+   "department": "success",
+   "lead": false,
+   "core": false,
+   "summary": "Owns the support queue: takes each ticket from sorting to a reply ready to send, finds the answer in your docs, drafts the reply, routes what needs a person and chases what is still open. Customers hear from it only once a person turns on mail sending.",
+   "when": "A team with a support inbox or ticket queue, where the same questions come back, replies wait while someone looks up the answer, and support needs one owner who keeps it running.",
+   "tags": [
+    "support",
+    "helpdesk",
+    "tickets",
+    "email",
+    "b2c",
+    "b2b",
+    "ecommerce",
+    "saas"
+   ],
+   "pains": [
+    "support inbox is overflowing",
+    "customers wait too long for an answer",
+    "we answer the same questions again and again",
+    "we can't tell which problems are actually product bugs",
+    "only one human knows how to reply"
+   ],
+   "recommend_when": [
+    "has_support_inbox",
+    "uses_tickets",
+    "sells_to_consumers",
+    "uses_email"
+   ],
+   "first_routine": "Daily support queue · Weekdays at 09:00 team time",
+   "tools": [
+    "chat",
+    "docs",
+    "mail"
+   ],
+   "default": true
   },
   {
    "slug": "support-qa",
@@ -3801,7 +4540,7 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next starts. Nothing is published until the owner approves the exact final file.",
+   "summary": "Makes one video at a time from an approved brief: script, storyboard, shots, cut and final, each stage OK'd in Tico before the next starts. Nothing is published until the owner OKs the exact final file.",
    "when": "A team that wants product explainers, demos, ads or social videos made and checked, and has no one with the hours to make them.",
    "tags": [
     "video",
@@ -3829,6 +4568,127 @@
    "tools": [
     "docs"
    ],
+   "default": false
+  }
+ ],
+ "helpers": [
+  {
+   "slug": "automations-owner",
+   "template": "automations-owner",
+   "name": "Automations Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Keeps the team's automations healthy: the routines, triggers, inbox automations and system jobs. Each week it reads them, notices misfires, noise and automations nobody owns, and proposes a fix on a task for the automation's owner. It changes an automation only when that owner approves the change. A team's own routines stay that team's; this bot keeps all of them working.",
+   "when": "Built in: keeps the team's automations healthy, the routines, triggers, inbox automations and system jobs. It notices a misfire or noise and proposes the fix; the automation's owner decides.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "bookkeeper",
+   "template": "bookkeeper",
+   "name": "Finance Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Operational accounting, not strategy. Tico checks the Finance work queue in plain code every hour and gives the Finance Owner one task only when there is something to do: rows to categorize, bills to enter, bills due, overdue invoices, receipts, failed syncs or a month ready to close. It acts only through the tico_finance tools, as itself, with finance.book, ap, ar, pay, cards and rules; it proposes posting rules, and a person approves each one. Every payment and the close still go to a person under the company's rules. Each Monday it also writes the weekly cash summary: cash now, the 13-week outlook against the minimum cash line, what is late or due, and usage against budget.",
+   "when": "Built in: keeps the books. Categorizes bank and card rows, enters bills, schedules payments, drafts reminders for overdue invoices, reconciles, prepares the monthly close and writes the monthly report, all through Finance's own actions and approvals. Each Monday it writes the weekly cash summary with the 13-week cash outlook and usage against budget.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "brand",
+   "template": "brand",
+   "name": "Brand Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Builds the brand book with the owner (who it's for, the promise, the voice, the look, tested on real pieces the owner marks us or not us), keeps the Brand card current, reviews copy and assets against it, checks new names, and audits what went public each month with three fixes. It changes no live page or asset itself.",
+   "when": "Built in: every team has a brand, and every bot that writes for customers checks its drafts against the Brand card this bot keeps.",
+   "tags": [
+    "brand",
+    "voice",
+    "naming",
+    "design",
+    "consistency",
+    "b2c",
+    "retail"
+   ],
+   "pains": [
+    "every team describes our team differently",
+    "our logo and colours are used wrong",
+    "new copy never sounds like us",
+    "we have no brand guidelines anyone follows",
+    "we don't know what we stand for or how we should look"
+   ],
+   "recommend_when": [
+    "publishes_content",
+    "sells_to_consumers",
+    "sells_to_businesses"
+   ],
+   "first_routine": "Monthly brand consistency audit · The 1st of each month at 10:00 team time",
+   "tools": [
+    "docs",
+    "web"
+   ],
+   "default": false
+  },
+  {
+   "slug": "task-manager",
+   "template": "task-manager",
+   "name": "Task Manager",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Tidies tasks, never the work. Once an hour on weekdays Tico checks each department's tasks in plain code: stalled or overdue asks, merged work not yet shipped, held bots and duplicates. Nothing to report means no task and no model run. Otherwise the Task Manager gets one task per department, fixes the obvious items and leaves one line in Needs you for anything it is unsure of.",
+   "when": "Built in: once an hour on weekdays it has the stalled, overdue and out-of-step tasks of each department checked, fixes the obvious ones and leaves one line per department for what it is unsure of.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "tico-counsel",
+   "template": "tico-counsel",
+   "name": "Rules Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Reads a document someone adds to Rules (a file or a link) and suggests the obligations that bind us, each with its section and quote, for a person to add or skip. Answers \"can I...?\" questions with the rules that apply, and cites them. Not legal advice: it says so, and says to ask a lawyer for real exposure. It cannot send, sign or change anything; it only reads and suggests.",
+   "when": "Built in: reads a contract, terms or policy you add and suggests the obligations that bind us, with the quote; answers \"can I...?\" from the rules in force.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [
+    "never"
+   ],
+   "first_routine": "",
+   "tools": [],
+   "default": false
+  },
+  {
+   "slug": "updates-owner",
+   "template": "updates-owner",
+   "name": "Updates Owner",
+   "department": "core",
+   "lead": false,
+   "core": true,
+   "summary": "Writes the company update for each period from what teammates report in Tico, with every figure's source and date, and skips a period with nothing new. The update is the source each audience's edition on the Company page reads from. It drafts a file for the owner; it never publishes an edition, and a person drafts, approves and publishes each one. Each teammate still writes their own update.",
+   "when": "Built in: writes the company update each period from what the team reports, as a draft for the owner to review. Nothing reaches an audience without a person's approval.",
+   "tags": [],
+   "pains": [],
+   "recommend_when": [],
+   "first_routine": "",
+   "tools": [],
    "default": false
   }
  ]

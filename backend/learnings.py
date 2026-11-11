@@ -42,7 +42,6 @@ LIBRARIAN_PROFILE = (
     "(competitors, their products, pricing, launches)"
 )
 REL = "This item is relevant to: "
-TITLE = "Nightly learnings: "
 PAGE = 30
 KIND_WORDS = {"chat": "Chat", "task": "Task", "slack": "Slack", "mail": "Email", "meeting": "Meeting"}
 SAW_WORDS = {
@@ -314,9 +313,8 @@ def collect(c, settings, now, team):
 
 # ----------------------------------------------------------------------------- route
 def engine_for(store, c):
-    """The server's decision model (backend/judge.py `server_engine`): the Tico AI Gateway, then an own TypeSafe key,
-    each in one short try, with the company's own provider behind them; None when there is none, or the month's
-    decision spend is at its cap."""
+    """The server's decision model (backend/judge.py `server_engine`): Jev on the Tico AI Gateway, then on an own
+    TypeSafe key, each in one short try; None when there is neither, or the month's decision spend is at its cap."""
     return server_engine(store, c, primary_engine(store.settings, store))
 
 
@@ -339,7 +337,7 @@ class Tally:
         with self.lock:
             self.calls += 1
             self.fallbacks += bool(result.get("fallback"))
-            from .stale_review import route_of
+            from .thread_rank import route_of
 
             self.routes[route_of(result)] += 1
             if result.get("fallback") and not self.fallback:
@@ -728,51 +726,6 @@ def advance(c, items, now):
             "last_ts=max(learning_cursors.last_ts,excluded.last_ts)",
             (source, newest.get(source) or now),
         )
-
-
-PACKET_STATUS_SQL = "(" + ",".join(f"'{s}'" for s in H.ACTIVE_STATUSES) + ")"
-PACKET_NOTE = (
-    "This nightly packet is finished: its night has ended or a newer packet replaces it. "
-    "Learn now delivers packets in the bot's Update turn."
-)
-
-
-def close_finished_packets(c, now):
-    """Close the keeper's nightly packet tasks that are finished, whatever their status (open, doing, waiting, review or
-    ready). A packet is finished when its night has ended (it was filed on an earlier local day than `now`) or a newer
-    packet for the same bot replaces it. Nothing files these tasks any more: Learn moved into the Maintenance run and
-    delivers packets in the bot's Update turn, so the old ones stayed open and counted as held Reviewer work
-    (profiles.mismatches, reviewer_holds_tasks).
-
-    A packet with an open subtask stays open and is named in `kept`: closing it would close that subtask too
-    (hubdb.task_close closes open descendants), and only its requester may close or re-parent that subtask.
-    Returns {"closed": [task ids], "kept": [{"id", "reason"}]}."""
-    today = night_of(H.parse_ts(now))
-    rows = c.execute(
-        "SELECT id,owner_id,created_at FROM tasks WHERE requester_id=? AND substr(title,1,?)=? "
-        f"AND status IN {PACKET_STATUS_SQL} ORDER BY created_at,id",
-        (H.KEEPER, len(TITLE), TITLE),
-    ).fetchall()
-    newest = {row["owner_id"]: row["id"] for row in rows}  # rows are oldest first, so the last one per bot wins
-    out = {"closed": [], "kept": []}
-    for row in rows:
-        superseded = newest[row["owner_id"]] != row["id"]
-        if not superseded and night_of(H.parse_ts(row["created_at"])) >= today:
-            continue
-        open_kids = [k["id"] for k in H.descendants(c, row["id"]) if k["status"] in H.ACTIVE_STATUSES]
-        if open_kids:
-            out["kept"].append({"id": row["id"], "reason": "open subtask " + ", ".join(open_kids)})
-            continue
-        c.execute("SAVEPOINT nightly_packet")
-        try:
-            H.task_close(c, H.KEEPER, row["id"], note=PACKET_NOTE, quiet=True)
-        except H.Refused as exc:
-            c.execute("ROLLBACK TO nightly_packet")
-            out["kept"].append({"id": row["id"], "reason": exc.detail or exc.rule})
-        else:
-            out["closed"].append(row["id"])
-        c.execute("RELEASE nightly_packet")
-    return out
 
 
 def finish(store, run_id, status, detail, read=0, routed=0):

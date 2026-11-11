@@ -86,7 +86,7 @@ takes an API key. Candidates:
 
 - **pi** (already a Tico host, `runner-rs/src/hosts/pi.rs`): a long-lived process driven over JSON on stdin and stdout
   (`pi --mode rpc`), a JSON event stream Tico already parses, resumable sessions, read/bash/edit/write/grep tools, MCP servers (the bot
-  reaches Tico through the hub MCP server and the `hub` CLI over bash), no permission prompts, an npm package, and keys
+  reaches Tico through the hub MCP server and the `tico` CLI over bash), no permission prompts, an npm package, and keys
   for many providers by environment variable. Tico reaches every model through OpenRouter, so one key covers all of them.
 - **OpenCode**: also capable and widely used, with a large provider list, but it would need a new host adapter and its
   own event format, and ships a per-platform native binary. Nothing in a headless run needs what it adds.
@@ -102,8 +102,10 @@ stdio server's environment names the Gateway key empty so it never inherits it. 
 
 **Compact at** applies to a pi turn: the turn's `settings.json` (in the same agent folder) sets pi's
 `compaction.reserveTokens` to the model's context window less the bot's Compact at (`reserve_tokens` in `hosts/pi.rs`,
-kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window.
-No OpenRouter model's window is known to Tico yet, so those turns keep pi's own compaction. pi's `compaction_end` with a
+kept between pi's default 16,384 and a compaction point of 100,000). The Tico Gateway's models have a 200,000-token window,
+so a Compact at of 250,000 or more compacts at 183,616 tokens there (200,000 less 16,384). No model outside the Gateway has a
+window Tico knows yet (OpenRouter's, DeepSeek's, Moonshot's and Mistral's included), so those turns keep pi's own compaction
+whatever the Compact at. pi's `compaction_end` with a
 result is a compaction: the session's next turn is given the whole prompt. pi can compact between one turn's tool calls,
 where Tico cannot put back what the turn left out, so that turn keeps what it was given until the next one.
 `compact_first` and `/compact` send pi's RPC `compact`, which ends at its `compaction_end`.
@@ -231,6 +233,8 @@ adapters and documented for [Claude](https://platform.claude.com/docs/en/build-w
 [Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
+Terra 6.1 (`gpt-6.1-terra`) is not offered for new choices. A bot whose **Model** or **Task model**
+is already Terra 6.1 keeps running on it.
 No existing bot is migrated automatically.
 
 Cursor Agent and Grok Build already have runner adapters and appear when their providers are enabled.
@@ -269,15 +273,14 @@ A task's own model ([Choosing the model a task runs on](tasks.md#choosing-the-mo
 bot's task model first, then to the bot's own model. A review or check subtask keeps its check model.
 
 A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
-**Task context length** or save the same model again. Settings lists a held model's **Task effort** choices only
-while a bot's own model or the team default is that model. Otherwise that field is disabled for a bot whose
-**Task model** it is. A save that sends only an effort or a context length keeps the model too.
+**Task context length** or save the same model again. Settings does not offer **Task effort** choices for such a
+model, so that field stays disabled there. A save that sends only an effort or a context length keeps the model too.
 Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
 so is choosing another model that is not offered yet.
 
 #### A warning about a cheaper task model
 
-A bot that has requested send, spend or publish approvals, or holds a tool grant that can write beyond its
+A bot that has asked a person to OK something on a task, or holds a tool grant that can write beyond its
 own repository, can show a warning under **Task model**. The warning compares models from the same provider
 using their listed output prices. Another provider's model, or one without a listed price, is not judged.
 

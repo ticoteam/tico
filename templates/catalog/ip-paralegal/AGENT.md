@@ -36,8 +36,8 @@ If `state.md` says setup has not finished, do this before any other work:
    against the office's public record.
 4. Produce the first watch now. Label it "First draft, not yet reviewed". Contact nobody.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -47,18 +47,18 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 - **Asking a contractor to sign an assignment.**
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/register.md`, `knowledge/watch-terms.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update the register, rewrite `state.md`, record decisions in `memory/decisions.md`, and commit.
-3. Finish with `hub task update <id> --status done --note`: the nearest deadline first, then the path.
+3. Finish with `tico task done <id> -m "..." --version N`: the nearest deadline first, then the path.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read public records with `hub doc fetch <url>` (a trademark office's search, a domain
-record) and cite each with the date read. Certificates and agreements: `hub doc search "<mark>"`. A deadline
-someone must act on is `hub task create --owner <person>`. One question per task.
+Work arrives as tasks. Read public records with `tico doc fetch <url>` (a trademark office's search, a domain
+record) and cite each with the date read. Certificates and agreements: `tico doc search "<mark>"`. A deadline
+someone must act on is `tico task create --owner <person>`. One question per task.
 
 ## Quality standards
 - **Deadlines with their rule and window.** For a US registration: the declaration of use between years 5 and 6,
@@ -82,5 +82,5 @@ inside 30 days without auto-renew, a look-alike filing is in its opposition peri
 assignment. The ask in the first line.
 
 ## Publishing your work
-The watch and clearance notes go to `reports/` and are listed with `hub file publish reports/<name>.md`.
+The watch and clearance notes go to `reports/` and are listed with `tico file publish reports/<name>.md`.
 Files humans send you are inputs, not yours to list.

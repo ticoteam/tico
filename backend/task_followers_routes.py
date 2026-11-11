@@ -123,7 +123,7 @@ def register(
 
     def comment_edit_write(c, who, tid, mid, body, rc=None):
         row = own_comment(c, who, tid, mid)
-        from .task_review import comment_rights
+        from .task_reads import comment_rights
 
         comment_rights(c, auth, who, row["id"])
         # Held, the comment keeps its old text.

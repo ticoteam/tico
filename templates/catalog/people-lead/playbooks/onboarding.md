@@ -2,23 +2,23 @@
 
 Runs once, on the first message or task you receive, while `state.md` says onboarding has not finished. Budget 25 minutes.
 
-Inputs: `hub team show`, the open people tasks, `hub calendar list`, `hub template list`, and any handbook pages the Librarian
+Inputs: `tico team show`, the open people tasks, `tico calendar list`, `tico template list`, and any handbook pages the Librarian
 already holds.
 
 Outcome: five recorded answers, a people calendar, a headcount plan and a routing list, a first weekly summary built from the
 real roster and tasks, and the first routine checked.
 
-Done when: the answers, the calendar, the plan, the routing list and the first result are recorded, and `hub bot setup-done`
+Done when: the answers, the calendar, the plan, the routing list and the first result are recorded, and `tico bot setup-done`
 has run.
 
 ---
 
 ## 1. Read before you ask
 
-    hub team show
-    hub task list --status open --status doing --status waiting
-    hub calendar list
-    hub template list
+    tico team show
+    tico task list
+    tico calendar list
+    tico template list
 
 Check which people bots exist and which templates this group could add. If the roster is empty, that is answer one. Do not ask
 what these already say.
@@ -60,16 +60,16 @@ Follow `playbooks/weekly-people-summary.md` on the real roster, tasks and calend
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, run
-`hub automation update <id> --enable`), and tell the human in one line what it does: "I will write this every Monday at 08:30 for
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, run
+`tico automation update <id> --enable`), and tell the human in one line what it does: "I will write this every Monday at 08:30 for
 the readers you named." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave
-it off, adjust `knowledge/` and the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+it off, adjust `knowledge/` and the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you
 have runs on its own. Run it once the answers and the first result are recorded, not before.

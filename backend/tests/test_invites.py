@@ -5,15 +5,8 @@ import uuid
 
 import pytest
 
-from backend.tests.test_api import api  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
-
-
-def owner(signin):  # noqa: F811
-    """Ana, the owner, signed in through the issuer; the headers a browser write carries."""
-    done = signin.login(claims={"email": "ana@acme.example"})
-    assert done.status_code == 302, done.text
-    return {"origin": signin.settings.public_url, "idempotency-key": "invite-" + uuid.uuid4().hex}
+from backend.tests.helpers.oidc import CLIENT, SECRET, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.invites import owner
 
 
 def invites_sent(signin):  # noqa: F811

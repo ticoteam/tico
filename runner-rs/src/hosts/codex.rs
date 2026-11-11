@@ -926,7 +926,7 @@ impl CodexHost {
             crate::mcp::codex_config(&settings.mcp_servers, &settings.env, &self.0.env),
         );
         if let Some(hub) = hub_mcp_server(&settings.env) {
-            servers.insert("hub".into(), hub);
+            servers.insert("tico".into(), hub);
         }
         if !servers.is_empty() {
             cfg.insert("mcp_servers".into(), Value::Object(servers));
@@ -1402,7 +1402,7 @@ mod tests {
             assert_eq!(params["config"][key], false, "{key}");
         }
         assert_eq!(params["config"]["web_search"], "disabled");
-        assert!(params["config"]["mcp_servers"].get("hub").is_none());
+        assert!(params["config"]["mcp_servers"].get("tico").is_none());
     }
 
     #[tokio::test]
@@ -1517,13 +1517,11 @@ for line in sys.stdin:
 
     #[tokio::test]
     async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {
-        use std::os::unix::fs::PermissionsExt;
         let dir =
             std::env::temp_dir().join(format!("codex-roots-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("codex");
-        std::fs::write(&program, FAKE_APP_SERVER).unwrap();
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::util::write_script(&program, FAKE_APP_SERVER);
         let path = format!(
             "{}:{}",
             dir.display(),

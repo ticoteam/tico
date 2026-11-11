@@ -1,6 +1,6 @@
 """What clients read and send on today's conversation surfaces, pinned before the native threads build replaces them.
 
-docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `hub` CLI
+docs/dev/threads-contract.md (section 10) keeps `/api/v2/conversations/*` as aliases for one release, and the `tico` CLI
 and MCP old names with them. Each test here is a behaviour a client depends on today: the paths a person or a bot
 calls, the fields it parses, the cursor it walks, the answer a person who may not read a chat gets, and the claim
 fields the runner keys its session on. The refactor has to keep each one true, or change the client on purpose.
@@ -16,13 +16,16 @@ import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend.store import H
-from backend.tests.test_api import api, headers, post, setup_attempt  # noqa: F401  (the api fixture)
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers, post, setup_attempt  # noqa: F401  (the api fixture)
+from backend.tests.helpers.mcp import call
 from clients import hubcli, remotecli
 from clients.tico import APIError
 
 BODY = "A long reply about the launch plan and its checks. " * 110  # about 5.5 KB a message
 CHAT_PAGE = {"limit": 50, "max_bytes": 163840}  # the web app's chat page (ui/app/chat.ts)
+# Fields the answer adds after the page is cut (backend/task_privacy.py page): each message's `source`
+# (teammate_access.Known) and the display names beside its ids (backend/names.py). `max_bytes` counts the rest.
+ADDED_AFTER_PAGE = {"source", "sender_name", "recipient_name"}
 
 
 def read(api, cid, token="ana-test", **query):
@@ -129,7 +132,10 @@ def test_a_chat_pages_back_by_limit_and_by_bytes_and_every_message_is_read_once(
         query = {**CHAT_PAGE, **({"before": cursor} if cursor else {})}
         page = read(api, cid, **query)
         pages += 1
-        sizes = [len(json.dumps(m, default=str).encode()) for m in page["messages"]]
+        sizes = [
+            len(json.dumps({k: v for k, v in m.items() if k not in ADDED_AFTER_PAGE}, default=str).encode())
+            for m in page["messages"]
+        ]
         assert len(page["messages"]) == 1 or sum(sizes) <= CHAT_PAGE["max_bytes"], sizes
         seen = [m["id"] for m in page["messages"]] + seen
         if not page["has_more"]:
@@ -209,7 +215,7 @@ def test_hub_history_is_the_conversation_show_alias_and_pages_back_like_the_rest
     assert [m["id"] for m in older["messages"]] == order[:-200] and older["has_more"] is False
 
 
-def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
+def test_the_conversation_tools_read_send_and_mark_read(api):
     cid = post(api, "chat/ops", {"text": "Read this back"})["conversation_id"]
     with api.app.state.store.transaction() as c:
         H.say(c, "bot:ops", "human:ana", "Done.", conversation_id=cid)
@@ -219,19 +225,7 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         with api.app.state.store.read() as c:
             return c.execute("SELECT read_at FROM messages WHERE id=?", (note,)).fetchone()[0]
 
-    # hubtools._call answers an old name with `renamed` and the new name; it does not run the old name.
-    err, out = call(api, "hub_history", {"conversation": cid})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_conversation_show" and "messages" not in out
-    err, out = call(api, "hub_say", {"to": "ops", "text": "Said under the old name"})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_send"
-    err, out = call(api, "hub_ack", {"message_id": note})
-    assert err and out["error"] == "renamed" and out["renamed_to"] == "hub_message_mark_read"
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM messages WHERE body='Said under the old name'").fetchone()[0] == 0
-    assert read_at() is None
-
-    # The new names answer the same request, so a bot that retries under them gets its answer.
-    err, page = call(api, "hub_conversation_show", {"conversation": cid})
+    err, page = call(api, "tico_conversation_show", {"conversation": cid})
     rest = read(api, cid)
     assert not err and page == {
         "conversation": rest["conversation"],
@@ -239,11 +233,12 @@ def test_an_old_mcp_name_is_refused_with_its_new_name_and_writes_nothing(api):
         "has_more": rest["has_more"],
         "next_before": rest["next_before"],
     }
-    # hub_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
+    # tico_message_send answers with the message itself (POST /messages), not wrapped as the reply route wraps it.
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "Said under the new name", "conversation_id": cid})
     assert not err and sent["conversation_id"] == cid and sent["body"] == "Said under the new name"
     assert "Said under the new name" in [m["body"] for m in read(api, cid)["messages"]]
-    err, _ = call(api, "hub_message_mark_read", {"message_id": note})
+    assert read_at() is None
+    err, _ = call(api, "tico_message_mark_read", {"message_id": note})
     assert not err and read_at() is not None
 
 

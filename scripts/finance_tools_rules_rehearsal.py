@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Rehearse Tico Finance's bot tools and rules on a local stack with simulated services.
 
-The eight checks drive the spec's bot tools (section 7.1: the six offered `hub_finance_*` tools, on the hub's MCP endpoint
-and on the local stdio MCP, plus the `hub finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
+The eight checks drive the spec's bot tools (section 7.1: the six offered `tico_finance_*` tools, on the hub's MCP endpoint
+and on the local stdio MCP, plus the `tico finance` CLI) against a running demo and the fake Mercury. This is a rehearsal,
 not the proof: real Mercury credentials are never used, and a pass here does not show that the real bank run works.
 Exit 0 only when every check passes.
 
@@ -83,7 +83,7 @@ SPEC_KINDS = (
     "account_update",
 )
 # spec 7.1: the tools offered (card fill is unlisted: hubtools.UNLISTED). The CLI subcommand is the tool name without
-# `hub_finance_`, with dashes.
+# `tico_finance_`, with dashes.
 SPEC_TOOLS = ("search", "report", "metric", "act", "action", "inbox")
 RIGHTS = ("finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards")
 # business tables a refused or retried action must not change (counted, read-only)
@@ -110,7 +110,7 @@ DEFAULT_RULES = (
 DECIDED = {"committed": ("allow", "limit"), "needs_approval": ("needs_approval",), "denied": ("deny",)}
 # fields that are a call's own clock, not part of the answer
 VOLATILE = ("as_of",)
-# the leaf parser of `hub finance <sub>`, read from clients/hubcli.py's own parser (argument dests, not help text)
+# the leaf parser of `tico finance <sub>`, read from clients/hubcli.py's own parser (argument dests, not help text)
 PARSER_SPEC = (
     "import argparse, json, sys\n"
     "sys.path.insert(0, sys.argv[1])\n"
@@ -345,7 +345,7 @@ class Demo:
             args["operation_id"] = op
         if dry:
             args["dry_run"] = True
-        is_err, out = self.mcp(token, "hub_finance_act", args)
+        is_err, out = self.mcp(token, "tico_finance_act", args)
         return norm(is_err, out)
 
     def rows(self, sql, args=()):
@@ -448,7 +448,7 @@ def cli_spec(sub):
         check=False,
     )
     if done.returncode != 0 or not done.stdout.strip():
-        raise RuntimeError(f"could not read `hub finance {sub}`'s parser: {done.stderr[-200:]}")
+        raise RuntimeError(f"could not read `tico finance {sub}`'s parser: {done.stderr[-200:]}")
     spec = json.loads(done.stdout)
     return spec["positional"], set(spec["options"])
 
@@ -663,11 +663,11 @@ def add_payee(d, fx, name, run, tag, account):
 def check1_surface(d, run, fx):
     hub = d.mcp_tools(d.owner)
     local = d.local_mcp(d.owner)[0]["result"]["tools"]
-    spec_names = sorted(f"hub_finance_{t.replace('-', '_')}" for t in SPEC_TOOLS)
-    hub_names = sorted(t["name"] for t in hub if t["name"].startswith("hub_finance_"))
-    local_names = sorted(t["name"] for t in local if t["name"].startswith("hub_finance_"))
+    spec_names = sorted(f"tico_finance_{t.replace('-', '_')}" for t in SPEC_TOOLS)
+    hub_names = sorted(t["name"] for t in hub if t["name"].startswith("tico_finance_"))
+    local_names = sorted(t["name"] for t in local if t["name"].startswith("tico_finance_"))
     run.check(
-        "the hub's MCP and the local MCP each list the six hub_finance_* tools and not card fill (spec 7.1)",
+        "the hub's MCP and the local MCP each list the six tico_finance_* tools and not card fill (spec 7.1)",
         hub_names == spec_names and local_names == spec_names,
         {"hub": hub_names, "local": local_names},
     )
@@ -679,7 +679,7 @@ def check1_surface(d, run, fx):
                 "id": 2,
                 "method": "tools/call",
                 "params": {
-                    "name": "hub_finance_card_fill",
+                    "name": "tico_finance_card_fill",
                     "arguments": {"card_id": "crd_x", "merchant": "example.com", "amount": 100},
                 },
             }
@@ -707,16 +707,16 @@ def check1_surface(d, run, fx):
     )
     schema = {t["name"]: set((t.get("inputSchema") or {}).get("properties", {}).keys()) for t in hub + local}
     for sub in SPEC_TOOLS:
-        tool = "hub_finance_" + sub.replace("-", "_")
+        tool = "tico_finance_" + sub.replace("-", "_")
         positionals, options = cli_spec(sub)
         cli_args = set(positionals) | options
         mcp_args = schema.get(tool, set())
         run.check(
-            f"{tool} and `hub finance {sub}` take the same arguments",
+            f"{tool} and `tico finance {sub}` take the same arguments",
             cli_args == mcp_args,
             f"MCP only: {sorted(mcp_args - cli_args)}; CLI only: {sorted(cli_args - mcp_args)}",
         )
-    _, mk = d.mcp(d.owner, "hub_finance_act", {"kind": "help"})
+    _, mk = d.mcp(d.owner, "tico_finance_act", {"kind": "help"})
     _, ck = d.cli(d.owner, ["finance", "act", "help"])
     listings = {
         "MCP": {k["kind"]: k for k in (mk.get("kinds") or []) if isinstance(k, dict)},
@@ -752,7 +752,7 @@ def check2_same_answer(d, run, fx):
         ("action", {"action_id": "act_missing_" + fx["rid"]}),
     ]
     for sub, args in reads:
-        tool = "hub_finance_" + sub.replace("-", "_")
+        tool = "tico_finance_" + sub.replace("-", "_")
         _, m = d.mcp(d.owner, tool, args)
         positionals, _ = cli_spec(sub)
         _, c = d.cli(d.owner, cli_argv(sub, args, positionals))
@@ -835,7 +835,7 @@ def check3_bad_input(d, run, fx):
     run.check("malformed JSON on the CLI is refused", rc != 0 or "error" in json.dumps(out).lower(), out)
     is_err, out = d.mcp(
         d.owner,
-        "hub_finance_act",
+        "tico_finance_act",
         {"kind": "bill_create", "payload": "{not json", "operation_id": f"{rid}-malformed-mcp"},
     )
     run.check(
@@ -983,14 +983,14 @@ def check5_rights(d, run, fx):
         res = d.act(tok, kind, payload, dry=True)
         run.check(label, denied(res) if want_denied else not denied(res), res["raw"])
     for label, tok in (("owner", d.owner), ("ben", ben), ("cara", cara), ("finance bot", fin), ("plain bot", plain)):
-        is_err, out = d.mcp(tok, "hub_finance_metric", {"name": "cash"})
+        is_err, out = d.mcp(tok, "tico_finance_metric", {"name": "cash"})
         allowed = not is_err and "not_found" not in json.dumps(out).lower()
         run.check(
             f"cash is readable only by a viewer with the sources view ({label})",
             allowed == (label in ("owner", "cara", "finance bot")),
             str(out)[:200],
         )
-    is_err, out = d.mcp(plain, "hub_finance_inbox", {})
+    is_err, out = d.mcp(plain, "tico_finance_inbox", {})
     run.check("a bot without finance rights can still read its inbox", not is_err, str(out)[:200])
     res = d.act(
         d.owner,
@@ -1005,8 +1005,8 @@ def check5_rights(d, run, fx):
     run.check(
         "owner books a revenue journal, so there is revenue to keep from ben", res["status"] == "committed", res["raw"]
     )
-    _, own = d.mcp(d.owner, "hub_finance_report", {"kind": "pnl"})
-    _, rep = d.mcp(ben, "hub_finance_report", {"kind": "pnl"})
+    _, own = d.mcp(d.owner, "tico_finance_report", {"kind": "pnl"})
+    _, rep = d.mcp(ben, "tico_finance_report", {"kind": "pnl"})
     own_types = {r.get("type") for r in (own.get("rows") or [])} if isinstance(own, dict) else set()
     ben_types = {r.get("type") for r in (rep.get("rows") or [])} if isinstance(rep, dict) else set()
     run.check(
@@ -1043,8 +1043,8 @@ def check5_rights(d, run, fx):
         {"vendor_id": fx["vendor"], "bill_date": TODAY, "lines": [{"account_id": fx["expense"], "amount": 300}]},
         op=f"{rid}-visibility",
     )
-    e1, o1 = d.mcp(plain, "hub_finance_action", {"action_id": made["action_id"]})
-    e2, o2 = d.mcp(plain, "hub_finance_action", {"action_id": "act_nope_" + rid})
+    e1, o1 = d.mcp(plain, "tico_finance_action", {"action_id": made["action_id"]})
+    e2, o2 = d.mcp(plain, "tico_finance_action", {"action_id": "act_nope_" + rid})
     r1, r2 = norm(e1, o1), norm(e2, o2)
     run.check(
         "the plain bot reads another person's action as not found, the same as a missing one",

@@ -1,4 +1,4 @@
-"""`hub doc ask` (clients/docs_ask.py): a bot asks the Librarian in a DM flagged needs-action; a person asks
+"""`tico doc ask` (clients/docs_ask.py): a bot asks the Librarian in a DM flagged needs-action; a person asks
 through their own docs conversation. Both come back as {answer, citations, covered}."""
 
 from clients import docs_ask as D, hubcli, hubtools
@@ -46,14 +46,14 @@ def test_the_cli_and_the_tools_declare_ask_and_fetch_and_the_server_never_offers
     parsed = hubcli.parser().parse_args(["doc", "fetch", "https://example.com", "--max-chars", "900"])
     assert (parsed.fn, parsed.url, parsed.max_chars) == ("doc fetch", "https://example.com", 900)
     assert hubcli.parser().parse_args(["doc", "ask", "Why?"]).fn == "doc ask"
-    assert {t["name"] for t in hubtools.listing()} >= {"hub_doc_ask"}
-    assert "hub_doc_fetch" not in {t["name"] for t in hubtools.listing()}  # the server's door
-    assert "hub_doc_fetch" in {t["name"] for t in hubtools.listing(local=True)}  # this computer's
+    assert {t["name"] for t in hubtools.listing()} >= {"tico_doc_ask"}
+    assert "tico_doc_fetch" not in {t["name"] for t in hubtools.listing()}  # the server's door
+    assert "tico_doc_fetch" in {t["name"] for t in hubtools.listing(local=True)}  # this computer's
     call = {
         "jsonrpc": "2.0",
         "id": 1,
         "method": "tools/call",
-        "params": {"name": "hub_doc_fetch", "arguments": {"url": "http://169.254.169.254/"}},
+        "params": {"name": "tico_doc_fetch", "arguments": {"url": "http://169.254.169.254/"}},
     }
     unknown = hubtools.Protocol(None).handle(call)["result"]
     assert unknown["isError"] is True and unknown["structuredContent"]["error"] == "local_only"
@@ -85,4 +85,4 @@ def test_timeout_ids_resume_without_sending_a_second_question_and_mcp_waits_are_
     assert now[0] == 20
     assert next(c for c in api.calls if c[:2] == ("POST", "messages"))[2]["wait_s"] == 20
     assert hubcli.parser().parse_args(["doc", "ask-status", "c1", "m1"]).fn == "doc ask-status"
-    assert "hub_doc_ask_status" in {t["name"] for t in hubtools.listing()}
+    assert "tico_doc_ask_status" in {t["name"] for t in hubtools.listing()}

@@ -21,7 +21,7 @@
      "steps": [
        {"id": "f1", "type": "filter", "enabled": true, "rules": [
          {"when": [{"field": "message.from", "op": "contains", "value": "newsletter"}], "match": "any", "then": ["archive"], "stop": true}]},
-       {"id": "dc1", "type": "decide", "enabled": true, "set": "mail-triage@1", "level": "medium", "out": "d1"},
+       {"id": "dc1", "type": "decide", "enabled": true, "set": "mail-triage@1", "out": "d1"},
        {"id": "p1", "type": "paths", "enabled": true,
         "paths": [
           {"name": "Reply", "when": [{"field": "d1.bucket", "op": "is", "value": "reply", "min": 0.7}], "steps": [

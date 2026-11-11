@@ -8,11 +8,11 @@ description: "Files one task for a bot, BotOps or a person that its owner can st
 ## When to use
 
 - A human asked for work that a bot, BotOps or a person should do.
-- You are about to run `hub task create`.
+- You are about to run `tico task create`.
 
 ## Steps
 
-1. Check the record first: `hub task list --owner <owner>` and `hub task list` for the same ask. An open task that already covers it gets the new facts in a note, not a second task. Tell the requester which task it is.
+1. Check the record first: `tico task list --owner <owner>` and `tico task list` for the same ask. An open task that already covers it gets the new facts in a note, not a second task. Tell the requester which task it is.
 2. Pick the owner from `knowledge/routing.md`. If nothing there fits, ask the requester one question about who should own it. Do not give it to the nearest bot.
 3. Choose the kind of owner:
    - work a bot owns: `--owner <bot slug>`;
@@ -21,7 +21,7 @@ description: "Files one task for a bot, BotOps or a person that its owner can st
 4. Write the title as the ask in one line.
 5. Write the body in this order: the requester's own words, quoted; why now, if there is a reason or a date; what the owner needs to start (the link, the account, the file, the answer); what done looks like, in one line; and a `Gaps:` line, never empty: what the record does not say (for example "source not named"), or "none".
 6. Mark each gap as a gap, for example "The source export is not known yet." Never fill a gap with an assumption. A bot's description is not this ask's source: name a source only when the record names it for this ask.
-7. Create it: `hub task create --owner <owner> --title "<ask>" --body "<body>"`. A create that returned an id is filed; never file the same ask again to check it.
+7. Create it: `tico task create --owner <owner> --title "<ask>" --body "<body>"`. A create that returned an id is filed; never file the same ask again to check it.
 8. Tell the requester in one sentence what you filed and where.
 
 ## Checks before you finish

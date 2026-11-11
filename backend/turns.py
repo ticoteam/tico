@@ -109,7 +109,7 @@ def build_steps(rows):
     return steps[:STEP_LIMIT]
 
 
-# A shell call's events name the program it runs (the runner's summary: `npm`, or `hub task close`), never its
+# A shell call's events name the program it runs (the runner's summary: `npm`, or `tico task close`), never its
 # arguments. These tool names are shells.
 SHELL_TOOLS = {"bash", "shell"}
 # The words a shell line may start with before its work (`cd web && npm test`, `export X=1 && npm test`). The runner
@@ -151,18 +151,15 @@ SHELL_PROGRAMS = {
 HUB_PHRASES = {
     "task create": "Filing a task",
     "task close": "Closing a task",
-    "task bulk": "Changing tasks",
+    "task done": "Finishing a task",
+    "task move": "Moving a task",
+    "task reassign": "Handing a task over",
     "task list": "Listing tasks",
     "task show": "Reading a task",
     "task update": "Updating a task",
     "task comment": "Commenting on a task",
-    "task question": "Asking a teammate",
-    "needs you": "Reading the Needs you list",
-    "approval list": "Reading approvals",
-    "approval show": "Reading approvals",
-    "approval read back": "Preparing approvals for your yes",
-    "approval approve": "Approving",
-    "approval decline": "Declining approvals",
+    "task ask": "Asking a teammate",
+    "task answer": "Answering an ask",
     "message list": "Reading messages",
     "message send": "Sending a message",
     "conversation show": "Reading the chat",
@@ -205,16 +202,22 @@ HUB_PHRASES = {
 }
 
 
+CLI_NAMES = ("tico", "hub")  # the teamwork CLI, and its old name
+
+
 def hub_words(text):
-    """A hub call's CLI words, lowercased and split on anything but letters and digits, from a shell summary
-    (`hub approval read-back`) or an MCP tool name (`mcp__hub__hub_approval_read_back`). None for any other tool."""
+    """A Tico CLI call's words, lowercased and split on anything but letters and digits, from a shell summary
+    (`tico task show`, or the same under the CLI's old name `hub`) or a Tico MCP tool name (`tico_task_show`, or
+    `mcp__tico__tico_task_show` with the harness's server prefix). None for any other tool."""
     words = re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
-    if words[:1] == ["mcp"]:
+    if words[:2] == ["mcp", "tico"]:
         words = words[1:]
-    if words[:1] != ["hub"]:
+    elif words[:1] == ["mcp"]:
+        return None
+    if words[:1] not in (["hub"], ["tico"]):
         return None
     words = words[1:]
-    if words[:1] == ["hub"]:  # an MCP tool named hub_<command>
+    if words[:1] == ["tico"]:  # mcp__tico__tico_<command>
         words = words[1:]
     return words
 
@@ -244,7 +247,7 @@ def strip_setup(words):
         rest = words[1:]
         if words[0] in ("cd", "source", "."):
             # Its one argument (a directory or a file) is skipped unless it is the work itself: `cd npm` is npm.
-            if len(rest) > 1 and rest[0] != "hub" and rest[0] not in SHELL_PROGRAMS:
+            if len(rest) > 1 and rest[0] not in CLI_NAMES and rest[0] not in SHELL_PROGRAMS:
                 rest = rest[1:]
         else:
             while rest and "=" in rest[0]:
@@ -257,15 +260,15 @@ def strip_setup(words):
 
 def shell_label(summary):
     """A shell call's label from its summary, or None when the summary is neither a hub command nor one program from
-    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && hub task list` reads as the hub command.
+    SHELL_PROGRAMS. A setup prefix (`cd web &&`) is skipped first, so `cd web && tico task list` reads as the hub command.
     A hub command's summary is `hub` and its command path (the runner checks the path against the CLI's command list):
     its phrase when it has one, else just `Ran hub`, since an old stored summary can hold argument words."""
     words = strip_setup(summary.split())
-    if words[:1] == ["hub"]:
+    if words[:1] and words[0] in CLI_NAMES:
         phrase = hub_phrase(hub_words(" ".join(words)) or [])
         if phrase:
             return phrase
-        return "Ran hub"
+        return "Ran " + words[0]
     if len(words) == 1 and words[0] in SHELL_PROGRAMS:
         return "Ran " + words[0]
     return None
@@ -448,7 +451,7 @@ def mark_prompts(c, messages):
     runs = c.execute(
         f"SELECT a.bot_id,a.state,coalesce(a.started_at,a.created_at) AS began,a.finished_at,t.sender_id,"
         " EXISTS(SELECT 1 FROM attempt_inputs i JOIN messages im ON im.id=i.message_id"
-        f"  WHERE i.attempt_id=a.id AND {H.person_sent_sql('im')}) AS person"
+        f"  WHERE i.attempt_id=a.id AND {H.in_person_name_sql('im')}) AS person"
         " FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages t ON t.id=j.message_id"
         f" WHERE a.bot_id IN ({','.join('?' * len(bots))}) AND coalesce(a.started_at,a.created_at)<=?"
         " AND ((a.finished_at IS NULL AND a.state IN ('leased','running')) OR a.finished_at>=?)",

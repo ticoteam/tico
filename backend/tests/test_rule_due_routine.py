@@ -7,12 +7,14 @@ import json
 from datetime import datetime, timedelta, timezone
 
 from backend import rule_due as D
+from backend import task_calls as TC
+from backend import task_engine as E
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401  (the api fixture)
-from backend.tests.test_automation_api import patch
-from backend.tests.test_automation_due import drain, runs_of, tick
-from backend.tests.test_automation_runs import sql
-from backend.tests.test_org_rules import org, rule
+from backend.tests.helpers.api import get, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.automation_api import patch
+from backend.tests.helpers.automation_due import drain, runs_of, tick
+from backend.tests.helpers.automation_runs import sql
+from backend.tests.helpers.org_rules import org, rule
 
 TEXT = "File the Acme sales tax return."
 
@@ -43,6 +45,16 @@ def tasks(api, aid):
 def write(api, fn, *args, **kw):
     with api.app.state.store.transaction() as c:
         return fn(c, *args, **kw)
+
+
+def done(c, actor, task_id):
+    """`actor` says the task's work is finished (its owner, or someone else who may say so): in General, it is Done."""
+    return TC.task_done(c, actor, task_id, seen_version=E.task(c, task_id)["version"])
+
+
+def move(c, actor, task_id, to, why="Moved on"):
+    """A move through the engine: reopen or close, with the version the mover saw."""
+    return E.move(c, task_id, to, actor, why, seen_version=E.task(c, task_id)["version"])
 
 
 def marks(api, due_id):
@@ -79,16 +91,14 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     aid = due["routine_id"]
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, aid)
-    write(api, H.task_update, "human:ana", task["id"], status="done")  # a mover's or manager's done is not
+    write(api, done, "human:ana", task["id"])  # a mover's or manager's done is not
     assert marks(api, due["id"]) == []
-    write(api, H.task_update, "bot:ops", task["id"], status="doing")
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, move, "bot:ops", task["id"], E.REOPEN)
+    write(api, done, "bot:ops", task["id"])
     assert marks(api, due["id"]) == [
         {"due_on": "2030-03-01", "satisfied_by": "bot:ops", "via": "routine", "task_id": task["id"]}
     ]
-    write(api, H.task_update, "bot:ops", task["id"], status="declined")  # a finished task declined keeps its mark
-    assert len(marks(api, due["id"])) == 1
-    write(api, H.task_update, "bot:ops", task["id"], status="doing")
+    write(api, move, "bot:ops", task["id"], E.REOPEN)
     assert marks(api, due["id"]) == []
     actions = sql(
         api, "SELECT before, after FROM audit_log WHERE object=? AND via='routine'", ("org_rule:" + due["rule_id"],)
@@ -96,19 +106,20 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     assert len(actions) == 2  # the mark and its removal are both on record
 
 
-def test_a_keeper_close_or_a_decline_marks_nothing_and_a_persons_close_does(api):
+def test_a_keeper_close_or_a_bots_close_marks_nothing_and_a_persons_close_does(api):
     _, due = linked(api, first="2030-03-01", repeats="monthly", days=0)
     aid = due["routine_id"]
     tick(api, datetime(2030, 4, 1, 0, 0, 5, tzinfo=timezone.utc))
     march, april = tasks(api, aid)
-    write(api, H.task_close, H.KEEPER, march["id"])
-    write(api, H.task_update, "bot:ops", april["id"], status="declined")
+    write(api, move, H.KEEPER, march["id"], E.CLOSED)
+    write(api, move, "bot:ops", april["id"], E.CLOSED)
     assert marks(api, due["id"]) == []
     tick(api, datetime(2030, 5, 1, 0, 0, 5, tzinfo=timezone.utc))
     may = tasks(api, aid)[-1]
-    write(api, H.task_close, "human:ana", may["id"])
+    write(api, move, "human:ana", may["id"], E.CLOSED)
     assert [(m["due_on"], m["satisfied_by"]) for m in marks(api, due["id"])] == [("2030-05-01", "human:ana")]
-    write(api, H.task_update, "bot:ops", march["id"], status="done")  # the owner's done after the keeper's close
+    write(api, move, "bot:ops", march["id"], E.REOPEN)  # the owner's done after the keeper's close
+    write(api, done, "bot:ops", march["id"])
     assert sorted(m["due_on"] for m in marks(api, due["id"])) == ["2030-03-01", "2030-05-01"]
 
 
@@ -117,7 +128,7 @@ def test_a_late_completion_of_an_older_occurrence_marks_that_one(api):
     aid = due["routine_id"]
     tick(api, datetime(2030, 2, 28, 0, 0, 5, tzinfo=timezone.utc))
     january, february = tasks(api, aid)
-    write(api, H.task_update, "bot:ops", january["id"], status="done")
+    write(api, done, "bot:ops", january["id"])
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-01-31"]
     assert february["status"] == "open"
 
@@ -165,7 +176,7 @@ def test_a_task_opened_before_an_edit_marks_the_ended_row_even_when_the_new_sche
     tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, aid)
     edited = post(api, f"rule-due/{due['id']}", {"repeats": "quarterly"})
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, done, "bot:ops", task["id"])
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
     assert marks(api, edited["id"]) == []
 
@@ -175,7 +186,7 @@ def test_a_task_outliving_its_routine_still_marks_its_day(api):
     tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, due["routine_id"])
     post(api, f"rule-due/{due['id']}", {"task_days": None})
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, done, "bot:ops", task["id"])
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
 
 
@@ -221,7 +232,7 @@ def test_a_late_completion_after_run_detail_is_pruned_still_marks_its_day_and_th
     [task] = tasks(api, due["routine_id"])
     edited = post(api, f"rule-due/{due['id']}", {"repeats": "quarterly"})
     prune_runs(api, 31)
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, done, "bot:ops", task["id"])
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
     assert marks(api, edited["id"]) == []
 
@@ -231,7 +242,7 @@ def test_a_task_opened_by_run_now_marks_its_day(api):
     run = post(api, f"automations/{due['routine_id']}/run", {})["run"]
     assert run["trigger_ref"] == "manual"
     [task] = tasks(api, due["routine_id"])
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, done, "bot:ops", task["id"])
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
 
 
@@ -302,7 +313,7 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
     )
     [opened] = tasks(api, mine["id"])
     assert sql(api, "SELECT rule_due_id FROM tasks WHERE id=?", (opened["id"],))[0]["rule_due_id"] is None
-    write(api, H.task_update, "human:cara", opened["id"], status="done")
+    write(api, done, "human:cara", opened["id"])
     # A task stamped with Ana's due date by a routine that never was its routine marks nothing either.
     forged = write(
         api,
@@ -314,12 +325,12 @@ def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_no
         occurrence=f"{mine['id']}:2030-03-01",
         rule_due_id=due["id"],
     )
-    write(api, H.task_update, "human:cara", forged["id"], status="done")
+    write(api, done, "human:cara", forged["id"])
     assert marks(api, due["id"]) == []
     # The linked routine's own task still does, and its refs name the due date.
     tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, due["routine_id"])
     refs = sql(api, "SELECT refs FROM messages WHERE json_extract(refs,'$.automation')=?", (due["routine_id"],))
     assert any(json.loads(ref["refs"]).get("rule_due_id") == due["id"] for ref in refs)
-    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    write(api, done, "bot:ops", task["id"])
     assert [(m["due_on"], m["task_id"]) for m in marks(api, due["id"])] == [("2030-03-01", task["id"])]

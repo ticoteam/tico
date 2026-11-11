@@ -3,8 +3,8 @@
 import json
 import uuid
 
-from backend.tests.test_worktrees import api, gh, prepared, post, auth  # noqa: F401
-from backend.tests.test_worktree_old_runner_residual_review import heartbeat
+from backend.tests.helpers.worktrees import api, gh, prepared, post, auth  # noqa: F401
+from backend.tests.helpers.worktree_old_runner_residual_review import heartbeat
 
 
 def test_old_human_restore_recovers_unknown_without_demoting_or_inventing_proof(prepared):

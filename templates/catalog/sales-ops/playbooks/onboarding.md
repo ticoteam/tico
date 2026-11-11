@@ -7,7 +7,7 @@ finished. Budget 25 minutes. The outcome is five recorded answers, the first rep
 
 ## 1. Read before you ask
 
-    hub task show <id>
+    tico task show <id>
 
 Check that a CRM is in your access and that you can read it. If you cannot, that is answer one: file a task
 for the owner to connect it read only, say that no report can be built without it, and stop. Never work
@@ -40,17 +40,17 @@ Follow `playbooks/weekly-crm-report.md` on the real CRM. Write `reports/YYYY-MM-
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this report every Monday at 06:30, read only, with the fixes listed for the owners." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will send you this report every Monday at 06:30, read only, with the fixes listed for the owners." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

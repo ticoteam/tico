@@ -17,211 +17,33 @@ import httpx
 import pytest
 
 from backend import cloud_access, cloud_machines as CM, placement, readiness
+from backend.cloud_machine_health import file_card as file_health_card
 from backend.store import H, Problem
-from backend.tests.test_api import api, assign, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_cloud_access import signals
-from backend.tests.test_credentials import setup
-from backend.tests.test_model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, on
-from backend.tests.test_member_bots import botops  # noqa: F401 - fixture for settings confirmation
+from backend.tests.helpers.api import assign, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.cloud_access import signals
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, give, on
+from backend.tests.helpers.member_bots import botops  # noqa: F401 - fixture for settings confirmation
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
 from backend import bot_settings as BS
-
-SIZES = [
-    {"name": name, "cpu": cpu, "memory_gb": cpu * 2, "usd_per_hour": 0.05 * cpu, "start_usd": 0.04, "idle_stop_s": idle}
-    for name, cpu, idle in (("small", 1, 600), ("default", 2, 300), ("large", 4, 180), ("xlarge", 8, 120))
-]
-
-
-class FakeHQ:
-    """The machines routes as Python calls. `fail[action]` is a Refused to raise (once each), or a list of them."""
-
-    def __init__(self):
-        self.calls, self.fail, self.machines, self.n = [], {}, {}, 0
-        self.clock = None  # a test's fake clock (an ISO time): start and stop then stamp as HQ does
-
-    def _check(self, action):
-        failing = self.fail.get(action)
-        if isinstance(failing, list) and failing:
-            raise failing.pop(0)
-        if isinstance(failing, CM.Refused):
-            raise failing
-
-    def _machine(self, mid, **changes):
-        self.machines[mid].update(changes)
-        return dict(self.machines[mid])
-
-    def list(self):
-        self.calls.append(("list",))
-        return {"machines": [dict(m) for m in self.machines.values()], "sizes": SIZES, "caps": {"machines": 10}}
-
-    def create(self, key, size, enroll_token, hub_url):
-        self.calls.append(("create", key, size, enroll_token, hub_url))
-        self._check("create")
-        for machine in self.machines.values():
-            if machine["key"] == key and machine["state"] not in ("deleted", "failed"):
-                return dict(machine)
-        for machine in self.machines.values():  # as HQ: the dead one is kept under a renamed key
-            if machine["key"] == key:
-                machine["key"] = f"{key}:superseded:{machine['id']}"
-        self.n += 1
-        mid = f"m{self.n}"
-        self.machines[mid] = {
-            "id": mid,
-            "key": key,
-            "size": size,
-            "state": "starting",
-            "started_at": H.now(),
-            "stopped_at": None,
-            "cost_month_usd": 0.0,
-            "starts_month": 1,
-            "last_error": "",
-            "pending": None,
-        }
-        return dict(self.machines[mid])
-
-    def start(self, machine_id, size=None):
-        self.calls.append(("start", machine_id, size))
-        self._check("start")
-        machine = self.machines[machine_id]
-        changes = {"state": "starting", "size": size or machine["size"], "starts_month": machine["starts_month"] + 1}
-        if self.clock:
-            changes["started_at"] = self.clock()
-        return self._machine(machine_id, **changes)
-
-    def stop(self, machine_id):
-        self.calls.append(("stop", machine_id))
-        self._check("stop")
-        return self._machine(machine_id, state="stopped", stopped_at=self.clock() if self.clock else H.now())
-
-    def heartbeat(self, machine_id):
-        self.calls.append(("heartbeat", machine_id))
-        self._check("heartbeat")
-        return 300
-
-    def delete(self, machine_id):
-        self.calls.append(("delete", machine_id))
-        self._check("delete")
-        if machine_id not in self.machines or self.machines[machine_id]["state"] == "deleted":
-            raise CM.Refused("not_found", 404)
-        self.machines[machine_id]["state"] = "deleted"
-
-    def actions(self):
-        return [call[0] for call in self.calls if call[0] != "list"]
-
-
-@pytest.fixture
-def cloud(api, monkeypatch):  # noqa: F811
-    """A Tico Cloud company, open, with a fake HQ and a fake clock (`cloud.at[0]`, seconds)."""
-    store = api.app.state.store
-    cloud_access.apply(store, cloud_access.parse(signals("open")))
-    fake = FakeHQ()
-    manager = api.app.state.cloud_machines
-    monkeypatch.setattr(manager, "client", fake)
-    # The finished setup's bots go on cloud machines when HQ first lists sizes (test_a_setup_finished_before_...);
-    # here each test places its own.
-    monkeypatch.setattr(manager, "on_offered", None)
-    at = [CM.epoch(H.now())]
-    monkeypatch.setattr(CM, "now", lambda: at[0])
-    # These tests time a pause in seconds: 5 minutes (the least a person can set) keeps them at 300 s. The 30-minute
-    # default is tested on its own, in test_the_default_pause_is_30_minutes_of_idle_and_not_before.
-    monkeypatch.setattr(CM, "PAUSE_MINUTES", 5)
-
-    class Cloud:
-        pass
-
-    out = Cloud()
-    out.api, out.store, out.hq, out.manager, out.at = api, store, fake, manager, at
-
-    def tick(seconds=0):
-        at[0] += seconds
-        manager.tick()
-        return fake.actions()
-
-    out.tick = tick
-    tick()  # HQ lists its sizes: the option is offered
-    with store.read() as c:
-        assert CM.offered(c, store.settings)
-
-    def row(bot="ops"):
-        with store.read() as c:
-            return CM.row(c, bot)
-
-    out.row = row
-    return out
-
-
-def adopt(cloud, bot="ops", place="own"):
-    """The bot on a cloud machine; `place` own (most tests here are of one bot's own machine) or shared."""
-    with cloud.store.transaction() as c:
-        assert placement.auto_place(c, cloud.api.app.state.execution, bot) is None
-        CM.save(c, bot, placement=place)
-        CM.ensure_shared(c)
-    return cloud.row(bot)
-
-
-def work(cloud, bot="ops", text="Please summarize the current work."):
-    return post(cloud.api, "chat/" + bot, {"text": text})
-
-
-def enrolled(cloud, bot="ops"):
-    """Create the bot's own machine for its queued work and enroll its runner with the code HQ was handed."""
-    adopt(cloud, bot)
-    work(cloud, bot)
-    assert cloud.tick()[-1] == "create"
-    code = cloud.hq.calls[-1][3]
-    return post(cloud.api, "runners/enroll", {"code": code, "label": "boat-vm", "platform": "linux"})
-
-
-def employee(api, bot="ops"):  # noqa: F811
-    return next(e for e in api.get("/api/employees", headers=headers()).json() if e["name"] == bot)
-
-
-def events(cloud, action):
-    with cloud.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM events WHERE action=?", (action,))]
-
-
-# ----------------------------------------------------------------------------- the policy, pure
-def facts(**kw):
-    return {
-        "active": True,
-        "turns": False,
-        "activity": 0,
-        "want": None,
-        "want_at": 0,
-        "frozen": False,
-        "retry_now": False,
-        "update": None,
-        "updating": False,
-        **kw,
-    }
-
-
-def machine_row(**kw):
-    return {
-        "bot": "ops",
-        "mode": "cloud",
-        "size": "default",
-        "always_on": 0,
-        "machine_id": "m1",
-        "runner_id": "r1",
-        "state": "stopped",
-        "machine_size": "default",
-        "active_at": None,
-        "heartbeat_at": None,
-        "next_try_at": None,
-        "failures": 0,
-        "problem": "",
-        "problem_at": None,
-        "wake_key": None,
-        "woke_at": None,
-        "enroll_by": 0,
-        "enroll_fails": 0,
-        "pause_minutes": None,
-        **kw,
-    }
+from backend.tests.helpers.cloud_machines import (
+    FakeHQ,
+    SIZES,
+    adopt,
+    claim_on,
+    cloud,
+    employee,
+    enrolled,
+    events,
+    facts,
+    idle,
+    machine_row,
+    shared_enrolled,
+    stopped_when_idle,
+    work,
+)
 
 
 def test_decide_wakes_for_work_and_creates_on_first_use():
@@ -232,6 +54,46 @@ def test_decide_wakes_for_work_and_creates_on_first_use():
     assert CM.decide(machine_row(always_on=1), facts(), 1000, 300) == ("start", None)
     # Not active, or moved to another computer: a machine that is on stops, one that is off stays off.
     assert CM.decide(machine_row(state="running"), facts(active=False, want="job:a"), 1000, 300) == ("stop", None)
+
+
+def test_an_offline_own_machine_restarts_only_after_fifteen_minutes_of_runnable_work():
+    # HQ's start leaves a live machine as it is, so the restart is a stop; the work's wake then starts it.
+    current = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    HOUR = 3600  # a pause longer than the wait, so its idle stop is not the stop seen here
+    waiting = facts(want="job:a", want_at=1000, last_seen=1000)
+    assert CM.decide(current, waiting, 1899, HOUR)[0] != "stop"
+    assert CM.decide(current, waiting, 1900, HOUR) == ("stop", None)
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, turns=True), 1900, HOUR)[0] != "stop"
+    assert CM.decide(current, facts(want="job:a", want_at=1000, last_seen=1000, updating=True), 1900, HOUR)[0] != "stop"
+    assert (
+        CM.decide(current, facts(want="watcher:ops:daily:done", want_at=1000, last_seen=1000), 1900, HOUR)[0] != "stop"
+    )
+    assert (
+        CM.decide(
+            machine_row(bot=CM.SHARED, placement="shared", state="running", active_at=1000, heartbeat_at=1000),
+            waiting,
+            1900,
+            HOUR,
+        )[0]
+        != "stop"
+    )
+    assert not CM.offline_restart_ready({**current, "state": "stopping"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "state": "stopped"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "placement": "shared"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "size": "large", "machine_size": "small"}, waiting, 1900)
+    assert not CM.offline_restart_ready({**current, "stop_until": 1901}, waiting, 1900)
+
+
+def test_an_offline_restart_never_loops():
+    current = machine_row(state="running", active_at=0, heartbeat_at=0)
+    gap = CM.OFFLINE_RESTART_GAP
+    # Restarted at 1000 and never heard from since: no second restart, however long the work waits.
+    never_back = facts(want="job:a", want_at=0, last_seen=900, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, never_back, 1000 + 10 * gap)
+    # Back at 1100, silent again: not again within the gap, once after it.
+    flapping = facts(want="job:a", want_at=0, last_seen=1100, restarted_at=1000)
+    assert not CM.offline_restart_ready(current, flapping, 1000 + gap - 1)
+    assert CM.offline_restart_ready(current, flapping, 1000 + gap)
     assert CM.decide(machine_row(), facts(active=False, want="job:a"), 1000, 300) == (None, None)
     # A drain lets the turn out finish on it first.
     assert CM.decide(machine_row(state="running"), facts(active=False, turns=True), 1000, 300) == ("heartbeat", None)
@@ -934,6 +796,174 @@ def test_a_resume_right_after_a_stop_retries_soon_without_counting_a_failure(clo
     assert cloud.tick(10) == ["start"]
     assert cloud.row()["failures"] == 0 and cloud.row()["problem"] == ""
     assert cloud.tick(5) == ["start", "start"] and cloud.row()["state"] == "starting"
+
+
+def silent_with_waiting_work(cloud):
+    """An enrolled own machine still running at HQ, silent for 30 minutes, with a fresh runnable job."""
+    computer = enrolled(cloud)
+    idle(cloud)
+    work(cloud, text="Please run after the machine restarts.")
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", state="running")
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=-30), computer["runner_id"]),
+        )
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    return computer
+
+
+def test_an_offline_own_machine_is_restarted_and_recorded_without_a_person_card(cloud):
+    computer = silent_with_waiting_work(cloud)
+    # HQ's start leaves a running machine as it is: the restart stops it, and the waiting work starts it again.
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.row()["state"] == "stopped" and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    stopped = events(cloud, "cloud_machine.stopped")[-1]
+    assert json.loads(stopped["detail"])["reason"] == CM.OFFLINE_REASON
+    assert cloud.tick(1) == ["stop", "start"]
+    assert cloud.hq.machines["m1"]["state"] == "starting"
+    assert CM.machine_view(cloud.row())["restarting"] is True
+    reported(cloud, computer)
+    assert cloud.row()["problem"] == ""
+    # Silent again at once: not restarted again within the hour.
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=? WHERE runner_id=?", (H.now(), computer["runner_id"]))
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    cloud.tick(CM.OFFLINE_RESTART_DELAY + 1)
+    restarts = [e for e in events(cloud, "cloud_machine.stopped") if CM.OFFLINE_REASON in (e["detail"] or "")]
+    assert len(restarts) == 1
+    with cloud.store.read() as c:
+        active, want, _, _ = CM.bot_want(c, cloud.store.settings, "ops", computer["runner_id"], cloud.at[0])
+        assert active and want.startswith("job:")
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE title LIKE 'Health: Check %cloud machine' LIMIT 1").fetchone()
+
+
+def with_botops(cloud):
+    with cloud.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
+
+
+def machine_cards(cloud):
+    with cloud.store.read() as c:
+        return [
+            dict(r)
+            for r in c.execute("SELECT title,body,owner_id,status FROM tasks WHERE title LIKE 'Check %cloud machine'")
+        ]
+
+
+@pytest.mark.parametrize(("code", "status"), [("starts_full", 429), ("cpu_cap", 409)])
+def test_a_refused_offline_restart_files_one_botops_task_and_keeps_the_existing_retry(cloud, code, status):
+    with_botops(cloud)
+    silent_with_waiting_work(cloud)
+    cloud.hq.fail["start"] = [CM.Refused(code, status), CM.Refused(code, status)]
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.tick(1) == ["stop", "start"]
+    current = cloud.row()
+    assert current["machine_id"] == "m1" and current["problem"] == "hq:" + code
+    assert current["next_try_at"] == cloud.at[0] + CM.BACKOFF
+    cards = machine_cards(cloud)
+    assert len(cards) == 1
+    card = cards[0]
+    assert card["owner_id"] == H.bot_actor(H.FLEET_MAINTAINER)
+    assert "ops" in card["body"] and code in card["body"] and "will not replace the machine" in card["body"]
+    assert "Replace the machine, or check it." in card["body"]
+    assert "keeper" not in (card["title"] + card["body"]).lower()
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM tasks WHERE owner_id LIKE 'human:%' LIMIT 1").fetchone()
+    cloud.hq.calls.clear()
+    assert cloud.tick(14) == []
+    # The retry is refused again: still one open task.
+    assert cloud.tick(CM.BACKOFF) == ["start"]
+    assert len(machine_cards(cloud)) == 1
+
+
+def test_the_refused_restart_task_is_one_open_per_bot_and_only_with_botops(cloud):
+    adopt(cloud)
+    with cloud.store.transaction() as c:
+        assert file_health_card(c, "ops", "starts_full", cloud.at[0]) is None  # no BotOps: nothing filed
+    assert machine_cards(cloud) == []
+    with_botops(cloud)
+    with cloud.store.transaction() as c:
+        first = file_health_card(c, "ops", "starts_full", cloud.at[0])
+        assert first and file_health_card(c, "ops", "cpu_cap", cloud.at[0]) is None
+    assert len(machine_cards(cloud)) == 1
+    with cloud.store.transaction() as c:
+        H.task_done(c, H.KEEPER, first, "Machine replaced.")
+        assert file_health_card(c, "ops", "cpu_cap", cloud.at[0])  # closed: the next refusal files a new one
+
+
+def restarted(cloud):
+    """An offline restart under way: stopped for it, then started by the work's wake. Returns the computer."""
+    computer = silent_with_waiting_work(cloud)
+    assert cloud.tick(CM.OFFLINE_RESTART_DELAY + 1) == ["stop"]
+    assert cloud.tick(1) == ["stop", "start"]
+    assert cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    return computer
+
+
+def person_reach(cloud):
+    with cloud.store.read() as c:
+        return (
+            c.execute("SELECT count(*) FROM tasks WHERE owner_id LIKE 'human:%'").fetchone()[0],
+            c.execute("SELECT count(*) FROM message_deliveries WHERE recipient LIKE 'human:%'").fetchone()[0],
+        )
+
+
+def test_a_restart_that_never_checks_in_fails_once_to_botops_and_does_not_loop(cloud):
+    with_botops(cloud)
+    restarted(cloud)
+    before = person_reach(cloud)
+    for _ in range(CM.OFFLINE_RESTART_DELAY // 60 - 1):  # past the 5-minute pause these tests set: not idle yet
+        cloud.tick(60)
+    cloud.tick(58)  # one second short of the stop's deadline
+    assert cloud.row()["state"] == "starting" and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
+    assert machine_cards(cloud) == []
+    cloud.tick(1)
+    assert cloud.row()["problem"] == "" and CM.machine_view(cloud.row())["restarting"] is False
+    (card,) = machine_cards(cloud)
+    assert card["owner_id"] == H.bot_actor(H.FLEET_MAINTAINER) and card["status"] == "open"
+    assert "ops" in card["body"] and "did not come back" in card["body"] and "refused" not in card["body"]
+    assert len(events(cloud, "cloud_machine.restart_failed")) == 1
+    assert person_reach(cloud) == before  # nobody is told
+    # Still silent with work waiting, for hours: no second restart and no second task.
+    for _ in range(4):
+        cloud.tick(CM.OFFLINE_RESTART_GAP)
+    restarts = [e for e in events(cloud, "cloud_machine.stopped") if CM.OFFLINE_REASON in (e["detail"] or "")]
+    assert len(restarts) == 1
+    assert len(machine_cards(cloud)) == 1 and len(events(cloud, "cloud_machine.restart_failed")) == 1
+    assert person_reach(cloud) == before
+
+
+def test_a_restart_checked_in_before_its_deadline_files_nothing(cloud):
+    with_botops(cloud)
+    computer = restarted(cloud)
+    cloud.tick(CM.OFFLINE_RESTART_DELAY - 2)
+    reported(cloud, computer)
+    assert cloud.row()["problem"] == ""
+    cloud.tick(CM.OFFLINE_RESTART_DELAY)
+    assert machine_cards(cloud) == [] and events(cloud, "cloud_machine.restart_failed") == []
+
+
+def test_a_failed_restart_that_checks_in_later_can_be_restarted_again_after_the_hour(cloud):
+    with_botops(cloud)
+    computer = restarted(cloud)
+    cloud.tick(CM.OFFLINE_RESTART_DELAY)
+    assert len(machine_cards(cloud)) == 1
+    reported(cloud, computer)  # back after all: the next silence is a fresh one
+    assert cloud.row()["problem"] == ""
+    with cloud.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), minutes=5), computer["runner_id"]),
+        )
+        CM.save(c, "ops", state="running")
+    cloud.hq.machines["m1"]["state"] = "running"
+    cloud.hq.calls.clear()
+    cloud.tick(CM.OFFLINE_RESTART_GAP)
+    assert "stop" in cloud.hq.actions() and cloud.row()["problem"] == CM.OFFLINE_RESTARTING
 
 
 def test_a_same_choice_reposted_keeps_the_start_refusal_and_its_wake_guard(cloud):
@@ -2132,14 +2162,14 @@ def test_a_bot_manager_can_replace_without_losing_the_admins_plan_placement(clou
 
 
 def test_replace_through_botops_waits_for_the_persons_confirmation(cloud, botops):
-    from backend.tests.test_member_bots import turn
-    from backend.tests.test_settings_assistant import mcp
+    from backend.tests.helpers.member_bots import turn
+    from backend.tests.helpers.settings_assistant import mcp
 
     enrolled(cloud)
     attempt = turn(cloud.api, botops, "ana-test", "Replace ops's cloud machine")
     failed, card = mcp(
         cloud.api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "bot.cloud_machine.replace", "bot": "ops", "value": {}, "on_behalf_of": "turn"},
         attempt["token"],
     )
@@ -2231,22 +2261,6 @@ def stamp(cloud, ago=0):
 def placed(cloud):
     with cloud.store.read() as c:
         return {r["bot"]: r["runner_id"] for r in c.execute("SELECT bot,runner_id FROM assignments")}
-
-
-def shared_enrolled(cloud, *bots):
-    """These bots on the shared machine, made for the first one's work and enrolled; returns its computer's id."""
-    for bot in bots:
-        adopt(cloud, bot, "shared")
-    work(cloud, bots[0])
-    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == CM.SHARED
-    return post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})[
-        "runner_id"
-    ]
-
-
-def idle(cloud):
-    with cloud.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled'")
 
 
 def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
@@ -2991,11 +3005,6 @@ def leased(cloud, rid):
         ]
 
 
-def claim_on(cloud, computer, bot):
-    """A claim through the real route, as the machine's runner does it."""
-    return post(cloud.api, "jobs/claim", {"bot": bot, "start_places": True}, token=computer["token"])
-
-
 def going_idle(cloud, key, computer, bots):
     """The machine's runner ready for its bots, nothing queued, and the clock at its idle stop: `decide` says stop."""
     ready(cloud.api, computer, bots)
@@ -3163,16 +3172,6 @@ def reported(cloud, computer, release="", update=None, target=""):
     if update:
         body["update"] = {"state": update, "target": target}
     return post(cloud.api, "runners/heartbeat", body, token=computer["token"])
-
-
-def stopped_when_idle(cloud, key="ops"):
-    """Nothing queued for the machine and its clock at its pause: it is stopped."""
-    idle(cloud)
-    cloud.hq.calls.clear()
-    cloud.at[0] = cloud.row(key)["active_at"] + 300
-    cloud.tick()
-    assert cloud.hq.actions() == ["stop"] and cloud.row(key)["state"] == "stopped"
-    cloud.hq.calls.clear()
 
 
 def draining(cloud, bot, value):

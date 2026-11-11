@@ -54,21 +54,18 @@ readable, say so in the first report, not in the answer.
 ## 6. Check the routines
 
 Setting you up switched your routines on: the weekly delivery report (Mondays 09:30), the weekly release notes draft (Fridays
-14:00) and the daily merge queue watch (09:00 each day). Check them with `hub automation list` (if one shows off, run
-`hub automation update <id> --enable`). Tell the human in one line each: "I will write the pipeline report every Monday at
+14:00) and the daily merge queue watch (09:00 each day). Check them with `tico automation list` (if one shows off, run
+`tico automation update <id> --enable`). Tell the human in one line each: "I will write the pipeline report every Monday at
 09:30", "I will draft release notes every Friday at 14:00", "I will check the merge queue each morning and tell you only when a
 gate stalls." They can change or turn any of them off any time; there is nothing to approve.
 
 Record them in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to
 leave one off, adjust `knowledge/` and the routine to match.
 
-Releases reach you through the team's release setting. Without a Release Manager seat (`release-notes`) on the team, the
-release flow finds no release manager until the owner names Pipeline Owner under Settings, Releases. Say so in one line, and
-record the answer in `state.md`.
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routines run; until then nothing you
 have runs on its own. Run it once the answers and the first results are recorded, not before.

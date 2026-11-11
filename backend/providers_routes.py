@@ -24,6 +24,8 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     def system_update(request: Request, body: M.SystemUpdate):
         who = request.state.identity
         updater_only(who, "updates the installation")
+        with store.read() as c:
+            releases.refuse_held(c, body.version)
         result = releases.start(body.version)
         target = str(body.version).lstrip("v")
         with store.transaction() as c:
@@ -71,7 +73,6 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                             "auto_fallback",
                             "check_models",
                             "preset",
-                            "decide_level",
                             "meeting_model",
                         )
                     },
@@ -85,7 +86,6 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
                             "auto_fallback",
                             "check_models",
                             "preset",
-                            "decide_level",
                             "meeting_model",
                         )
                     },
@@ -120,7 +120,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
     @app.get("/api/v2/gateway/catalog")
     def gateway_catalog(request: Request, query: str = ""):
         """The Gateway's lineup as an agent reads it: models, decisions and services, each with when to use it, its
-        price and its ids (`hub_gateway_catalog`). `query` keeps the entries it matches."""
+        price and its ids (`tico_gateway_catalog`). `query` keeps the entries it matches."""
         auth.domain(request.state.identity)
         with store.read() as c:
             gateway_page.catalog(c, settings)
@@ -128,7 +128,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/search")
     def gateway_search(request: Request, body: M.GatewaySearch):
-        """Web search through the Tico AI Gateway (`hub_gateway_search`), asked with the company's gateway key and, for a
+        """Web search through the Tico AI Gateway (`tico_gateway_search`), asked with the company's gateway key and, for a
         bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -158,7 +158,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/fetch")
     def gateway_fetch(request: Request, body: M.GatewayFetch):
-        """Read a web page or PDF through the Tico AI Gateway (`hub_gateway_fetch`), asked with the company's gateway key
+        """Read a web page or PDF through the Tico AI Gateway (`tico_gateway_fetch`), asked with the company's gateway key
         and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -188,7 +188,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/digest")
     def gateway_digest(request: Request, body: M.GatewayDigest):
-        """Group many items into one digest through the Tico AI Gateway (`hub_gateway_digest`), asked with the company's
+        """Group many items into one digest through the Tico AI Gateway (`tico_gateway_digest`), asked with the company's
         gateway key and, for a bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -220,7 +220,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/images")
     def gateway_images(request: Request, body: M.GatewayImage):
-        """Make an image through the Tico AI Gateway (`hub_gateway_image`), asked with the company's gateway key and, for a
+        """Make an image through the Tico AI Gateway (`tico_gateway_image`), asked with the company's gateway key and, for a
         bot, as that bot. Whoever may call the API may ask; the Gateway meters it."""
         who = request.state.identity
         auth.domain(who)
@@ -305,7 +305,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.post("/api/v2/gateway/videos", status_code=202)
     def gateway_video(request: Request, body: M.GatewayVideo):
-        """Start a video through the Tico AI Gateway (`hub_gateway_video`), asked with the company's gateway key and, for a
+        """Start a video through the Tico AI Gateway (`tico_gateway_video`), asked with the company's gateway key and, for a
         bot, as that bot. The answer is the job, queued: its id is checked with `GET /api/v2/gateway/videos/{id}`."""
         who = request.state.identity
         auth.domain(who)
@@ -327,7 +327,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.get("/api/v2/gateway/videos/{job_id}")
     def gateway_video_status(job_id: str, request: Request):
-        """A video job's state, and its price once it is done (`hub_gateway_video_status`)."""
+        """A video job's state, and its price once it is done (`tico_gateway_video_status`)."""
         who = request.state.identity
         auth.domain(who)
         key, base, header = gateway_for(who)
@@ -340,7 +340,7 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
 
     @app.get("/api/v2/gateway/videos/{job_id}/content")
     def gateway_video_content(job_id: str, request: Request):
-        """The MP4 of a done video, read through the server (`hub_gateway_video_status` saves it). HQ keeps none."""
+        """The MP4 of a done video, read through the server (`tico_gateway_video_status` saves it). HQ keeps none."""
         who = request.state.identity
         auth.domain(who)
         key, base, header = gateway_for(who)

@@ -1,5 +1,5 @@
 # pyright: strict
-"""The Directory's HTTP routes (`hub directory`, track 4). Each route is a call on backend/entities/store.py, which holds the
+"""The Directory's HTTP routes (`tico directory`, track 4). Each route is a call on backend/entities/store.py, which holds the
 read rule (visible.py) and the writer gate, so a route holds no SQL (the lint test keeps the entity tables to the store).
 A read answers with what the caller may see; a write names the caller as its actor, and runs through `mutate` so a retry
 with the same Idempotency-Key lands once.
@@ -119,6 +119,13 @@ def install(
         auth.domain(who)  # pyright: ignore[reportUnknownMemberType]
         return who.actor
 
+    def trace(request: Request, entity_id: str) -> None:
+        """A bot run's lookup (`get` or `rules`): the run trace the linker links that run's text to."""
+        attempt_id = getattr(request.state.identity, "attempt_id", "") or ""
+        if attempt_id:
+            with store.transaction() as c:
+                ES.record_lookup(cast("sqlite3.Connection", c), attempt_id, entity_id)
+
     def resolve(c: sqlite3.Connection, actor: str, ref: str) -> dict[str, Any] | None:
         """The one visible entity a read's reference names: None when none shows, and the matches when several do."""
         found = ES.get(c, actor, ref)
@@ -128,6 +135,15 @@ def install(
 
     def ambiguous(ref: str, c: sqlite3.Connection, actor: str) -> dict[str, Any]:
         return {"ambiguous": True, "ref": ref, "matches": [ES.brief(row) for row in ES.get(c, actor, ref)]}
+
+    def where_we_operate(request: Request, link_key: str | None, touches_self: bool) -> None:
+        """Where we operate switches laws on for the whole company, so a person changes it only as an owner or an admin.
+        Bots keep the writer gate every Directory write has."""
+        who = request.state.identity
+        if link_key != "operates_in" or not touches_self or who.role not in ("owner", "human"):
+            return
+        if auth.company_role(who) not in ("owner", "admin"):  # pyright: ignore[reportUnknownMemberType]
+            raise Problem("forbidden", "Only an owner or an admin changes where we operate", 403)
 
     def page_error(error: ValueError) -> Problem:
         return Problem("validation", str(error), 422)
@@ -150,6 +166,13 @@ def install(
         with read() as c:
             return {"types": ES.types(c)}
 
+    @app.get("/api/v2/entities/counts")
+    def directory_counts(request: Request):
+        """How many entities of each type you can see, each stopping at 1,000 and saying so (`approximate`)."""
+        actor = caller(request)
+        with read() as c:
+            return {"counts": ES.type_counts(c, actor)}
+
     @app.get("/api/v2/entities/types/{type_key}")
     def directory_describe(request: Request, type_key: str):
         """One type: its attributes (each with its owner and options) and the link types that may touch it."""
@@ -157,7 +180,7 @@ def install(
         with read() as c:
             body = ES.describe_type(c, type_key)
         if body is None:
-            raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
+            raise Problem("not_found", f"No entity type {type_key}; see tico directory types", 404)
         return body
 
     @app.get("/api/v2/entities/find/{type_key}")
@@ -169,14 +192,26 @@ def install(
         link: str | None = None,
         after: str | None = None,
         limit: int | None = None,
+        detail: bool = False,
     ):
-        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`."""
+        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
+        `detail` adds each row's organization, owner and the sources you can see it is known from (the Directory list)."""
         actor = caller(request)
         with read() as c:
             if not ES.type_exists(c, type_key):
-                raise Problem("not_found", f"No entity type {type_key}; see hub directory types", 404)
+                raise Problem("not_found", f"No entity type {type_key}; see tico directory types", 404)
             try:
-                return ES.find(c, actor, type_key, name=name, status=status, link=link, after=after, limit=limit or 50)
+                return ES.find(
+                    c,
+                    actor,
+                    type_key,
+                    name=name,
+                    status=status,
+                    link=link,
+                    after=after,
+                    limit=limit or 50,
+                    detail=detail,
+                )
             except ValueError as error:
                 raise page_error(error) from None
 
@@ -194,6 +229,7 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
+        trace(request, found[0]["id"])
         return {"ambiguous": False, **body}
 
     @app.get("/api/v2/entities/rules")
@@ -207,6 +243,7 @@ def install(
             if len(found) > 1:
                 return ambiguous(ref, c, actor)
             applies = ES.rules(c, actor, found[0]["id"])
+        trace(request, found[0]["id"])
         return {"entity": found[0]["id"], "action": action, "as_bot": as_bot, "rules": applies or []}
 
     @app.get("/api/v2/entities/history")
@@ -316,12 +353,14 @@ def install(
 
     @app.post("/api/v2/entities/links")
     def directory_link(request: Request, body: DirectoryLinkCreate):
-        """A typed, dated link between two entities you can see. The link type says which ends it may join."""
+        """A typed, dated link between two entities you can see. The link type says which ends it may join. Where we
+        operate (our company operates_in a place) is an owner's or an admin's."""
         actor = caller(request)
 
         def work(c: sqlite3.Connection):
             from_id = ES.target(c, actor, body.from_ref)
             to_id = ES.target(c, actor, body.to_ref)
+            where_we_operate(request, body.link_key, ES.touches_self(c, entity_ids=[from_id, to_id]))
             link_id = ES.link(
                 c,
                 actor,
@@ -341,9 +380,14 @@ def install(
 
     @app.post("/api/v2/entities/unlink")
     def directory_unlink(request: Request, body: DirectoryUnlink):
-        """End a link: it stops being current today. Its history stays."""
+        """End a link: it stops being current today. Its history stays. Where we operate is an owner's or an admin's."""
         actor = caller(request)
-        return mutate(request, body, lambda c: {"id": ES.unlink(c, actor, body.link_id)})
+
+        def work(c: sqlite3.Connection):
+            where_we_operate(request, ES.link_key_of(c, body.link_id), ES.touches_self(c, link_id=body.link_id))
+            return {"id": ES.unlink(c, actor, body.link_id)}
+
+        return mutate(request, body, work)
 
     @app.post("/api/v2/entities/merge")
     def directory_merge(request: Request, body: DirectoryMerge):

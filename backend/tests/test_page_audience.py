@@ -7,26 +7,11 @@ import pytest
 from backend import events, live_blocks, task_privacy, visuals
 from backend.auth import Identity
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_files import turn
-from backend.tests.test_groups import send
-from backend.tests.test_pages import HTML, page, read
-
-
-def edit(api, fid, audience, token="ben-test", expected=200):
-    r = api.patch('/api/v2/pages/' + fid, json={'audience': audience}, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def promoted(api):
-    _, attempt = turn(api)
-    made = page(api, attempt, title="Audience secret")
-    assert made.status_code == 200, made.text
-    fid = made.json()['page']['file_id']
-    r = api.patch('/api/v2/files/' + fid, json={'promote': True}, headers=headers('ben-test'))
-    assert r.status_code == 200, r.text
-    return fid, attempt
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.pages import HTML, page, read
+from backend.tests.helpers.page_audience import edit, promoted
 
 
 def finance_token(api):
@@ -110,7 +95,7 @@ def test_task_pages_live_blocks_and_bot_context_do_not_bypass_audience(api):
             assert fid not in r.text and 'Audience secret' not in r.text
         assert sql(api, f"SELECT id FROM bot_files WHERE id='{fid}'", token) == []
     with api.app.state.store.read() as c:
-        from backend.task_review import comment_file
+        from backend.files import comment_file
         from backend.store import Problem
 
         with pytest.raises(Problem):

@@ -22,6 +22,7 @@ from . import names
 from . import read_cache
 from . import visuals
 from .store import H, Problem
+from . import visual_specs
 from clients import bot_files as BF
 
 SCHEMA = """
@@ -29,7 +30,7 @@ CREATE TABLE IF NOT EXISTS pages(
  file_id TEXT PRIMARY KEY REFERENCES bot_files(id),
  cadence TEXT NOT NULL DEFAULT 'none' CHECK(cadence IN ('none','daily','weekly','monthly')),
  as_of TEXT, replaced_by_id TEXT, audience TEXT, deleted_at TEXT, archived INTEGER NOT NULL DEFAULT 0,
- created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, spec TEXT);
 CREATE INDEX IF NOT EXISTS pages_replaced ON pages(replaced_by_id) WHERE replaced_by_id IS NOT NULL;
 """
 
@@ -346,6 +347,12 @@ class Pages:
         as_of = check_as_of(fields.get("as_of"))
         replaces = str(fields.get("replaces") or "").strip()
         task = str(fields.get("task") or "").strip()
+        spec = str(fields.get("spec") or "").lower() in ("1", "true", "yes")
+        if spec:
+            # A spec is a page on a task in a Product pipeline; its styles are inlined so the stored page reads the same anywhere.
+            with self.store.read() as c:
+                visual_specs.check_publish(c, task)
+            data = visual_specs.inline_styles(data)
         cleaned, unembedded = visuals.clean(data, "page", base=False)
         if len(cleaned) > visuals.LIMITS["page"]:
             raise Problem("file_refused", "A page is at most 10 MB", 422)
@@ -360,10 +367,22 @@ class Pages:
 
                 editor = Identity("bot:" + row["bot_id"], "bot")
             c.execute(
-                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at) VALUES(?,?,?,?,?) "
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec) VALUES(?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
-                "archived=CASE WHEN ? THEN 0 ELSE archived END",
-                (row["id"], cadence or "none", as_of, now, now, cadence, as_of, now, int(bool(changed))),
+                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END",
+                (
+                    row["id"],
+                    cadence or "none",
+                    as_of,
+                    now,
+                    now,
+                    visual_specs.CARD if spec else None,
+                    cadence,
+                    as_of,
+                    now,
+                    visual_specs.CARD if spec else None,
+                    int(bool(changed)),
+                ),
             )
             if audience_set:
                 self.set_audience(c, editor, row, checked_audience(c, audience))
@@ -519,6 +538,7 @@ class Pages:
 def install_pages(app, store, auth, files):
     pages = Pages(app, store, auth, files)
     app.state.pages = pages
+    visual_specs.bind(files, auth.settings.public_url)
     publish_doc = {
         "requestBody": {
             "required": True,
@@ -539,6 +559,7 @@ def install_pages(app, store, auth, files):
                             "replaces": {"type": "string"},
                             "path": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
+                            "spec": {"type": "boolean"},
                             "audience": {"anyOf": [{"$ref": "#/components/schemas/AccessAudience"}, {"type": "null"}]},
                         },
                     }

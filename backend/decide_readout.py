@@ -1,9 +1,11 @@
 """The weekly Decide readout: per question set, the window's calls, cost, model (Jev, Decide Medium or High, or the
-fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `hub decision readout`).
+fallback) and answer spread, and the month's spend against the team's cap (`GET /api/v2/decisions/readout`, `tico decision readout`).
 
-Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the `judge.spend` rows
+Plain code over the audit, no model: calls and models from the `judge.call` rows, cost from the spend rows
 (`backend/judge.py` `metered` writes one after every paid call, so a batch or a nightly run counts each call it paid
-for). Rows are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
+for). Org rule checks spend from the same budget and write `judge.spend` rows too. Rule checks once had a budget of
+their own and wrote `rules.spend` rows; the ones already written still count toward their set's cost, as past spend. Rows
+are grouped by question set, the id before the `@` of their label, so a set's versions read as one.
 
 It names nothing a caller wrote. A label is free text, so only the shipped question sets (`questions/*.json`, the
 company's registry copy, and the few sets the code asks inline) are named; every other label is one "(other labels)"
@@ -23,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from clients import judge as J
 from .judge import spent_this_month, budget_cap
 
+SPEND_ACTIONS = ("judge.spend", "rules.spend")  # one row per paid call; `rules.spend` only in rows written before
 OTHER_LABELS = "(other labels)"
 OTHER_QUESTIONS = "(other questions)"
 OPEN_ITEM = "(an open item)"
@@ -184,7 +187,7 @@ def readout(c, settings, days=7, at=None):
     by = {}
     rows = c.execute(
         "SELECT action, target, detail FROM events WHERE created_at>=? AND created_at<? "
-        "AND action IN ('judge.call','judge.spend')",
+        "AND action IN ('judge.call','judge.spend','rules.spend')",
         (stamp(start), stamp(end)),
     ).fetchall()
     for action, target, raw in rows:
@@ -196,7 +199,7 @@ def readout(c, settings, days=7, at=None):
         label = detail.get("label") or target
         name = set_of(label, sets)
         row = by.setdefault(name, _empty())
-        if action == "judge.spend":
+        if action in SPEND_ACTIONS:
             cost = detail.get("cost_usd")
             if isinstance(cost, (int, float)) and not isinstance(cost, bool):
                 row["cost_usd"] += float(cost)

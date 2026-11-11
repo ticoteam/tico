@@ -2,14 +2,135 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// What this file reads on a bot row beyond Employee: its external agent and the desktop app it is delivered through.
+interface DeviceAgent extends BotAgent {
+  harness?: string;
+  profile?: string;
+  detail?: string;
+}
+interface DeviceAppDelivery {
+  computer?: string | null;
+  computer_label?: string;
+  app_label?: string;
+  app?: string;
+}
+interface DeviceBot extends Employee {
+  agent?: DeviceAgent | null;
+  app_delivery?: DeviceAppDelivery | null;
+}
+// POST /v2/bots/<bot>/agent-credential: the token, shown once, and how the profile installs it.
+interface AgentSetup {
+  url: string;
+  token?: string;
+  heartbeat: {path: string; every_seconds: number; offline_after_seconds: number};
+  mcp_servers: {tico: {url: string}};
+}
+interface AgentCredentialIssued {
+  token: string;
+  setup: AgentSetup;
+}
+// A personal API token (backend/personal_tokens.py), as listed and as minted.
+interface PersonalTokenRow {
+  id: string;
+  label: string;
+  name?: string;
+  email?: string;
+  human?: string;
+  created_at: string;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  revoked_at?: string | null;
+}
+interface PersonalTokenIssued {
+  label: string;
+  token: string;
+  expires_at: string;
+}
+// A computer's readiness and state as this file reads them (GET /v2/operations `machines`, beyond SettingsMachine).
+interface MachineAccount {
+  kind?: string;
+  email?: string;
+  org?: string;
+  plan?: string;
+  checked_at?: string;
+}
+// One usage window a login reports (`weekly`, `five_hour`).
+interface MachineUsageWindow {
+  used_percent?: number;
+  reported_at?: string;
+  resets_at?: string;
+}
+interface MachineUsageState {
+  account?: MachineAccount | null | undefined;
+  weekly?: MachineUsageWindow | null | undefined;
+  five_hour?: MachineUsageWindow | null | undefined;
+}
+// The key a login runs on (readiness `key`).
+interface MachineKey {
+  name?: string;
+  source: string;
+}
+interface MachineApp {
+  ready?: boolean;
+  state?: string;
+  installed?: boolean;
+  version?: string;
+  detail?: string;
+}
+interface MachineUpdate {
+  release?: string;
+  kind?: string;
+  state?: string;
+  label?: string;
+  target?: string;
+  outdated?: boolean;
+}
+// The readiness fields this file reads (settings.ts SettingsMachine.readiness carries them).
+interface DeviceReadiness {
+  runtimes?: Record<string, {account?: MachineAccount | null}>;
+  appdriver?: {apps?: Record<string, MachineApp>} | null;
+  bots?: Record<string, {ready?: boolean}>;
+}
+// One computer: what this file and the pop-up (computer-detail.ts DetailMachine) read from it.
+interface DeviceMachine extends SettingsMachine {
+  platform?: string;
+  version?: string;
+  release?: string;
+  last_seen_at?: string | null;
+  update?: MachineUpdate | null;
+  signed_out?: Record<string, string[]>;
+  key_cleared?: string[];
+  keys?: Record<string, {preview?: string}>;
+  shared_keys?: Record<string, {preview?: string}>;
+  shared_logins?: {runtime: string; profile?: string; bots?: string[]; count: number}[];
+  turn_counts?: Record<string, number>;
+  turn_limit?: number | null | undefined;
+  bots?: string[];
+  restarting?: boolean;
+  bot_connections?: DetailLink[];
+  bot_runtimes?: string[];
+  needed_runtimes?: string[] | null;
+  shared_with?: Record<string, DetailShared>;
+  harness_choices?: Record<string, boolean>;
+  harness_actions?: {harness: string; action: string; state: string}[];
+  turns_at_once?: number | null;
+  capacity?: number | null;
+  inbox_only?: boolean;
+  accepts_member_bots?: boolean;
+  performance?: string;
+  turn_summary?: string;
+  browser_exit?: import('../types/api').BrowserExit | null;
+}
+
 // An external agent (a Hermes profile) has no computer: the cell holds its credential instead.
 // The token is shown once, when it is minted; after that only rotate and revoke remain.
-const agentKind = a => `${settingsHarnessName(a.harness) || a.harness} agent`;
+const agentKind = (a: BotAgent) => `${settingsHarnessName(a.harness) || a.harness} agent`;
 // An imported snapshot's freshness says nothing about its external process.
-const agentPresenceLabel = (a, online) => a.synced ? (online ? 'History synced recently' : a.last_seen_at ? 'History not synced lately' : 'History not synced yet')
+const agentPresenceLabel = (a: {synced?: boolean; last_seen_at?: string | null; credential?: unknown}, online: boolean | undefined) => a.synced ? (online ? 'History synced recently' : a.last_seen_at ? 'History not synced lately' : 'History not synced yet')
   : !a.credential ? 'No credential yet' : online ? 'Reporting in' : 'Not reporting';
-function settingsAgentCell(e) {
-  const a = e.agent, name = agentKind(a);
+function settingsAgentCell(e: DeviceBot) {
+  const a = e.agent; if (!a) return '';
+  const name = agentKind(a);
   const manage = settingsCanManageBot(e);
   if (a.synced) return `<div class="settings-agent-cell"><strong>${esc(name)}</strong>${a.profile ? ` · <span class="muted">${esc(a.profile)}</span>` : ''}
     <span class="settings-cell-note">${esc(a.last_seen_at ? `synced ${ago(a.last_seen_at)}${a.detail ? ` by ${a.detail}` : ''}` : 'not synced yet')}</span>${settingsAppDeliveryNote(e)}</div>`;
@@ -19,15 +140,15 @@ function settingsAgentCell(e) {
     ${manage ? `<span class="settings-agent-actions">${agentPairButton(e)}<button class="ghost" type="button" data-agent-credential="${esc(e.id)}">${a.credential ? 'Rotate credential' : 'Create credential'}</button>${a.credential ? `<button class="ghost" type="button" data-agent-revoke="${esc(e.id)}">Revoke</button>` : ''}</span>` : ''}</div>`;
 }
 // Where a synced bot's messages go when it is delivered through its desktop app (settings-bot-editor.js).
-function settingsAppDeliveryNote(e) {
+function settingsAppDeliveryNote(e: DeviceBot) {
   const d = e.app_delivery; if (!d?.computer) return '';
   const where = SETTINGS_DATA.machines.find(machine => machine.id === d.computer)?.label || d.computer_label || 'a computer';
   return `<span class="settings-cell-note" data-app-delivery-note>through the ${esc(d.app_label || machineAppName(d.app))} app on ${esc(where)}</span>`;
 }
 // Pair: the code a Hermes profile printed, typed here; approving hands the profile its credential (backend/agents.py).
-const agentPairButton = e => ['hermes', 'openclaw'].includes(e.agent?.harness) ? `<button class="ghost" type="button" data-agent-pair="${esc(e.id)}">Pair</button>` : '';
-function settingsAgentPair(slug) {
-  const e = S.emps.find(row => row.id === slug); if (!e) return;
+const agentPairButton = (e: DeviceBot) => ['hermes', 'openclaw'].includes(String(e.agent?.harness)) ? `<button class="ghost" type="button" data-agent-pair="${esc(e.id)}">Pair</button>` : '';
+function settingsAgentPair(slug: string) {
+  const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
   dialog.innerHTML = `<form method="dialog"><header><h2>Pair ${esc(e.display_name)}</h2><button class="ghost" type="button" data-close>Close</button></header>
     <div class="tmodal-body agent-credential-body">
@@ -37,13 +158,16 @@ function settingsAgentPair(slug) {
       <div class="row"><button class="primary" type="submit">Pair</button><span class="muted" data-pair-status></span></div>
     </div></form>`;
   const form = dialog.querySelector('form'), status = dialog.querySelector('[data-pair-status]');
-  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  const close = dialog.querySelector<HTMLElement>('[data-close]');
+  if (!form || !status || !close) return;
+  close.onclick = () => dialog.close();
   const preview = dialog.querySelector('[data-pair-preview]');
-  let previewCode = '', pendingPreview;
+  if (!preview) return;
+  let previewCode = '', pendingPreview: number | undefined;
   const loadPreview = async () => {
     const code = form.code.value.trim();
     if (code.replace(/[^a-z0-9]/gi, '').length !== 8) { preview.textContent = ''; previewCode = ''; return; }
-    const shown = await get(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`);
+    const shown = await get<{profile?: string; host?: string; harness?: string}>(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`);
     if (form.code.value.trim() !== code) return;
     previewCode = code;
     preview.textContent = `${shown.profile || 'Profile'} · ${shown.host || 'Computer'} · ${settingsHarnessName(shown.harness) || shown.harness}${e.agent?.credential ? ' · replaces current credential' : ''}`;
@@ -54,24 +178,25 @@ function settingsAgentPair(slug) {
   };
   form.onsubmit = async event => {
     event.preventDefault();
-    const button = form.querySelector('button[type=submit]'); button.disabled = true; status.textContent = 'Pairing…';
+    const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button) return;
+    button.disabled = true; status.textContent = 'Pairing…';
     try {
       if (previewCode !== form.code.value.trim()) await loadPreview();
-      const done = await post('/v2/agents/pairings/approve', {code: form.code.value.trim(), bot: slug});
+      const done: {profile?: string; host?: string} = await post('/v2/agents/pairings/approve', {code: form.code.value.trim(), bot: slug});
       toast(`Paired ${done.profile || 'the profile'}${done.host ? ` on ${done.host}` : ''}`);
       dialog.close();
-    } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; button.disabled = false; }
+    } catch (error) { status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`; button.disabled = false; }
   };
   dialog.onclose = () => { clearTimeout(pendingPreview); dialog.remove(); void loadSettings(); };
   document.body.appendChild(dialog); dialog.showModal(); form.code.focus();
 }
-async function settingsAgentCredential(slug) {
-  const e = S.emps.find(row => row.id === slug); if (!e) return;
+async function settingsAgentCredential(slug: string) {
+  const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const rotating = !!e.agent?.credential;
   if (rotating && !confirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`)) return;
-  let issued;
+  let issued: AgentCredentialIssued;
   try { issued = await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential`, {}); }
-  catch (error) { toast(error.message, true); return; }
+  catch (error) { toast(errorMessage(error, ''), true); return; }
   const setup = issued.setup, yaml = agentConfigYaml(setup);
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
   dialog.innerHTML = `<header><h2>${rotating ? 'New agent credential' : 'Agent credential'} for ${esc(e.display_name)}</h2><button class="ghost" type="button" data-close>Close</button></header>
@@ -85,9 +210,12 @@ async function settingsAgentCredential(slug) {
         <p class="muted">Heartbeat: <code>POST ${esc(setup.url)}${esc(setup.heartbeat.path)}</code> with <code>Authorization: Bearer &lt;token&gt;</code> every ${setup.heartbeat.every_seconds} s; the bot shows offline after ${setup.heartbeat.offline_after_seconds} s without one.</p>
       </details>
     </div>`;
-  dialog.querySelector('[data-close]').onclick = () => dialog.close();
-  dialog.querySelector('[data-copy-token]').onclick = () => void copyText(issued.token).then(() => toast('Token copied'));
-  dialog.querySelector('[data-copy-command]').onclick = () => void copyText(dialog.querySelector('[data-command]').textContent).then(() => toast('Command copied'));
+  const close = dialog.querySelector<HTMLElement>('[data-close]'), copyToken = dialog.querySelector<HTMLElement>('[data-copy-token]');
+  const copyCommand = dialog.querySelector<HTMLElement>('[data-copy-command]');
+  if (!close || !copyToken || !copyCommand) return;
+  close.onclick = () => dialog.close();
+  copyToken.onclick = () => void copyText(issued.token).then(() => toast('Token copied'));
+  copyCommand.onclick = () => void copyText(dialog.querySelector('[data-command]')?.textContent || '').then(() => toast('Command copied'));
   dialog.onclose = () => { dialog.remove(); void loadSettings(); };
   document.body.appendChild(dialog); dialog.showModal();
 }
@@ -97,12 +225,12 @@ async function settingsAgentCredential(slug) {
 async function renderSettingsTokens() {
   const el = $('#set-tokens'); if (!el) return;
   const everyone = settingsIsAdmin();
-  let rows;
-  try { rows = (await get(everyone ? '/v2/access/tokens' : '/v2/me/tokens')).tokens || []; }
-  catch (error) { el.innerHTML = `<div class="err">${esc(error.message || 'Tokens could not be loaded')}</div>`; return; }
+  let rows: PersonalTokenRow[];
+  try { rows = (await get<{tokens?: PersonalTokenRow[]}>(everyone ? '/v2/access/tokens' : '/v2/me/tokens')).tokens || []; }
+  catch (error) { el.innerHTML = `<div class="err">${esc(errorMessage(error, 'Tokens could not be loaded'))}</div>`; return; }
   const now = Date.now();
-  const state = row => row.revoked_at ? '<span class="pill fail">revoked</span>'
-    : row.expires_at && new Date(row.expires_at) < now ? '<span class="pill fail">expired</span>' : '<span class="pill ok">active</span>';
+  const state = (row: PersonalTokenRow) => row.revoked_at ? '<span class="pill fail">revoked</span>'
+    : row.expires_at && Number(new Date(row.expires_at)) < now ? '<span class="pill fail">expired</span>' : '<span class="pill ok">active</span>';
   const live = rows.filter(row => !row.revoked_at);
   const table = live.length ? `<div class="scroll"><table class="settings-table"><thead><tr>${everyone ? '<th>Person</th>' : ''}<th>Label</th><th>Created</th><th>Last used</th><th>Expires</th><th>Status</th><th></th></tr></thead><tbody>${live.map(row =>
     `<tr data-token-row="${esc(row.id)}">${everyone ? `<td>${esc(row.name || row.email || row.human)}</td>` : ''}<td><strong>${esc(row.label)}</strong></td><td>${esc(ago(row.created_at))}</td><td>${row.last_used_at ? esc(ago(row.last_used_at)) : '<span class="muted">never</span>'}</td><td>${row.expires_at ? esc(new Date(row.expires_at).toLocaleDateString()) : '<span class="muted">never</span>'}</td><td>${state(row)}</td><td><button class="ghost" type="button" data-token-revoke="${esc(row.id)}" data-token-label="${esc(row.label)}">Revoke</button></td></tr>`).join('')}</tbody></table></div>`
@@ -115,21 +243,21 @@ async function renderSettingsTokens() {
       <button class="primary" type="submit">New token</button>
     </form>` : ''}`;
   el.querySelector('[data-tokens-list]').innerHTML = table;
-  el.querySelectorAll('[data-token-revoke]').forEach(button => { button.onclick = () => void settingsTokenRevoke(button.dataset.tokenRevoke, button.dataset.tokenLabel); });
+  el.querySelectorAll('[data-token-revoke]').forEach((button: HTMLElement) => { button.onclick = () => void settingsTokenRevoke(button.dataset.tokenRevoke, button.dataset.tokenLabel); });
   const form = el.querySelector('#settings-token-form');
-  if (form) form.onsubmit = async event => {
+  if (form) form.onsubmit = async (event: SubmitEvent) => {
     event.preventDefault();
     const label = form.label.value.trim(), days = Number(form.days.value);
     if (!label) { form.label.focus(); return; }
     const button = form.querySelector('button[type=submit]'); button.disabled = true;
     try {
-      const issued = await post('/v2/me/tokens', {label, expires_in_days: days});
+      const issued: PersonalTokenIssued = await post('/v2/me/tokens', {label, expires_in_days: days});
       form.reset();
       settingsTokenShow(issued);
-    } catch (error) { toast(error.message, true); button.disabled = false; }
+    } catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; }
   };
 }
-function settingsTokenShow(issued) {
+function settingsTokenShow(issued: PersonalTokenIssued) {
   const dialog = document.createElement('dialog'); dialog.className = 'tmodal tmodal-shell agent-credential';
   dialog.innerHTML = `<header><h2>Token ${esc(issued.label)}</h2><button class="ghost" type="button" data-close>Close</button></header>
     <div class="tmodal-body agent-credential-body">
@@ -137,32 +265,35 @@ function settingsTokenShow(issued) {
       <label>Token<div class="row"><code class="agent-token" data-token>${esc(issued.token)}</code><button class="ghost" type="button" data-copy-token>Copy</button></div></label>
       <label>In a shell, for the <code>hub</code> command line and scripts:<div class="row"><code data-command>export HUB_API_URL=${esc(location.origin)} HUB_TOKEN=${esc(issued.token)}</code><button class="ghost" type="button" data-copy-command>Copy</button></div></label>
     </div>`;
-  dialog.querySelector('[data-close]').onclick = () => dialog.close();
-  dialog.querySelector('[data-copy-token]').onclick = () => void copyText(issued.token).then(() => toast('Token copied'));
-  dialog.querySelector('[data-copy-command]').onclick = () => void copyText(dialog.querySelector('[data-command]').textContent).then(() => toast('Command copied'));
+  const close = dialog.querySelector<HTMLElement>('[data-close]'), copyToken = dialog.querySelector<HTMLElement>('[data-copy-token]');
+  const copyCommand = dialog.querySelector<HTMLElement>('[data-copy-command]');
+  if (!close || !copyToken || !copyCommand) return;
+  close.onclick = () => dialog.close();
+  copyToken.onclick = () => void copyText(issued.token).then(() => toast('Token copied'));
+  copyCommand.onclick = () => void copyText(dialog.querySelector('[data-command]')?.textContent || '').then(() => toast('Command copied'));
   dialog.onclose = () => { dialog.remove(); void renderSettingsTokens(); };
   document.body.appendChild(dialog); dialog.showModal();
 }
-async function settingsTokenRevoke(id, label) {
+async function settingsTokenRevoke(id: string | undefined, label: string | undefined) {
   if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
-  try { await post(`/v2/me/tokens/${encodeURIComponent(id)}/revoke`, {}); toast(`Token ${label} revoked`); }
-  catch (error) { toast(error.message, true); }
+  try { await post(`/v2/me/tokens/${encodeURIComponent(String(id))}/revoke`, {}); toast(`Token ${label} revoked`); }
+  catch (error) { toast(errorMessage(error, ''), true); }
   await renderSettingsTokens();
 }
-function agentConfigYaml(setup) {
+function agentConfigYaml(setup: AgentSetup) {
   return `mcp_servers:\n  tico:\n    url: "${setup.mcp_servers.tico.url}"\n    headers:\n      Authorization: "Bearer \${TICO_AGENT_TOKEN}"\n# .env in the profile directory:\nTICO_AGENT_TOKEN=${setup.token}`;
 }
-async function settingsAgentRevoke(slug) {
+async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
   if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
-  try { await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
-  catch (error) { toast(error.message, true); }
+  try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
+  catch (error) { toast(errorMessage(error, ''), true); }
 }
 // The Add computer flow, shared by Settings and the first-run wizard: one private short-lived
 // setup file, downloaded by the browser. The commands that consume it are shown by the caller.
 // A Linux server, a Mac with Docker Desktop and a Windows PC (WSL 2) need no file: the one-time code goes on the line.
-async function enrollmentCode(operator) { return post('/v2/enrollments', {operator}); }
-const shellSafe = value => String(value).replace(/["$`\\\n]/g, '');
+async function enrollmentCode(operator: string): Promise<{code: string; [key: string]: unknown}> { return post('/v2/enrollments', {operator}); }
+const shellSafe = (value: unknown) => String(value).replace(/["$`\\\n]/g, '');
 // The release the server runs, as the tag its installer and images carry; '' for a build with none.
 const serverReleaseTag = () => {
   const version = String(S.config?.runner_compat?.version || '').replace(/^v/, '');
@@ -172,8 +303,8 @@ const serverReleaseTag = () => {
 // a bare `docker run` has no sidecar and stays where it is.
 // The container name follows from the code, so the commands of one Add computer agree with each other.
 // It starts with a letter or digit: install.sh and install-wsl.ps1 accept no other first character for --name.
-const runnerName = code => `${String(S.config?.compose_project || 'tico').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '').slice(0, 20) || 'tico'}-${String(code).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'computer'}`;
-function dockerRunnerCommands(code, label, runtime, kind = 'linux') {
+const runnerName = (code: string) => `${String(S.config?.compose_project || 'tico').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/^-+/, '').slice(0, 20) || 'tico'}-${String(code).toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8) || 'computer'}`;
+function dockerRunnerCommands(code: string, label: string, runtime: string | undefined, kind = 'linux'): [[string, string], [string, string] | null, [string, string]] {
   const tag = serverReleaseTag(), quoted = `"${shellSafe(label)}"`;
   const installer = tag ? `https://github.com/ticoteam/tico/releases/download/${tag}/install.sh`
                         : 'https://github.com/ticoteam/tico/releases/latest/download/install.sh';
@@ -201,7 +332,7 @@ function dockerRunnerCommands(code, label, runtime, kind = 'linux') {
 }
 // A Windows PC runs the Linux runner in WSL 2 (infra/windows/install-wsl.ps1, published with each release).
 // The code is quoted: a code may start with '-', which PowerShell would read as a parameter name.
-function windowsRunnerCommands(code, label) {
+function windowsRunnerCommands(code: string, label: string): [[string, string]] {
   const tag = serverReleaseTag();
   const script = tag ? `https://github.com/ticoteam/tico/releases/download/${tag}/install-wsl.ps1`
                      : 'https://github.com/ticoteam/tico/releases/latest/download/install-wsl.ps1';
@@ -209,7 +340,7 @@ function windowsRunnerCommands(code, label) {
   return [['In PowerShell as administrator on that PC. Sets up WSL 2 and Ubuntu if needed (may ask for a restart), keeps Ubuntu running while you are signed in, and turns off sleep on mains power (add -AllowSleep to skip)',
     `& ([scriptblock]::Create((irm ${script}))) -Url ${runnerUrl()} -Code '${code}' -Label ${quoted} -Name ${runnerName(code)}`]];
 }
-async function enrollmentDownload(operator, label) {
+async function enrollmentDownload(operator: string, label: string) {
   const filename = `tico-enrollment-${operator}-${Date.now().toString(36)}.json`;
   const enrollment = await enrollmentCode(operator);
   const setup = {...enrollment, operator, label, url: runnerUrl()};
@@ -226,35 +357,35 @@ async function enrollmentDownload(operator, label) {
 // to Credentials. The account (email, plan) comes only from a provider's own status command (#610) and only to an
 // administrator or the computer's operator; anything not reported reads unavailable, never a guessed value.
 // The server's rule (model_login._operator): the owner, an admin, or the person whose computer it is.
-const machineCanSignIn = machine => settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id);
-function machineLoginCommand(machine, name) {
+const machineCanSignIn = (machine: {owner_id?: string | null}) => settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id);
+function machineLoginCommand(machine: DeviceMachine, name: string) {
   const command = harnessCaps(name).terminal_login;
   return command && machine.update?.kind === 'docker' ? `docker exec -it -u bot <container> ${command}` : command;
 }
 // A computer reads an account again every 10 minutes (runner-rs/src/accounts.rs READ_EVERY), the answer landing on a
 // later heartbeat's report, which is kept a minute; a reading older than this has missed its refresh.
 const MACHINE_ACCOUNT_FRESH_MS = 15 * 60000;
-const machinePlanName = plan => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
+const machinePlanName = (plan: unknown) => plan ? String(plan).replace(/^./, c => c.toUpperCase()) : '';
 // "Signed in as <email>" from an account (the plan is left out: the usage says what matters); what the provider did not
 // say is left out, not guessed. A reading
 // that has missed its refresh says when it was last checked, since the login may have changed since.
-function machineAccountHTML(account, runtime, title = '') {
+function machineAccountHTML(account: MachineAccount | null | undefined, runtime: string, title = '') {
   const who = account?.kind === 'api_key' ? 'with an API key · no plan usage'
     : account?.email || '';
   const rest = who ? (account?.kind === 'api_key' ? who : `as ${who}`)
     : harnessCaps(runtime).account ? '· account not reported yet' : '· account unavailable';
-  const checked = Date.parse(account?.checked_at);
+  const checked = Date.parse(String(account?.checked_at));
   const old = who && Number.isFinite(checked) && Date.now() - checked > MACHINE_ACCOUNT_FRESH_MS
-    ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account.checked_at))}</span>` : '';
+    ? ` <span class="muted" data-account-checked>account last checked ${esc(ago(account!.checked_at))}</span>` : '';
   const tip = [account?.org, machinePlanName(account?.plan)].filter(Boolean).join(' · ');
   return `<span class="pill ok"${title ? ` title="${esc(title)}"` : ''}>Signed in</span> <span class="machine-account${who ? '' : ' muted'}"${tip ? ` title="${esc(tip)}"` : ''}>${esc(rest)}</span>${old}`;
 }
 // One usage window ("weekly" or "5-hour window"): what is left and when it resets; its age only once it is a day old. A
 // window with no provider percentage says so; it never reads as 0% or a full allowance.
-function machineWindowHTML(label, reading, name) {
+function machineWindowHTML(label: string, reading: MachineUsageWindow | null | undefined, name: string) {
   if (!reading) return '';
-  const percent = Number.isFinite(reading.used_percent) ? Math.min(100, Math.max(0, reading.used_percent)) : null;
-  const reported = Date.parse(reading.reported_at), reset = Date.parse(reading.resets_at);
+  const percent = Number.isFinite(reading.used_percent) ? Math.min(100, Math.max(0, reading.used_percent!)) : null;
+  const reported = Date.parse(String(reading.reported_at)), reset = Date.parse(String(reading.resets_at));
   const expired = Number.isFinite(reset) && reset <= Date.now();
   const stale = Number.isFinite(reported) && Date.now() - reported > 86400000;
   const left = percent === null ? null : Math.round(100 - percent);
@@ -267,7 +398,7 @@ function machineWindowHTML(label, reading, name) {
 }
 // A runtime whose usage comes only from its turns (`weekly_usage = "turns"`, Claude) has nothing to show before one:
 // it says where the reading will come from (`where`: this computer, or this subscription).
-function machineUsageHTML(runtime, state, name, where = 'this computer') {
+function machineUsageHTML(runtime: string, state: MachineUsageState | null | undefined, name: string, where = 'this computer') {
   const caps = harnessCaps(runtime);
   if (!caps.weekly_usage) return '<span class="muted" data-usage-window="none">Usage unavailable</span>';
   if (state?.account?.kind === 'api_key') return '<span class="muted" data-usage-window="none">No plan usage (API key)</span>';
@@ -278,7 +409,7 @@ function machineUsageHTML(runtime, state, name, where = 'this computer') {
 }
 // The sign-in cell: signed in as <account>, signed out, login expired or rejected, checking, or couldn't check (with
 // when the computer last reported).
-function machineSignInHTML(machine, online, name, auth, value) {
+function machineSignInHTML(machine: DeviceMachine, online: boolean, name: string, auth: string | undefined, value: {account?: MachineAccount | null; detail?: string}) {
   const checked = machine.last_seen_at ? ` · last checked ${ago(machine.last_seen_at)}` : '';
   if (auth !== 'ready' && machineKeyCleared(machine, name)) return '<span class="pill fail" title="Its key was cleared from Tico: the company\'s shared key does not sign it back in by itself">No key</span>';
   if (auth !== 'ready' && machineSignedOut(machine, name)) return '<span class="pill fail" title="Signed out from Tico: the company\'s shared key does not sign it back in by itself">Signed out</span>';
@@ -290,30 +421,30 @@ function machineSignInHTML(machine, online, name, auth, value) {
   return online ? `<span class="pill waiting" title="${esc(value.detail || '')}">Checking…</span>` : couldNot;
 }
 // A login someone signed out from Tico (backend/model_login.py model_login_cleared); '' is the computer's own login.
-const machineSignedOut = (machine, runtime, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
+const machineSignedOut = (machine: DeviceMachine, runtime: string, profile = '') => (machine.signed_out?.[runtime] || []).includes(profile);
 // Of those, the computer's own login whose key a person cleared (Clear key, not Sign out): it reads "No key · Add key".
-const machineKeyCleared = (machine, runtime) => machineSignedOut(machine, runtime) && (machine.key_cleared || []).includes(runtime);
+const machineKeyCleared = (machine: DeviceMachine, runtime: string) => machineSignedOut(machine, runtime) && (machine.key_cleared || []).includes(runtime);
 // Sign out / Switch account (or Use the shared key, or Switch to subscription for the computer's login on an API key)
 // for one login, from the shared sign-in module (ui/model-login.ts).
-const machineLoginActions = (machine, online, runtime, profile, signedIn) => window.TicoModelLogin?.actionsHTML({
+const machineLoginActions = (machine: DeviceMachine, online: boolean, runtime: string, profile: string, signedIn: boolean) => window.TicoModelLogin?.actionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, profile, signedIn, signedOut: machineSignedOut(machine, runtime, profile), online,
   platform: machine.platform || '', onKey: !profile && machine.readiness?.runtimes?.[runtime]?.account?.kind === 'api_key'}) || '';
 // The key a login runs on (its readiness `key`: {name, source}), by its stored preview only: this computer's own key or
 // the company's shared one (backend/computer_keys.py), or one set on the computer itself.
-function machineKeyHTML(machine, runtime, key) {
+function machineKeyHTML(machine: DeviceMachine, runtime: string, key: MachineKey | null | undefined) {
   if (!key) return '';
   const stored = key.source === 'computer' ? machine.keys?.[runtime] : key.source === 'shared' ? machine.shared_keys?.[runtime] : null;
-  const whose = {computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'}[key.source] || 'a key';
+  const whose = ({computer: 'this computer\'s key', shared: 'the company\'s shared key', terminal: 'a key set on the computer'} as Record<string, string>)[key.source] || 'a key';
   return ` <span class="muted machine-key" data-machine-key="${esc(key.source)}">· ${esc(whose)}${stored?.preview ? ` <code>${esc(stored.preview)}</code>` : ''}</span>`;
 }
 // Replace key / Clear key, or Add key, from the shared sign-in module (ui/model-login.ts).
-const machineKeyActions = (machine, online, runtime, key, signedIn) => (window.TicoModelLogin?.keyActionsHTML({
+const machineKeyActions = (machine: DeviceMachine, online: boolean, runtime: string, key: MachineKey | null | undefined, signedIn: boolean) => (window.TicoModelLogin?.keyActionsHTML({
   runnerId: machine.id, runtime, machine: machine.label, key, signedIn, online}) || '')
   + (signedIn && key ? window.TicoModelLogin?.toSubscriptionHTML({runnerId: machine.id, runtime, machine: machine.label, online,
     platform: machine.platform || ''}) || '' : '');
 // A sign-in several of the computer's bots run on (`shared_logins`, backend/views.py shared_logins), for a harness whose
 // login serves one run at a time (`one_turn_per_login`): those bots take turns, so it says so beside that login.
-function machineSharedLoginHTML(machine, runtime, profile = '') {
+function machineSharedLoginHTML(machine: DeviceMachine | null | undefined, runtime: string, profile = '') {
   const row = (machine?.shared_logins || []).find(r => r.runtime === runtime && (r.profile || '') === profile);
   if (!row) return '';
   const names = (row.bots || []).map(settingsBotName), more = row.count - names.length;
@@ -323,13 +454,13 @@ function machineSharedLoginHTML(machine, runtime, profile = '') {
 // Desktop apps the computer's app driver operates for synced bots (readiness `appdriver`, a Mac's native runner):
 // one row per app with its state and the driver's own detail, such as which System Settings entry to turn on. A
 // computer without a driver reports no `appdriver`, so it shows nothing here.
-const MACHINE_APP_STATES = {no_permission: 'Needs Accessibility permission', not_signed_in: 'Not signed in',
+const MACHINE_APP_STATES: Record<string, string> = {no_permission: 'Needs Accessibility permission', not_signed_in: 'Not signed in',
   not_installed: 'Not installed', needs_foreground: 'Can\'t work in the background', ui_changed: 'Layout changed',
   no_driver: 'Driver not installed', error: 'Problem'};
-const machineAppName = id => String(id).replace(/^./, c => c.toUpperCase());
+const machineAppName = (id: unknown) => String(id).replace(/^./, c => c.toUpperCase());
 // `ready` is what the server checks before it delivers through the app; a state it does not know reads Problem.
-const machineAppState = app => app?.ready === true ? 'Ready' : MACHINE_APP_STATES[app?.state] || 'Problem';
-function machineAppsHtml(machine) {
+const machineAppState = (app: MachineApp | null | undefined) => app?.ready === true ? 'Ready' : MACHINE_APP_STATES[String(app?.state)] || 'Problem';
+function machineAppsHtml(machine: DeviceMachine) {
   const driver = machine.readiness?.appdriver;
   if (!driver || typeof driver !== 'object') return '';
   const apps = Object.entries(driver.apps || {});
@@ -342,7 +473,7 @@ function machineAppsHtml(machine) {
     <span role="columnheader">Desktop apps</span><span role="columnheader">Installed</span><span role="columnheader">State</span></div>${rows}</div>`;
 }
 // The row's sign that the screen is on: a link to it for whoever may open it.
-function machineScreenHTML(machine) {
+function machineScreenHTML(machine: DeviceMachine) {
   if (!machine.screen || machine.screen === 'off' || machine.revoked_at) return '';
   if (!machine.screen_available) return '<span class="settings-cell-note">Screen not available</span>';
   const label = machine.screen === 'control' ? 'Screen · control' : 'Screen · view';
@@ -350,7 +481,7 @@ function machineScreenHTML(machine) {
     : `<span class="machine-screen"><span class="nav-icon" aria-hidden="true">computer</span>${label}</span>${betaPill('computer_screen')}`;
 }
 // "Update" on the row only when one waits; the details are under Versions and updates in the pop-up.
-function machineUpdateWords(update) {
+function machineUpdateWords(update: MachineUpdate | null | undefined) {
   if (!update) return '';
   if (update.state === 'updating') return `<span class="pill waiting" title="${esc(update.label || 'Updating')}">Updating</span>`;
   if (update.state === 'needs_update' || update.state === 'incompatible' || update.outdated)
@@ -358,15 +489,16 @@ function machineUpdateWords(update) {
   return '';
 }
 // Rename from the computer's pop-up (computer-detail.js): 1 to 100 characters once trimmed.
-async function settingsComputerRename(form) {
-  const input = form.querySelector('[data-computer-rename-input]'), id = form.dataset.computerRenameForm;
+async function settingsComputerRename(form: HTMLFormElement) {
+  const input = form.querySelector<HTMLInputElement>('[data-computer-rename-input]'), id = form.dataset.computerRenameForm;
+  if (!input) return;
   const label = input.value.trim();
   settingsFieldClear(input);
   if (!label || label.length > 100) { settingsFieldError(input, 'Enter 1 to 100 characters.'); input.focus(); return; }
   const buttons = [...form.querySelectorAll('button')], edit = COMPUTER_RENAME_EDIT;
   buttons.forEach(button => { button.disabled = true; });
   try {
-    await post(`/v2/computers/${encodeURIComponent(id)}/label`, {label});
+    await post(`/v2/computers/${encodeURIComponent(String(id))}/label`, {label});
     const machine = (SETTINGS_DATA.machines || []).find(row => row.id === id);
     if (machine) machine.label = label;
     // Only the edit that sent it closes: the pop-up may show another computer, or another edit, by now.
@@ -379,13 +511,13 @@ async function settingsComputerRename(form) {
     toast('Renamed');
     await loadSettings();
   } catch (error) {
-    toast(error.message, true);
+    toast(errorMessage(error, ''), true);
     buttons.forEach(button => { button.disabled = false; });
   }
 }
 // Turns at once on a computer: a whole number from 1 to 256, or empty for automatic. Anything else is named under the
 // row and not sent. The note is set from the answer, since a pop-up whose field is still focused is not redrawn.
-async function settingsTurnsAtOnceSave(input) {
+async function settingsTurnsAtOnceSave(input: HTMLInputElement): Promise<void> {
   // The field is disabled while its save is in flight, so a change that lands then starts no second save
   // here. The server has not seen that value: it is sent once this save answers, from what the field holds
   // then (below).
@@ -402,13 +534,13 @@ async function settingsTurnsAtOnceSave(input) {
   input.disabled = true;
   let saved = false;
   try {
-    const path = `/v2/computers/${encodeURIComponent(input.dataset.turnsAtOnce)}/turns-at-once`;
-    const done = await post(path, {turns_at_once});
+    const path = `/v2/computers/${encodeURIComponent(String(input.dataset.turnsAtOnce))}/turns-at-once`;
+    const done: {turn_limit?: number} | null = await post(path, {turns_at_once});
     saved = true;
     input.dataset.current = text;
     input.defaultValue = text;
     input.disabled = false;
-    const machine = (SETTINGS_DATA.machines || []).find(row => row.id === input.dataset.turnsAtOnce);
+    const machine: DeviceMachine | undefined = (SETTINGS_DATA.machines || []).find(row => row.id === input.dataset.turnsAtOnce);
     const note = input.closest('label')?.querySelector('[data-turns-note]');
     if (note && machine) {
       const turn_limit = done?.turn_limit ?? machine.turn_limit;
@@ -416,9 +548,9 @@ async function settingsTurnsAtOnceSave(input) {
     }
     toast(turns_at_once == null ? 'Turns at once is automatic' : `Turns at once set to ${turns_at_once}`);
   } catch (error) {
-    toast(error.message, true);
+    toast(errorMessage(error, ''), true);
     // A value typed during the failed save is kept and sent below; only an unchanged field goes back to what is saved.
-    if (input.value === text) input.value = input.dataset.current;
+    if (input.value === text) input.value = String(input.dataset.current);
     input.disabled = false;
   }
   // The value the field holds now differs from what the server holds: send it, and its own save reloads the page.
@@ -426,26 +558,28 @@ async function settingsTurnsAtOnceSave(input) {
   if (saved) await loadSettings();
 }
 // What a computer is doing now: "1 running · 55 queued", idle, asleep (a cloud computer stopped to save), or offline.
-function machineNowWords(machine) {
+function machineNowWords(machine: DeviceMachine) {
   if (machine.revoked_at) return 'revoked';
+  if (machine.cloud_machine?.restarting) return 'Restarting';
   const counts = machine.turn_counts || {};
   const parts = [['running', 'running'], ['starting', 'starting'], ['queued', 'queued'], ['waiting', 'waiting']]
-    .filter(([key]) => Number(counts[key]) > 0).map(([key, word]) => `${counts[key]} ${word}`);
+    .filter(([key]) => Number(counts[String(key)]) > 0).map(([key, word]) => `${counts[String(key)]} ${word}`);
   if (parts.length) return parts.join(' · ');
   if (machineOnline(machine)) return 'idle';
-  if (['stopped', 'stopping'].includes(machine.cloud_machine?.state)) return 'asleep';
+  if (['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) return 'asleep';
   return 'offline';
 }
 // The AI tools that get a column: those a subscription can be given to first (a picker each), then every other tool a
 // computer reports (its login's chip, as in the computer's pop-up).
-function machineToolColumns(machines) {
+function machineToolColumns(machines: DeviceMachine[]) {
   const pickers = subsComputersReady() ? subsTools() : [];
-  const seen = new Map();
-  for (const machine of machines) for (const conn of machineShown(machine)) if (!pickers.includes(conn.runtime)) seen.set(conn.runtime, conn.tool);
+  const seen = new Map<string, string>();
+  // machineConnections (computer-detail.ts) sets each connection's `tool` after it builds the row.
+  for (const machine of machines) for (const conn of machineShown(machine) as (ReturnType<typeof machineShown>[number] & {tool: string})[]) if (!pickers.includes(conn.runtime)) seen.set(conn.runtime, conn.tool);
   const others = [...seen].sort((a, b) => a[1].localeCompare(b[1])).map(([runtime]) => runtime);
   return {pickers, others};
 }
-function machineToolCellHTML(machine, runtime) {
+function machineToolCellHTML(machine: DeviceMachine, runtime: string) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
   const chips = machineShown(machine).filter(conn => conn.runtime === runtime).map(conn => machineChipHTML(machine, conn)).join('');
   return chips ? `<div class="machine-chips">${chips}</div>` : '<span class="muted">—</span>';
@@ -456,11 +590,11 @@ function renderSettingsMachines() {
   const el = $('#set-machines'); if (!el) return;
   const showRevoked = el.dataset.showRevoked === 'true';
   const revoked = SETTINGS_DATA.machines.filter(machine => machine.revoked_at).length;
-  const machines = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
+  const machines: DeviceMachine[] = SETTINGS_DATA.machines.filter(machine => showRevoked || !machine.revoked_at);
   const {pickers, others} = machineToolColumns(machines);
   // Share the entry's support read; the rows are drawn again when it comes.
   if (!CLOUD_SUPPORT.read && machines.some(machine => machine.cloud_machine))
-    void cloudSupportRead().then(view => { if (view) renderSettingsMachines(); });
+    void cloudSupportRead()!.then(view => { if (view) renderSettingsMachines(); });
   const cards = machines.map(machine => {
     const online = machineOnline(machine);
     const dot = machine.revoked_at ? 'failed' : online ? 'ok' : '';
@@ -475,108 +609,108 @@ function renderSettingsMachines() {
       ${others.map(runtime => `<td data-label="${esc(machineToolName(machine, runtime))}">${machineToolCellHTML(machine, runtime)}</td>`).join('')}
       <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
-  const toolHead = runtime => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
-  el.onchange = async event => {
-    const pick = event.target.closest('[data-subs-pick]');
+  const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
+  el.onchange = async (event: Event & {target: Element}) => {
+    const pick = event.target.closest<HTMLSelectElement>('[data-subs-pick]');
     if (pick) { await subsPick(pick); return; }
-    if (event.target.matches('[data-show-revoked-computers]')) {
+    if (event.target.matches('[data-show-revoked-computers]') && event.target instanceof HTMLInputElement) {
       el.dataset.showRevoked = String(event.target.checked);
       renderSettingsMachines();
       el.querySelector('[data-show-revoked-computers]')?.focus();
       return;
     }
-    const choice = event.target.closest('[data-harness-choice]');
+    const choice = event.target.closest<HTMLInputElement>('[data-harness-choice]');
     if (choice) {
       choice.disabled = true;
       try {
-        await post(`/v2/computers/${encodeURIComponent(choice.dataset.runner)}/harness-choices`, {harness: choice.dataset.harnessChoice, enabled: choice.checked});
+        await post(`/v2/computers/${encodeURIComponent(String(choice.dataset.runner))}/harness-choices`, {harness: choice.dataset.harnessChoice, enabled: choice.checked});
         toast(choice.checked ? 'Installing' : 'Turned off');
         await loadSettings();
-      } catch (error) { toast(error.message, true); choice.checked = !choice.checked; choice.disabled = false; }
+      } catch (error) { toast(errorMessage(error, ''), true); choice.checked = !choice.checked; choice.disabled = false; }
       return;
     }
-    const exit = event.target.closest('[data-browser-exit], [data-browser-exit-bots] input, [data-browser-exit-cap]');
+    const exit = event.target.closest<HTMLInputElement>('[data-browser-exit], [data-browser-exit-bots] input, [data-browser-exit-cap]');
     if (exit) { await machineBrowserExitSave(exit); return; }
-    const perf = event.target.closest('[data-performance-mode]');
+    const perf = event.target.closest<HTMLInputElement>('[data-performance-mode]');
     if (perf) {
       perf.disabled = true;
       try {
-        await post(`/v2/computers/${encodeURIComponent(perf.dataset.performanceMode)}/performance`, {mode: perf.checked ? 'on' : 'off'});
+        await post(`/v2/computers/${encodeURIComponent(String(perf.dataset.performanceMode))}/performance`, {mode: perf.checked ? 'on' : 'off'});
         toast(perf.checked ? 'Performance diagnostics on' : 'Performance diagnostics off');
         await loadSettings();
-      } catch (error) { toast(error.message, true); perf.checked = !perf.checked; perf.disabled = false; }
+      } catch (error) { toast(errorMessage(error, ''), true); perf.checked = !perf.checked; perf.disabled = false; }
       return;
     }
-    const inbox = event.target.closest('[data-inbox-only]');
+    const inbox = event.target.closest<HTMLInputElement>('[data-inbox-only]');
     if (inbox) {
       inbox.disabled = true;
       try {
-        await post(`/v2/runners/${encodeURIComponent(inbox.dataset.inboxOnly)}/inbox-only`, {enabled: inbox.checked});
+        await post(`/v2/runners/${encodeURIComponent(String(inbox.dataset.inboxOnly))}/inbox-only`, {enabled: inbox.checked});
         toast(inbox.checked ? 'Kept for inbox bots' : 'No longer kept for inbox bots');
         await loadSettings();
-      } catch (error) { toast(error.message, true); inbox.checked = !inbox.checked; inbox.disabled = false; }
+      } catch (error) { toast(errorMessage(error, ''), true); inbox.checked = !inbox.checked; inbox.disabled = false; }
       return;
     }
-    const turns = event.target.closest('[data-turns-at-once]');
+    const turns = event.target.closest<HTMLInputElement>('[data-turns-at-once]');
     if (turns) { await settingsTurnsAtOnceSave(turns); return; }
-    const box = event.target.closest('[data-member-bots]');
+    const box = event.target.closest<HTMLInputElement>('[data-member-bots]');
     if (!box) return;
     box.disabled = true;
     try {
-      await post(`/v2/computers/${encodeURIComponent(box.dataset.memberBots)}/member-bots`, {accepts: box.checked});
+      await post(`/v2/computers/${encodeURIComponent(String(box.dataset.memberBots))}/member-bots`, {accepts: box.checked});
       toast(box.checked ? 'Members\' bots may now go on this computer' : 'Members\' bots no longer go on this computer');
       await loadSettings();
-    } catch (error) { toast(error.message, true); box.checked = !box.checked; box.disabled = false; }
+    } catch (error) { toast(errorMessage(error, ''), true); box.checked = !box.checked; box.disabled = false; }
   };
-  el.onclick = async event => {
+  el.onclick = async (event: MouseEvent & {target: Element}) => {
     // The pop-up: a click on a row (its name, a chip, anywhere on it) opens it; ✕ or the backdrop closes it.
     const dialog = el.querySelector('dialog.computer-detail');
     if (dialog && (event.target === dialog || event.target.closest('[data-detail-close]'))) { dialog.close(); return; }
     if (dialog && event.target.closest('dialog.computer-detail a[href]:not([data-computer-bots])')) dialog.close();   // leaving for a link
     // Add, on the row or in the pop-up, opens its own pop-up (before the row's click opens the computer's).
-    const add = event.target.closest('[data-add-connection]');
-    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection); return; }
+    const add = event.target.closest<HTMLButtonElement>('[data-add-connection]');
+    if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection!); return; }
     if (event.target.closest('[data-subs-cell] select, [data-subs-reconnect]')) {
-      const reconnect = event.target.closest('[data-subs-reconnect]');
+      const reconnect = event.target.closest<HTMLElement>('[data-subs-reconnect]');
       if (reconnect) subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect));
       return;
     }
     if (event.target.closest('#machine-add-dialog')) return;
-    const row = event.target.closest('[data-computer-open], [data-computer-row]');
-    if (row && !event.target.closest('a')) { computerDetailOpen(row.dataset.computerOpen || row.dataset.computerRow); return; }
-    const perfLink = event.target.closest('[data-computer-performance]');
-    if (perfLink) { dialog?.close(); location.hash = performanceHref(perfLink.dataset.computerPerformance); return; }
+    const row = event.target.closest<HTMLElement>('[data-computer-open], [data-computer-row]');
+    if (row && !event.target.closest('a')) { computerDetailOpen((row.dataset.computerOpen || row.dataset.computerRow)!); return; }
+    const perfLink = event.target.closest<HTMLElement>('[data-computer-performance]');
+    if (perfLink) { dialog?.close(); location.hash = performanceHref(String(perfLink.dataset.computerPerformance)); return; }
     const shown = event.target.closest('[data-computer-bots]');
     if (shown) {
       event.preventDefault(); dialog?.close();
       settingsShow('bots'); renderSettingsBots();
       return;
     }
-    const login = event.target.closest('[data-machine-copy-login]');
-    if (login) { void copyText(login.dataset.machineCopyLogin).then(() => toast('Command copied')); return; }
-    const remove = event.target.closest('[data-computer-remove]');
+    const login = event.target.closest<HTMLElement>('[data-machine-copy-login]');
+    if (login) { void copyText(login.dataset.machineCopyLogin!).then(() => toast('Command copied')); return; }
+    const remove = event.target.closest<HTMLButtonElement>('[data-computer-remove]');
     if (remove) {
-      const machine = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
+      const machine: DeviceMachine | undefined = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
       const bots = (machine?.bots || []).length;
       if (!await settingsConfirm({title: `Revoke ${machine?.label || 'this computer'}?`, text: `It stops taking work at once${bots ? `; its ${bots === 1 ? 'bot waits' : `${bots} bots wait`} until reassigned on the Bots page` : ''}.`, ok: 'Revoke'})) return;
       remove.disabled = true;
       try {
-        await post(`/v2/computers/${encodeURIComponent(remove.dataset.computerRemove)}/revoke`, {});
+        await post(`/v2/computers/${encodeURIComponent(String(remove.dataset.computerRemove))}/revoke`, {});
         dialog?.close();
         await loadSettings();
         $('#machine-note').innerHTML = 'Computer revoked. Its bots wait until reassigned in Bots. For Docker, stop its runner from its install directory: <code>docker compose -f runner.compose.yaml down</code>. Include <code>-f runner.override.yaml</code> before <code>down</code> if that file is present. This keeps repositories and sign-in.';
         toast('Computer revoked');
-      } catch (error) { toast(error.message, true); remove.disabled = false; }
+      } catch (error) { toast(errorMessage(error, ''), true); remove.disabled = false; }
       return;
     }
-    const button = event.target.closest('[data-harness-action]');
+    const button = event.target.closest<HTMLButtonElement>('[data-harness-action]');
     if (!button || button.disabled) return;
     button.disabled = true;
     try {
-      await post(`/v2/computers/${encodeURIComponent(button.dataset.runner)}/harness-actions`, {harness: button.dataset.harness, action: button.dataset.harnessAction});
+      await post(`/v2/computers/${encodeURIComponent(String(button.dataset.runner))}/harness-actions`, {harness: button.dataset.harness, action: button.dataset.harnessAction});
       toast(button.dataset.harnessAction === 'update' ? 'Update requested; the computer applies it when no run is using it' : 'Saved');
       await loadSettings();
-    } catch (error) { toast(error.message, true); button.disabled = false; }
+    } catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; }
   };
   const people = S.me?.role === 'owner' ? SETTINGS_DATA.people : SETTINGS_DATA.people.filter(person => person.id === S.me?.id);
   const agents = (SETTINGS_DATA.agents || []).map(agent => `<tr class="machine-card" data-agent-row="${esc(agent.bot)}"><td><strong><a href="#/bot/${esc(encodeURIComponent(agent.bot))}">${esc(agent.display_name || botSlug(agent.bot))}</a></strong><span class="settings-cell-note">${esc(agentKind(agent))}${agent.profile ? ` · profile ${esc(agent.profile)}` : ''}${agent.version ? ` · ${esc(agent.version)}` : ''}${agent.platform ? ` · ${esc(agent.platform)}` : ''}</span></td>
@@ -606,7 +740,7 @@ function renderSettingsMachines() {
   restoreFocus();
   computerDetailPaint();
   const machineDefaultLabel = () => $('#machine-kind').value === 'linux' && S.config?.local ? 'This computer'
-    : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'})[$('#machine-kind').value] || 'Mac'}`;
+    : `${settingsPersonName($('#machine-operator').value)}'s ${({linux: 'server', windows: 'PC'} as Record<string, string>)[$('#machine-kind').value] || 'Mac'}`;
   $('#machine-operator').onchange = () => { $('#machine-label').value = machineDefaultLabel(); };
   // A hosted computer is named and sized on app.tico.dev, so the owner and name fields step aside.
   const machineKindPaint = () => { const hosted = $('#machine-kind').value === 'hosted';
@@ -614,7 +748,7 @@ function renderSettingsMachines() {
     $('#register-machine').textContent = hosted ? 'Open hosting' : 'Get code'; };
   $('#machine-kind').onchange = () => { $('#machine-label').value = machineDefaultLabel(); machineKindPaint(); };
   machineKindPaint();
-  $('#register-machine').onclick = async event => {
+  $('#register-machine').onclick = async (event: MouseEvent & {target: HTMLButtonElement}) => {
     if ($('#machine-kind').value === 'hosted') {
       window.open('https://app.tico.dev/hosting?workspace=' + encodeURIComponent(location.hostname), '_blank', 'noopener');
       return;
@@ -627,14 +761,14 @@ function renderSettingsMachines() {
       const {code} = await enrollmentCode(operator);
       // Settings signs the computer in from its row, so the Docker sign-in line is left to the setup wizard.
       const [main, ...more] = kind === 'windows' ? windowsRunnerCommands(code, label)
-        : dockerRunnerCommands(code, label, '', kind).filter(Boolean);
-      const line = ([note, command], i) => `<span class="muted">${esc(note)}</span><span class="machine-command"><code>${esc(command)}</code><button class="ghost" type="button" data-machine-copy="${i}">Copy</button></span>`;
+        : dockerRunnerCommands(code, label, '', kind).filter(Boolean) as [[string, string], ...[string, string][]];
+      const line = ([note, command]: [string, string], i: number) => `<span class="muted">${esc(note)}</span><span class="machine-command"><code>${esc(command)}</code><button class="ghost" type="button" data-machine-copy="${i}">Copy</button></span>`;
       status.innerHTML = `<span>${kind === 'windows' ? `Windows PC through WSL 2${betaPill('windows')}. ` : ''}Code for <strong>${esc(label)}</strong>, good 15 minutes. Then sign it in here.</span>${line(main, 0)}`
         + (more.length ? `<details><summary>Other ways</summary>${more.map((row, i) => line(row, i + 1)).join('')}</details>` : '')
         + (kind === 'mac' ? '<button class="ghost" type="button" id="machine-checkout">Use a Tico checkout instead</button>' : '');
       const commands = [main, ...more];
-      status.querySelectorAll('[data-machine-copy]').forEach(button => button.onclick = () =>
-        void copyText(commands[Number(button.dataset.machineCopy)][1]!).then(() => toast('Command copied')));
+      status.querySelectorAll('[data-machine-copy]').forEach((button: HTMLElement) => button.onclick = () =>
+        void copyText(commands[Number(button.dataset.machineCopy)]![1]).then(() => toast('Command copied')));
       const checkout = $('#machine-checkout');
       if (checkout) checkout.onclick = async () => {
         checkout.disabled = true;
@@ -643,13 +777,13 @@ function renderSettingsMachines() {
           status.innerHTML = `Setup file downloaded. Run in the Tico checkout on that Mac:<span class="machine-command"><code>scripts/setup-runner.sh "$HOME/Downloads/${esc(filename)}"</code><button class="ghost" type="button" id="copy-enrollment-command">Copy</button></span><button class="ghost" type="button" id="copy-enrollment-prompt">Copy AI setup prompt</button>`;
           $('#copy-enrollment-command').onclick = () => void copyText(`scripts/setup-runner.sh "$HOME/Downloads/${filename}"`).then(() => toast('Setup command copied'));
           $('#copy-enrollment-prompt').onclick = () => void copyText(settingsEnrollmentPrompt(operator, filename)).then(() => toast('Computer setup prompt copied'));
-        } catch (error) { toast(error.message, true); checkout.disabled = false; }
+        } catch (error) { toast(errorMessage(error, ''), true); checkout.disabled = false; }
       };
-    } catch (error) { toast(error.message, true); }
+    } catch (error) { toast(errorMessage(error, ''), true); }
     finally { event.target.disabled = false; }
   };
 }
-function settingsSetupPrompt(slug) {
+function settingsSetupPrompt(slug?: string) {
   const rows = (slug ? S.emps.filter(e => e.id === slug) : S.emps).map(e => {
     const owners = (e.users || []).map(person => person.name || person.id).join(', ') || 'nobody';
     const machine = e.machine?.label || `not assigned (reserved for ${settingsPersonName(e.owner_id)})`;
@@ -657,9 +791,9 @@ function settingsSetupPrompt(slug) {
   });
   return `Help me update the ${appName()} bot setup.\n\nCurrent cloud state:\n${rows.join('\n')}\n\nAsk me what I want to change, then use the formal owner-admin API. Do not edit the production SQLite database directly. Bot definitions in the ${appName()} backend are authoritative after the one-time bootstrap: create a bot with POST /api/v2/bots and update its name, description, hierarchy, status, repository, or room type with POST /api/v2/bots/{bot}/definition. No ${appName()} application deploy or registry publish is required. Provision the bot's repository on any computer that will run it, and verify computer readiness. Preserve tasks and conversation history. Change a bot's model, reasoning effort, or registered computer through POST /api/v2/bots/{bot}/transitions so ${appName()} checkpoints every current session before applying it. If the transition is blocked because the old computer is unavailable, explain what continuity will be lost and ask me before calling apply-without-checkpoint. Use revision and assignment-generation checks. Humans are still managed separately from bot definitions.`;
 }
-function settingsEnrollmentPrompt(operator, filename) {
+function settingsEnrollmentPrompt(operator: string, filename: string) {
   return `Set up a ${appName()} local runner for ${settingsPersonName(operator)} using the downloaded ${filename} enrollment file. Work from the Tico checkout on the target Mac. Locate the human's bot repositories, run scripts/setup-runner.sh "$HOME/Downloads/${filename}", then run scripts/tico-computer doctor and resolve every repository, runtime login (Codex or Claude), model, or configuration-readiness problem. Never print or commit the enrollment code or runner token and never open an inbound port. Do not install the private processing or connector workers. Registration must not assign bots; when the computer is ready, tell me to return to ${appName()} Settings and choose it for each intended bot so existing sessions are checkpointed before the move.`;
 }
-function settingsCopyPrompt(slug) {
+function settingsCopyPrompt(slug?: string) {
   void copyText(settingsSetupPrompt(slug)).then(() => toast(`${slug ? settingsBotName(slug) + ' ' : ''}setup prompt copied`)).catch(() => toast('Could not copy the setup prompt', true));
 }

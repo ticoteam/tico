@@ -98,7 +98,7 @@ def s13_steps(org, f):
         trigger={"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
         steps=[
             {"id": "gate", "type": "filter", "enabled": True, "rules": []},
-            {"id": "rank", "type": "decide", "enabled": True, "set": "task-rank@1", "level": "low", "out": "d1"},
+            {"id": "rank", "type": "decide", "enabled": True, "set": "task-rank@1", "out": "d1"},
             {"id": "draft", "type": "llm", "enabled": True, "as": OPENAI_REF, "prompt": "Draft a reply", "out": "txt"},
             {"id": "act", "type": "bot_turn", "enabled": True, "bot": OPENAI_ID, "prompt": "Do the work"},
         ],

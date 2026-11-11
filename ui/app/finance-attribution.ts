@@ -65,6 +65,7 @@ function finShareBps(text: string): number {
   if (!/^\d{1,3}(\.\d{1,2})?$/.test(t)) return NaN;
   return Math.round(Number(t) * 100);
 }
+interface FinPage { attr?: FinAttrState }
 const finShareName = (p: FinShare): string => p.teammate ? finWho(p.teammate) : finTeamName(p.team || '');
 // The picker's value for a part, in the form finAttrTags reads back (finance-docs.js): "teammate:bot:x" or "team:id".
 const finShareRef = (p: FinShare): string => p.teammate ? 'teammate:' + p.teammate : p.team ? 'team:' + p.team : '';
@@ -142,7 +143,7 @@ function finShareRead(root: ParentNode): FinShare[] {
 
 // ----------------------------------------------------------------- the rail's "Attributed to"
 // The line ids a Transactions row holds (a bank row's lines, or an entry's own line) and the rail's section for each.
-async function finShareRailLoad(key: string, lines: {line_id: string; account?: string}[]): Promise<void> {
+async function finShareRailLoad(key: string, lines: {line_id: string; account?: string | undefined}[]): Promise<void> {
   const box = document.getElementById('fin-tx-share');
   if (!box || !lines.length) return;
   const reads = await Promise.all(lines.map(l => get(`/v2/finance/lines/${encodeURIComponent(l.line_id)}/attribution${finAs('?')}`, {fresh: true})
@@ -213,7 +214,7 @@ async function finShareUndo(lineId: string): Promise<void> {
 // Shown to the owner and anyone holding finance.attribution (or finance.admin): the rules, and + Rule for those who may change them.
 function finAttrPage(): void {
   const state: FinAttrState = {rules: [], can: false, load: 0, dims: []};
-  FIN.attr = state;
+  finNeed(FIN, 'the Finance page').attr = state;
   const body = $('#fin-body');
   if (!body) return;
   body.innerHTML = `<div class="fin-bar"><span class="spacer"></span><button type="button" class="primary" data-fin-rule-add hidden>+ Rule</button></div>
@@ -247,7 +248,7 @@ function finAttrPage(): void {
   void finAttrLoad();
 }
 async function finAttrLoad(): Promise<void> {
-  const state: FinAttrState | undefined = FIN.attr;
+  const state: FinAttrState | undefined = FIN?.attr;
   if (!state) return;
   const load = ++state.load;
   let d: FinRulesRead | null;
@@ -294,7 +295,7 @@ function finClassTarget(value: string): {teammate?: string; team?: string} {
   return {};
 }
 async function finClassesSave(): Promise<void> {
-  const state = FIN.attr as FinAttrState | undefined;
+  const state: FinAttrState | undefined = FIN?.attr;
   if (!state) return;
   const items: Record<string, unknown>[] = [];
   for (const sel of document.querySelectorAll<HTMLSelectElement>('select[data-fin-class-team]')) {
@@ -308,7 +309,7 @@ async function finClassesSave(): Promise<void> {
   void finAttrLoad();
 }
 function finAttrDraw(): void {
-  const state: FinAttrState | undefined = FIN.attr, box = $('#fin-rules');
+  const state: FinAttrState | undefined = FIN?.attr, box = $('#fin-rules');
   if (!box || !state) return;
   const classes = finClassesHtml(state.dims);
   if (!state.rules.length) { box.innerHTML = classes + finNote('No rules.'); return; }

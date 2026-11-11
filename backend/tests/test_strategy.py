@@ -5,46 +5,13 @@ Acme."""
 import json
 
 from backend import strategy as S
+from backend import task_engine as E
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_company import with_strategy_bot
-from backend.tests.test_kpis import goal_with_kpi, log
-
-WRONG = {"kind": "text", "text": "Three landlords in a row say no", "check_by": "2099-01-01"}
-
-
-def draft(api, token="ana-test"):
-    return get(api, "strategy", token=token)["draft"]
-
-
-def write(api, token="ana-test", expected=200, **fields):
-    revision = fields.pop("revision", None)
-    if revision is None:
-        revision = draft(api)["revision"]
-    return put(api, "strategy/draft", {"revision": revision, **fields}, token=token, expected=expected)
-
-
-def add_bet(api, statement="Small landlords pay for bots", expected=200, token="ana-test", **more):
-    body = {
-        "statement": statement,
-        "why": "They have no staff.",
-        "rules_out": "Enterprise sales",
-        "wrong_if": WRONG,
-        "status": "active",
-        **more,
-    }
-    return post(api, "strategy/bets", body, token=token, expected=expected)
-
-
-def publish(api, note="First", expected=200):
-    return post(api, "strategy/publish", {"note": note, "revision": draft(api)["revision"]}, expected=expected)
-
-
-def ready(api, **bet):
-    """A draft that may be published: a won't-do and one active bet."""
-    write(api, summary="Acme runs rentals with bots.", sections={"not": "No enterprise deals."})
-    return add_bet(api, **bet)["bet"]
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.helpers.company import with_strategy_bot
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.strategy import add_bet, draft, publish, ready, write
 
 
 def test_draft_merges_only_what_is_sent_and_a_stale_revision_gets_409(api):
@@ -335,7 +302,7 @@ def test_goals_by_bet_hides_goals_the_reader_may_not_see_and_task_only_goals_are
         c.execute("UPDATE goals SET owner_id='bot:acme-helper' WHERE id=?", (theirs["id"],))
         listed = S.goals_by_bet(c, Auth, Identity("human:cara", "human"), [bet["id"]])
     assert [g["id"] for g in listed[bet["id"]]] == [mine["id"]]
-    post(api, "goals", {"title": "Nope", "owner": "ana", "bet_id": "missing"}, expected=422)
+    post(api, "goals", {"title": "Nope", "owner": "ana", "bet_id": "missing"}, expected=404)
     goal, kpi = goal_with_kpi(api)
     post(api, f"goals/{goal['id']}", {"bet_id": bet["id"]})
     log(api, kpi["id"], 41)
@@ -383,10 +350,21 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
     with api.app.state.store.read() as c:
-        closed = H._one(c, "SELECT status, note FROM tasks WHERE id=?", (task["id"],))
-        assert closed["status"] in ("done", "closed")
+        closed = H._one(c, "SELECT status FROM tasks WHERE id=?", (task["id"],))
+        assert closed["status"] == "closed"
         assert not H._one(c, "SELECT 1 AS x FROM goal_asks WHERE ref=?", (proposal["id"],))
-    assert closed["note"] == "Resolved: the goals were realigned with the strategy."
+    assert closing_note(api, task["id"]) == "Resolved: the goals were realigned with the strategy."
+
+
+def closing_note(api, tid):
+    """The why on the move that closed the task."""
+    with api.app.state.store.read() as c:
+        return H._one(
+            c,
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (tid,),
+        )["note"]
 
 
 def realign_card(api):
@@ -416,11 +394,7 @@ def test_a_reworded_bet_carries_its_earlier_wording_and_keeping_every_goal_says_
     assert task["title"] == "Choose what happens to 2 goals after strategy v2" and "reworded" in task["body"]
     post(api, f"goal-proposals/{card['id']}/decide", {"decision": "confirm", "moves": {g["id"]: "keep" for g in goals}})
     assert all(get(api, f"goals/{g['id']}")["goal"]["bet_id"] == card["payload"]["goals"][0]["bet_id"] for g in goals)
-    with api.app.state.store.read() as c:
-        assert (
-            H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"]
-            == "Resolved: the goals stay as they are."
-        )
+    assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
 
 def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(api):
@@ -433,11 +407,7 @@ def test_a_goal_closed_since_the_card_was_filed_is_listed_closed_and_left_alone(
     )["proposal"]
     assert out["result"]["goals"] == {goals[0]["id"]: "closed", goals[1]["id"]: "kept"}
     assert get(api, f"goals/{goals[0]['id']}")["goal"]["status"] == "done"
-    with api.app.state.store.read() as c:
-        assert (
-            H._one(c, "SELECT note FROM tasks WHERE id=?", (task["id"],))["note"]
-            == "Resolved: the goals stay as they are."
-        )
+    assert closing_note(api, task["id"]) == "Resolved: the goals stay as they are."
 
 
 def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_version(api):
@@ -466,7 +436,8 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
         assert not c.execute(
             "SELECT 1 FROM history_events WHERE subject_type='strategy' AND kind=?", (S.TRIPPED,)
         ).fetchone()
-        c.execute("UPDATE tasks SET status='done' WHERE title='Bet 1: may be wrong'")
+        held = c.execute("SELECT id FROM tasks WHERE title='Bet 1: may be wrong'").fetchone()[0]
+        E.move(c, held, E.DONE, "human:ana", "Looked into it")
     log(api, kpi["id"], 15)
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT status FROM tasks WHERE title='Bet 1: may be wrong' ORDER BY created_at"))
@@ -537,17 +508,17 @@ def test_the_old_company_vision_moves_into_the_first_draft(api):
 
 
 def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
     err, out = ok(
-        "hub_strategy_draft",
+        "tico_strategy_draft",
         {"summary": "Acme runs rentals.", "section": ["not=No enterprise deals.", "brand=Plain words."]},
     )
     assert not err and out["sections"]["not"] == "No enterprise deals."
     assert out["sections"]["extra"]["brand"] == {"title": "Brand", "body": "Plain words."}
     err, out = ok(
-        "hub_strategy_bet_add",
+        "tico_strategy_bet_add",
         {
             "statement": "Landlords pay for bots",
             "rules_out": "Enterprise sales",
@@ -557,14 +528,14 @@ def test_the_owner_runs_the_strategy_through_the_hub_tools(api):
         },
     )
     assert not err and out["bet"]["wrong_if"]["kind"] == "text"
-    err, out = ok("hub_strategy_publish", {"note": "First"})
+    err, out = ok("tico_strategy_publish", {"note": "First"})
     assert not err and out["n"] == 1
-    err, out = ok("hub_strategy_summary", token="cara-test")
+    err, out = ok("tico_strategy_summary", token="cara-test")
     assert not err and out["n"] == 1 and "Landlords pay for bots" in out["text"]
-    err, _ = ok("hub_strategy_draft", {"summary": "Mine."}, token="cara-test")
+    err, _ = ok("tico_strategy_draft", {"summary": "Mine."}, token="cara-test")
     assert err
     err, out = ok(
-        "hub_goal_create",
+        "tico_goal_create",
         {"owner": "ana", "title": "Sign 10 landlords", "bet_id": get(api, "strategy")["bets"][0]["id"]},
     )
     assert not err and out["bet_id"]

@@ -17,19 +17,13 @@ from backend import company_file as C
 from backend.company_file import actions as A
 from backend.company_file import draft as D
 from backend.company_file import starter
+from backend.tests.helpers.company_file import TODAY, chart, started, tag
 
-TODAY = dt.date(2026, 10, 17)
 CREATED = dt.datetime(2026, 10, 17, 9, 30, tzinfo=dt.timezone.utc)
 # Built at run time so no scanner mistakes the test for a leak.
 OPENAI = "sk-" + "proj" + "A1b2C3d4E5f6G7h8J9k0L1m2"
 GITHUB = "ghp" + "_" + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe"
 AWS = "AKIA" + "IOSFODNN7EXAMPLE"
-
-
-def started(**fields):
-    """A draft as the page sends it after the first turn: the Everything model on the chart (no signals yet)."""
-    turn = C.Turn(C.blank(), TODAY)
-    return {**turn.finish(), **fields}
 
 
 def run(draft, *steps):
@@ -204,8 +198,8 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("CRO") is None and A.find_role("cro bot") is None and A.find_role("the pipeline") is None
     assert A.find_role("sales pipeline") is None and A.find_role("pipeline") is None
     assert A.find_role("Pipeline Owner")["slug"] == "pipeline"
-    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro"
-    assert A.find_role("release manager")["slug"] == "release-notes"
+    assert A.find_role("Conversion Rate Optimization Owner")["slug"] == "cro-owner"
+    assert A.find_role("release manager")["slug"] == "release-owner"
 
 
 def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
@@ -1037,36 +1031,6 @@ def test_the_copy_tico_hq_serves_runs_the_same_engine(tmp_path):
             del sys.modules[name]
 
 
-# ------------------------------------------------------------------------------- seat guard (Org chart models 2/7)
-def tag(i):
-    """A title suffix without digits: a title like "Account Manager 7" slugs to an id the key scrubber can cut."""
-    return "".join("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[d] for d in (i // 26, i % 26))
-
-
-def chart(bots, people=1):
-    """The starter chart grown (or cut) to `bots` bots and `people` people, through the chat's own actions."""
-    draft = started()
-    draft["bots"] = draft["bots"][:bots]
-    roles = [r for r in C.ROLES if not r["core"]]  # built-ins stay one each
-    turn = C.Turn(draft, TODAY)
-    for i in range(bots - len(turn.draft["bots"])):
-        role = roles[i % len(roles)]
-        result = turn.apply(
-            "bot_add",
-            {
-                "template": role["slug"],
-                "title": "%s %s" % (role["name"], tag(i)),
-                "reason": "The owner asked for one more.",
-            },
-        )
-        assert result["ok"], result
-    for i in range(people - len(turn.draft["people"])):
-        assert turn.apply("person_set", {"name": "Person %s" % tag(i), "role": "Account Manager"})["ok"]
-    draft = turn.finish()
-    assert (len(draft["bots"]), len(draft["people"])) == (bots, people)
-    return draft
-
-
 @pytest.mark.parametrize("seat", [61, 100, 300])
 def test_4_the_chat_adds_a_61st_100th_and_300th_bot_with_no_limit_message(seat):
     draft, (result,) = run(
@@ -1128,7 +1092,7 @@ def test_a_full_300_seat_chart_with_its_undo_and_chat_fits_the_draft_and_the_com
 
 
 def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_words():
-    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 325th lands, the 326th is refused,
+    """The chat's own goals stay inside the limit the file check uses (Dev 449): the 329th lands, the 330th is refused,
     and the full plan passes the check and its file reads back."""
     draft = started()
     draft["goals"] = [
@@ -1146,10 +1110,10 @@ def test_the_chat_adds_goals_up_to_the_goal_limit_and_refuses_the_next_in_plain_
         for i in range(C.LIMITS["goals"] - 1)
     ]
     draft, (last, over) = run(draft, ("goal_add", {"title": "The last goal"}), ("goal_add", {"title": "One too many"}))
-    assert C.LIMITS["goals"] == 325 and last["ok"] and len(draft["goals"]) == 325
-    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (325)."
+    assert C.LIMITS["goals"] == 329 and last["ok"] and len(draft["goals"]) == 329
+    assert not over["ok"] and over["refused"] == "The plan has the most goals it can hold (329)."
     assert C.Turn(draft, TODAY).finish()["goals"] == draft["goals"]
-    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 325
+    assert len(C.from_yaml(C.to_yaml(draft, CREATED))["goals"]) == 329
 
 
 # ------------------------------------------------------------------ goals from POST /goals keep their layer (Dev 321 parity)

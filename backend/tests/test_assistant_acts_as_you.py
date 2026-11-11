@@ -13,11 +13,10 @@ import pytest
 from backend import assistant
 from clients import hubtools
 from backend import hubdb as H
-from backend.tests.test_api import api, as_member, get, headers, post, setup_attempt  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_automation_access import flow
+from backend.tests.helpers.api import as_member, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.automation_access import flow
 from backend.store import Problem
-from backend.tests.test_batch import approval_for_ana
 
 
 def set_rule(api, **rules):
@@ -32,12 +31,12 @@ def test_the_turn_closes_a_task_the_person_owns_as_them_on_the_cite(api):
     token = attempt["token"]
     current = get(api, "tasks/" + task, token)
     current = current.get("task", current)
-    closed = post(api, "tasks/" + task, {"version": current["version"], "status": "done"}, token=token)
-    assert closed["status"] == "done"
+    post(api, f"tasks/{task}/done", {"version": current["version"]}, token=token)
     with api.app.state.store.read() as c:
+        assert H.task(c, task)["status"] == "done"
         assert (
             c.execute(
-                "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status' "
+                "SELECT via FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' "
                 "ORDER BY created_at DESC LIMIT 1",
                 (task,),
             ).fetchone()[0]
@@ -50,13 +49,18 @@ def test_a_bulk_change_on_the_turn_records_each_task_as_the_person_via_assistant
         ids = [H.task_create(c, "bot:ops", f"Follow up {n}", "Pending.", "human:ana")["id"] for n in range(2)]
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
-    done = post(api, "task-bulk", {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"}, token=token)
-    assert done["changed"] >= 2, done
+    # Many tasks at once is the person's own sign-in; the turn closes each through its own route, with its version.
+    bulk = {"filter": {"owner": "human:ana", "status": "open"}, "action": "close"}
+    post(api, "task-bulk", bulk, token=token, expected=403)
+    for task_id in ids:
+        current = get(api, "tasks/" + task_id, token)
+        current = current.get("task", current)
+        post(api, f"tasks/{task_id}/move", {"to": "closed", "version": current["version"]}, token=token)
     with api.app.state.store.read() as c:
         latest = {}  # newest first: keep the first row seen for each task
         for task_id, via in c.execute(
             "SELECT subject_id, via FROM history_events WHERE subject_type='task' AND subject_id IN (?,?) "
-            "AND kind='status' ORDER BY created_at DESC",
+            "AND kind='move' ORDER BY created_at DESC",
             ids,
         ).fetchall():
             latest.setdefault(task_id, via)
@@ -152,26 +156,36 @@ def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
         assert refused.value.code == "on_behalf_of"
 
 
-def test_a_batch_commit_never_approves_on_an_assistant_walk(api):
-    _, _, finance = setup_attempt(api, "finance")
-    approval = approval_for_ana(api, token=finance["token"])
+def test_a_batch_commit_never_oks_on_an_assistant_walk(api):
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:ana", "Run the LinkedIn ads", "Q4.", "bot:finance", lint=False)
+        asked = H.task_ask(
+            c, "bot:finance", made["id"], "human:ana", "Spend $1,200?", kind="ok", seen_version=made["version"]
+        )
+    tid, rid = made["id"], asked["requirement_id"]
+
+    def found():
+        with api.app.state.store.read() as c:
+            view = H.task_view(c, tid, "human:ana")
+        return next(r for r in view["to_leave"] if r["requirement_id"] == rid)
+
     bid = post(api, "batch", {})["id"]
     r, attempt = assistant_turn(api, "ana-test")
     token = attempt["token"]
     post(
         api,
         f"batch/{bid}/respond",
-        {"kind": "decide", "decision": "approve", "text": "Go ahead", "heard": "go ahead"},
+        {"kind": "decide", "decision": "ok", "text": "Go ahead", "heard": "go ahead"},
         token=token,
     )
     done = post(api, f"batch/{bid}/commit", {}, token=token)
-    assert any("Approving is the person's own decision" in str(err) for err in done["errors"]), done["errors"]
-    assert not get(api, "approvals/" + approval["id"]).get("decision")
-    # A decline is the Assistant's to make on a walk: a fresh batch (the committed one is closed).
+    assert done["errors"] and "own" in str(done["errors"]), done["errors"]
+    assert not found()["met"] and found()["answer"] is None
+    # A send back is the Assistant's to make on a walk: a fresh batch (the committed one is closed).
     bid = post(api, "batch", {}, token=token)["id"]
-    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "decline", "text": "No"}, token=token)
+    post(api, f"batch/{bid}/respond", {"kind": "decide", "decision": "send_back", "text": "No"}, token=token)
     post(api, f"batch/{bid}/commit", {}, token=token)
-    assert get(api, "approvals/" + approval["id"])["decision"] == "declined"
+    assert (found()["met"], found()["answer"]["value"]) == (False, "no")
 
 
 def test_admits_on_turn_refuses_what_the_person_alone_decides():
@@ -233,10 +247,17 @@ def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api
 
 def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
     coo = setup_attempt(api, "coo")[2]["token"]
-    approve = {"actions": [{"path": "/api/v2/approvals/a1", "body": {"decision": "approved"}}]}
-    card(
-        api, coo, "/api/v2/assistant/batch", approve, summary="Approve the spend", for_person="human:ana", expected=403
-    )
+    # An OK is the person's own tap on its preview: never a card, alone or as a bulk step.
+    with api.app.state.store.transaction() as c:
+        ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
+        ok = H.task_ask(
+            c, "bot:ops", ads["id"], "human:ana", "Spend $500 on ads?", kind="ok", seen_version=ads["version"]
+        )
+    give = f"/api/v2/tasks/{ads['id']}/asks/{ok['requirement_id']}/ok"
+    for path, body in (("/api/v2/assistant/batch", {"actions": [{"path": give, "body": {}}]}), (give, {})):
+        sent = {"summary": "OK the spend", "method": "POST", "path": path, "body": body, "for": "human:ana"}
+        refused = api.post("/api/v2/assistant/actions", json=sent, headers=headers(coo))
+        assert refused.status_code in (403, 422), refused.text
     for n in range(5):
         card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": n + 1}, for_person="human:ana")
     card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 9}, for_person="human:ana", expected=429)
@@ -249,7 +270,7 @@ def test_one_card_holds_closes_an_automation_change_and_a_rule_stop(api):
     token = assistant_turn(api, "ana-test")[1]["token"]
     batch = {
         "actions": [
-            {"path": "/api/v2/tasks/" + task, "body": {"status": "done", "version": 1}},
+            {"path": f"/api/v2/tasks/{task}/move", "body": {"to": "done", "version": 1}},
             {"method": "PATCH", "path": "/api/v2/automations/" + aid, "body": {"name": "Weekly digest"}},
         ]
     }
@@ -377,9 +398,9 @@ def test_the_morning_tool_is_offered_to_the_assistant_and_its_bot_and_to_no_one_
         kind: {t["name"] for t in hubtools.listing(local=True, kind=kind)}
         for kind in ("assistant", "bot", "owner", "admin", "member", "botops", "agent")
     }
-    assert "hub_assistant_morning" in offered["assistant"] and "hub_assistant_morning" in offered["bot"]
+    assert "tico_assistant_morning" in offered["assistant"] and "tico_assistant_morning" in offered["bot"]
     assert not any(
-        "hub_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot")
+        "tico_assistant_morning" in names for kind, names in offered.items() if kind not in ("assistant", "bot")
     )
 
 
@@ -523,7 +544,7 @@ def _template_tools():
     template = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "assistant"
     tools = set()
     for path in template.rglob("*.md"):
-        for span in re.findall(r"\bhub ([^\n`]+)", path.read_text(encoding="utf-8")):
+        for span in re.findall(r"\b(?:tico|hub) ([^\n`]+)", path.read_text(encoding="utf-8")):
             words = []
             for token in span.split():
                 if not re.fullmatch(r"[a-z][a-z-]*", token):
@@ -548,4 +569,4 @@ def test_the_assistant_turn_is_offered_the_tools_its_template_runs_and_never_the
     assert template - names == set(), sorted(template - names)
     assert not set(hubtools.ASSISTANT_HIDDEN) & names and set(hubtools.ASSISTANT_HIDDEN) <= everything
     assert len(json.dumps(offered)) <= 200_000, len(json.dumps(offered))
-    assert "hub_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}
+    assert "tico_assistant_propose" in {t["name"] for t in hubtools.listing(local=True, kind="bot")}

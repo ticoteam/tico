@@ -21,7 +21,7 @@ Steps:
 4. Attach the context to the task: what was said, the question asked, the product area and the owner it goes to. One line
    per lead.
 5. Write the sales follow-up deadline from `knowledge/rules.md` on the task.
-6. Route to sales with `hub task create --owner <seller>` only when the task asks for it and a granted Tool allows it.
+6. Route to sales with `tico task create --owner <seller>` only when the task asks for it and a granted Tool allows it.
    Otherwise keep the list on the task for a person to route.
 
 Checks before you finish:

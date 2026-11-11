@@ -30,5 +30,5 @@ expires for 2 support staff in 41 days.**
 - Engineering's cloud certification records: not in the provider export. Asked the engineering manager on T-483.
 
 ## Sources
-- Provider export on T-478 (2026-09-30), `hub team show`, `knowledge/mandatory.md`, read 2026-10-01
+- Provider export on T-478 (2026-09-30), `tico team show`, `knowledge/mandatory.md`, read 2026-10-01
 ```

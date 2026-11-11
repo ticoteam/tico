@@ -1,12 +1,12 @@
-"""The hub_finance_* tools (docs/finance-tools.md): each call runs as its caller, through the Finance routes, with
+"""The tico_finance_* tools (docs/finance-tools.md): each call runs as its caller, through the Finance routes, with
 results cut to the payload budget."""
 
 import json
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
-from backend.tests.test_api import api, get, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, setup_attempt  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubtools
 
 
@@ -27,7 +27,7 @@ def test_tools_run_as_the_calling_bot_with_its_own_rights_and_view(api):
     bot = as_bot(api, "finance")
     err, out = call(
         api,
-        "hub_finance_act",
+        "tico_finance_act",
         {
             "kind": "payment_create",
             "operation_id": "pay-1",
@@ -36,13 +36,13 @@ def test_tools_run_as_the_calling_bot_with_its_own_rights_and_view(api):
         token=bot,
     )
     assert not err and out["status"] == "denied" and "finance.pay" in out["reason"], out
-    err, cash = call(api, "hub_finance_metric", {"name": "cash"})
+    err, cash = call(api, "tico_finance_metric", {"name": "cash"})
     assert not err and "as_of" in cash
-    err, refused = call(api, "hub_finance_metric", {"name": "cash"}, token=bot)
+    err, refused = call(api, "tico_finance_metric", {"name": "cash"}, token=bot)
     assert err, refused
-    err, queue = call(api, "hub_finance_inbox", {}, token=bot)
+    err, queue = call(api, "tico_finance_inbox", {}, token=bot)
     assert not err and queue["items"] == []
-    err, found = call(api, "hub_finance_search", {"q": "services"}, token=bot)
+    err, found = call(api, "tico_finance_search", {"q": "services"}, token=bot)
     assert not err and found["results"] == []
 
 
@@ -50,18 +50,18 @@ def test_act_takes_the_operation_id_as_its_key_and_a_replay_rereads_only_the_sta
     _books(api)
     ai = next(b for b in get(api, "finance/budgets")["budgets"] if b["name"] == "AI services")
     ask = {"kind": "budget_update", "payload": {"budget_id": ai["id"], "amount": 5_000}, "operation_id": "budget-1"}
-    err, first = call(api, "hub_finance_act", ask)
+    err, first = call(api, "tico_finance_act", ask)
     assert not err and first["status"] == "committed" and "result" in first
-    err, again = call(api, "hub_finance_act", ask)
+    err, again = call(api, "tico_finance_act", ask)
     assert not err and again["action_id"] == first["action_id"] and again["status"] == "committed"
     assert "result" not in again and "impact" not in again
-    err, status = call(api, "hub_finance_action", {"action_id": first["action_id"]})
+    err, status = call(api, "tico_finance_action", {"action_id": first["action_id"]})
     assert not err and status["status"] == "committed"
-    err, missing = call(api, "hub_finance_act", {k: v for k, v in ask.items() if k != "operation_id"})
+    err, missing = call(api, "tico_finance_act", {k: v for k, v in ask.items() if k != "operation_id"})
     assert err and "operation_id" in json.dumps(missing)
-    err, kinds = call(api, "hub_finance_act", {"kind": "help"})
+    err, kinds = call(api, "tico_finance_act", {"kind": "help"})
     assert not err and {"payment_create", "bill_create", "categorize"} <= {k["kind"] for k in kinds["kinds"]}
-    err, one = call(api, "hub_finance_act", {"kind": "help", "payload": {"kind": "bill_create"}})
+    err, one = call(api, "tico_finance_act", {"kind": "help", "payload": {"kind": "bill_create"}})
     assert not err and one["fields"][0]["name"] == "vendor_id"
 
 

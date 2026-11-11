@@ -18,12 +18,12 @@ brand book, or the owner asking to redo or extend it. Also to resume a run (`sta
   for the rest. Paste its output; never a number worked out by eye.
 - **Pause and resume.** When the owner stops, write `## Brand book run` in `state.md`: the stage, the next question,
   open threads. On their next message, pick up there in one line.
-- **Teammates.** A needs-teammate item is one `hub task question "<question>" --on <person> --parent <task>` each,
+- **Teammates.** A needs-teammate item is one `tico task ask <task> --to <person> "<question>" --version N` each,
   quoting the section and what the answer unlocks. When answers arrive, follow **Resume: teammate answers** below.
 - **Hand-over.** At the end:
   1. `python3 skills/build-the-brand-book/audit.py markdown reports/brand-book.json > reports/brand-book.md`, then
-     `hub file publish reports/brand-book.md` (publishing again adds a version).
-  2. Propose the Brand card from the book with `hub proposal create --kind brand_draft`, payload
+     `tico file publish reports/brand-book.md` (publishing again adds a version).
+  2. Propose the Brand card from the book with `tico proposal create --kind brand_draft`, payload
      `{"sections": {...}}`, using only these sections and limits (the card refuses anything else):
      - `name` (≤ 60), `positioning`: the one line (≤ 120).
      - `voice`: [{trait, do, dont}] from the voice table (we are, sounds like, but not / not like).
@@ -90,7 +90,7 @@ never loses work.
 ## Stage 0: Read first (desk)
 
 Read everything before the first question, and cite each item in brackets when you use it: the published strategy
-(`hub strategy show`), bets and Market page, the current Brand card (`hub brand show`), docs (`hub doc search "brand"`,
+(`tico strategy show`), bets and Market page, the current Brand card (`tico brand show`), docs (`tico doc search "brand"`,
 `"style guide"`, the home page); live copy (site incl. CSS,
 listings, emails, support macros, sales emails, social, app copy and errors, the founder's own writing); customer
 words (reviews, support threads, call notes, quote lists); product data (returns, complaints, ratings).
@@ -305,7 +305,7 @@ contrast, a never-claim, a number) never closes on the founder's call.
    never-claims itself. It replaces the Brand card summary for growth-facing bots.
 2. **Governance**: owner by name, approvers, review date (default every six months and before any launch or
    rename), what Tico checks automatically, the needs-teammate list.
-3. **Ask the teammates.** Each needs-teammate item goes to its owner as one question (in Tico: a question task, or
+3. **Ask the teammates.** Each needs-teammate item goes to its owner as one question (in Tico: an ask on the task, or
    a message to their bot), quoting the section and what the answer unlocks. Facts a teammate holds come from them,
    not second-hand through the founder: tag second-hand ones `assumption` until the owner confirms.
 4. Headline, decisions, assumptions, next steps, as in `coach.md`.

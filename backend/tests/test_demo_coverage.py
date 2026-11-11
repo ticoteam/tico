@@ -9,7 +9,7 @@ import pytest
 import time_machine
 
 from backend import demo
-from backend.tests.test_demo import NOW, signed_in
+from backend.tests.helpers.demo import NOW, signed_in
 
 UI = Path(__file__).resolve().parents[2] / "ui"
 WEEK_AGO = NOW - timedelta(days=7)
@@ -42,6 +42,8 @@ PAGES = {
     "files": page("files", "files"),
     # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
     "skills": page("skills", "skills"),
+    # Library › Directory (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
+    "directory": page("entities/find/person", "rows"),
     "tools": page("tools", "integrations"),
     # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
     "connections": page("tool-index", "rows"),
@@ -105,8 +107,7 @@ def api(tmp_path_factory):
         yield client
 
 
-@pytest.mark.parametrize("name", sorted(PAGES.keys() - NO_DEMO_DATA.keys()))
-def test_page_has_demo_data(api, name):
+def _page_has_demo_data(api, name):
     path, key, query = PAGES[name]
     response = api.get("/api/v2/" + path, params=query)
     assert response.status_code == 200, f"{name}: GET /api/v2/{path} returned {response.status_code}"
@@ -115,14 +116,14 @@ def test_page_has_demo_data(api, name):
     assert items, f"{name}: GET /api/v2/{path} has no {key or 'items'} in the demo"
 
 
-def test_full_page_audience_editor_has_a_restricted_example(api):
+def _full_page_audience_editor_has_a_restricted_example(api):
     pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
     assert pages
     shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
 
 
-def test_a_demo_task_and_meeting_link_to_each_other(api):
+def _a_demo_task_and_meeting_link_to_each_other(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     linked = []
     for meeting in meetings:
@@ -136,7 +137,7 @@ def test_a_demo_task_and_meeting_link_to_each_other(api):
     assert meeting in {row['meeting_id'] for row in response.json()['meetings']}
 
 
-def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
+def _meeting_follow_up_is_an_ask_in_needs_you(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     linked = {
         row['task_id']
@@ -144,16 +145,11 @@ def test_meeting_follow_up_has_an_answerable_needs_you_card(api):
         for row in api.get(f"/api/v2/meetings/{meeting['id']}/tasks").json()['tasks']
     }
     needs = api.get('/api/v2/needs-you?limit=200').json()['items']
-
-    def filed_under_meeting(item):
-        detail = api.get(f"/api/v2/tasks/{item['id']}").json()['task']
-        return any(parent['id'] in linked for parent in detail['relations'].get('parent', []))
-
-    # The follow-up is a question task Ana owns, filed under the meeting's task; its card is answered by an update.
-    assert any('update' in it.get('actions', []) and filed_under_meeting(it) for it in needs)
+    # The follow-up is an OK the meeting's task asks of Ana, on that task.
+    assert any(item['kind'] == 'ask' and item['task_id'] in linked for item in needs)
 
 
-def test_demo_task_has_an_editor_for_the_live_task_page(api):
+def _demo_task_has_an_editor_for_the_live_task_page(api):
     meetings = api.get('/api/v2/meetings').json()['meetings']
     task = next(
         row['task_id']
@@ -164,7 +160,7 @@ def test_demo_task_has_an_editor_for_the_live_task_page(api):
     assert any(event['field'] == 'due' and event['actor'] == 'human:ana' for event in detail['events'])
 
 
-def test_task_pages_have_demo_data(api):
+def _task_pages_have_demo_data(api):
     pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
@@ -172,7 +168,7 @@ def test_task_pages_have_demo_data(api):
     assert any(p.get("page", {}).get("file_id") == pages[0]["file_id"] for p in pins)
 
 
-def test_a_demo_task_has_a_page_made_by_its_person(api):
+def _a_demo_task_has_a_page_made_by_its_person(api):
     pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
     made = next(p for p in pages if p["updated_by"] == "human:ana")
     pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
@@ -186,16 +182,35 @@ def test_a_demo_task_has_a_page_made_by_its_person(api):
         assert row and made["task_id"] in row["refs"]
 
 
-def test_mail_settings_have_a_read_grant_and_keep_owner_routing(api):
+def _mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
     assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
 
 
-def test_skills_page_has_usage_proposals_and_an_unused_install(api):
+def _skills_page_has_usage_proposals_and_an_unused_install(api):
     usage = api.get("/api/v2/skills/usage", params={"days": 30}).json()["skills"]
     assert all(row["uses"] for row in usage) and any(row["top"] for row in usage)
     pending = api.get("/api/v2/skills/proposals", params={"status": "pending"}).json()["proposals"]
     assert {p["screen_status"] for p in pending} == {"pending", "screened"}
     states = {i["coverage"] for i in api.get("/api/v2/skills/refund-check/usage").json()["installs"]}
     assert {"used", "unused"} <= states
+
+
+def test_the_demo_fills_every_page_and_links_its_records(api, subtests):
+    """One demo build for every page (a subtest per nav page, named for it), then the records' own checks."""
+    for name in sorted(PAGES.keys() - NO_DEMO_DATA.keys()):
+        with subtests.test(msg=name):
+            _page_has_demo_data(api, name)
+    for check in (
+        _full_page_audience_editor_has_a_restricted_example,
+        _a_demo_task_and_meeting_link_to_each_other,
+        _meeting_follow_up_is_an_ask_in_needs_you,
+        _demo_task_has_an_editor_for_the_live_task_page,
+        _task_pages_have_demo_data,
+        _a_demo_task_has_a_page_made_by_its_person,
+        _mail_settings_have_a_read_grant_and_keep_owner_routing,
+        _skills_page_has_usage_proposals_and_an_unused_install,
+    ):
+        with subtests.test(check.__name__):
+            check(api)

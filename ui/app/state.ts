@@ -60,9 +60,11 @@ const assistantName = (): string => {
 const assistantBot = (): string => S.config.assistant_bot || CONFIG_DEFAULTS.assistant_bot;
 // The built-in Counsel's slug (backend/hubdb.py COUNSEL): Tico's own name, so a team's own bot named counsel stays theirs.
 const COUNSEL_BOT = 'tico-counsel';
+// The group the server keeps the built-in bots in (backend/groups.py BUILT_IN): Tico's own, collapsed on the team chart.
+const BUILT_IN_GROUP = 'built-in';
 // The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, Counsel and the Brand Owner are built
-// in to every team: pause and rename them, never archive or delete. None is on the org chart: their settings are
-// Settings > Bots and their bot page's Settings.
+// in to every team: pause and rename them, never archive or delete. They sit in the Built-in group of the team chart, which
+// nobody drags them out of; their settings are Settings > Bots and their bot page's Settings.
 const isBuiltInBot = (slug: string): boolean => slug === assistantBot() || slug === 'botops' || slug === 'librarian' || slug === 'goal-manager' || slug === 'task-manager' || slug === 'bookkeeper' || slug === COUNSEL_BOT || slug === 'brand';
 // The Assistant's helpers (backend/assistant.py HELPERS): everyone's one chat is their Assistant, which hands these the
 // work. Nobody chats with them: their bot pages have no composer, and every "ask" on a page opens the Ask panel.
@@ -209,24 +211,34 @@ function betaMark(root: ParentNode = document): void {
   root.querySelectorAll<HTMLElement>('[data-beta]').forEach(el => { el.innerHTML = betaPill(el.dataset.beta); });
 }
 // ----------------------------------------------------------------- derived state
-// Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.js compares it with 'failed', which
+// Returns one of planned, paused, running, needs, idle. Typed as string because bot-page.ts compares it with 'failed', which
 // this never returns: the comparison is a dead branch in that file, and a literal union would make it a new tsc finding.
-function stateOf(slug: string): string {
+function stateOf(slug: string | undefined): string {
   const e = botRow(slug);
   if (!e || e.status === 'planned') return 'planned';
   if (e.status === 'paused') return 'paused';
-  const live = S.v2?.status?.[slug];
-  if (live) return live.state === 'running' ? 'running' : ['waiting_human', 'blocked', 'crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
+  const live = S.v2?.status?.[slug ?? ''];
+  if (live) return live.state === 'running' ? 'running' : ['crashed', 'quarantined'].includes(live.state) ? 'needs' : 'idle';
   if (S.status?.active?.some(a => a.employee === slug)) return 'running';
   return 'idle';
 }
 const openCount = (slug: string): number => S.v2?.status?.[slug]?.open_tasks || 0;
-// What needs you from that bot, grouped the way the Needs you list groups it (companyNeedActor). The org tree's
-// number is a fixed attention count matching the default Needs you tab, independent of edits to that tab.
-function botNeeds(slug: string) {
-  return (S.v2?.needs || []).filter(it => (['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it)
-    && companyNeedActor(it, it) === 'bot:' + slug)
-    || (it.kind === 'approval' && (it.requested_by_id || it.requester_id) === 'bot:' + slug));
+// The bot one Needs-you item goes with (backend views.needs_actor): the bot that asked, for an ask; the bot that asked
+// for the task, for a task; the first bot that cannot run, for a stuck stretch. A mention is a person's.
+function needsBotOf(it: NeedsEntry): string | null {
+  const me = S.me?.id ? `human:${S.me.id}` : '', task = it.task;
+  const ask = it.ask as {asked_by?: string | null} | null | undefined;
+  const options = it.kind === 'paused' ? (it.bots || []).slice(0, 1)
+    : it.kind === 'ask' ? [ask?.asked_by, task?.owner_id, task?.requester_id]
+      : it.kind === 'task' ? [task?.requester_id] : [];
+  return options.find((a): a is string => typeof a === 'string' && a.startsWith('bot:') && a !== me) || null;
+}
+// What needs you from that bot. The org tree's number is a fixed attention count matching the default Needs you tab,
+// independent of edits to that tab.
+// S.v2.needs holds the Needs-you items as the server sends them (hub-v2.ts needsTake).
+const needsEntries = (): NeedsEntry[] => (S.v2?.needs || []) as unknown as NeedsEntry[];
+function botNeeds(slug: string): NeedsEntry[] {
+  return needsEntries().filter(it => needsBotOf(it) === 'bot:' + slug);
 }
 // While only some pages are held, the counts are the server's over the whole list (its `bots`).
 const needsBotsWhole = (): Record<string, number> | null => S.v2?.needsNext && S.v2.needsBots ? S.v2.needsBots : null;
@@ -236,10 +248,9 @@ function needsMeCounts(): Map<string, number> {
   const whole = needsBotsWhole();
   if (whole) return new Map(Object.entries(whole));
   const counts = new Map<string, number>();
-  for (const it of S.v2?.needs || []) {
-    const actor = ['task', 'question', 'waiting'].includes(it.kind) && taskNeedsMe(it) ? companyNeedActor(it, it)
-      : it.kind === 'approval' ? it.requested_by_id || it.requester_id : null;
-    if (typeof actor === 'string' && actor.startsWith('bot:')) counts.set(actor, (counts.get(actor) || 0) + 1);
+  for (const it of needsEntries()) {
+    const actor = needsBotOf(it);
+    if (actor) counts.set(actor, (counts.get(actor) || 0) + 1);
   }
   return counts;
 }

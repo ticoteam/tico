@@ -8,7 +8,7 @@ import json
 
 from backend import hubdb as H
 from backend import reconnects as R
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401
 from backend import bot_settings as BS
 
 
@@ -30,7 +30,7 @@ def heartbeat(api, machine, signed_in):
 
 
 def codex_bot(api):
-    from backend.tests.test_subscriptions import set_runtime
+    from backend.tests.helpers.subscriptions import set_runtime
 
     machine = runner(api)
     assign(api, machine, "ops")
@@ -78,6 +78,11 @@ def cards(api, t):
 
 def needs(api, token="ana-test"):
     return get(api, "needs-you", token)["items"]
+
+
+def paused(api, token="ana-test"):
+    """The Paused rows in a person's Needs you: one per cause they can fix, with the tasks it holds up."""
+    return [i for i in needs(api, token) if i["kind"] == "paused"]
 
 
 def open_card(api, t, key="google:ana@acme.example", person="human:ana"):
@@ -191,7 +196,7 @@ def ops_machine(api):
 
 def botops_turn(api, title="Connect the Acme CRM for ops"):
     from backend.store import encode
-    from backend.tests.test_api import ready
+    from backend.tests.helpers.api import ready
 
     with api.app.state.store.transaction() as c:
         if not c.execute("SELECT 1 FROM bots WHERE id='botops'").fetchone():
@@ -288,7 +293,6 @@ def test_a_card_retires_when_its_task_changes_hands_or_its_bot_is_archived_and_a
         assert R.google_connected(c, "ana@acme.example") == []
     assert [c["status"] for c in cards(api, moved) + cards(api, kept)] == ["retired", "retired"]
     assert wakes(api, moved) == wakes(api, kept) == []
-    assert not [i for i in needs(api) if i.get("reconnect")]
 
 
 def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_the_fix(api, monkeypatch):
@@ -312,18 +316,19 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     [card] = cards(api, t)
     assert card["key"] == f"login:{machine['runner_id']}:codex:_default" and card["status"] == "open"
     assert card["person"] == "human:ana" and card["fix"]["runner"] == machine["runner_id"]
-    assert shown(api, t)["task"]["status"] == "waiting"
+    assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
-        assert H.waiting_for(c, H.task(c, t["id"])) == "Codex on Test Mac to be reconnected"
-    [item] = [i for i in needs(api) if i["id"] == t["id"]]
-    assert item["need"] == "connect" and item["reconnect"]["key"] == card["key"]
+        assert R.hold(c, t["id"])["why"] == "Codex on Test Mac to be reconnected"
+    # The bot is Paused on it: one row for the person who can fix it, naming the task (docs/pipelines-v3.md, Paused).
+    [row] = paused(api)
+    assert row["line"] == "ops has a login to reconnect" and row["task_ids"] == [t["id"]]
     # The same refusal again (the queued job's retry) changes nothing: one card, one item.
     with api.app.state.store.transaction() as c:
         R.login_refused(c, api.app.state.store.settings, "ops", machine["runner_id"], "codex", t["id"])
     assert len(cards(api, t)) == 1
     heartbeat(api, machine, True)
     assert [c["status"] for c in cards(api, t)] == ["fixed"]
-    assert shown(api, t)["task"]["status"] in ("open", "doing")  # back to the working step it held
+    assert shown(api, t)["task"]["status"] == "open"
     assert wakes(api, t) == [f"Reconnected: {t['title']}\nCodex on Test Mac is reconnected. Continue."]
     # Another healthy report finds nothing open: still one wake.
     post(
@@ -341,7 +346,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
         machine["token"],
     )
     assert len(wakes(api, t)) == 1
-    assert not [i for i in needs(api) if i["id"] == t["id"]]
+    assert paused(api) == []
     # a refused profile waits for that profile not the computers own login
     drain(api)
     t = task(api)
@@ -387,20 +392,15 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     first, second = task(api, "Reply to Acme"), task(api, "Book the Acme call")
     open_card(api, first)
     open_card(api, second)
-    items = [i for i in needs(api) if i.get("reconnect")]
-    assert len(items) == 1 and items[0]["id"] == first["id"]
-    assert [f["id"] for f in items[0]["folded"]] == [second["id"]]
     with api.app.state.store.transaction() as c:
         assert R.google_connected(c, "ana@acme.example") == [first["id"], second["id"]]
         assert R.google_connected(c, "ana@acme.example") == []
     assert len(wakes(api, first)) == len(wakes(api, second)) == 1
     assert {shown(api, t)["task"]["status"] for t in (first, second)} == {"open"}
-    # a task waiting on its card gets no stall wake
+    # a task paused on its card is parked: news about it waits
     t = task(api)
     open_card(api, t, key="google:stall@acme.example")
-    later = H.shift(H.now(), hours=30)
     with api.app.state.store.transaction() as c:
-        assert t["id"] not in {r["id"] for r in H.stalled_tasks(c, later)}
         from backend import wake_rules
 
         assert wake_rules.parked(c, H.task(c, t["id"])) == "reconnect"
@@ -409,9 +409,7 @@ def test_a_refused_login_or_a_google_card_holds_the_task_and_one_wake_follows_th
     t = task(api)
     open_card(api, t, key="google:cara@acme.example", person="human:cara")
     # Cara's own mailbox: hers to connect, not the owner's or an admin's.
-    assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
-    assert not [i for i in needs(api, "ana-test") if i.get("reconnect")]
-    assert not [i for i in needs(api, "ben-test") if i.get("reconnect")]
+    assert [c["person"] for c in cards(api, t)] == ["human:cara"]
     with api.app.state.store.transaction() as c:
         R.google_connected(c, "cara@acme.example")  # settled, so it is not left for the next step
     # the connector cards the mailbox bots recent task and only every refusing service fixes it
@@ -473,7 +471,7 @@ def test_a_credential_card_holds_the_task_and_every_fix_wakes_it_once_and_a_hand
     assert opened.status_code == 200, opened.text
     [card] = cards(api, t)
     assert card["key"] == "secret:ops:ACME_CRM_TOKEN" and card["person"] == "human:ana"
-    assert shown(api, t)["task"]["status"] == "waiting"
+    assert shown(api, t)["task"]["status"] == "open"
     post(api, f"credential-requests/{opened.json()['id']}/save", {"value": "crm-token-0123456789"})
     assert [c["status"] for c in cards(api, t)] == ["fixed"]
     assert wakes(api, t) == [f"Reconnected: {t['title']}\nthe Acme CRM token is saved. Continue."]
@@ -505,7 +503,7 @@ def test_a_credential_card_holds_the_task_and_every_fix_wakes_it_once_and_a_hand
     opened = ask_secret(api, claim(api, machine))
     post(api, f"credential-requests/{opened['id']}/cancel", {})
     assert [c["status"] for c in cards(api, t)] == ["canceled"]
-    assert shown(api, t)["task"]["status"] in ("open", "doing")
+    assert shown(api, t)["task"]["status"] == "open"
     [woke] = wakes(api, t)
     assert "canceled the card for the Acme CRM token" in woke
     assert not [i for i in needs(api) if i["id"] == t["id"]]
@@ -545,100 +543,12 @@ def test_a_credential_card_holds_the_task_and_every_fix_wakes_it_once_and_a_hand
             {"kind": "secret"},
         )
         assert R.google_connected(c, "ana@acme.example") == []
-        assert H.task(c, t["id"])["status"] == "waiting"
+        assert H.task(c, t["id"])["status"] == "open" and R.pending(c, t["id"])
     assert wakes(api, t) == []
     with api.app.state.store.transaction() as c:
         assert R.secret_stored(c, "ops", "ACME_CRM_TOKEN") == [t["id"]]
     [woke] = wakes(api, t)
     assert "Google (ana@acme.example) is reconnected." in woke and "the Acme CRM token is saved." in woke
-    # a fix while another hold stands is told once when that hold clears
-    drain(api)
-    t = task(api)
-    with api.app.state.store.transaction() as c:
-        child = H.task_create(c, "bot:ops", "Get the Acme price list", "x", "bot:cpo", parent_id=t["id"])["id"]
-    open_card(api, t)
-    with api.app.state.store.transaction() as c:
-        assert R.google_connected(c, "ana@acme.example") == []
-        assert H.task(c, t["id"])["status"] == "waiting"
-    assert wakes(api, t) == []
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", child, status="done", note="Sent")
-        assert H.task(c, t["id"])["status"] in ("open", "doing")
-    [woke] = wakes(api, t)
-    assert "Google (ana@acme.example) is reconnected." in woke
-    with api.app.state.store.transaction() as c:
-        assert R.google_connected(c, "ana@acme.example") == []
-    assert len(wakes(api, t)) == 1
-    # a fix while several holds stand is told with the wake the last one clearing sends
-    drain(api)
-    t = task(api)
-    with api.app.state.store.transaction() as c:
-        first, second = (
-            H.task_create(c, "bot:ops", title, "x", "bot:cpo", parent_id=t["id"])["id"]
-            for title in ("Get the Acme price list", "Get the Acme contract")
-        )
-    open_card(api, t)
-
-    def told():
-        return [body for body in wakes(api, t) if "is reconnected" in body]
-
-    with api.app.state.store.transaction() as c:
-        assert R.google_connected(c, "ana@acme.example") == []
-        H.task_update(c, "bot:cpo", first, status="done", note="Sent")
-        assert H.task(c, t["id"])["status"] == "waiting"
-        # Any other wake to the owner while a hold stands leaves the news owed.
-        assert H._wake(c, H.task(c, t["id"]), "bot:ops", "The Acme price list is in.")
-    assert told() == []
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:cpo", second, status="done", note="Sent")
-        assert H.task(c, t["id"])["status"] in ("open", "doing")
-    [woke] = told()
-    assert "Google (ana@acme.example) is reconnected." in woke and "Get the Acme contract is done" in woke
-    # a fix owed when the task changes hands never reaches the next owner
-    drain(api)
-    t = task(api)
-    with api.app.state.store.transaction() as c:
-        child = H.task_create(c, "bot:ops", "Get the Acme price list", "x", "bot:cpo", parent_id=t["id"])["id"]
-    open_card(api, t, key="google:handoff@acme.example")
-    with api.app.state.store.transaction() as c:
-        assert R.google_connected(c, "handoff@acme.example") == []  # owed: the child still holds it
-        H.task_update(c, "human:ana", t["id"], owner="bot:finance")
-        H.task_update(c, "bot:cpo", child, status="done", note="Sent")
-        told = [r["body"] for r in c.execute("SELECT body FROM messages WHERE recipient_id='bot:finance'")]
-    assert told and not any("reconnected" in b for b in told)
-    # two fixers on one task each have their own item
-    drain(api)
-    t = task(api)
-    open_card(api, t, key="google:twofix@acme.example")
-    with api.app.state.store.transaction() as c:
-        R.open(
-            c,
-            t["id"],
-            "ops",
-            "secret:ops:ACME_CRM_TOKEN",
-            "secret",
-            "the Acme CRM token",
-            "human:ben",
-            {"kind": "secret"},
-        )
-    for token, key in (("ana-test", "google:twofix@acme.example"), ("ben-test", "secret:ops:ACME_CRM_TOKEN")):
-        [item] = [i for i in needs(api, token) if i["id"] == t["id"]]
-        assert item["reconnect"]["key"] == key
-    # another person asked on the same task gets a card that replaces the first
-    drain(api)
-    t = task(api)
-    attempt = claim(api, machine)
-    first = ask_secret(api, attempt)  # for the bot's operator, Ana
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")
-    second = ask_secret(api, attempt)  # Ben runs the bot now: his card
-    assert second["id"] != first["id"] and request_status(api, first["id"]) == "canceled"
-    assert sorted((c["person"], c["status"]) for c in cards(api, t)) == [
-        ("human:ana", "retired"),
-        ("human:ben", "open"),
-    ]
-    post(api, f"credential-requests/{second['id']}/save", {"value": "crm-token-0123456789"}, "ben-test")
-    assert len(wakes(api, t)) == 1 and shown(api, t)["task"]["status"] in ("open", "doing")
 
 
 def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_loses_the_card(api, monkeypatch):
@@ -646,11 +556,10 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
     # a task made private retires a card nobody else can fix and stops waiting on it
     t = post(api, "tasks", {"owner": "ops", "title": "Price the Acme deal", "body": "x"}, "ben-test")
     open_card(api, t, "google:cara@acme.example", "human:cara")  # only Cara connects her mailbox
-    assert [i["id"] for i in needs(api, "cara-test") if i.get("reconnect")] == [t["id"]]
+    assert [(c["person"], c["status"]) for c in cards(api, t)] == [("human:cara", "open")]
     make_private(api, t)  # Cara cannot read it now
     assert [c["status"] for c in cards(api, t)] == ["retired"]
-    assert shown(api, t, "ben-test")["task"]["status"] in ("open", "doing")
-    assert not [i for i in needs(api, "cara-test") if i.get("reconnect")]
+    assert shown(api, t, "ben-test")["task"]["status"] == "open"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     # a former reader cannot load or save the credential card by id
@@ -673,8 +582,7 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
         ("human:ana", "open"),
         ("human:cara", "retired"),
     ]
-    assert shown(api, t, "ben-test")["task"]["status"] == "waiting"
-    assert [i["reconnect"]["person"] for i in needs(api) if i["id"] == t["id"]] == ["human:ana"]
+    assert shown(api, t, "ben-test")["task"]["status"] == "open"
     heartbeat(api, machine, True)  # the fix still reaches the task
     assert len(wakes(api, t)) == 1
     # a private task cards a fixer who can read it and never one who cannot
@@ -691,7 +599,7 @@ def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_l
     refused(api, machine, attempt)
     [card] = cards(api, t)
     assert card["person"] == "human:ana"  # the company owner can read it
-    assert shown(api, t, "ben-test")["task"]["status"] == "waiting"
+    assert shown(api, t, "ben-test")["task"]["status"] == "open"
     monkeypatch.setattr(api.app.state.store.settings, "owner_email", "cara@acme.example")
     with api.app.state.store.transaction() as c:
         row = H.task(c, t["id"])
@@ -705,12 +613,12 @@ def test_botops_asking_for_a_credential_cards_the_task_and_waits_on_each_bots_ca
     opened = botops_ask(api, attempt, "ops")
     [card] = cards(api, t)
     assert card["key"] == "secret:ops:ACME_CRM_TOKEN" and card["bot"] == "ops" and card["status"] == "open"
-    assert shown(api, t)["task"]["status"] == "waiting"
+    assert shown(api, t)["task"]["status"] == "open"
     with api.app.state.store.read() as c:
         assert H.message(c, opened["message_id"])["conversation_id"] == H.task(c, t["id"])["conversation_id"]
     post(api, f"credential-requests/{opened['id']}/save", {"value": "crm-token-0123456789"})
     assert botops_wakes(api, t) == [f"Reconnected: {t['title']}\nops's Acme CRM token is saved. Continue."]
-    assert shown(api, t)["task"]["status"] in ("open", "doing")
+    assert shown(api, t)["task"]["status"] == "open"
     # botops asking one variable for two bots on one task waits on both cards
     drain(api)
     t, attempt = botops_turn(api, "Connect the Acme CRM for ops and cpo")
@@ -718,7 +626,7 @@ def test_botops_asking_for_a_credential_cards_the_task_and_waits_on_each_bots_ca
     assert sorted(c["key"] for c in cards(api, t)) == ["secret:cpo:ACME_CRM_TOKEN", "secret:ops:ACME_CRM_TOKEN"]
     post(api, f"credential-requests/{second['id']}/save", {"value": "crm-token-0123456789"})
     assert sorted(c["status"] for c in cards(api, t)) == ["fixed", "open"]  # cpo's saved, ops's still asked
-    assert shown(api, t)["task"]["status"] == "waiting" and botops_wakes(api, t) == []
+    assert shown(api, t)["task"]["status"] == "open" and botops_wakes(api, t) == []
     post(api, f"credential-requests/{first['id']}/save", {"value": "crm-token-9876543210"})
     [woke] = botops_wakes(api, t)
     assert "ops's Acme CRM token is saved." in woke and "cpo's Acme CRM token is saved." in woke

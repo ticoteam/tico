@@ -831,7 +831,7 @@ def command(client, operation, value, task=None):
                             path, workspace, repo, link['branch'], expected, expected_base, identity, env
                         )
                     elif state in ('setup_running', 'setup_failed'):
-                        raise ValueError('Setup did not finish; use hub task worktree setup to retry explicitly')
+                        raise ValueError('Setup did not finish; use tico task worktree setup to retry explicitly')
                     elif state == 'ready':
                         if not expected_base:
                             raise ValueError('Ready worktree has no recorded base identity; kept unchanged')
@@ -969,7 +969,7 @@ def command(client, operation, value, task=None):
 
 def prepare(workspace, row, repo, env, client):
     """Check out and set up a worktree the server reserved for a waiting task (backend/worktree_waits.py), as
-    `hub task worktree add` does inside a turn, with the same records and proof: the bot is idle, and the server wakes
+    `tico task worktree add` does inside a turn, with the same records and proof: the bot is idle, and the server wakes
     its task once this reports the worktree present."""
     task = row['task_id']
     link = {**row, **_detail(row), 'link_id': row['id']}

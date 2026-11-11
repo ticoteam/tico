@@ -1,6 +1,6 @@
 """Independent checks for caller authority and uncertain external creation through MCP."""
 
-from backend.tests.test_github_app import api, gh, auth, connect  # noqa: F401
+from backend.tests.helpers.github_app import api, gh, auth, connect  # noqa: F401
 
 
 def mcp(api, args, token="owner-test"):
@@ -11,7 +11,7 @@ def mcp(api, args, token="owner-test"):
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {"name": "hub_repo_product_create", "arguments": args},
+            "params": {"name": "tico_repo_product_create", "arguments": args},
         },
     )
 

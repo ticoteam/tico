@@ -19,7 +19,7 @@ from backend.finance.store import schema as SCH
 import importlib
 
 MIGRATION = importlib.import_module("backend.migrations.0037_finance_combined")
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -33,6 +33,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_oks import give
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
 MAPPING = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
@@ -111,7 +112,7 @@ def test_the_bookkeeper_asks_and_the_owner_approves(books):
         asked = act(c, "bot:coder", "import_raw_totals", _body(), "bot-import")
         assert asked.status == "needs_approval" and asked.approver == OWNER
         assert _count(c, "fin_raw_imports") == 0
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed" and len(done.result["months"]) == 3
         assert _count(c, "fin_raw_imports") == 1

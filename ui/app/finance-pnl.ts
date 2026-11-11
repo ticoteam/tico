@@ -39,8 +39,9 @@ interface FinPnlControls extends FinFilter {
 // FIN.pnl: the open P&L page (`model` is set whenever `data` is).
 interface FinPnlState {
   view: string; data: FinPnlData | null; budgets: FinBudget[]; load: number; busy?: boolean; snap?: FinFilter; compare?: string;
-  budgetsRead?: FinBudRead | null; model: FinPnlModel; opened?: boolean;
+  budgetsRead?: FinBudRead | null; model?: FinPnlModel; opened?: boolean;
 }
+interface FinPage { pnl?: FinPnlState }
 type FinAccess = import('../types/api').FinanceAccess;
 interface FinRangeControls { start: HTMLInputElement; end: HTMLInputElement }
 // A form whose named controls are typed (form.elements is a collection; its fields are read by name).
@@ -87,6 +88,7 @@ function finCompareOptions() {
 // ----------------------------------------------------------------- the page
 function finPnlPage() {
   const caps = finNeed(finCaps(), 'the finance caps'), p = FIN_PNL;
+  if (!FIN) return;
   const view = FIN.q.get('view') === 'expenses' || !caps.company ? 'expenses' : 'company';
   // A range the person chose stays through a change of period; until then each period opens on its own window.
   if (!p.start || (!p.picked && p.rangeOf !== p.period)) { [p.start, p.end] = finPnlRange(p.period); p.rangeOf = p.period; }
@@ -104,7 +106,8 @@ function finPnlPage() {
     ${filters}` + finSplit(view === 'expenses'
       // The org-chart picker: a column beside the table on a wide screen, "+ Filter" on a phone (finance.css).
       ? `<div class="fin-exp"><div class="fin-tree fin-tree-col" id="fin-tree-col" role="group" aria-label="Filter"></div><div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div></div>`
-      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown');
+      : `<div class="fin-scroll" id="fin-pl">${skelRows(8, {dot: false})}</div>`, '', view === 'company' ? 'Selected cell' : 'Breakdown')
+    + '<section class="fin-subs" id="fin-subs" aria-label="Subscriptions" hidden></section>';
   const body = finNeed<HTMLElement>($('#fin-body'), 'the Finance body');
   body.onclick = ev => finPnlClick(ev);
   body.ondblclick = ev => { const td = eventElement(ev)?.closest<HTMLElement>('td[data-fin-budget]'); if (td) finPnlEdit(td); };
@@ -127,6 +130,7 @@ function finPnlPage() {
   });
   if (view === 'expenses') finFiltersDraw();
   void finPnlLoad();
+  void finSubsLoad();
 }
 function finPnlClick(ev: Event) {
   const p = FIN_PNL, t = eventElement(ev);
@@ -174,7 +178,7 @@ function finPop(btn: HTMLElement, pop: HTMLElement | null) {
 }
 
 async function finPnlLoad() {
-  const state: FinPnlState = FIN.pnl, p = FIN_PNL, caps = finNeed(finCaps(), 'the finance caps'), load = ++state.load;
+  const state: FinPnlState = finNeed(FIN?.pnl, 'the P&L page'), p = FIN_PNL, caps = finNeed(finCaps(), 'the finance caps'), load = ++state.load;
   const qs = new URLSearchParams({start: p.start, end: p.end, period: p.period, basis: p.basis, view: state.view});
   const compare = state.view === 'company' ? p.compare : '';
   if (compare) qs.set('budget_as_of', compare);
@@ -248,8 +252,9 @@ function finSum<R>(rows: R[], pick: (r: R) => number | null) {
 const finSide = <R>(rows: R[], f: (r: R) => number | null) => rows.length ? finSum(rows, f) : 0;
 const finLess = (a: number | null, b: number | null) => a == null || b == null ? null : a - b;
 function finPnlDraw() {
-  const state: FinPnlState = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
+  const state = FIN?.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finNeed(finCaps(), 'the finance caps');
+  if (!state.model) return;
   const {sections} = state.model;
   if (!sections.length) { box.innerHTML = finNote(state.view !== 'expenses' ? 'No lines yet.' : finFilterAny(state.snap || p) ? 'No expenses in this filter.' : 'No expenses.'); return; }
   const years = new Set(cols.map(c => c.start.slice(0, 4))).size > 1;
@@ -334,7 +339,7 @@ function finPnlDraw() {
 }
 // Wider than the page, the table opens on the newest actual (once the rail is drawn, which narrows it).
 function finPnlOpenAt() {
-  const state: FinPnlState = FIN.pnl, box = $('#fin-pl'), cols = state.data?.columns || [];
+  const state: FinPnlState = finNeed(FIN?.pnl, 'the P&L page'), box = $('#fin-pl'), cols = state.data?.columns || [];
   if (state.opened || !box?.querySelector('table')) return;
   state.opened = true;
   const th = box.querySelectorAll('thead tr:first-child th')[cols.filter(c => c.state !== 'future').length];
@@ -344,7 +349,7 @@ function finPnlOpenAt() {
 // unfiltered, the top budgets the viewer sees; filtered to a team, those of that team and the teams under it; to a
 // teammate, theirs. Never a parent and its child both.
 function finScopeBudgets(accountId: string) {
-  const state: FinPnlState | undefined = FIN.pnl, p = state?.snap || finFilterSnap({teams: [], mates: [], who: 'both', unattributed: false});
+  const state: FinPnlState | undefined = FIN?.pnl, p = state?.snap || finFilterSnap({teams: [], mates: [], who: 'both', unattributed: false});
   const all = (state?.budgets || []).filter(b => b.active && !b.catch_all);
   let picked = all;
   if (state?.view === 'expenses' && finFilterAny(p)) {
@@ -370,7 +375,7 @@ function finSliceLabel(state: FinPnlState) {
   }
   return caps && !caps.company && !caps.companyExpenses ? finOwnSlice(caps) : '';
 }
-const finFiltered = () => FIN.pnl?.view === 'expenses' && !!FIN.pnl.snap && finFilterAny(FIN.pnl.snap);
+const finFiltered = () => FIN?.pnl?.view === 'expenses' && !!FIN.pnl.snap && finFilterAny(FIN.pnl.snap);
 // A team and every team under it.
 function finTeamsBelow(id: string) {
   const teams: FinAccess['teams'] = (FIN?.acc || FIN_ACCESS)?.teams || [], out = new Set([id]);
@@ -415,8 +420,8 @@ function finLineBudget(accountId: string, budgets: FinBudget[] | undefined) {
 const finCentsField = (c: number | null) => c == null ? '' : c % 100 ? (c / 100).toFixed(2) : String(c / 100);
 function finPnlEdit(td: HTMLElement) {
   if (td.querySelector('input')) return;
-  const id = td.dataset.finBudget || '', state: FinPnlState = FIN.pnl, cols = finNeed(state.data, 'the P&L').columns, col = cols[FIN_PNL.budgetCol];
-  const row = state.model.lines.find(r => r.account_id === id);
+  const id = td.dataset.finBudget || '', state: FinPnlState = finNeed(FIN?.pnl, 'the P&L page'), cols = finNeed(state.data, 'the P&L').columns, col = cols[FIN_PNL.budgetCol];
+  const row = finNeed(state.model, 'the P&L').lines.find(r => r.account_id === id);
   // The budget this cell shows, fixed now: a filter change while typing reloads the table and the edit is dropped.
   const data = state.data, b = finBudgetFor(id);
   if (state.busy || state.compare || !row || !finBudgetEditable(col, b)) return;
@@ -442,7 +447,7 @@ function finPnlEdit(td: HTMLElement) {
   input.onblur = () => void finish(true);
 }
 function finPnlExport() {
-  const p = FIN_PNL, view = FIN.pnl?.view || 'company';
+  const p = FIN_PNL, view = FIN?.pnl?.view || 'company';
   finCsv(finTableRows($('#fin-pl table')), `pnl-${view}-${p.period}-${p.start}-${p.end}.csv`);
 }
 
@@ -463,20 +468,20 @@ function finImportedCols(data: FinPnlData, cols: FinPnlCol[]) {
   });
 }
 // A closed month's snapshot (a window inside one closed month) and how many restatements it has taken since.
-function finMarksDraw(box: HTMLElement | null, data: FinPnlData | null) {
+function finMarksDraw(box: HTMLElement | null, data: FinPnlData | FinBsData | null) {
   if (!box) return;
   const snap = data?.snapshot;
   box.innerHTML = snap ? `<span class="pill ok">Closed</span>${snap.restatements ? `<span class="pill waiting" title="${esc(snap.month)}">Restated · ${snap.restatements}</span>` : ''}` : '';
 }
 async function finPnlRail() {
-  const state: FinPnlState = FIN.pnl, p = FIN_PNL; if (!state?.data) return;
+  const state = FIN?.pnl, p = FIN_PNL; if (!state?.data) return;
   const cols = state.data.columns || [], caps = finNeed(finCaps(), 'the finance caps');
-  const row = p.sel ? state.model.lines.find(r => r.account_id === p.sel?.id) : null;
+  const row = p.sel ? finNeed(state.model, 'the P&L').lines.find(r => r.account_id === p.sel?.id) : null;
   let html = '';
   if (row) {
     const i = finNeed(p.sel, 'the selected cell').col, col = finNeed(cols[i], 'the selected column'), future = col.state === 'future';
     const v = finVal(row, cols, i), budget = row.budget?.[i] ?? null, fb = finBudgetFor(row.account_id) || undefined;
-    const sec = state.model.sections.find(s => s.lines.some(r => r.account_id === row.account_id));
+    const sec = finNeed(state.model, 'the P&L').sections.find(s => s.lines.some(r => r.account_id === row.account_id));
     const over = v == null || budget == null ? null : (row.type === 'income' ? budget - v : v - budget);
     const nextAt = cols.findIndex((c, k) => k > i && c.state === 'future');
     html += `${sec && sec.top.account_id !== row.account_id ? `<div class="muted fin-sup">${esc(sec.top.name)}</div>` : ''}
@@ -500,7 +505,7 @@ async function finPnlRail() {
   } catch { /* the figures above stand on their own */ }
 }
 function finTeammatesHtml() {
-  const state: FinPnlState = FIN.pnl, p = FIN_PNL, data = finNeed(state.data, 'the P&L');
+  const state: FinPnlState = finNeed(FIN?.pnl, 'the P&L page'), p = FIN_PNL, data = finNeed(state.data, 'the P&L');
   const rows = data.teammates || [], picks = finPicked(p);
   const who = picks.length ? picks.map(finPickName).join(', ') : 'Everyone';
   return `<div class="fin-rail-sec"><div class="muted fin-sup">Expenses · ${esc(finRangeLabel(data.start, data.end))}</div><h2>${esc(who)}</h2>
@@ -543,7 +548,7 @@ function finChipsDraw() {
 }
 function finFiltersDraw() {
   const box = $('#fin-filters'); if (!box) return;
-  const p = FIN_PNL, acc: FinAccess = FIN.acc, caps = finCaps(), on = new Set(finPicked(p));
+  const p = FIN_PNL, acc: FinAccess = finNeed(FIN?.acc, 'the access list'), caps = finCaps(), on = new Set(finPicked(p));
   const kind = ({bots: 'bot', people: 'person'} as Record<string, string>)[p.who];
   const teams = acc.teams || [], members = (acc.teammates || []).filter(t => !kind || t.kind === kind);
   const kids = (id: string): FinAccess['teams'] => finTeamKids(teams, id);
@@ -594,6 +599,7 @@ interface FinLineState {
   id: string; cur: FinLineRead | null; prev: FinLineRead | null; budgets: FinBudget[]; budgetsRead?: FinBudRead | null;
   vendors: Record<string, {data: FinLineRead | null}>; load: number; fq: string;
 }
+interface FinPage { line?: FinLineState }
 interface FinLineKey { key: string; label: string; cur: number | null; prev: number | null; proj: number | null }
 const FIN_LINE: {month: string; by: FinLineBy; sel: string} = {month: '', by: 'vendor', sel: ''};
 function finLinePage(accountId: string) {
@@ -601,6 +607,7 @@ function finLinePage(accountId: string) {
   if (caps.viewing) { location.replace(finHref('/pnl')); return; }
   const L = FIN_LINE;
   if (!L.month) L.month = finToday().slice(0, 7);
+  if (!FIN) return;
   const filter = finFilterFrom(FIN.q), fq = finFilterQs(filter).toString();
   FIN.line = {id: accountId, cur: null, prev: null, budgets: [], vendors: {}, load: 0, fq};
   const rows = FIN_PNL.last?.rows || [], me = rows.find(r => r.account_id === accountId), parent = me && rows.find(r => r.account_id === me.parent_id);
@@ -635,10 +642,10 @@ const finLineFuture = () => FIN_LINE.month > finToday().slice(0, 7);
 const finLineNow = () => FIN_LINE.month === finToday().slice(0, 7);
 const finVendorEditable = (b: FinBudget | undefined | null, parent: FinBudget | null) => finLineFuture() ? (b ? b.period === 'month' : !!parent) : finLineNow() && b?.period === 'month';
 // The line's own monthly budget, which vendor budgets sit under; null when it has none (or keeps one by quarter or year).
-const finLineParent = () => { const b = finLineBudget(FIN.line.id, FIN.line.budgets); return b && b.period === 'month' ? b : null; };
+const finLineParent = () => { const line = finNeed(FIN?.line, 'the line page'), b = finLineBudget(line.id, line.budgets); return b && b.period === 'month' ? b : null; };
 const finPrevMonth = (ym: string) => { const [y = 0, m = 0] = ym.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${finPad(d.getMonth() + 1)}`; };
 async function finLineLoad() {
-  const state: FinLineState = FIN.line, L = FIN_LINE, load = ++state.load, id = encodeURIComponent(state.id);
+  const state: FinLineState = finNeed(FIN?.line, 'the line page'), L = FIN_LINE, load = ++state.load, id = encodeURIComponent(state.id);
   const [a, z] = finMonthBounds(L.month), [pa, pz] = finMonthBounds(finPrevMonth(L.month));
   const fq = state.fq ? '&' + state.fq : '';
   const [cur, prev, budgets] = await Promise.allSettled([get<FinLineRead>(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=${FIN_LINE_TOP}&limit=200${fq}`, {fresh: true}),
@@ -655,11 +662,11 @@ async function finLineLoad() {
   finLineDraw(); finLineRail();
 }
 const FIN_PER: Record<string, string> = {month: 'mo', quarter: 'qtr', year: 'yr'};
-const finVendorBudget = (vendor: string): FinBudget | undefined => (FIN.line?.budgets || []).find((b: FinBudget) => b.active && b.account_id === FIN.line.id && b.vendor === vendor && !b.team && !b.teammate);
+const finVendorBudget = (vendor: string): FinBudget | undefined => (FIN?.line?.budgets || []).find((b: FinBudget) => b.active && b.account_id === finNeed(FIN?.line, 'the line page').id && b.vendor === vendor && !b.team && !b.teammate);
 const FIN_LINE_TOP = 50;     // the drill-down's top_n: rows past it fold into "Other · n"
 const FIN_OTHER = ' other';  // that row's key (backend/finance/reads.py OTHER): no real key starts with a space
 function finLineKeys(): FinLineKey[] {
-  const state: FinLineState = FIN.line, by = ('by_' + FIN_LINE.by) as `by_${FinLineBy}`, cur = state.cur?.[by] || [], prev = state.prev?.[by] || [];
+  const state: FinLineState = finNeed(FIN?.line, 'the line page'), by = ('by_' + FIN_LINE.by) as `by_${FinLineBy}`, cur = state.cur?.[by] || [], prev = state.prev?.[by] || [];
   const keys = [...cur.map(r => r.key), ...prev.map(r => r.key).filter(k => !cur.some(r => r.key === k))];
   if (FIN_LINE.by === 'vendor') for (const b of state.budgets) if (b.active && b.account_id === state.id && b.vendor && !b.team && !b.teammate && !keys.includes(b.vendor)) keys.push(b.vendor);
   // Next month's projection by row (next_by). A key with a projection but no spend in either month gets a row while the
@@ -686,7 +693,7 @@ function finLineLabel(key: string, label: string) {
   return label || key;
 }
 function finLineDraw() {
-  const state: FinLineState = FIN.line, box = $('#fin-line'); if (!box || !state.cur) return;
+  const state = FIN?.line, box = $('#fin-line'); if (!box || !state?.cur) return;
   const L = FIN_LINE, vendor = L.by === 'vendor', may = finNeed(finCaps(), 'the finance caps').may('finance.budgets');
   const rows = finLineKeys(), parent = finLineParent();
   const add = $('#fin-line-add');
@@ -711,7 +718,7 @@ function finLineDraw() {
 // Other (the rest, rolled up) and No vendor (spend with none, key unattributed) are not vendors a budget can name.
 const finIsVendor = (k: string) => k !== FIN_OTHER && k !== FIN_NONE;
 function finLineRail() {
-  const state: FinLineState = FIN.line, L = FIN_LINE; if (!state?.cur) return;
+  const state = FIN?.line, L = FIN_LINE; if (!state?.cur) return;
   const row = finLineKeys().find(r => r.key === L.sel);
   if (!row) { finRail(''); return; }
   const vendor = L.by === 'vendor', b = vendor && finIsVendor(row.key) ? finVendorBudget(row.key) : null, month = FIN_MON[finDate(L.month + '-01').getMonth()];
@@ -754,10 +761,10 @@ async function finVendorSave(input: HTMLInputElement) {
   const cents = finParseCents(text);
   if (cents == null) { toast('A dollar amount, like 450', true); input.value = finCentsField(was); return; }
   if (cents === was) return;
-  const from = FIN_LINE.month + '-01', parent = finLineParent(), account = FIN.line.id;
+  const from = FIN_LINE.month + '-01', parent = finLineParent(), account = finNeed(FIN?.line, 'the line page').id;
   if (!finVendorEditable(b, parent)) { input.value = finCentsField(was); return; }
   input.disabled = true;
-  const state: FinLineState = FIN.line, name = finLineKeys().find(r => r.key === vendor)?.label || vendor;
+  const state: FinLineState = finNeed(FIN?.line, 'the line page'), name = finLineKeys().find(r => r.key === vendor)?.label || vendor;
   const [kind, payload] = b ? ['budget_update', {budget_id: b.id, amount: cents, effective_from: from}]
     : ['budget_create', {name, period: 'month', account_id: account, vendor, parent_id: finNeed(parent, 'the line budget').id, amount: cents, effective_from: from}];
   await finBudgetDecide(kind, payload, {title: name, change: finBudgetChange(FIN_MONTH[finDate(from).getMonth()], was, cents), alive: () => FIN?.line === state,
@@ -785,7 +792,7 @@ function finFromValue(form: HTMLFormElement, now = false) {
   return v + '-01';
 }
 function finVendorAdd() {
-  const parent = finLineParent(), account = FIN.line.id;
+  const parent = finLineParent(), account = finNeed(FIN?.line, 'the line page').id;
   if (!parent) return;
   finDecideDialog('Vendor budget', `<label>Vendor<input name="vendor" required maxlength="80" autocomplete="off"></label>
     ${finAmountField()}${finFromField(FIN_LINE.month)}${finAtLimitField()}`,
@@ -800,7 +807,7 @@ function finVendorAdd() {
 }
 // A vendor budget sits under its line's budget (a budget tree starts at a line), so a line without one gets it first.
 function finLineBudgetAdd() {
-  const name = FIN.line.cur?.account?.name || $('#fin-line-name')?.textContent || 'Line', account = FIN.line.id;
+  const line = finNeed(FIN?.line, 'the line page'), name = line.cur?.account?.name || $('#fin-line-name')?.textContent || 'Line', account = line.id;
   finDecideDialog('Line budget', finAmountField() + finFromField(FIN_LINE.month), 'Add', (form: FinFormOf<{amount: HTMLInputElement; from: HTMLInputElement}>) => {
     const cents = finAmountValue(form);
     return ['budget_create', {name, period: 'month', account_id: account, amount: cents, effective_from: finFromValue(form)}];

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Type-check every backend module with basedpyright (pinned) against .basedpyright/baseline.json, then the ratchet in
+# Type-check every backend module with basedpyright (pinned) against its baseline, baselines/pyright (one file per module;
+# basedpyright reads the .basedpyright/baseline.json generated from them), then the ratchet in
 # scripts/check_pyright_ratchet.py. The baseline and the legacy module list only shrink, and a module added since
 # the legacy list was written must be strict (migrations excepted). Takes about 30 seconds on a Mac; CI runs it in
 # the static job.
@@ -31,11 +32,11 @@ else
 fi
 case " $* " in
   *" --writebaseline "*)
-    # basedpyright writes the baseline; then it is put in the layout scripts/baseline_merge.py merges (the ratchet checks it).
+    # basedpyright writes .basedpyright/baseline.json; its entries are split into baselines/pyright, one file per module.
     status=0
     uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" "$@" || status=$?
     if [ -f .basedpyright/baseline.json ]; then
-      "$PYTHON_BIN" scripts/baseline_merge.py normalize .basedpyright/baseline.json
+      "$PYTHON_BIN" scripts/pyright_baseline.py --split
     fi
     exit "$status"
     ;;
@@ -45,6 +46,8 @@ esac
 # the same on every run (Nov 7: "went down by 3" failed a merge group whose only change was under scripts/), so failing
 # on it ejects good PRs at random. The ratchet below still fails when the baseline grows; --writebaseline drops gone
 # entries.
+# The pieces in baselines/pyright are the source; basedpyright reads the single file generated from them (git-ignored).
+"$PYTHON_BIN" scripts/pyright_baseline.py --generate
 out="$(mktemp)"
 set +e
 uvx "$BASEDPYRIGHT" --pythonpath "$PYTHON_BIN" --baselinemode=lock --warnings "$@" 2>&1 | tee "$out"

@@ -1,0 +1,8394 @@
+{
+ "2 hours of silence in the merge queue": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "2 hours of silence on a PR never read": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "2 hours of silence waiting for releases": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "2 hours since releases were last read": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "GitHub down once, then answers": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for checks"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR closed by hand in Merge": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "acme/app#1 was closed without merging"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "closed",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "PR closed then reopened": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR closed without merging": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "acme/app#1 was closed without merging"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "closed",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR gone after it was read, 2 hours": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR gone, never read": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading the PR from GitHub"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR merged by hand while in Build": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "room",
+    "eng-release",
+    "Moving to Release"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "PR opened by webhook, no checks yet": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for checks"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [],
+  "extra": {
+   "webhook": [
+    "acme/app#1"
+   ]
+  }
+ },
+ "a required check missing: GitHub refuses the queue": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: Required status check \"e2e\" is expected.",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: Required status check \"e2e\" is expected.",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub refused the merge: Required status check \"e2e\" is expected."
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "failed",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": "Required status check \"e2e\" is expected."
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_refused:acme/app#1:sha1",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "a webhook delivered twice": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "unit",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [],
+  "extra": {
+   "webhooks": [
+    [
+     "acme/app#1"
+    ],
+    "repeat"
+   ]
+  }
+ },
+ "access refused, 2 hours": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "GitHub hasn't answered about acme/app#1 for 2 hours",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "GitHub hasn't answered about acme/app#1 for 2 hours"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "auto-merge turned on by someone else (webhook)": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "auto_merge",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "check run before its synchronize": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": true
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "checks failing": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: check-1",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: check-1",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks failed on acme/app#1: check-1"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "failure",
+     "checks": [
+      [
+       "check-1",
+       "failure",
+       false
+      ],
+      [
+       "check-2",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "checks failing and running": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: check-2",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: check-2",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks failed on acme/app#1: check-2"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "failure",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ],
+      [
+       "check-2",
+       "failure",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "checks pass by webhook, moves to Merge": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "unit",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "checks running (check_run webhook)": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "unit",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "checks running over 2 hours": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks still running after 2 hours",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks still running after 2 hours",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks still running after 2 hours"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "closed after GitHub merged it anyway": {
+  "stage": "Closed",
+  "status": "closed",
+  "level": "owner",
+  "requirements": [],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": true
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   },
+   {
+    "kind": "dequeue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": null,
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "dequeue",
+    "acme/app",
+    1
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:merged_anyway:acme/app#1",
+    "bot:eng-manager"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "closed before GitHub queued it": {
+  "stage": "Closed",
+  "status": "closed",
+  "level": "owner",
+  "requirements": [],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "moot",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "commit pushed in Merge after a drop": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: The merge group's checks failed (e2e)"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "The merge group's checks failed",
+     "failing_check": "e2e",
+     "failing_check_url": "https://ci.example/run/9",
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:changed_after_ok:sha2",
+    "bot:eng-manager"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "commit status success": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "ci/lint",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "dequeued webhook, before the re-read": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": true
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "dequeued webhook, then the re-read": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: Checks failed in the merge queue (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: Checks failed in the merge queue (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: Checks failed in the merge queue (e2e)"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "Checks failed in the merge queue",
+     "failing_check": "e2e",
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "draft PR open, checks pass": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": true,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "draft reaches Merge: marked ready and queued": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": true,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "dropped from the queue, 1st": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: The merge group's checks failed (e2e)"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "The merge group's checks failed",
+     "failing_check": "e2e",
+     "failing_check_url": "https://ci.example/run/9",
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "dropped from the queue, 2nd": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: The merge group's checks failed (e2e)"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "The merge group's checks failed",
+     "failing_check": "e2e",
+     "failing_check_url": "https://ci.example/run/9",
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "dropped from the queue, 3rd: the manager": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "manager",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:eng-manager",
+    "Dropped from the merge queue: The merge group's checks failed (e2e)"
+   ]
+  ],
+  "turn": "bot:eng-manager",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "The merge group's checks failed",
+     "failing_check": "e2e",
+     "failing_check_url": "https://ci.example/run/9",
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:manager:1:<ts>",
+    "bot:eng-manager"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "dropped from the queue, 4th: a person": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "person",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: The merge group's checks failed (e2e)",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "person",
+    "human:ana",
+    "Stuck in Merge"
+   ],
+   [
+    "person",
+    "human:ana",
+    "Dropped from the merge queue: The merge group's checks failed (e2e)"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "The merge group's checks failed",
+     "failing_check": "e2e",
+     "failing_check_url": "https://ci.example/run/9",
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:manager:1:<ts>",
+    "bot:eng-manager"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "enqueue failed once, retry owed": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": "GitHub is unavailable"
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "enqueue failed three times": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: GitHub is unavailable",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: GitHub is unavailable",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub refused the merge: GitHub is unavailable"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "failed",
+    "tries": 3,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": "GitHub is unavailable"
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_refused:acme/app#1:sha1",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "enqueue refused by a branch rule": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: At least 1 approving review is required by reviewers with write access.",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: At least 1 approving review is required by reviewers with write access.",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub refused the merge: At least 1 approving review is required by reviewers with write access."
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "failed",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": "At least 1 approving review is required by reviewers with write access."
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_refused:acme/app#1:sha1",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "enqueue refused: head moved": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: The head moved",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "GitHub refused the merge: The head moved",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "GitHub refused the merge: The head moved"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "failed",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": "The head moved"
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_refused:acme/app#1:sha1",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "entered Merge, queue owed": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "late dequeued after the merge never unmerges": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading releases"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "linked, never read": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading the PR from GitHub"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "merged from the queue (webhook closed+merged)": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading releases"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, a newer release that does not hold it": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for a release of acme/app"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": [
+       [
+        "sha3",
+        false
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, a pre-release holds it and pre-releases count": {
+  "stage": "Done",
+  "status": "done",
+  "level": "owner",
+  "requirements": [],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "met",
+    "whose": null,
+    "line": "In v1.0.0-rc.1",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v1.0.0-rc.1",
+      "commit": "sha3",
+      "prerelease": false,
+      "holds": [
+       [
+        "sha3",
+        true
+       ]
+      ]
+     },
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, a release holds it: Done": {
+  "stage": "Done",
+  "status": "done",
+  "level": "owner",
+  "requirements": [],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "met",
+    "whose": null,
+    "line": "In v1.0.0",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v1.0.0",
+      "commit": "sha3",
+      "prerelease": false,
+      "holds": [
+       [
+        "sha3",
+        true
+       ]
+      ]
+     },
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, only a pre-release holds it": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for a release of acme/app"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v1.0.0-rc.1",
+      "commit": "sha3",
+      "prerelease": false,
+      "holds": []
+     },
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, only an older release (not asked)": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for a release of acme/app"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha3",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v0.9.0",
+      "commit": "sha1",
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, release repo is another repo": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading releases"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, releases never read": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading releases"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "merged, the repo publishes no releases (C31)": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "met",
+    "whose": null,
+    "line": "This repo doesn't publish releases",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "met",
+    "whose": null,
+    "line": "This repo doesn't publish releases",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "room",
+    "eng-done",
+    "Moving to Done"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": true,
+    "publishes": false,
+    "releases": []
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "moved back from Merge while queued": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: unit",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: unit",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks failed on acme/app#1: unit"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "failure",
+     "checks": [
+      [
+       "unit",
+       "failure",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   },
+   {
+    "kind": "dequeue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": null,
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "dequeue",
+    "acme/app",
+    1
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit3>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_dequeued"
+  ]
+ },
+ "new commit pushed in Build": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for checks"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "no checks configured (C13, 10 minutes)": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "No checks on this repo",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Queuing the PR",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Queuing the PR"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "no checks, head seen under 10 minutes": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for checks"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "only Tico's own check failed": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "Tico",
+       "failure",
+       true
+      ],
+      [
+       "ci/lint",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "queue again after a drop, checks green": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued",
+   "pr_queued"
+  ],
+  "extra": {
+   "owed": [
+    [
+     "owed",
+     "sha1"
+    ]
+   ]
+  }
+ },
+ "queue again refused while checks run, and before any drop": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: It conflicts with its base branch",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: It conflicts with its base branch",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: It conflicts with its base branch"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "It conflicts with its base branch",
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:changed_after_ok:sha2",
+    "bot:eng-manager"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed"
+  ],
+  "extra": {
+   "before_drop": [
+    "task_requirement",
+    "Nothing was taken out of the merge queue"
+   ],
+   "bot:release": [
+    "task_requirement",
+    "The checks on acme/app#1 are still running"
+   ],
+   "bot:builder": [
+    "task_requirement",
+    "Only the stage owner, the pipeline's manager or a person can queue it again"
+   ]
+  }
+ },
+ "queue entry vanished": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: GitHub gave no reason",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:release",
+    "line": "Dropped from the merge queue: GitHub gave no reason",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:release",
+    "Dropped from the merge queue: GitHub gave no reason"
+   ]
+  ],
+  "turn": "bot:release",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "removed",
+     "queued_at": false,
+     "removed_at": true,
+     "removed_reason": "GitHub gave no reason",
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed"
+  ]
+ },
+ "queued": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "queued by someone else (enqueued webhook)": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "owed",
+    "tries": 0,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "release published webhook": {
+  "stage": "Release",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "met",
+    "whose": null,
+    "line": "Merged",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for a release of acme/app",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for a release of acme/app"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "merged",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": "sha2",
+     "merged_at": true,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {
+   "acme/app": {
+    "read": false,
+    "publishes": true,
+    "releases": [
+     {
+      "tag": "v1.2.0",
+      "commit": null,
+      "prerelease": false,
+      "holds": []
+     }
+    ]
+   }
+  },
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "repo not connected": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading the PR from GitHub"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "repo without a merge queue: auto-merge": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "auto_merge",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued"
+  ]
+ },
+ "sent back to Build after a drop, then into Merge again": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   },
+   {
+    "kind": "dequeue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": null,
+    "error": null
+   },
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "dequeue",
+    "acme/app",
+    1
+   ],
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit2>:queue_removed:acme/app#1:<ts>",
+    "bot:release"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queue_removed",
+   "pr_queued"
+  ],
+  "extra": {
+   "drops_in_visit": 0
+  }
+ },
+ "sent back while GitHub queues it": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: unit",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#1: unit",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks failed on acme/app#1: unit"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "failure",
+     "checks": [
+      [
+       "unit",
+       "failure",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "moot",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   },
+   {
+    "kind": "dequeue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": null,
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "dequeue",
+    "acme/app",
+    1
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ],
+   [
+    "<task>:<visit3>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_dequeued"
+  ]
+ },
+ "two PRs in two repos, one not read yet": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading the PR from GitHub"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   },
+   {
+    "ref": "acme/server#4",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1",
+   "acme/server#4"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "two PRs queued": {
+  "stage": "Merge",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "met",
+    "whose": null,
+    "line": "Checks pass",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "In the merge queue",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "In the merge queue"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   },
+   {
+    "ref": "acme/app#2",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "queued",
+     "queued_at": true,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#1",
+    "head": "sha1",
+    "error": null
+   },
+   {
+    "kind": "queue_pr",
+    "state": "done",
+    "tries": 1,
+    "ref": "acme/app#2",
+    "head": "sha2",
+    "error": null
+   }
+  ],
+  "due": [
+   "acme/app#1",
+   "acme/app#2"
+  ],
+  "github_calls": [
+   [
+    "ready",
+    "acme/app",
+    1
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    1,
+    "sha1"
+   ],
+   [
+    "ready",
+    "acme/app",
+    2
+   ],
+   [
+    "enqueue",
+    "acme/app",
+    2,
+    "sha2"
+   ]
+  ],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [
+   "pr_queued",
+   "pr_queued"
+  ]
+ },
+ "two PRs, both closed": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "acme/app#1 was closed without merging",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "acme/app#1 was closed without merging"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "closed",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   },
+   {
+    "ref": "acme/app#2",
+    "fact": {
+     "state": "closed",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "two PRs, the first closed, the second open": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Checks running",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Checks running"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "closed",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   },
+   {
+    "ref": "acme/app#2",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "pending",
+     "checks": [
+      [
+       "check-1",
+       "pending",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": true,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#2"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "two PRs, the second failing": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#2: check-1",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Checks failed on acme/app#2: check-1",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "Checks failed on acme/app#2: check-1"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1",
+     "checks_state": "success",
+     "checks": [
+      [
+       "check-1",
+       "success",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   },
+   {
+    "ref": "acme/app#2",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha2",
+     "checks_state": "failure",
+     "checks": [
+      [
+       "check-1",
+       "failure",
+       false
+      ]
+     ],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": false
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1",
+   "acme/app#2"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "unlinked task": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "No PR linked",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "bot",
+    "bot:builder",
+    "No PR linked"
+   ]
+  ],
+  "turn": "bot:builder",
+  "prs": [],
+  "releases": {},
+  "effects": [],
+  "due": [],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": []
+ },
+ "webhook for a PR no task links": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Reading the PR from GitHub",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Reading the PR from GitHub"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": null
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [],
+  "extra": {
+   "webhook": []
+  }
+ },
+ "webhook with an older updated_at after a newer one": {
+  "stage": "Build",
+  "status": "open",
+  "level": "owner",
+  "requirements": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   }
+  ],
+  "github_kinds": [
+   {
+    "kind": "pr_open",
+    "state": "met",
+    "whose": null,
+    "line": "PR open",
+    "can_push_past": true
+   },
+   {
+    "kind": "checks_pass",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Waiting for checks",
+    "can_push_past": true
+   },
+   {
+    "kind": "pr_merged",
+    "state": "not_met",
+    "whose": "bot:builder",
+    "line": "Not merged yet",
+    "can_push_past": false
+   },
+   {
+    "kind": "in_release",
+    "state": "waiting",
+    "whose": "github",
+    "line": "Not merged yet",
+    "can_push_past": false
+   }
+  ],
+  "waiting": [
+   [
+    "github",
+    null,
+    "Waiting for checks"
+   ]
+  ],
+  "turn": null,
+  "prs": [
+   {
+    "ref": "acme/app#1",
+    "fact": {
+     "state": "open",
+     "draft": false,
+     "head": "sha1071767867375995473349368877325274214414350531515",
+     "checks_state": "none",
+     "checks": [],
+     "merged_sha": null,
+     "merged_at": false,
+     "queue_state": "none",
+     "queued_at": false,
+     "removed_at": false,
+     "removed_reason": null,
+     "failing_check": null,
+     "failing_check_url": null,
+     "head_seen_at": true,
+     "checks_started_at": false,
+     "read_again": true
+    }
+   }
+  ],
+  "releases": {},
+  "effects": [],
+  "due": [
+   "acme/app#1"
+  ],
+  "github_calls": [],
+  "wakes": [
+   [
+    "<task>:<visit1>:owner:0",
+    "bot:builder"
+   ]
+  ],
+  "older_pr_pass_items": [],
+  "events": [],
+  "extra": {
+   "webhooks": [
+    [
+     "acme/app#1"
+    ],
+    []
+   ]
+  }
+ }
+}

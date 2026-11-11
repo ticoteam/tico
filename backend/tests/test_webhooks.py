@@ -1,9 +1,6 @@
 """Outgoing webhooks (backend/webhooks.py, backend/webhook_delivery.py, backend/egress.py): who hears of what, the exact
 bytes and signature that leave, how a failure is retried, and what the network guard refuses."""
 
-import base64
-import hashlib
-import hmac
 import ipaddress
 import json
 import time
@@ -15,90 +12,9 @@ from backend import egress
 from backend import hubdb as H
 from backend import webhook_delivery as D
 from backend import webhooks as W
-from backend.tests.test_tasks_board import api, bot_token, get, headers  # noqa: F401
-from backend.tests.test_tasks_board import post as _post
-
-PUBLIC = [ipaddress.ip_address("93.184.216.34")]
-URL = "https://hooks.acme.example/tico"
-
-
-def verify(secret, headers_, body, now=None, tolerance=300):
-    """A Standard Webhooks verifier written from the spec text, not from our signer: the signed content is
-    `id.timestamp.body`, the key is the base64 payload after `whsec_`, the header holds space-separated `v1,<sig>`."""
-    sent = int(headers_["webhook-timestamp"])
-    assert abs((now or time.time()) - sent) <= tolerance
-    key = base64.b64decode(secret.split("_", 1)[1])
-    want = base64.b64encode(
-        hmac.new(
-            key, f"{headers_['webhook-id']}.{headers_['webhook-timestamp']}.".encode() + body, hashlib.sha256
-        ).digest()
-    ).decode()
-    return any(
-        hmac.compare_digest(want, sig.split(",", 1)[1])
-        for sig in headers_["webhook-signature"].split(" ")
-        if sig.startswith("v1,")
-    )
-
-
-@pytest.fixture
-def net(monkeypatch):
-    """The network: every name resolves to a public address, and each request goes to `net.answer` and is kept."""
-
-    class Net:
-        seen = []
-        reply = staticmethod(lambda request: httpx.Response(200))
-
-    state = Net()
-    state.seen = []
-
-    def handler(request):
-        state.seen.append(request)
-        return state.reply(request)
-
-    state.transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(egress, "resolve", lambda host: PUBLIC)
-    return state
-
-
-def post(api, path, body, token="ana-test", expected=200, key=None):
-    """The API call; `key` pins the Idempotency-Key so a repeat is a replay."""
-    sent = headers(token)
-    if key:
-        sent["Idempotency-Key"] = key
-    reply = api.post("/api/v2/" + path, json=body, headers=sent)
-    assert reply.status_code == expected, reply.text
-    return reply.json()
-
-
-def make(api, url=URL, events=("*",), token="ana-test", **more):
-    return post(api, "webhooks", {"name": "Acme hook", "url": url, "events": list(events), **more}, token=token)[
-        "webhook"
-    ]
-
-
-def run(api, net, rehearsal=False):
-    """Deliver everything that is due, as the workers would."""
-    app = api.app
-    count = 0
-    while D.step(app.state.store, app.state.vault, transport=net.transport, rehearsal=rehearsal):
-        count += 1
-    return count
-
-
-def due(api):
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE webhook_sends SET next_attempt_at='1970-01-01T00:00:00.000000Z' WHERE state='ready'")
-
-
-def sends(api, hook_id=None):
-    with api.app.state.store.read() as c:
-        sql = "SELECT * FROM webhook_sends" + (" WHERE webhook_id=?" if hook_id else "") + " ORDER BY created_at, id"
-        return [dict(r) for r in c.execute(sql, (hook_id,) if hook_id else ())]
-
-
-def publish(api, *args, **kw):
-    with api.app.state.store.transaction() as c:
-        return W.publish(c, *args, **kw)
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers  # noqa: F401
+from backend.tests.helpers.tasks_board import post as _post
+from backend.tests.helpers.webhooks import PUBLIC, URL, due, make, net, post, publish, run, sends, verify
 
 
 def test_the_standard_webhooks_vector_and_our_signature_verify_with_an_independent_verifier():
@@ -225,7 +141,7 @@ NOT_PUBLIC_BY_ITS_SPELLING = [
 ]
 
 
-def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api):
+def _an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set(api, net):
     """No name lookup at save: an IP literal outside public space, or a local name, is refused like its http twin."""
 
     def refused(url, path, body):
@@ -244,12 +160,12 @@ def test_an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cann
         assert get(api, f"webhooks/{made['id']}")["webhook"]["url"] == made["url"], url
 
 
-def test_a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api):
+def _a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved(api, net):
     make(api, "https://8.8.8.8/hook")
     make(api, "https://dead.beef/hook")
 
 
-def test_plain_http_is_for_localhost_and_the_owner_switch_alone(api, net):
+def _plain_http_is_for_localhost_and_the_owner_switch_alone(api, net):
     post(api, "webhooks", {"name": "Dev", "url": "http://localhost:9000/x", "events": ["*"]}, expected=422)
     post(
         api,
@@ -349,12 +265,11 @@ def test_a_task_event_names_its_owner_and_requester_as_the_api_does_with_real_va
 
 
 def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sends_nothing_twice(api, net):
-    made = make(api, events=["task.done", "task.state_changed", "task.assigned"])
+    made = make(api, events=["task.done", "task.assigned"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
-    doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
-    _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
+    _post(api, f"tasks/{task['id']}/done", {"note": "Shipped."})
     kinds = [s["type"] for s in sends(api, made["id"])]
-    assert kinds.count("task.state_changed") == 1 and kinds.count("task.done") == 1
+    assert kinds.count("task.done") == 1
     first = publish(api, "task.done", task["id"], {"id": task["id"], "title": "Ship it"}, "bot:ops", revision="r1")
     second = publish(api, "task.done", task["id"], {"id": task["id"], "title": "Ship it"}, "bot:ops", revision="r1")
     assert (first, second) == (1, 0)
@@ -363,33 +278,17 @@ def test_task_changes_are_published_with_their_own_names_and_a_retried_write_sen
 def test_catalog_examples_have_the_top_level_keys_their_producers_send(api, net):
     from backend import event_catalog as catalog
 
-    made = make(api, events=["task.*", "approval.*"])
+    made = make(api, events=["task.*"])
     task = _post(api, "tasks", {"owner": "ops", "title": "Ship it", "body": "Ship it."})
     _post(api, f"tasks/{task['id']}/comments", {"text": "Soon."})
-    doing = _post(api, f"tasks/{task['id']}", {"version": task["version"], "status": "doing"})
-    _post(api, f"tasks/{task['id']}", {"version": doing["version"], "status": "done", "note": "Shipped."})
-    with api.app.state.store.transaction() as c:
-        approval = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
-        )
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
+    _post(api, f"tasks/{task['id']}/done", {"note": "Shipped."})
     sent = {s["type"]: json.loads(s["body"])["data"] for s in sends(api, made["id"])}
-    assert {
-        "task.created",
-        "task.commented",
-        "task.state_changed",
-        "task.done",
-        "approval.requested",
-        "approval.decided",
-    } <= set(sent)
+    assert {"task.created", "task.commented", "task.done"} <= set(sent)
     for name, data in sent.items():
         assert set(data) == set(catalog.EVENTS[name].example), name
 
 
-def test_the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api):
+def _the_strategy_bot_and_a_bot_without_the_send_switch_are_refused(api, net):
     made = make(api)
     assert publish(api, "custom.x", "s", {}, "bot:goal-manager") == 0  # the broad path never raises, and sends nothing
     with api.app.state.store.transaction() as c:
@@ -418,11 +317,13 @@ def test_a_bot_asks_a_person_approves_and_the_person_owns_the_endpoint(api, net)
     again = post(api, "webhooks", body, token=bot, key="another")
     assert again["approval"]["id"] == asked["approval"]["id"]
     assert get(api, "webhooks")["items"] == []
-    post(api, f"approvals/{asked['approval']['id']}", {"decision": "approved"})
+    rid, task = asked["approval"]["id"], asked["approval"]["task_id"]
+    shown = get(api, f"oks/{rid}")["shown_hash"]  # Ana opens what it would make, and OKs it
+    post(api, f"tasks/{task}/asks/{rid}/ok", {"shown_hash": shown})
     made = post(api, "webhooks", body, token=bot)["webhook"]
     assert made["created_by"] == "human:ana" and made["requested_by"] == "bot:ops" and made["url"].endswith("/…")
     assert [h["id"] for h in get(api, "webhooks")["items"]] == [made["id"]]
-    again = post(api, "webhooks", body, token=bot, key="third")  # the approval was spent: a new ask
+    again = post(api, "webhooks", body, token=bot, key="third")  # the OK was used: a new ask
     assert again["approval"]["id"] != asked["approval"]["id"]
     post(api, f"webhooks/{made['id']}/rotate", {}, token=bot, expected=403)  # a bot manages none
     post(api, f"webhooks/{made['id']}/send", {"type": "custom.x"}, token=bot, expected=403)  # switch off
@@ -552,22 +453,6 @@ def test_the_hourly_cleanup_keeps_a_month_of_sends_and_two_hundred_attempts(api,
         assert c.execute("SELECT count(*) FROM webhook_events").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM webhook_attempts").fetchone()[0] == 200
         assert c.execute("SELECT min(n) FROM webhook_attempts").fetchone()[0] == 51  # the newest 200 stay
-
-
-def test_the_other_events_are_published_where_they_happen(api, net):
-    made = make(api, events=["approval.*", "needs_you.*", "bot.*"])
-    with api.app.state.store.transaction() as c:
-        approval = H.approval_request(
-            c,
-            "bot:ops",
-            "send",
-            {"to": "x@acme.example", "cc": "", "subject": "Hi", "body_sha256": "a" * 64, "mailbox": "ops"},
-        )
-        H.approval_decide(c, "human:ana", approval["id"], "approved")
-    kinds = {s["type"] for s in sends(api, made["id"])}
-    assert {"approval.requested", "approval.decided"} <= kinds
-    body = json.loads(next(s for s in sends(api, made["id"]) if s["type"] == "approval.decided")["body"])
-    assert body["data"]["decision"] == "approved" and "payload" not in body["data"]
 
 
 def test_an_endpoint_cannot_subscribe_to_events_only_rules_see(api):
@@ -740,3 +625,16 @@ def test_a_held_post_tells_only_the_people_who_can_read_its_thread(api, net, mon
     assert body["data"]["rule"] == "no-prices" and body["data"]["thread_id"] == room["id"]
     assert "$10" not in held[0]["body"], "a held event never carries the words"
     assert [s for s in sends(api, owner["id"]) if s["type"] == "message.held"] == []
+
+
+def test_endpoint_addresses_plain_http_and_refused_senders_story(api, net, subtests):
+    """Endpoint addresses and the senders the rules refuse, on one app: each check makes its own endpoints and reads
+    only its own rows, and every privacy, permission and guard assertion runs as it did on its own."""
+    for check in (
+        _an_address_the_guard_refuses_or_that_is_not_public_by_its_spelling_cannot_be_saved_or_set,
+        _a_public_ip_literal_and_a_name_that_only_looks_local_can_be_saved,
+        _plain_http_is_for_localhost_and_the_owner_switch_alone,
+        _the_strategy_bot_and_a_bot_without_the_send_switch_are_refused,
+    ):
+        with subtests.test(check.__name__):
+            check(api, net)

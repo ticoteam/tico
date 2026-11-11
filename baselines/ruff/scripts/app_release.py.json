@@ -1,0 +1,5 @@
+{
+  "scripts/app_release.py": {
+    "BLE001": 1
+  }
+}

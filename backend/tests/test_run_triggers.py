@@ -13,8 +13,9 @@ from backend import routines
 from backend import run_triggers as RT
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_sql import query
+from backend.tests.helpers.api import as_member, claim, get, headers, post, ready, runner
+from backend.tests.helpers.sql import query
+from backend.tests.helpers.run_triggers import USAGE, finish, machine, start
 
 
 def newest(c, bot, words):
@@ -37,41 +38,17 @@ def turn(api, attempt):
         return H.turn(c, attempt["id"])
 
 
-def machine(api, bot="ops"):
-    r = runner(api)
-    assign(api, r, bot)
-    ready(api, r, [bot])
-    return r
-
-
-def start(api, r, attempt):
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "fixture-thread"}, r["token"])
-
-
-USAGE = {"input_tokens": 200, "cached_tokens": 1000, "output_tokens": 30, "model": "fake"}
-
-
-def finish(api, r, attempt, text="", tokens_in=1200, usage=USAGE):
-    return post(
-        api,
-        f"attempts/{attempt['id']}/complete",
-        {"outcome": "completed", "last_seq": 0, "text": text, "tokens_in": tokens_in, "tokens_out": 30, "usage": usage},
-        r["token"],
-    )
-
-
 def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
     store = api.app.state.store
     with store.transaction() as c:
-        # status_or_relation: a task handed to the bot.
+        # task_turn: a task handed to the bot is its turn (backend/task_wakes.py).
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:ops")
-        assert RT.of_message(newest(c, "ops", "New task from")) == ("status_or_relation", None)
-        # A subtask finishing names the subtask it was.
-        child = H.task_create(
-            c, "bot:ops", "Pull the bank file", "For the parent.", "bot:finance", parent_id=task["id"]
-        )
-        H.task_update(c, "bot:finance", child["id"], status="done", note="Pulled.")
-        assert RT.of_message(newest(c, "ops", "")) == ("status_or_relation", child["id"])
+        wake = c.execute(
+            "SELECT id FROM messages WHERE recipient_id='bot:ops' AND json_extract(refs,'$.wake')='task_turn' "
+            "AND json_extract(refs,'$.task')=?",
+            (task["id"],),
+        ).fetchone()
+        assert RT.of_message(H.message(c, wake[0])) == ("task_turn", None)
         # comment: a bot writes on the task.
         H.task_comment(c, "bot:finance", task["id"], "The bank file is in.")
         said = newest(c, "ops", "The bank file is in.")
@@ -81,17 +58,11 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
             c, "github-task-wake:" + task["id"], {"due": H.shift(H.now(), seconds=-1), "items": ["Unit tests failed"]}
         )
         assert G.flush_wakes(c) == [task["id"]]
-        assert RT.of_message(newest(c, "ops", "Unit tests failed")) == ("pr_checks", None)
+        assert RT.of_message(newest(c, "ops", "%Unit tests failed")) == ("pr_checks", None)
         # other: a keeper message nothing stamped (a Slack digest).
         conv = H.conversation(c, task["conversation_id"])
         H.feed(c, "bot:ops", "Three new posts in #general.", conv)
         assert RT.of_message(newest(c, "ops", "Three new posts")) == ("other", None)
-        # schedule: a snooze that ends.
-        quiet(c)
-        H.TS.snooze(c, "human:ana", task["id"], H.shift(H.now(), days=1))
-    Scheduler(store, api.app.state.execution).tick(H.parse_ts(H.shift(H.now(), days=1)) + timedelta(seconds=1))
-    with store.read() as c:
-        assert RT.of_message(newest(c, "ops", "Snooze over")) == ("schedule", None)
     # person_message: a person writes to the bot.
     said = post(api, "chat/ops", {"text": "How is the cash warning?"})
     with store.read() as c:
@@ -144,7 +115,7 @@ def test_the_claim_puts_the_wake_on_the_run(api):
     with api.app.state.store.transaction() as c:
         quiet(c)
         H.task_create(c, H.human_actor("ana"), "Close the books", "By Friday.", "bot:ops")
-    assert turn(api, claim(api, r))["trigger_kind"] == "status_or_relation"
+    assert turn(api, claim(api, r))["trigger_kind"] == "task_turn"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE trigger_kind IS NULL").fetchone()[0] == 0
 
@@ -222,7 +193,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
         get(api, f"conversations/{task['conversation_id']}/messages", token)
     elif case == "task_update":
         version = get(api, "tasks/" + task["id"], token)["task"]["version"]
-        post(api, "tasks/" + task["id"], {"version": version, "status": "doing"}, token)
+        post(api, "tasks/" + task["id"], {"version": version, "title": "Check the bank feed today"}, token)
     elif case == "comment":
         post(api, f"tasks/{task['id']}/comments", {"text": "Feed checked: two new lines."}, token)
     elif case == "message":
@@ -239,7 +210,7 @@ def test_did_nothing_and_outcome_come_from_what_the_run_wrote(api, case):
         assert r_file.status_code == 200, r_file.text
     elif case == "task_finished":
         with api.app.state.store.transaction() as c:
-            H.task_close(c, H.human_actor("ana"), task["id"], "Not needed.", quiet=True)
+            H.task_close(c, H.human_actor("ana"), task["id"], "Not needed.")
     finish(api, r, attempt, "Nothing new." if case == "reply_to_person" else "")
     row = turn(api, attempt)
     assert row["outcome"] == ("acted" if case in WRITES else NO_WRITES[case])
@@ -567,7 +538,7 @@ def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
 
 
 def test_open_task_states_match_the_board():
-    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) | {"blocked"}
+    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) == {"open"}
     with pytest.raises(ValueError):
         RT.stamp({}, "nudge")
     assert RT.counts("task.comment") and not RT.counts("status.set") and not RT.counts("attempt.started")
@@ -613,8 +584,8 @@ def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):
     def readable(token, table):
         return query(api, f"SELECT count(*) FROM {table}", token)["rows"][0][0]
 
-    assert runs("ana-test") == {"person_message": 1, "status_or_relation": 3, "unknown": 1}
-    assert runs("ben-test") == {"status_or_relation": 1} and readable("ben-test", "attempts") == 1
+    assert runs("ana-test") == {"person_message": 1, "task_turn": 3, "unknown": 1}
+    assert runs("ben-test") == {"task_turn": 1} and readable("ben-test", "attempts") == 1
     # Ben's access to the shared task ends after its run: its totals leave his table with it.
     with store.transaction() as c:
         c.execute("UPDATE tasks SET private=1 WHERE id=?", (shared["id"],))
@@ -647,7 +618,7 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
     def runs(token):
         return {row["trigger"]: row["runs"] for row in weekly(api, token)}
 
-    assert runs("ben-test") == {"status_or_relation": 1, "unknown": 1}
+    assert runs("ben-test") == {"task_turn": 1, "unknown": 1}
     with store.transaction() as c:
         # Each run read a different message of the private task (a message is one run's input).
         H.task_comment(c, "human:ana", private["id"], "And the second draft.")
@@ -659,7 +630,7 @@ def test_a_run_whose_inputs_came_from_a_private_task_leaves_the_weekly_table(api
         for attempt, message in ((tainted, first), (lost, later)):
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], message))
     assert runs("ben-test") == {}
-    assert runs("ana-test") == {"status_or_relation": 2, "unknown": 1}
+    assert runs("ana-test") == {"task_turn": 2, "unknown": 1}
 
 
 def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(api):
@@ -668,21 +639,31 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
         old = H.turn_start(c, "bot:ops", "ops")  # a run with no result, as runs before this were
         before = H.turn(c, old["id"])
         runs = {}
-        for name in ("accepted", "edited", "overridden", "own"):
+        for name in ("accepted", "edited", "overridden", "given", "own"):
             task = H.task_create(c, ana, f"Recheck the {name} cash warning", "Before the deadline.", "bot:ops")
             runs[name] = (task["id"], H.turn_start(c, "bot:ops", "ops", task_id=task["id"])["id"])
-            H.task_update(c, "bot:ops", task["id"], status="done", note="Rechecked.")
-        H.task_close(c, ana, runs["accepted"][0])
+            if name not in ("accepted", "given"):
+                H.task_done(c, "bot:ops", task["id"], "Rechecked.", H.task(c, task["id"])["version"])
+        # Accepted: Done by someone else's act (the engine's effects say so for a move into Done that is not the bot's).
+        H.task_done(c, ana, runs["accepted"][0], "Checked it myself.")
         H.task_update(c, ana, runs["edited"][0], body="Before the deadline, with the March file.")
-        H.task_close(c, ana, runs["edited"][0])  # after its edit: still one, `edited`
-        H.task_update(c, ana, runs["overridden"][0], status="open", note="Not yet: the March file is missing.")
-        H.task_update(c, "bot:ops", runs["own"][0], status="doing")  # the bot moving its own result is no verdict
+        H.task_move(c, ana, runs["overridden"][0], H.TASK_REOPEN, "Not yet: the March file is missing.")
+        H.task_reassign(c, ana, runs["given"][0], ana, "I will do this one.")
         got = {
             r[0]: (r[1], json.loads(r[2]))
             for r in c.execute("SELECT target, actor, detail FROM events WHERE action='turn.outcome'")
         }
-        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 3
-        for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
+        # The bot's own done is no verdict: `own` has none.
+        assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 4
+        for name, frm, to in (
+            ("accepted", "done", "done"),
+            ("edited", "done", "done"),
+            ("overridden", "done", "open"),
+            ("given", "open", "open"),
+        ):
             task_id, turn_id = runs[name]
-            assert got[turn_id] == (ana, {"task_id": task_id, "outcome": name, "from": "done", "to": to})
+            assert got[turn_id] == (
+                ana,
+                {"task_id": task_id, "outcome": name if name != "given" else "overridden", "from": frm, "to": to},
+            ), name
         assert H.turn(c, old["id"]) == before

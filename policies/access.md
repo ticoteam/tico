@@ -22,8 +22,8 @@ Rules:
   Do not list them. Access to another bot's or a product repository still needs a declaration.
 - Messages to outsiders (`send`, `post`, `publish`) follow the bot's sending policy in Tico (Settings > Bots > <bot> > Email sending: On their own, Ask first or Never), never a line in `bot.yaml`. Every email goes through Tico's send queue, which decides it; under Ask first a person approves it in Tico. Act within the requested work and the declared Tools. Spending follows the requested budget and Tools; it does not depend on the sending policy.
 - The secret named in `env` lives in `~/tico-work/secrets/<slug>.env` on the machine that runs
-  the team. If it is missing, the app shows "not connected" and the bot should ask via
-  `needs-human` rather than improvise.
+  the team. If it is missing, the app shows "not connected" and the bot asks a person on its
+  task (`tico task ask`) rather than improvise.
 - A value in that file may be a 1Password reference instead of the secret itself:
   `UPFLUENCE_PASSWORD=op://vault/item/field`. The runner reads it from
   the **Acme Bots** vault at the start of the turn with a read-only service account
@@ -35,8 +35,8 @@ Rules:
 - Calendar appointments are a team-wide capability for every bot, separate from Gmail access.
   Every address in `registry/people.yaml` may be read or scheduled through the guarded Hub tools
   or mail CLI; a Gmail `read_only: true` entry does not restrict calendar use:
-  `hub_calendar_list` reads the connector's bounded snapshot and `hub_calendar_schedule`
-  queues an audited provider action. `hub_calendar_status` must say `succeeded` before the bot
+  `tico_calendar_list` reads the connector's bounded snapshot and `tico_calendar_schedule`
+  queues an audited provider action. `tico_calendar_status` must say `succeeded` before the bot
   claims the event exists. `mail calendar add|list|get` is the direct audited path on the runner.
   Invitations may include guests outside the team (the owner can turn that off with
   `TICO_BLOCK_EXTERNAL_INVITES=1`, which limits bots to roster attendees). This standing grant does
@@ -68,5 +68,5 @@ Rules:
   channel in this list still needs to be on the Slack channel list (Settings > Tools > Slack channels) and Tico must
   be a member. Set `dms: false` when the role must not read the shared app's DM inbox; `inbox`
   enforces it from `--as <slug>` or `HUB_BOT`.
-- Changing `tools:` is a Tico-level decision: create a task for the owner rather than editing
+- Changing `tools:` is a Tico-level decision: ask the owner on your task rather than editing
   your own manifest.

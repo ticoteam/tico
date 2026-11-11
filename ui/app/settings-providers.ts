@@ -3,9 +3,11 @@
 'use strict';
 
 // What the providers view (GET /v2/providers, backend/providers.py) carries, as the page reads it.
-interface SettingsProviderRow { id: string; label: string; gateway?: boolean; recommended?: string | null; }
+interface SettingsProviderRow { id: string; label: string; gateway?: boolean; recommended?: string | null; runtime?: string; }
 interface SettingsProvidersView {
   providers?: SettingsProviderRow[];
+  /** Whether the team has chosen its AI providers (the first run starts with them until it has). */
+  configured?: boolean;
   presets?: string[];
   preset?: string;
   enabled?: string[];
@@ -15,8 +17,6 @@ interface SettingsProvidersView {
   auto_fallback?: boolean;
   check_models?: string[];
   check_order?: { runtime: string }[];
-  decide_levels?: string[];
-  decide_level?: string;
 }
 // One model the company can run (backend/providers.py), as the model lists carry it.
 interface SettingsProviderModel {
@@ -37,7 +37,6 @@ interface SettingsProvidersChoice {
   enabled: string[];
   preset?: string;
   model: string;
-  decide_level?: string;
   auto_fallback?: boolean;
   meeting_model?: string;
   check_models?: string[];
@@ -167,14 +166,14 @@ function providersWire(root: HTMLElement | null, view: SettingsProvidersView, mo
 const providersCollect = (root: HTMLElement): SettingsProvidersChoice => {
   // Each lookup is optional: a form without a field (the first-run step has no meeting model) sends nothing for it.
   const fallback = root.querySelector<HTMLInputElement>('[data-provider-fallback]'), check = root.querySelector<HTMLInputElement>('[data-provider-check]');
-  const preset = root.querySelector<HTMLInputElement>('[data-provider-preset]:checked'), decide = root.querySelector<HTMLSelectElement>('[data-provider-decide]');
+  const preset = root.querySelector<HTMLInputElement>('[data-provider-preset]:checked');
   const meeting = root.querySelector<HTMLSelectElement>('[data-provider-meeting]');
   // The default model select is required: the form always draws it, and a save without it has nothing to send.
   const model = root.querySelector<HTMLSelectElement>('[data-provider-model]');
   if (!model) throw new Error('The models form did not draw its default model');
   return {enabled: [...root.querySelectorAll<HTMLInputElement>('[data-provider]:checked')].map(input => input.value),
     ...(preset ? {preset: preset.value} : {}),
-    model: model.value, ...(decide ? {decide_level: decide.value} : {}), ...(fallback ? {auto_fallback: fallback.checked} : {}),
+    model: model.value, ...(fallback ? {auto_fallback: fallback.checked} : {}),
     // Sent only when changed, so a save about something else keeps an unset meeting model unset.
     ...(meeting && meeting.value !== meeting.dataset.saved ? {meeting_model: meeting.value} : {}),
     // Sent only when edited, so a save about something else never re-checks a saved entry.
@@ -185,7 +184,6 @@ async function providersSave(view: SettingsProvidersView, chosen: SettingsProvid
     ...('auto_fallback' in chosen ? {auto_fallback: chosen.auto_fallback} : {}),
     ...('check_models' in chosen ? {check_models: chosen.check_models} : {}),
     ...('preset' in chosen ? {preset: chosen.preset} : {}),
-    ...('decide_level' in chosen ? {decide_level: chosen.decide_level} : {}),
     ...('meeting_model' in chosen ? {meeting_model: chosen.meeting_model} : {})});
 }
 // ----------------------------------------------------------------- Settings > Models: Tico Gateway and Defaults
@@ -206,12 +204,8 @@ const providersRow = (id: string, label: string, control: string, help = ''): st
   `<div class="models-row"><span class="k"><label for="${id}">${esc(label)}</label>${help ? helpBubble(help) : ''}</span>${control}</div>`;
 function providersDefaultsHTML(view: SettingsProvidersView, owner: boolean): string {
   const dis = owner ? '' : ' disabled';
-  const levels = view.decide_levels || [];
   return `<form id="set-prov" class="models-form" data-providers-form>
     ${providersRow('set-prov-model', 'Default model', `<select id="set-prov-model" class="settings-inline-select" data-provider-model${dis}></select>`)}
-    ${levels.length ? providersRow('set-prov-decide', 'Decisions', `<select id="set-prov-decide" class="settings-inline-select" data-provider-decide${dis}>${levels.map(level =>
-      `<option value="${esc(level)}"${level === (view.decide_level || levels[0]) ? ' selected' : ''}>${esc(level.charAt(0).toUpperCase() + level.slice(1))}</option>`).join('')}</select>`,
-      'How carefully Tico judges approvals and checks. Higher is slower and costs more.') : ''}
     ${providersRow('set-prov-meeting', 'Meeting model', `<select id="set-prov-meeting" class="settings-inline-select" data-provider-meeting${dis}></select>`)}
     ${providersRow('set-prov-fallback', 'Fall back when a plan runs out', `<input id="set-prov-fallback" type="checkbox" class="people-switch" data-provider-fallback${view.auto_fallback !== false ? ' checked' : ''}${dis}>`,
       'A bot with no fallback of its own runs on another AI tool signed in on its computer.')}
@@ -223,7 +217,7 @@ function providersDefaultsHTML(view: SettingsProvidersView, owner: boolean): str
 }
 // One line: whether the Gateway is connected, this month's spend against its cap, and the switch. Below it what
 // GET /v2/gateway adds for owners and admins (settings-gateway.ts), the key and address behind Advanced (read-only for
-// anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.js).
+// anyone but the owner), and Webhooks: incoming webhooks' Gateway addresses, drawn when opened (settings-webhooks.ts).
 function providersGatewayCardHTML(view: SettingsProvidersView, gateway: SettingsGatewayView | null, owner: boolean, overview: unknown): string {
   const [tone, line] = gateway ? gatewayStatusLine(gateway) : ['', ''];
   return `<div class="models-gw models-gw-head">

@@ -38,8 +38,8 @@ If `state.md` says setup has not finished, do this before any other work:
 4. Run the first check now (`playbooks/weekly-affiliate-review.md`) on whatever export was attached, and attach
    the review to the task as a draft labelled "First draft, not yet reviewed". Pay nothing and change nothing.
 5. Check the routine (Fridays 09:00 unless they said otherwise). Setting you up switched it on, so nothing waits
-   for a yes. Check it with `hub automation list`, tell the human what it does and that they can change it or turn
-   it off, and log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   for a yes. Check it with `tico automation list`, tell the human what it does and that they can change it or turn
+   it off, and log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -63,32 +63,32 @@ Always:
 - `skills/review-an-affiliate-application/SKILL.md`: read before an application gets a proposed decision.
 
 ## Starting a run
-1. Read `state.md`, then the task and its conversation with `hub task show <id>`.
+1. Read `state.md`, then the task and its conversation with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/program-terms.md`, `knowledge/program-method.md` and
    `knowledge/fraud-signals.md`, then last week's review.
-3. Set `hub bot status set` to one line naming the review in progress.
+3. Set `tico bot status set` to one line naming the review in progress.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/affiliates/` with the dated checks and decisions, rewrite `state.md`, record durable decisions in
    `memory/decisions.md`, and commit this repository.
-3. Finish with `hub task update <id> --status done --note`: the headline first, the review path after it, then the
-   exports you could not read. The requester closes it.
+3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the review path after it, then the
+   exports you could not read.
 
 ## Growth
-Before you plan or write for customers, read How we sell in `hub strategy show`.
-Work on a Marketing task, or a subtask of one, carries the label `channel:<slug>` for its channel; `hub growth channel list` names the slugs.
+Before you plan or write for customers, read How we sell in `tico strategy show`.
+Work on a growth idea, or a sub-task of one, carries the label `channel:<slug>` for its channel; `tico growth channel list` names the slugs.
 Report the numbers the task needs on the task, each with its source and date. Before an outward draft leaves (an email,
-post, page, listing or message), run `hub brand check -` on it and fix every hit, then check each claim against
-`hub brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
-contact anyone for a channel, read `hub rules list --mine`; a rule that blocks the work stops it. Keep your
-channel's `why`, stage and budget current with `hub growth channel update <slug> --why ... --stage ... --budget ...`.
-Record each measurement as a KPI reading with `hub kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
+post, page, listing or message), run `tico brand check -` on it and fix every hit, then check each claim against
+`tico brand show --section claims` yourself: the check does not catch claims missing from the list. Before you spend or
+contact anyone for a channel, read `tico rules list --mine`; a rule that blocks the work stops it. Keep your
+channel's `why`, stage and budget current with `tico growth channel update <slug> --why ... --stage ... --budget ...`.
+Record each measurement as a KPI reading with `tico kpi log <kpi id> <value> --period-start <date> --period-end <date>`.
 A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
-Work arrives as tasks. Read the record with `hub task show <id>`. Ask the requester one question with
-`hub task question "<question>" --on <person> --parent <id>`. A decision for a human is `hub task create --owner <human>`.
+Work arrives as tasks. Read the record with `tico task show <id>`. Ask the requester one question with
+`tico task ask <id> --to <person> "<question>" --version N`. A decision for a human is `tico task create --owner <human>`.
 Payout lists and application decisions are attached to the task for the person who pays or decides.
 
 ## Method
@@ -115,5 +115,5 @@ Ask the owner when an affiliate's referrals look fraudulent, when a published te
 or when a coupon is posted somewhere it was never approved. One question per task, the ask in the first line, under 120 words.
 
 ## Publishing your work
-The review goes to `reports/` and is listed with `hub file publish reports/<name>.md`; publishing again adds a version.
+The review goes to `reports/` and is listed with `tico file publish reports/<name>.md`; publishing again adds a version.
 Files humans send you are inputs, not yours to list.

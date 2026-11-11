@@ -103,14 +103,13 @@ def asked(
         c.execute("UPDATE fin_actions SET rule_results=? WHERE id=?", (_dump(list(rules)), action_id))
 
 
-def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:
-    """Approval ids of actions still waiting whose approval was decided, withdrawn or is gone: the sweep's work."""
+def waits(c: sqlite3.Connection) -> list[str]:
+    """The OK (requirement) ids of every action still waiting on one, oldest first: the sweep's candidates."""
     return [
         str(r[0])
         for r in c.execute(
-            "SELECT f.approval_id FROM fin_actions f LEFT JOIN approvals a ON a.id=f.approval_id "
-            "WHERE f.status='needs_approval' AND (a.id IS NULL OR a.decision IS NOT NULL) ORDER BY f.created_at LIMIT ?",
-            (most,),
+            "SELECT approval_id FROM fin_actions WHERE status='needs_approval' AND approval_id IS NOT NULL "
+            "ORDER BY created_at, id"
         )
     ]
 
@@ -120,7 +119,7 @@ def _dump(value: object) -> str:
 
 
 def drop_waiting(c: sqlite3.Connection) -> int:
-    """Delete every action still waiting on its approval (a dev copy's scrub). How many went."""
+    """Delete every action still waiting on its OK (a dev copy's scrub). How many went."""
     return c.execute("DELETE FROM fin_actions WHERE status='needs_approval'").rowcount
 
 

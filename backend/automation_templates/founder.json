@@ -56,7 +56,7 @@
       {"when": [{"field": "message.category", "op": "is", "value": "promotions"}],
        "to": "archive", "next": "end", "stop": true}
     ]},
-    {"id": "ask", "type": "decide", "level": "low", "out": "q", "questions": {
+    {"id": "ask", "type": "decide", "out": "q", "questions": {
       "only_founder": {"type": "noul", "instructions": "Is this something only the founder can handle: an investor, a personal matter, or a decision only the founder can make?"},
       "meet": {"type": "noul", "instructions": "Is someone asking to meet?"},
       "bug": {"type": "noul", "instructions": "Is it a bug report or product feedback?"},

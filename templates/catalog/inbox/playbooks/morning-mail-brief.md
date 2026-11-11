@@ -12,7 +12,7 @@ Done when: the brief is on the task with the counts, every mailbox read that fai
 
 ## 1. Read the task and the preferences
 
-    hub task show <id>
+    tico task show <id>
 
 Then `playbooks/inbox-preferences.md`, `knowledge/voice.md`, and `memory/learnings.md`. The mailbox is
 the one named `Mailbox:` in `AGENT.md`. You already hold it; do not pass `--mailbox`.
@@ -40,7 +40,7 @@ Brief is id, date, from, subject, labels, a snippet, and a `decision:` word from
 |---|---|---|
 | needs-owner | Only the human can act: legal, money, an investor, a regulator, a relationship only they hold | Top of the brief. Label `hub/needs-owner` only if Filing is On |
 | reply | A real person waits on an answer a careful assistant could draft | Draft it (step 5); send requested replies only when a person has turned mail sending on in Tico |
-| route | It belongs to another team: a lead, a customer, a candidate, a vendor | `hub task create --owner <slug> --parent <id>` per `## Routed to someone else`; do not flag it as needing the human |
+| route | It belongs to another team: a lead, a customer, a candidate, a vendor | `tico task create --owner <slug> --parent <id>` per `## Routed to someone else`; do not flag it as needing the human |
 | archive | Nothing is asked: a receipt, a notification, a cold pitch | List it as "would file". Archive only if Filing is `labels and archive` |
 | read, or unsure | The model was not sure enough | Open the thread and decide yourself |
 
@@ -58,11 +58,11 @@ In the shape of `knowledge/examples/mail-brief.md`: a headline count, "Needs you
 drafts, then routed items, then what you would file, then anything you could not read. Message ids and
 one-line reasons only; no bodies and no address lists in the brief. (A task you file for another bot may carry the
 message's own text; see AGENT.md.) Then attach it to the task. If it is worth
-keeping, `hub file publish reports/YYYY-MM-DD-mail-brief.md`.
+keeping, `tico file publish reports/YYYY-MM-DD-mail-brief.md`.
 
 ## 7. Finish
 
-Prove the pass with another untriaged read. Commit, then `hub task update <id> --status done --note`:
+Prove the pass with another untriaged read. Commit, then `tico task done <id> -m "..." --version N`:
 counts (rules settled, decisions by kind, drafts, routed), the needs-owner ids with one line each, or one
 line that the untriaged list was empty. Always finish it: an open scheduled task absorbs the next
 occurrence and quietly stops the pass.

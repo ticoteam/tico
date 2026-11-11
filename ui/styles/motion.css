@@ -22,7 +22,6 @@
 /* ---- drawers: a side panel slides 8px in from its edge as it fades (a dialog's own fade is base.css's). */
 @keyframes m-from-right{from{opacity:0;translate:8px 0}}
 :where(dialog.gpanel[open]){animation:m-from-right var(--dur) var(--ease)}
-@media (min-width:761px){:where(#task-peek[open]){animation:m-from-right var(--dur) var(--ease)}}
 
 /* ---- Ask (ui/app/ask-panel.ts): the panel rises 8px out of the Ask row as it fades in and sinks back as it fades out; on a phone the
    page comes up from the bottom. It always has its box (ask.css): opening draws it at once, and closing stops drawing
@@ -78,7 +77,7 @@
 
 @media (prefers-reduced-motion:reduce){
   :is(.tl-pop,.p-menu,.people-menu,.slash-menu,#account-menu,#new-version-pop,#account-status-pop,
-    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover],dialog.gpanel,#task-peek,
+    #team-add-menu,.dash-menu,.au-menu,.vcard-menu-list,.pg-menu-list,.ask-menu,[popover],dialog.gpanel,
     .m-tick-in,.m-check path,.tmodal-act.m-checking svg path,.m-task-done),.m-ticking::before{animation:none!important}
   :is(a.card,button.card,.bcard,.au-card,.meet-tile,.rdo-card,.ob-tile,.chev,.section-chev,.req-arrow,.tl-gchev svg,
     .tl-chev svg,.sub-chev,.au-chev,.rdo-cx){transition:none!important}

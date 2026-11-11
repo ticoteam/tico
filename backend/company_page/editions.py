@@ -8,16 +8,17 @@ The life of one:
   Outside editions rules (org_rule_check.outside_edition). `ready` only when both are clean; anything else is `held`,
   including no engine, the budget and a failed call. A person may `override` with a note. An override, like a passing
   check, holds for one exact fingerprint (text, version, disclosure revision and rules).
-- `request_approval` asks the audience's approver or the owner, by name, with the whole text in the payload. Deciding is
-  the person's own click: `require_own_click`, in the decide routes (backend/approvals_routes.py, backend/batch.py) and refused earlier
-  for the Assistant (backend/assistant.py).
-- `publish` spends the approval and marks the edition published in one transaction, and only if the payload still equals
-  what publishing would send now. The route then calls `release_published`, after the commit: a rebuild inside a
-  transaction that rolled back would leave published files up. `correct` makes the next version through the same steps.
-  `retract` takes it down, and the page with it, in the same step: taking something back never lags.
+- `request_approval` asks the audience's approver or the owner, by name, for an OK bound to the whole text
+  (backend/task_asks.py, subject `edition:<id>`, content `approval_payload`). The OK is that person's own click on its
+  preview (task_asks.give_ok): never a token, the Assistant or BotOps.
+- `publish` uses the OK and marks the edition published in one transaction, and only if what publishing would send now
+  is exactly what was OK'd. The route then calls `release_published`, after the commit: a rebuild inside a transaction
+  that rolled back would leave published files up. `correct` makes the next version through the same steps. `retract`
+  takes it down, and the page with it, in the same step: taking something back never lags.
 
-Stats boards have the same approval (`request_board_approval`), spent when it is decided, because there is nothing further
-to publish. Nothing here is reachable by a bot: every write refuses a bot, and approvals also refuse BotOps.
+Stats boards have the same OK (`request_board_approval`, subject `board:<audience>`), used when it is given
+(`board_ok`), because there is nothing further to publish. Nothing here is reachable by a bot: every write refuses a
+bot, and the OK refuses anyone but the person's own click.
 """
 
 import hashlib
@@ -26,6 +27,7 @@ import logging
 import re
 from decimal import Decimal, InvalidOperation
 
+from .. import task_asks
 from ..store import H, Problem
 
 LOG = logging.getLogger("tico.company_page.editions")
@@ -92,12 +94,6 @@ def require_own_click(who):
     """A person at their own browser: no token, no Assistant (on a card or on their words), no BotOps, no Tico support."""
     if not is_person(who) or who.via or who.via_token or who.support or who.attempt_id or who.agent:
         raise Problem("forbidden", "Only the person's own click in Tico does this", 403)
-
-
-def own_click_approval(payload):
-    """Whether an approval's payload is one only `require_own_click` may decide."""
-    url = payload.get("url") if isinstance(payload, dict) else None
-    return isinstance(url, str) and url.strip().lower().startswith((EDITION_URL, BOARD_URL))
 
 
 # ----------------------------------------------------------------------------- body
@@ -515,9 +511,8 @@ def stream(c, audience_ids, before=None, limit=10, company_name=""):
 
 
 def approval_payload(c, row, audience=None):
-    """The exact thing an approver approves and `publish` compares against: the full text, version, audience, disclosure
-    revision and rules. `text` is the whole edition, so a card or the approval's page shows all of it; the chat notice
-    hubdb.approval_request writes is a clip of this and only says one is waiting."""
+    """The exact thing an approver OKs and `publish` compares against: the full text, version, audience, disclosure
+    revision and rules. `text` is the whole edition, so the OK's preview shows all of it."""
     audience = audience or _audience(c, row["audience_id"])
     text = edition_text(row["title"], _load_sections(row), row["correction_note"] or "")
     return {
@@ -534,46 +529,58 @@ def approval_payload(c, row, audience=None):
     }
 
 
-def _approval_state(row, expected):
-    """pending, approved, declined, lapsed (nobody decided it in time, hubdb.APPROVAL_STALE_DAYS), spent or stale (the
-    text, disclosure or rules moved since it was asked)."""
-    if row["consumed_at"]:
-        return "spent"
-    if row["decision"] == "withdrawn":
-        return "lapsed"
-    if row["decision"] == "declined":
-        return "declined"
-    if row["payload"] != expected:
-        return "stale"
-    return "approved" if row["decision"] == "approved" else "pending"
+def _subject(edition_id):
+    return f"edition:{edition_id}"
 
 
-def _decision_note(c, approval_id):
-    """What the person wrote when they decided: the approval's row doesn't hold it, its event does."""
-    row = c.execute(
-        "SELECT detail FROM events WHERE target=? AND action='approval.decide' ORDER BY created_at DESC LIMIT 1",
-        (approval_id,),
-    ).fetchone()
-    return (json.loads(row["detail"] or "{}").get("note") or "") if row else ""
+def _ok_view(c, rid, current):
+    """Where an OK stands, as the Company page shows it: pending, approved, declined (sent back), lapsed (not asked any
+    more), spent (used) or stale (what it was asked about changed since). `current` is the content it would be for now."""
+    found = task_asks.grant(c, rid) if rid else None
+    if not found:
+        return {"id": rid, "state": "lapsed"}
+    standing = task_asks.standing(c, rid)
+    from .. import task_requirements as R
+
+    requirement = R.get(c, rid)
+    visit = requirement.get("visit_id") if requirement else None
+    asked_of = R.person_of(c, requirement, visit) if requirement and visit else None
+    answer = (
+        c.execute(
+            "SELECT notes FROM answers WHERE requirement_id=? AND answer='no' AND undone_at IS NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (rid,),
+        ).fetchone()
+        if standing == task_asks.SENT_BACK
+        else None
+    )
+    state = {
+        task_asks.USED: "spent",
+        task_asks.WITHDRAWN: "lapsed",
+        task_asks.SENT_BACK: "declined",
+        task_asks.OK: "approved",
+        task_asks.WAITING: "pending",
+    }[standing]
+    if state in ("approved", "pending") and found["content_hash"] != task_asks.content_hash(current):
+        state = "stale"
+    return {
+        "id": rid,
+        "task_id": task_asks.task_of(c, rid),
+        "state": state,
+        "to": asked_of,
+        "to_name": H.actor_name(c, asked_of) if asked_of else None,
+        "requested_by": found["asked_by_id"],
+        "created_at": found["created_at"],
+        "decided_by": found["ok_by_id"],
+        "decided_at": found["ok_at"],
+        "note": (answer[0] or "") if answer else "",
+    }
 
 
 def approval_view(c, row):
     if not row["approval_id"]:
         return None
-    found = H.approval(c, row["approval_id"])
-    if not found:
-        return {"id": row["approval_id"], "state": "lapsed"}
-    return {
-        "id": found["id"],
-        "state": _approval_state(found, approval_payload(c, row)),
-        "to": found.get("decision_owner"),
-        "to_name": found.get("decision_owner_name"),
-        "requested_by": found["requested_by_id"],
-        "created_at": found["created_at"],
-        "decided_by": found["decided_by_id"],
-        "decided_at": found["decided_at"],
-        "note": _decision_note(c, found["id"]),
-    }
+    return _ok_view(c, row["approval_id"], approval_payload(c, row))
 
 
 def view(c, row, audience_names=None):
@@ -981,10 +988,10 @@ def check(store, edition_id, primary=None):
 
 
 def _drop_approval(c, row, note):
-    """An undecided approval leaves the approver's queue. A decided one can't be withdrawn; once the edition no longer
-    names it, `publish` refuses it all the same."""
+    """The OK asked for this text leaves the approver's list, given or not: the edition no longer names it, and
+    `publish` would refuse it all the same."""
     if row.get("approval_id"):
-        H.approval_withdraw(c, row["approval_id"], note)
+        task_asks.withdraw(c, row["approval_id"], note)
 
 
 def override(c, who, edition_id, note):
@@ -1148,6 +1155,19 @@ def _approver(c, audience):
     return owner
 
 
+def may_ok(c, person, grant):
+    """Whether `person` may OK this edition or stats board now (task_asks.MAY_OK): the audience's approver as it is
+    today, whoever holds the ask."""
+    audience_id = str((grant.get("content") or {}).get("audience_id") or "")
+    try:
+        approver = _approver(c, _audience(c, audience_id)) if audience_id else None
+    except Problem:
+        approver = None
+    if not approver or approver != person:
+        return "Only this audience's approver OKs it"
+    return None
+
+
 def request_approval(c, who, edition_id):
     """Ask the approver. From `ready`, or again when the last ask lapsed, was declined or no longer matches."""
     require_person(who)
@@ -1173,49 +1193,60 @@ def request_approval(c, who, edition_id):
     if not _cleared(c, row):
         raise Problem("checks_stale", "Run the checks on this text first", 409)
     payload = approval_payload(c, row, audience)
-    found = H.approval_request(c, who.actor, "publish", payload, to=_approver(c, audience))
+    asked = task_asks.ask_ok(
+        c,
+        who.actor,
+        _approver(c, audience),
+        "Publish this edition?",
+        shows=[f"edition:{edition_id}"],
+        subject=_subject(edition_id),
+        content=payload,
+        title=f"Publish: {row['title'] or 'an edition'}"[:200],
+    )
     c.execute(
         "UPDATE editions SET status='awaiting_approval', approval_id=?, payload_hash=?, disclosure_revision_id=?, "
         "updated_at=? WHERE id=?",
-        (found["id"], found["payload_hash"], payload["disclosure_revision"], H.now(), edition_id),
+        (
+            asked["requirement_id"],
+            task_asks.content_hash(payload),
+            payload["disclosure_revision"],
+            H.now(),
+            edition_id,
+        ),
     )
     return full_view(c, edition_id)
 
 
-def _decided_by_addressee(found):
-    """A yes from the person it was addressed to, by their own hand, asked for by a person."""
-    return (
-        found["decision"] == "approved"
-        and H.is_human(found["requested_by_id"])
-        and not found.get("decided_via")
-        and found["decided_by_id"] == found.get("decision_owner")
-    )
-
-
 def publish(c, who, edition_id, approval_id=None):
-    """Spend the approval and publish, one transaction. Refused unless the approved payload is exactly what publishing
-    would send now (same text, version, audience, disclosure revision and rules); a mismatch needs a new approval."""
+    """Use the OK and publish, one transaction. Refused unless what publishing would send now (same text, version,
+    audience, disclosure revision and rules) is exactly what the person OK'd; a change needs a new OK. The click is a
+    person's own; the OK is used as the one who asked for it."""
     require_own_click(who)
     row = _edition(c, edition_id)
     if row["status"] != "awaiting_approval" or not row["approval_id"]:
         raise Problem("conflict", f"This edition is {row['status']}, with no approval to publish on", 409)
     if approval_id and approval_id != row["approval_id"]:
         raise Problem("approval", "That approval isn't this edition's", 409)
-    found = H.approval(c, row["approval_id"])
-    if not found or found["kind"] != "publish" or not _decided_by_addressee(found) or found["consumed_at"]:
+    found = task_asks.grant(c, row["approval_id"])
+    if not found or found["subject"] != _subject(edition_id) or not H.is_human(found["asked_by_id"]):
         raise Problem("approval", "This edition has no approval to publish on", 409)
-    if found["payload"] != approval_payload(c, row):
+    payload = approval_payload(c, row)
+    if found["content_hash"] != task_asks.content_hash(payload):
         raise Problem(
             "approval_stale",
             "The edition, its disclosure or its rules changed after this was approved: ask for approval again",
             409,
         )
-    H.approval_consume(c, who.actor, found["id"])
+    if not task_asks.passes(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"]):
+        # Not OK'd yet, sent back, taken back, or its giver may not OK it any more: the page's own word for it.
+        raise Problem("approval", "This edition has no OK to publish on: ask for approval again", 409)
+    task_asks.use(c, row["approval_id"], _subject(edition_id), payload, found["asked_by_id"])
+    task_asks.settle(c, row["approval_id"], "Published the edition.")
     at = H.now()
     c.execute(
         "UPDATE editions SET status='published', published_at=?, approved_by=?, payload_hash=?, updated_at=? "
         "WHERE id=? AND status='awaiting_approval'",
-        (at, found["decided_by_id"], found["payload_hash"], at, edition_id),
+        (at, found["ok_by_id"], found["content_hash"], at, edition_id),
     )
     if row["supersedes_id"]:
         # Only what is up gets superseded: a correction of a retracted edition leaves it retracted.
@@ -1223,7 +1254,7 @@ def publish(c, who, edition_id, approval_id=None):
             "UPDATE editions SET status='superseded', updated_at=? WHERE id=? AND status='published'",
             (at, row["supersedes_id"]),
         )
-    H.event(c, who.actor, "edition.publish", edition_id, {"approval": found["id"], "version": row["version"]})
+    H.event(c, who.actor, "edition.publish", edition_id, {"approval": row["approval_id"], "version": row["version"]})
     _notify(c, edition_id)
     return full_view(c, edition_id)
 
@@ -1315,71 +1346,21 @@ def _board_text(c, audience_id, audience, view):
     return "\n".join(lines)
 
 
-def _board_rows(c, audience_id):
-    prefix = f"{BOARD_URL}{audience_id}/"
-    return [
-        r["id"]
-        for r in c.execute(
-            "SELECT id FROM approvals WHERE kind='publish' AND substr(json_extract(payload,'$.url'),1,?)=? "
-            "ORDER BY created_at DESC, rowid DESC LIMIT 20",
-            (len(prefix), prefix),
-        )
-    ]
+def _board_subject(audience_id):
+    return f"board:{audience_id}"
 
 
-def board_approval(c, audience_id):
-    """The latest ask to approve this audience's stats board and where it stands, so a lapsed one shows; or None."""
+def _board_content(c, audience_id, audience=None):
+    """What an OK of this audience's stats board is for now: which stats, in which form, under which disclosure
+    revision. `text` is every stat it covers, so the preview shows all of it."""
     from . import stats
 
-    rows = _board_rows(c, audience_id)
-    if not rows:
-        return None
-    found = H.approval(c, rows[0])
-    current = f"{BOARD_URL}{audience_id}/{stats.board_config_hash(c, audience_id)}"
-    state = (
-        "spent"
-        if found["consumed_at"]
-        else "lapsed"
-        if found["decision"] == "withdrawn"
-        else "declined"
-        if found["decision"] == "declined"
-        else "stale"
-        if found["payload"].get("url") != current
-        else "approved"
-        if found["decision"] == "approved"
-        else "pending"
-    )
-    return {
-        "id": found["id"],
-        "state": state,
-        "to": found.get("decision_owner"),
-        "to_name": found.get("decision_owner_name"),
-        "created_at": found["created_at"],
-        "decided_by": found["decided_by_id"],
-        "decided_at": found["decided_at"],
-        "note": _decision_note(c, found["id"]),
-    }
-
-
-def request_board_approval(c, who, audience_id):
-    """Ask for approval of which stats this audience sees, in which form, under the current disclosure revision. The
-    values refresh by code after that (stats.board_approved); a loosened rule or a new stat changes the hash and asks again."""
-    from . import stats
-
-    require_person(who)
-    audience = _audience(c, audience_id)
+    audience = audience or _audience(c, audience_id)
     config = stats.board_config_hash(c, audience_id)
-    url = f"{BOARD_URL}{audience_id}/{config}"
-    for old in _board_rows(c, audience_id):
-        found = H.approval(c, old)
-        if found["decision"] is None:
-            if found["payload"].get("url") == url:
-                return {"approval": found["id"], **board_approval(c, audience_id)}
-            H.approval_withdraw(c, old, "The stats board changed.")
     view = stats.board(c, audience_id, H.parse_ts(H.now()))
     text = _board_text(c, audience_id, audience, view)
-    payload = {
-        "url": url,
+    return {
+        "url": f"{BOARD_URL}{audience_id}/{config}",
         "title": f"{audience['name']} stats board",
         "text": text,
         "content_sha256": hashlib.sha256(text.encode()).hexdigest(),
@@ -1387,29 +1368,74 @@ def request_board_approval(c, who, audience_id):
         "audience_id": audience_id,
         "disclosure_revision": _revision(c, audience_id),
     }
-    found = H.approval_request(c, who.actor, "publish", payload, to=_approver(c, audience))
-    return {"approval": found["id"], **board_approval(c, audience_id)}
 
 
-def approval_decided(c, found):
-    """After an own-click approval is decided, in that transaction. An edition waits for `publish`. A stats board has
-    nothing further to do, so a yes is spent and recorded now, while it still describes the board. If it doesn't any
-    more, no row is written and the page shows it as stale. Returns the new board row's id, or None; the caller passes
-    it to `release_board` once the transaction has committed."""
-    url = str((found.get("payload") or {}).get("url") or "").strip()
-    if not url.startswith(BOARD_URL) or not _decided_by_addressee(found):
+def board_approval(c, audience_id):
+    """The latest ask to approve this audience's stats board and where it stands, so a lapsed one shows; or None. Stale
+    when the board it was asked about is not the board now (another config or disclosure revision)."""
+    found = task_asks.latest(c, _board_subject(audience_id))
+    if not found:
         return None
     from . import stats
 
-    audience_id, _, config = url[len(BOARD_URL) :].partition("/")
-    revision = found["payload"].get("disclosure_revision")
+    current = dict(found["content"] or {})
+    current["url"] = f"{BOARD_URL}{audience_id}/{stats.board_config_hash(c, audience_id)}"
+    current["disclosure_revision"] = _revision(c, audience_id)
+    out = _ok_view(c, found["requirement_id"], found["content"])
+    if out["state"] in ("approved", "pending") and (
+        current["url"] != (found["content"] or {}).get("url")
+        or current["disclosure_revision"] != (found["content"] or {}).get("disclosure_revision")
+    ):
+        out["state"] = "stale"
+    return out
+
+
+def request_board_approval(c, who, audience_id):
+    """Ask for an OK of which stats this audience sees, in which form, under the current disclosure revision. The
+    values refresh by code after that (stats.board_approved); a loosened rule or a new stat changes the hash and asks
+    again. An ask still waiting for exactly this board is kept."""
+    require_person(who)
+    audience = _audience(c, audience_id)
+    content = _board_content(c, audience_id, audience)
+    asked = task_asks.ask_ok(
+        c,
+        who.actor,
+        _approver(c, audience),
+        "Show these stats to " + audience["name"] + "?",
+        shows=[f"board:{audience_id}"],
+        subject=_board_subject(audience_id),
+        content=content,
+        title=f"Approve the {audience['name']} stats board"[:200],
+    )
+    return {"approval": asked["requirement_id"], **(board_approval(c, audience_id) or {})}
+
+
+def board_ok(c, grant, ctx):
+    """In the transaction of an OK of a stats board (task_asks.ON_OK): there is nothing further to publish, so the OK is
+    used and recorded now, while it still describes the board. If it doesn't any more, nothing is recorded and the page
+    shows it as stale. The Public page is rebuilt once the transaction has committed."""
+    content = grant["content"] or {}
+    audience_id = str(content.get("audience_id") or "")
+    if not audience_id or not H.is_human(grant["asked_by_id"]):
+        return
+    app = getattr(ctx, "app", None)
+    store = getattr(getattr(app, "state", None), "store", None)
+    if store is None:
+        # The Public page is rebuilt after the OK commits: with nothing to rebuild it, the OK is not taken.
+        raise Problem("approval", "A stats board is OK'd from its preview in Tico", 409)
+    from . import stats
+
+    url = str(content.get("url") or "")
+    _, _, config = url[len(BOARD_URL) :].partition("/")
+    revision = content.get("disclosure_revision")
     if config != stats.board_config_hash(c, audience_id) or revision != _revision(c, audience_id):
-        return None
-    H.approval_consume(c, found["decided_by_id"], found["id"])
+        return
+    task_asks.use(c, grant["requirement_id"], grant["subject"], content, grant["asked_by_id"])
+    task_asks.settle(c, grant["requirement_id"], "The stats board is approved.")
     row = H.new_id()
     c.execute(
         "INSERT INTO stat_board_approvals(id, audience_id, config_hash, disclosure_revision_id, approval_id, "
         "approved_by, created_at) VALUES(?,?,?,?,?,?,?)",
-        (row, audience_id, config, revision, found["id"], found["decided_by_id"], H.now()),
+        (row, audience_id, config, revision, grant["requirement_id"], grant["ok_by_id"], H.now()),
     )
-    return row
+    ctx.after.append(lambda: release_board(store, row))

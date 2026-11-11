@@ -13,9 +13,9 @@ import pytest
 
 from backend.mcp import ApiProblem
 from clients import hubtools
-from backend.tests.test_api import api, assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
-from backend.tests.test_botops_parity import bot_id, vault
-from backend.tests.test_member_bots import botops, finish, turn  # noqa: F401  (fixtures)
+from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture)
+from backend.tests.helpers.botops_parity import bot_id, vault
+from backend.tests.helpers.member_bots import botops, finish, turn  # noqa: F401  (fixtures)
 
 EVALS = Path(__file__).resolve().parents[2] / "evals" / "botops"
 sys.path.insert(0, str(EVALS))
@@ -115,7 +115,7 @@ def replay(api, botops_machine, scenario):
                 args["model"] = next(
                     m["id"] for m in captured["models"]["models"] if m["id"] != captured["models"]["current"]
                 )
-            if step["tool"] == "hub_bot_go_live":
+            if step["tool"] == "tico_bot_go_live":
                 # Local repository construction is outside the remote tool script; report its result.
                 post(api, f"bots/{args['bot']}/place", {"computer": computer["runner_id"]}, person)
                 readiness = {

@@ -1,4 +1,4 @@
-"""What a bot may publish as a file, checked the same way by the hub, the runner and `hub file`.
+"""What a bot may publish as a file, checked the same way by the hub, the runner and `tico file`.
 
 Pure stdlib. The server repeats every rule here (backend/files.py): this module is what lets the
 client refuse early, with a reason, before any bytes are sent. See docs/files.md.
@@ -211,7 +211,7 @@ def local_file(root, rel, extra_types=()):
 
 def read_local(root, rel):
     """(name, content type, bytes, relative name) for a file `local_file` accepts, read whole: the 25 MB cap
-    for every kind. Video and audio that are larger stream from the path (`hub file publish`)."""
+    for every kind. Video and audio that are larger stream from the path (`tico file publish`)."""
     path, relative = local_file(root, rel)
     with open(path, "rb") as stream:
         data = stream.read(MAX_BYTES + 1)

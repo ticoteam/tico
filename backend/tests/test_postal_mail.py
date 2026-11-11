@@ -13,11 +13,12 @@ import pytest
 
 from backend import hubdb as H
 from backend import postal_mail as P
-from backend.tests.test_api import api, get, post, put  # noqa: F401
-from backend.tests.test_api import headers
-from backend.tests.test_api import setup_attempt
-from backend.tests.test_hook_relay import hq, service  # noqa: F401
-from backend.tests.test_mcp import call, rpc
+from backend import sources as SRC
+from backend.tests.helpers.api import get, post, put  # noqa: F401
+from backend.tests.helpers.api import headers
+from backend.tests.helpers.api import setup_attempt
+from backend.tests.helpers.hook_relay import hq, service  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
 from backend import bot_settings as BS
 
 SYSTEM = "hr_00000000000000a1"  # the install's `_tico` system relay
@@ -186,8 +187,8 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
     assert made["owner_id"] == "human:ana" and made["due_at"] == "2026-11-20"
     assert "A summons from the county court" in made["body"] and "2026-11-20" in made["body"]
     assert "/api/v2/files/" + row["blob_id"] in made["body"]
+    assert row["task_id"] in {i["task"]["id"] for i in get(api, "needs-you", "ana-test")["items"] if i.get("task")}
     with api.app.state.store.read() as c:
-        assert row["task_id"] in {t["id"] for t in H.needs_you(c, "human:ana")["tasks"]}
         assert c.execute("SELECT count(*) FROM task_assets WHERE task_id=?", (row["task_id"],)).fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM tasks WHERE id=?", (row["task_id"],)).fetchone()[0] == 1
         assert (
@@ -206,8 +207,8 @@ def test_a_letter_is_kept_once_and_legal_mail_asks_the_owner_with_its_deadline(a
         assert get(api, "postal/items", token)["items"] == []
         get(api, "postal/items/" + row["id"], token, expected=404)
         assert scan(api, row, token) == 404
-    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token="ben-test")[0] is True
-    assert call(api, "hub_mail_read", {"item_id": row["id"]})[1]["item"]["kind"] == "legal"
+    assert call(api, "tico_mail_read", {"item_id": row["id"]}, token="ben-test")[0] is True
+    assert call(api, "tico_mail_read", {"item_id": row["id"]})[1]["item"]["kind"] == "legal"
 
 
 def test_read_grants_open_private_letters_and_scans_through_api_and_mcp_and_revoke(api, hq, mail):
@@ -220,10 +221,10 @@ def test_read_grants_open_private_letters_and_scans_through_api_and_mcp_and_revo
     assert get(api, "postal/items", token)["items"] == []
     get(api, "postal/items/" + row["id"], token, expected=404)
     assert scan(api, row, token) == 404
-    assert call(api, "hub_mail_list", {}, token=token)[1]["items"] == []
-    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[0] is True
+    assert call(api, "tico_mail_list", {}, token=token)[1]["items"] == []
+    assert call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[0] is True
     offered = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
-    assert {"hub_mail_list", "hub_mail_read"} <= offered
+    assert {"tico_mail_list", "tico_mail_read"} <= offered
 
     path = "postal/addresses/all/grants/bot/ops"
     grant = put(api, path, {"level": "read"})["grant"]
@@ -232,8 +233,8 @@ def test_read_grants_open_private_letters_and_scans_through_api_and_mcp_and_revo
     assert get(api, "postal/items", token)["items"][0]["id"] == row["id"]
     assert get(api, "postal/items/" + row["id"], token)["item"]["summary"] == "Court papers"
     assert scan(api, row, token) == 200
-    assert call(api, "hub_mail_list", {}, token=token)[1]["items"][0]["summary"] == "Court papers"
-    assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["file_url"]
+    assert call(api, "tico_mail_list", {}, token=token)[1]["items"][0]["summary"] == "Court papers"
+    assert call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["file_url"]
     # A Read grant on letters gives no right to change or read the private task itself.
     get(api, "tasks/" + row["task_id"], token, expected=404)
     response = api.delete("/api/v2/" + path, headers=headers())
@@ -316,6 +317,8 @@ def test_legal_mail_routes_to_chosen_bot_privately_and_notifies_owner_then_reset
         assert scan(api, row) == scan(api, row, token) == 200
         with api.app.state.store.read() as c:
             assert H.task_private_readable(c, "human:ana", made)
+            # Filed on Ana's rights, shown as Postal mail's (backend/sources.py filers).
+            assert SRC.filers(c, [row["task_id"]]) == {row["task_id"]: "postal-mail"}
             notice = c.execute(
                 "SELECT body FROM messages WHERE recipient_id='human:ana' "
                 "AND json_extract(refs,'$.task')=? AND body LIKE 'Legal mail:%'",
@@ -375,7 +378,7 @@ def test_mail_grants_are_paged(api):
 
 def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
     from backend import task_privacy
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     letter(api, "161", "legal", summary="Private court papers")
     deliver(hq, "161", assignment_id="as_de")
@@ -397,8 +400,8 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
         assert get(api, "postal/items", token)["items"] == []
         for path in paths:
             get(api, path, token, expected=404)
-        assert call(api, "hub_mail_list", {}, token=token)[1]["items"] == []
-        assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[0]
+        assert call(api, "tico_mail_list", {}, token=token)[1]["items"] == []
+        assert call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[0]
         with api.app.state.store.read() as c:
             assert not task_privacy.blob_readable(c, ("human:ben", "bot:coo"), row["blob_id"])
 
@@ -413,7 +416,7 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
     put(api, bot_grant, {})
     assert get(api, "postal/items", token)["items"][0]["summary"] == "Private court papers"
     assert (
-        call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == "Private court papers"
+        call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == "Private court papers"
     )
     for path in paths[1:]:
         response = api.get("/api/v2/" + path, headers=headers(token))
@@ -429,8 +432,8 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
 def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, mail):
     from backend.auth import Identity
     from backend.blobs import register
-    from backend.tests.test_api import assign, ready, runner
-    from backend.tests.test_counsel import counsel_on, store_file
+    from backend.tests.helpers.api import assign, ready, runner
+    from backend.tests.helpers.counsel import counsel_on, store_file
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:
@@ -462,12 +465,12 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     attempt = claimed["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "postal-counsel"}, token=computer["token"])
     token = attempt["token"]
-    assert {"hub_mail_list", "hub_mail_read"} <= {
+    assert {"tico_mail_list", "tico_mail_read"} <= {
         t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]
     }
     assert {i["external_id"] for i in get(api, "postal/items", token)["items"]} == {"171", "172"}
     for row in (routed, owner):
-        assert call(api, "hub_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == row["summary"]
+        assert call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[1]["item"]["summary"] == row["summary"]
         assert scan(api, row, token) == 200
         for path in (f"files/{row['file_id']}?v=1", f"files/{row['file_id']}/versions/1"):
             response = api.get("/api/v2/" + path, headers=headers(token))
@@ -604,7 +607,7 @@ def test_a_letter_with_no_task_is_the_owners_alone(api, hq, mail):
     for item in shown.values():
         assert item["redacted"] is True and not {"sender", "summary", "deadline", "file_url", "task_id"} & set(item)
     assert get(api, "postal/items/" + archived["id"], "ben-test")["item"]["redacted"] is True
-    assert "Credit card offer" not in json.dumps(call(api, "hub_mail_list", {}, token="ben-test")[1])
+    assert "Credit card offer" not in json.dumps(call(api, "tico_mail_list", {}, token="ben-test")[1])
     assert scan(api, archived, "ben-test") == 404
     assert get(api, "postal/items", "cara-test")["items"] == []
     get(api, "postal/items/" + archived["id"], "cara-test", expected=404)

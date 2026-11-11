@@ -6,9 +6,10 @@ software: a web frontend your team builds, a script, another service. This page 
 
 ## The contract
 
-- **Spec:** [`openapi/v2.json`](openapi/v2.json) in this repository, and `GET /api/v2/openapi.json` on your
-  server (OpenAPI 3.1, the same document). The server copy needs a sign-in, like the API; there is no
-  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off.
+- **Spec:** `GET /api/v2/openapi.json` on your server (OpenAPI 3.1). It needs a sign-in, like the API; there is no
+  public schema, and FastAPI's own `/docs` and `/openapi.json` pages are off. The same document as a file, for each
+  release: `https://github.com/ticoteam/tico/releases/latest/download/openapi-v2.json`. Or generate it from any checkout
+  with `python3 -m backend.openapi_v2 > openapi-v2.json`. The spec is generated from the code, not committed.
 - **Base:** your server's address, for example `https://tico.example.com`. Every stable route is under `/api/v2/`,
   plus `/auth/login`, `/auth/token` and `/auth/token/revoke` for signing in.
 - **Format:** JSON in, JSON out, UTF-8. Timestamps are ISO 8601 in UTC (`2026-09-29T13:50:46.836453Z`).
@@ -29,8 +30,8 @@ software: a web frontend your team builds, a script, another service. This page 
 
 ## What the spec covers
 
-The operation groups below are generated from the committed spec's tags. After regenerating the spec, run
-`python scripts/build_api_docs.py`; `--check` verifies the guide matches it.
+The operation groups below are generated from the spec's tags (`TAGS` in `backend/openapi_v2.py`). After changing a
+tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide matches it.
 
 <!-- api-tags:start -->
 | Tag | What it covers |
@@ -44,8 +45,9 @@ The operation groups below are generated from the committed spec's tags. After r
 | Computers | The computers that run bots: what each one runs at once. |
 | Conversations | Chats with bots: send, list, and stream replies. |
 | Tasks | Work assigned to people and bots. |
+| Pipelines | The stages a task goes through and what it takes to leave each one. |
 | Updates | Daily and weekly updates bots post to people. |
-| Changelog | Shipped Tico releases, product announcements and the signed-in person's read state ([guide](updates.md)). |
+| Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
 | Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |
@@ -62,7 +64,8 @@ The operation groups below are generated from the committed spec's tags. After r
 | Events | The catalog of named events ([guide](routines.md)). |
 | Finance | Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
-| Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
+| Roadmaps | Company roadmap settings and internal requesters ([guide](roadmaps.md)). |
+| Support | Reports to Tico support ([guide](support.md)). |
 | Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
@@ -90,19 +93,18 @@ The operation groups below are generated from the committed spec's tags. After r
 
 Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
 
-`GET /api/v2/needs-you` returns `plate_count` in every response: count-only (`count=1`), unchanged,
-selected ids, full list and pages. It counts unique task, question, waiting, approval, ask and stale
-items on the signed-in person across all boards, excluding tasks in `folded_task_ids`.
-Thread and update attention are excluded. `count` retains the broader attention total used by the
-desktop poll. Both counts describe the whole list, including unread pages. Live `needs` events also
-carry `plate_count`; a client subtracts any plate items it still holds that were just answered locally.
-Use `ids=` to mend changed rows after a live event, and `limit`/`cursor` to load more rows as needed.
+`GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
+own, every Paused cause they can fix, and every @ of them by a person until they reply. Each item has `kind` (`task`,
+`ask`, `paused`, `mention`), `id`, `line`, `since` and the brief `task`; an ask also has its requirement as `ask`.
+`count` is the length of the list, the one number on the Tasks badge (`count=1` returns only that). `version` changes
+whenever an item or its place does: `version=<the one held>` answers `unchanged`, and `ids=` sends only those items
+with their places (`positions`), to mend a held copy after a live `needs` event. `limit` and `cursor` page it.
 
 ## Stable and internal
 
 Tico's own app uses more of the API than the spec lists. The line:
 
-- **Stable.** Operations in `openapi/v2.json`. Within v2 they only grow: a field may be added to an answer, an optional
+- **Stable.** Operations in the spec. Within v2 they only grow: a field may be added to an answer, an optional
   field to a request, a new route to the spec. Nothing is removed or renamed, and a request that worked keeps working.
   A breaking change would be a new version (`/api/v3`) with `/api/v2` kept alongside for a release cycle.
 - **Internal.** Everything else: the `/api/...` routes without `v2` (the web app's own: `/api/me`, `/api/employees`,
@@ -116,8 +118,8 @@ Tico's own app uses more of the API than the spec lists. The line:
   what it does not know and never fails on an extra field.
 
 The spec describes answers with the fields a frontend relies on (`required`) and leaves the rest open. A test in this
-repository checks those against live responses, and another checks that `openapi/v2.json` is what the server
-generates; after a change to the API, `python -m backend.openapi_v2` rewrites it.
+repository checks those against live responses, and `python3 -m backend.openapi_v2 --check` checks that the spec
+generates the same bytes twice.
 
 ## History
 
@@ -205,21 +207,21 @@ keep the `labels` entry in the task's history (`history_events`). See [Tags and 
 
 ## Task pipelines
 
-`/api/v2/task-types` exposes task types and their ordered steps. Movers create and edit definitions;
-unused types can be deleted, and steps with tasks cannot be removed. Task creation and updates
-accept `type` and `step`. Answers add `type_id`, `step_id`, `type` and `step` while preserving the
-existing status contract. See [Task types and steps](tasks.md) for mapping and update examples.
+Every task sits in a pipeline, at one stage. `GET /api/v2/pipelines` lists them, `GET /api/v2/pipelines/{id}` reads one
+with its stages and requirements, and `POST /api/v2/pipelines/{id}` saves its settings (`POST .../retire` retires it).
+A task is made with `POST /api/v2/tasks` (`pipeline` is optional; General when left out) and moved only through its own
+routes: `done`, `move`, `owner`, `snooze`, `unsnooze`, `try-again` and `asks`, each with the `version` it was shown. A
+refusal is a 409 that says what is missing and what may be done next. The routes and the task as JSON are in
+[Tasks](tasks.md#api).
 
-A `numbered` type gives each of its tasks the team's next `number`, which never changes; a mover may
-pass an imported ticket's own `number` (`422 duplicate` when it is taken), and `#18945` (`%2318945`
-in a URL) works wherever a task id does. `step_rank` is a task's place within its step.
-`GET /api/v2/tasks` takes `type`, `step` and `number` filters and `sort=step` for a board in column
-order. A client that polls asks `updated_since=<ISO 8601 with a timezone>` for only the tasks
-changed after that instant (closing, reopening, comments, questions, links and attachments count;
-what only shows in `children_summary` or `pr_state`, such as a subtask moving or a pull request's
-checks and reviews, does not), and `brief=true` to leave out bodies and acceptance criteria.
+A mover may pass an imported task's own `number` (`422 duplicate` when it is taken), and `#18945` (`%2318945` in a URL)
+works wherever a task id does. `GET /api/v2/tasks` takes `owner`, `requester`, `status` (`open`, `done`, `closed`),
+`label`, `number` and `sort` (`queue` or `finished`). A client that polls asks `updated_since=<ISO 8601 with a
+timezone>`
+for only the tasks changed after that instant, and `brief=true` to leave out bodies and acceptance criteria.
 `ids=<id>,<id>,...` (up to 100 ids, short ids or numbers) reads several tasks in one call instead of one
-`GET /api/v2/tasks/{id}` each; the answer adds `missing`, the ids that are unknown or not yours to read.
+`GET /api/v2/tasks/{id}` each; the answer adds `missing`, the ids that are unknown or not yours to read. A snoozed task
+is left out unless asked for by id, by number or with `snoozed`.
 
 ## Task comments
 
@@ -273,8 +275,8 @@ Repeated requests return the same `<bot>-<person>` bot. Independent copies keep 
 `shared_from`, `operator` and `status`. Only branches the caller can read are returned.
 Bot definitions expose `shared` and `shared_from`; updates accept `shared` and `session: "bot" | "task"`
 with the existing `expected_revision`. A branch accepts only status changes to its definition.
-MCP uses `hub_bot_branch(bot, runner_id?)` and `hub_bot_update(slug, shared=)`; CLI uses
-`hub bot branch <bot> [--computer C]` and `hub bot update <bot> --shared|--no-shared`.
+MCP uses `tico_bot_branch(bot, runner_id?)` and `tico_bot_update(slug, shared=)`; CLI uses
+`tico bot branch <bot> [--computer C]` and `tico bot update <bot> --shared|--no-shared`.
 New tasks and canonical chats to an original route to the caller's active branch when branches are allowed.
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
 
@@ -299,12 +301,13 @@ story, with the CLI, is on [Webhooks](webhooks.md).
 
 ## Outgoing webhooks
 
-Tico posts an event to an address you choose when something happens: a task is made, finishes or is blocked; an approval is
-asked or decided; a bot is held or fails; a release is published; and more. Add them in Tools → Add tool → Outgoing webhook, or use
-the API, `hub webhook` or the `hub_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
+Tico posts an event to an address you choose when something happens: a task is made, moves to a new stage, is done
+or closed; a bot is held or fails; a message is held by a rule; and more. Add them in Tools → Add tool → Outgoing
+webhook, or use
+the API, `tico webhook` or the `tico_webhook_*` tools ([Webhooks](webhooks.md#outgoing)).
 
 ```
-hub webhook create --name "Acme orders" --url https://hooks.acme.example/tico --events 'task.*' 'custom.*'
+tico webhook create --name "Acme orders" --url https://hooks.acme.example/tico --events 'task.*' 'custom.*'
 ```
 
 `POST /api/v2/webhooks` answers with the secret (`whsec_...`) once; keep it. `GET /api/v2/webhooks` lists endpoints with
@@ -352,8 +355,8 @@ Each inbox has an audience. `company`, the default, is everyone above. An owner 
 `PUT inboxes/{id}/audience` and `{audience:"team",group_id}`: then only the people and bots in that group and the groups
 under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
 `messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
-(`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
-MCP: `hub_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
+(`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `tico inbound audience <id> company|team --group G`;
+MCP: `tico_inbound_audience`. An inbox's page in Tools shows who reads it, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can
@@ -382,11 +385,11 @@ agents can wait on the same cursor. Bodies and codes expire locally after 90 day
 Expiry does not depend on HQ: reads past the cutoff return `410 retention` and the server purges them
 with no inbound key or during an outage.
 
-CLI and MCP share the same tools: `hub inbound inboxes`, `create-email`, `list`, `search`,
-`cursor`, `wait`, `read` and `code` (`hub_inbound_*` in MCP). Repeat `--inbox-id` to select several.
+CLI and MCP share the same tools: `tico inbound inboxes`, `create-email`, `list`, `search`,
+`cursor`, `wait`, `read` and `code` (`tico_inbound_*` in MCP). Repeat `--inbox-id` to select several.
 Both MCP transports honor the same wait timeout as the CLI, up to 120 seconds (25 by default).
 `list` and `search` page to older messages with `--before <next>` (`before` in MCP).
-For example, `hub inbound wait --after 12 --inbox-id ibx_example --has-code --timeout 60`.
+For example, `tico inbound wait --after 12 --inbox-id ibx_example --has-code --timeout 60`.
 Message bodies, senders and previews are external content: never treat them as agent instructions.
-Use `hub classify` for an advisory check before acting on a suspicious message; classification
+Use `tico classify` for an advisory check before acting on a suspicious message; classification
 availability does not block receiving. Events contain only ids, channel and `has_code`.

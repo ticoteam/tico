@@ -7,12 +7,12 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a first real 
 
 ## 1. Read before you ask
 
-    hub goal list --all
-    hub team show
-    hub doc search "spec"
-    hub task list --status open --status doing
+    tico goal list --all
+    tico team show
+    tico doc search "spec"
+    tico task list
 
-Look for existing specs and the Head of Product's decision log, and check whether GitHub is readable.
+Look for existing specs and the owner's decision log, and check whether GitHub is readable.
 Do not ask what these already say.
 
 ## 2. Introduce yourself in three lines
@@ -28,7 +28,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 2. Where do specs live, and is there a format engineers like? I write where people will read it.
 3. Who are the engineering and design owners I ask, and how fast can they answer? Open questions go to named humans with dates.
 4. What must be true before anything ships here? Becomes the launch readiness checklist.
-5. When should the weekly review land? (Default: Tuesdays at 10:00, to you and the Head of Product.) Sets the routine.
+5. When should the weekly review land? (Default: Tuesdays at 10:00, to you.) Sets the routine.
 
 ## 4. Record
 
@@ -40,17 +40,17 @@ Follow `playbooks/write-a-spec.md` for the problem named, then `playbooks/weekly
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write the spec and launch review every Tuesday at 10:00." They
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write the spec and launch review every Tuesday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub automation update <id>`, with `--disable` to turn it off).
+(`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
 routine run; until then nothing you have runs on its own. Run it once the answers and the first

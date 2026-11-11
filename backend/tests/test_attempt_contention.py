@@ -12,85 +12,15 @@ import pytest
 from backend import flight, worktrees
 from backend.scheduler import Scheduler
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, headers, ready, runner  # noqa: F401
+from backend.tests.helpers.api import headers, runner
 from backend.enqueue import enqueue_stored
-
-
-def fleet(api, attempts=100, trees=50):
-    computer = runner(api)
-    assign(api, computer, "ops")
-    ready(api, computer, ["ops"])
-    store = api.app.state.store
-    now = H.now()
-    until = H.shift(now, seconds=store.settings.lease_seconds)
-    with store.transaction() as c:
-        generation = c.execute("SELECT generation FROM assignments WHERE bot='ops'").fetchone()[0]
-        for i in range(attempts + trees):
-            tid, cid, mid = f"task-{i}", f"room-{i}", f"message-{i}"
-            c.execute(
-                "INSERT INTO conversations(id,kind,participants,created_at,task_id) VALUES(?,'task',?,?,?)",
-                (cid, encode(["human:ana", "bot:ops"]), now, tid),
-            )
-            c.execute(
-                "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,conversation_id,created_at,updated_at) "
-                "VALUES(?,?,'Synthetic workload','human:ana','bot:ops','doing',?,?,?)",
-                (tid, tid, cid, now, now),
-            )
-            if i < attempts:
-                c.execute(
-                    "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
-                    "VALUES(?,?,'human:ana','bot:ops','say','Synthetic work',?,?)",
-                    (mid, cid, now, encode({"task": tid})),
-                )
-                enqueue_stored(c, mid)
-                c.execute(
-                    "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at,lane) "
-                    "VALUES(?,?,'ops',?,?,?,'running',?,?,?)",
-                    (
-                        f"attempt-{i}",
-                        mid,
-                        computer["runner_id"],
-                        generation,
-                        f"synthetic-{i}",
-                        until,
-                        now,
-                        "task:" + tid,
-                    ),
-                )
-                c.execute("UPDATE jobs SET state='running',attempt_id=? WHERE id=?", (f"attempt-{i}", mid))
-            else:
-                detail = {
-                    "owner": "bot:ops",
-                    "checkout_state": "ready",
-                    "setup_pending": False,
-                    "expected_head": "a" * 40,
-                    "checkout_target": "refs/heads/main",
-                    "expected_base": "b" * 64,
-                }
-                c.execute(
-                    "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,path,detail) "
-                    "VALUES(?,?,'worktree',?,'present','bot:ops',?,?,?,?)",
-                    (
-                        f"tree-{i}",
-                        tid,
-                        f"worktree:tree-{i}",
-                        now,
-                        computer["runner_id"],
-                        f"tasks/{tid}/Acme__product",
-                        encode(detail),
-                    ),
-                )
-                c.execute(
-                    "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at) "
-                    "VALUES(?,?,'pr',?,'merged','bot:ops',?)",
-                    (f"pr-{i}", tid, f"https://github.com/Acme/product/pull/{i}", now),
-                )
-    return computer
+from backend import task_engine as E
+from backend.tests.helpers.attempt_contention import fleet, on_engine
 
 
 def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignment(api, monkeypatch):
     import sqlite3
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     computer = fleet(api, attempts=1, trees=0)
     store = api.app.state.store
@@ -144,7 +74,7 @@ def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignmen
 
 def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapshot(api, monkeypatch):
     from backend import task_privacy
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     computer = fleet(api, attempts=4, trees=3)
     store = api.app.state.store
@@ -170,7 +100,8 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     def changes_after_read(c, computer_id):
         selected = prepare(c, computer_id)
         with store.transaction() as writer:
-            writer.execute("UPDATE tasks SET carried_by='attempt-0' WHERE id='task-4'")
+            # attempt-0's turn now carries task-4 too: the snapshot read before it is stale.
+            writer.execute("UPDATE messages SET refs=? WHERE id='message-0'", (encode({"task": ["task-0", "task-4"]}),))
         return selected
 
     monkeypatch.setattr(worktrees, "live_turn_cache", changes_after_read)
@@ -178,13 +109,14 @@ def test_heartbeat_prepares_provenance_outside_write_and_discards_a_stale_snapsh
     assert "tree-4" not in {a["link_id"] for a in result["worktree_actions"]}
     monkeypatch.setattr(worktrees, "live_turn_cache", prepare)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:finance' WHERE id='task-4'")
+        row = on_engine(c, "task-4")
+        E.reassign(c, "task-4", "bot:finance", "human:ana", seen_version=row["version"])
     result = post(api, "runners/heartbeat", body, computer["token"])
     assert "tree-4" in {a["link_id"] for a in result["worktree_actions"]}
 
 
 def test_event_batch_replay_conflict_and_gap_are_atomic(api):
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     computer = fleet(api, attempts=1, trees=0)
     path = "attempts/attempt-0/events"
@@ -235,7 +167,9 @@ def test_idle_inputs_and_task_read_do_not_wait_on_unrelated_writers(api):
             release.set()
         background.result()
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
+        row = on_engine(c, "task-0")
+        c.execute("UPDATE tasks SET private=1,requester_id='human:ben' WHERE id='task-0'")
+        E.reassign(c, "task-0", "bot:finance", "human:ana", seen_version=row["version"])
     assert api.post('/api/v2/attempts/attempt-0/inputs', json={}, headers=headers(computer['token'])).status_code == 409
 
 
@@ -252,11 +186,16 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
         return original(c, aid)
 
     monkeypatch.setattr(task_privacy, '_attempt_tasks', build)
+    with store.transaction() as c:
+        # Finance owns the task now; while it is not private, Ops' run still reads it.
+        row = on_engine(c, "task-0")
+        E.reassign(c, "task-0", "bot:finance", "human:ana", seen_version=row["version"])
+        c.execute("UPDATE tasks SET private=0 WHERE id='task-0'")
     with store.read_transaction() as c:
         assert task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     count = len(builds)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id='task-0'")
+        c.execute("UPDATE tasks SET private=1,requester_id='human:ben' WHERE id='task-0'")
     with store.read_transaction() as c:
         assert not task_privacy.attempt_readable(c, 'bot:ops', 'attempt-0')
     assert len(builds) == count  # Only neutral provenance survives; permission never does.
@@ -275,12 +214,14 @@ def test_shared_provenance_rechecks_permissions_and_never_publishes_rolled_back_
 
 def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
     from backend import execution
-    from backend.tests.test_api import post
+    from backend.tests.helpers.api import post
 
     computer = fleet(api, attempts=0, trees=20)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done'")
+        for i in range(20):
+            row = on_engine(c, f"task-{i}")
+            E.move(c, row["id"], E.DONE, "human:ana", "Finished", seen_version=row["version"])
         for i in range(20):
             c.execute(
                 "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,created_at,refs) "
@@ -290,13 +231,9 @@ def test_claim_cleans_a_bounded_page_of_obsolete_notices(api):
             enqueue_stored(c, f'obsolete-{i}')
     assert post(api, 'jobs/claim', {}, computer['token'])['attempt'] is None
     with store.read() as c:
-        assert (
-            c.execute("SELECT count(*) FROM jobs WHERE state='canceled'").fetchone()[0] == execution.CLAIM_MAINTENANCE
-        )
-        assert (
-            c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0]
-            == 20 - execution.CLAIM_MAINTENANCE
-        )
+        obsolete = "SELECT count(*) FROM jobs WHERE state=? AND message_id LIKE 'obsolete-%'"
+        assert c.execute(obsolete, ("canceled",)).fetchone()[0] == execution.CLAIM_MAINTENANCE
+        assert c.execute(obsolete, ("queued",)).fetchone()[0] == 20 - execution.CLAIM_MAINTENANCE
 
 
 def test_health_flags_runner_p95_and_clears_after_the_window(api):
@@ -317,6 +254,9 @@ def test_health_flags_runner_p95_and_clears_after_the_window(api):
         assert "renew" in health.runner_route_latency(c, now)["summary"]
         assert any(row["key"] == "runner_route_latency" for row in maintenance_health._server_checks(c))
         assert health.runner_route_latency(c, now + 16 * 60) is None
+
+
+WORKERS = 12
 
 
 @pytest.mark.slow
@@ -373,7 +313,10 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
         finally:
             flight.request_finished(token)
 
-    with ThreadPoolExecutor(max_workers=18) as pool:
+    # 12 workers: the heartbeat, the scheduler tick and 10 requests in flight, the profile the scale test
+    # (test_attempt_contention_scale.py) holds to. With 18, the extra threads only queue on the CPU and the GIL, so a
+    # route's p95 measured how busy the VM was rather than the SQLite contention this test is about.
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         beat = pool.submit(
             api.post,
             "/api/v2/runners/heartbeat",
@@ -402,7 +345,7 @@ def test_100_attempt_routes_during_heartbeat_and_scheduler(api, monkeypatch):
         for name, values in samples.items()
     }
     print("SNAPSHOT_RECEIPT " + json.dumps(snapshot_counts, sort_keys=True))
-    print("CONTENTION_RECEIPT " + json.dumps(receipt, sort_keys=True))
+    print("CONTENTION_RECEIPT " + json.dumps({"workers": WORKERS, **receipt}, sort_keys=True))
     rec.drain()
     print("HOLDERS " + json.dumps(sorted(rec.long_holds, key=lambda h: -h["hold_s"])[:10]))
     assert not failures, failures

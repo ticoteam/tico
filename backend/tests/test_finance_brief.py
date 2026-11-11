@@ -5,16 +5,7 @@ cash, burn and unattributed spend, a person with no view none). The brief is cac
 is handed the lines only when they differ from the ones that reader was last handed."""
 
 from backend.finance import brief as BR
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    account,
-    act,
-    books,
-    finance_template,
-    spend,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store
 
 LATER = "2026-10-15T14:00:00.000000Z"
 LATEST = "2026-10-15T15:00:00.000000Z"
@@ -213,7 +204,7 @@ def test_an_on_demand_brief_does_not_use_up_the_turn_start_hand_off(books):
         parent, soft = _software(c)
         _coder_budget(c, parent, soft)
         spend(c, "6100", 25_000, day="2026-10-10", teammate="bot:coder")
-        asked = BR.brief(c, "bot:coder", at=AT)  # hub_finance_brief answers on demand
+        asked = BR.brief(c, "bot:coder", at=AT)  # tico_finance_brief answers on demand
         assert asked["lines"]
         handed = BR.for_turn(c, "bot:coder", at=LATER)  # the turn start still gets them: nothing was handed yet
         assert handed is not None and handed["lines"] == asked["lines"]

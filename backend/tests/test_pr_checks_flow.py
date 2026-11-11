@@ -1,11 +1,12 @@
-"""Pull request checks give one event per head, and the rules decide who it wakes (backend/github.py, rules.py)."""
+"""Pull request checks give one event per head, and the engine decides whether it wakes the owner (backend/github.py,
+task_engine.tell_owner): a wake on the owner bot's turn, a quiet note for its next run while the task waits on a
+person first."""
 
 from backend import github as G
-from backend import hubdb as H
 from backend.repositories import metadata, save_metadata
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_rules import plain_task
-from backend.tests.test_wake_rules import jobs, setup
+from backend import hubdb as H
+from backend.tests.helpers.rules import plain_task
+from backend.tests.helpers.wake_rules import jobs, setup
 
 
 def due(c, task):
@@ -26,21 +27,66 @@ def sent(c, task, item="Checks finished on tico#1: passed", armed=False, head="a
     )
 
 
-def test_finished_checks_wake_the_owner_at_a_working_step_and_are_a_note_elsewhere(api):
+def woke(c, msg):
+    """(a run was queued for the owner, the message is a quiet note)."""
+    return jobs(c, "cpo") == 1, bool(msg["refs"].get("quiet"))
+
+
+def asked(c, task, person="human:ana", kind="answer"):
+    """The owner bot asks `person` on its task, and nothing is queued."""
+    H.task_ask(c, "bot:cpo", task["id"], person, "Which color?", kind=kind, seen_version=task["version"])
+    c.execute("DELETE FROM jobs")
+    return H.task(c, task["id"])
+
+
+def test_finished_checks_wake_the_owner_on_its_turn_once_per_head(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         task = plain_task(c)
         msg = sent(c, task)
-        assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("pr_checks_done", 1) and not msg["refs"].get("quiet")
+        assert woke(c, msg) == (True, False)
+        assert (msg["refs"]["pr_head"], msg["refs"]["pr_result"]) == ("a" * 40, "pass")
         c.execute("DELETE FROM jobs")
-        c.execute("UPDATE tasks SET status='review' WHERE id=?", (task["id"],))
-        msg = sent(c, H.task(c, task["id"]), head="b" * 40)
-        # In review someone else is working: the result waits for the owner's next run, as a note.
-        assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("pr_checks_note", 0) and msg["refs"]["quiet"] is True
-        assert c.execute("SELECT count(*) FROM notes WHERE message_id=?", (msg["id"],)).fetchone()[0] == 1
-        # A link the bot armed with wake_once is the same event, and it asked to hear it wherever the task is.
+        # A link the bot armed with wake_once is the same event, and says it was asked for.
         msg = sent(c, H.task(c, task["id"]), head="c" * 40, armed=True)
-        assert (msg["refs"]["rule"], jobs(c, "cpo")) == ("awaited_wake_once", 1)
+        assert woke(c, msg) == (True, False) and msg["refs"]["pr_armed"] is True
+
+
+def test_finished_checks_on_a_task_that_asks_a_person_are_a_note(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = asked(c, plain_task(c))
+        msg = sent(c, task)
+        # The person's answer is what wakes it: the result waits for the owner's next run, as a note.
+        assert woke(c, msg) == (False, True)
+
+
+def test_finished_checks_on_a_task_waiting_on_an_ok_are_a_note(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = asked(c, plain_task(c), kind="ok")
+        assert woke(c, sent(c, task)) == (False, True)
+
+
+def test_finished_checks_after_the_person_answers_wake_again(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = asked(c, plain_task(c))
+        assert woke(c, sent(c, task)) == (False, True)
+        [ask] = [r for r in H.task_view(c, task["id"])["to_leave"] if r["kind"] == "answer"]
+        H.task_answer(c, "human:ana", task["id"], ask["requirement_id"], "Blue")
+        c.execute("DELETE FROM jobs")
+        assert woke(c, sent(c, H.task(c, task["id"]), head="b" * 40)) == (True, False)
+
+
+def test_finished_checks_on_a_task_that_is_not_open_send_nothing(api):
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task = plain_task(c)
+        H.task_close(c, "bot:ops", task["id"], "Not needed.", task["version"])
+        G.queue_checks_done(c, task, "a" * 40, "pass", "Checks finished on tico#1: passed", False)
+        due(c, task)
+        assert G.flush_wakes(c) == [] and jobs(c, "cpo") == 0
 
 
 def test_a_review_that_is_not_a_persons_is_a_note(api):
@@ -54,4 +100,4 @@ def test_a_review_that_is_not_a_persons_is_a_note(api):
             c,
             c.execute("SELECT id FROM messages WHERE recipient_id='bot:cpo' ORDER BY rowid DESC LIMIT 1").fetchone()[0],
         )
-        assert msg["refs"]["rule"] == "pr_review_note" and jobs(c, "cpo") == 0
+        assert msg["refs"]["quiet"] and jobs(c, "cpo") == 0

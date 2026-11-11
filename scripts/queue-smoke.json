@@ -23,7 +23,7 @@
     {
       "file": "clients/tests/test_hubcli.py",
       "seconds": 29.89,
-      "reason": "The hub CLI as bots run it: exit codes are the contract"
+      "reason": "The tico CLI as bots run it: exit codes are the contract"
     },
     {
       "file": "runner_support/tests/test_redact.py",
@@ -47,6 +47,11 @@
     }
   ],
   "browser": [
+    {
+      "script": "ask-screen",
+      "seconds": 5.4,
+      "reason": "Needs you one ask at a time: an OK sends the hash of exactly what it showed"
+    },
     {
       "script": "account-status",
       "seconds": 9.429,
@@ -161,11 +166,6 @@
       "script": "task-privacy",
       "seconds": 8.29,
       "reason": "Task labels and PR links with every request intercepted: nothing reaches the hub or Slack"
-    },
-    {
-      "script": "tasks-page",
-      "seconds": 41.965,
-      "reason": "The Tasks page as one list: a 32px row per task, versions checked as the server does (409)"
     },
     {
       "script": "team-groups",

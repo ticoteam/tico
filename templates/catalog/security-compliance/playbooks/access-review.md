@@ -5,7 +5,7 @@ Nothing is changed unless the task asks for the change, a granted admin Tool all
 line.
 
 Inputs: an export of users and roles from the tool, from its admin or from `it-support` (as a task attachment), or read
-directly where this bot has read access. Also `hub team show`, last quarter's review and `knowledge/controls.md`.
+directly where this bot has read access. Also `tico team show`, last quarter's review and `knowledge/controls.md`.
 
 Outcome: `knowledge/access-reviews/<quarter>.md` with one table per tool, shared on the task. Each line has a mark, a reason
 and the owner's decision. Where a change is made, a fresh export shows it.
@@ -35,6 +35,6 @@ ambiguous account.
 ## 4. Close it with evidence
 
 Apply a change only when the task asks for it and a granted admin Tool allows it. Otherwise create a task for `it-support`
-naming the tool, the account and the rule (`hub task create --owner it-support`). The review is complete only when a fresh
+naming the tool, the account and the rule (`tico task create --owner it-support`). The review is complete only when a fresh
 export shows the changes applied. File the rules used, the before and after exports and their dates in the evidence folder,
 and log them in `knowledge/evidence-log.md`.

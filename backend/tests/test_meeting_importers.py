@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, headers, post, runner  # noqa: F401
+from backend.tests.helpers.api import headers, post, runner  # noqa: F401
 
 
 def historical_meeting(api, machine):

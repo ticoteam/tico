@@ -1,4 +1,4 @@
-"""`hub db` on MongoDB (Atlas first): the read-only rules, the audit shape, catalogs and the doctor.
+"""`tico db` on MongoDB (Atlas first): the read-only rules, the audit shape, catalogs and the doctor.
 
 The rules and the mongodb+srv parsing are tested without a server. Enforcement is tested against a
 throwaway MongoDB container when Docker can run one (skipped otherwise), with a `read` user, a
@@ -15,7 +15,7 @@ import uuid
 
 import pytest
 
-from backend.tests.test_databases import FakeHub, workspace
+from backend.tests.helpers.databases import FakeHub, workspace
 from clients import dbmongo as M
 from clients import dbquery as D
 from clients.tico import APIError

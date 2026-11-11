@@ -2,7 +2,7 @@
 """Build the setup page's role list from the templates, and the copies Tico HQ serves suggestions from.
 
     backend/company_file/roles.json
-                          every role template the tico.team/setup page offers (`hub template list` less the helpers),
+                          every role template the tico.team/setup page offers (`tico template list` less the helpers),
                           with its summary and when to suggest it, for the setup page's draft engine
 
 With `--out DIR`, into DIR and nothing else (Tico HQ, in ticoteam/tico-services, has no templates; its sync job runs this
@@ -72,48 +72,50 @@ def _strings(value):
 
 
 def roles(documents):
-    """The setup page's role list: every card `hub template list` serves except the helpers, which sit outside the
-    org chart. Built-in (`required`) cards are the `core` department and the assistant reads as "Assistant", as the
-    page shows them. `tools` are the prerequisites besides hub; `recommend_when` leaves out `always`."""
+    """The setup page's role list, and the built-in helpers a chart seat can hold. `roles`: every card `tico template list`
+    serves except the helpers, which sit outside the setup page's list. `helpers`: the required helper cards (the
+    built-ins every install has, such as the Bookkeeper, which the chart's Finance Owner seat is). Built-in (`required`)
+    cards are the `core` department and the assistant reads as "Assistant", as the page shows them. `tools` are the
+    prerequisites besides hub; `recommend_when` leaves out `always`."""
     out = []
+    helpers = []
     for card in documents:
         template = str(card.get("template") or "").strip()
-        if not template or card.get("kind") == "helper" or card.get("retired"):
+        if not template or card.get("retired"):
+            continue
+        helper = card.get("kind") == "helper"
+        if helper and not card.get("required"):
             continue
         slug = str(card.get("slug") or template).strip()
         routine = card.get("first_routine") if isinstance(card.get("first_routine"), dict) else {}
         name = str(card.get("name") or template)
         prerequisites = card.get("prerequisites") if isinstance(card.get("prerequisites"), list) else []
-        out.append(
-            {
-                "slug": slug,
-                "template": template,
-                "name": "Assistant" if "{{" in name else name,
-                "department": "core"
-                if card.get("required")
-                else str(card.get("group") or card.get("department") or ""),
-                "lead": bool(card.get("lead")),
-                "core": bool(card.get("required")),
-                "summary": str(card.get("summary") or ""),
-                "when": str(card.get("when") or ""),
-                "tags": _strings(card.get("tags")),
-                "pains": _strings(card.get("pains")),
-                "recommend_when": [item for item in _strings(card.get("recommend_when")) if item != "always"],
-                "first_routine": " · ".join(str(routine.get(key) or "") for key in ("title", "cadence"))
-                if routine
-                else "",
-                "tools": sorted(
-                    {
-                        str(item.get("tool"))
-                        for item in prerequisites
-                        if isinstance(item, dict) and item.get("tool") and item.get("tool") != "hub"
-                    }
-                ),
-                "default": str(card.get("suggest") or "") == "default" and not card.get("required"),
-            }
-        )
+        entry = {
+            "slug": slug,
+            "template": template,
+            "name": "Assistant" if "{{" in name else name,
+            "department": "core" if card.get("required") else str(card.get("group") or card.get("department") or ""),
+            "lead": bool(card.get("lead")),
+            "core": bool(card.get("required")),
+            "summary": str(card.get("summary") or ""),
+            "when": str(card.get("when") or ""),
+            "tags": _strings(card.get("tags")),
+            "pains": _strings(card.get("pains")),
+            "recommend_when": [item for item in _strings(card.get("recommend_when")) if item != "always"],
+            "first_routine": " · ".join(str(routine.get(key) or "") for key in ("title", "cadence")) if routine else "",
+            "tools": sorted(
+                {
+                    str(item.get("tool"))
+                    for item in prerequisites
+                    if isinstance(item, dict) and item.get("tool") and item.get("tool") != "hub"
+                }
+            ),
+            "default": str(card.get("suggest") or "") == "default" and not card.get("required"),
+        }
+        (helpers if helper else out).append(entry)
     out.sort(key=lambda role: role["slug"])
-    return {"roles": out}
+    helpers.sort(key=lambda role: role["slug"])
+    return {"roles": out, "helpers": helpers}
 
 
 def planner(role_list):

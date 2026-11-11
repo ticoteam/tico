@@ -8,7 +8,7 @@ with its account, and an answer the sender can pass on without promising anythin
 
 ## 1. Read the request
 
-    hub task show <id>
+    tico task show <id>
 
 Find the need behind it: who, trying to do what, blocked how. The account and where it was asked
 (ticket, call, email) with the date. If the account is missing, ask the sender once.
@@ -29,4 +29,4 @@ Is it on the roadmap, specced, shipped or declined? Link the spec or the decisio
 
 On the task: the row it went to, how many accounts now ask, and its status, in words the sender can
 repeat without a promise: "Logged with 12 other accounts; not on the current roadmap." Then
-`hub task update <id> --status done --note`.
+`tico task done <id> -m "..." --version N`.

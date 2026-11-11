@@ -8,6 +8,8 @@ image does, and check the apt packages and the Python pins against Debian's and 
 
 import json
 import re
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -190,50 +192,147 @@ def test_wheel_tags_match_only_the_images_python_and_platforms(wheel, x86_64, aa
     )
 
 
-@pytest.mark.slow
+FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_wheels.json'
+REQUIRES_PYTHON_FIXTURE = ROOT / 'scripts/tests/fixtures/pypi_requires_python.json'
+PYPI_ATTEMPTS = 4
+PYPI_RETRY_BACKOFF = 0.25
+RECORD_WORKERS = 8
+
+
+def pins(requirements):
+    return re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
+
+
+def pypi_json(name, version):
+    """One pinned version's PyPI metadata, retrying a brief network failure (a reset or a refused connection)."""
+    url = f'https://pypi.org/pypi/{name}/{version}/json'
+    for attempt in range(PYPI_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(url, timeout=60) as response:
+                return json.load(response)
+        except (urllib.error.URLError, ConnectionError):
+            if attempt + 1 == PYPI_ATTEMPTS:
+                raise
+            time.sleep(PYPI_RETRY_BACKOFF * 2**attempt)
+
+
+def test_pypi_json_retries_a_brief_network_failure(monkeypatch):
+    from io import BytesIO
+
+    answers = iter(
+        [
+            urllib.error.URLError(ConnectionResetError('reset')),
+            ConnectionResetError('reset'),
+            BytesIO(b'{"info": {"requires_python": ">=3.12"}, "urls": []}'),
+        ]
+    )
+    calls, delays = [], []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        answer = next(answers)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(time, 'sleep', delays.append)
+    assert pypi_json('demo', '1.2.3')['info']['requires_python'] == '>=3.12'
+    assert calls == ['https://pypi.org/pypi/demo/1.2.3/json'] * 3
+    assert delays == [0.25, 0.5]
+
+
+def test_pypi_json_still_fails_after_its_retries(monkeypatch):
+    calls, delays = [], []
+
+    def urlopen(url, timeout):
+        calls.append(url)
+        raise urllib.error.URLError('unreachable')
+
+    monkeypatch.setattr(urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(time, 'sleep', delays.append)
+    with pytest.raises(urllib.error.URLError, match='unreachable'):
+        pypi_json('demo', '1.2.3')
+    assert len(calls) == PYPI_ATTEMPTS
+    assert delays == [0.25, 0.5, 1.0]
+
+
+def wheels_on_pypi(pin):
+    """The wheel tags (python-abi-platform) PyPI lists for one pinned version."""
+    files = pypi_json(*pin)['urls']
+    return sorted({'-'.join(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')})
+
+
 # Only production pins are copied into the image's venv; CI can build its own test-only C extensions.
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt'])
 def test_every_pin_has_a_wheel_for_the_images_python(requirements):
-    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there."""
+    """The images' Python has no compiler outside the venv stage, so a pin with no wheel fails the build there.
+
+    The wheels come from scripts/tests/fixtures/pypi_wheels.json, recorded from PyPI, not a live call: a published
+    version's files do not change, and a live call failed Release validation with a connection reset. A new or bumped
+    pin needs its wheels recorded with `python3 scripts/tests/test_image_pins.py --record`.
+    """
     major, minor = re.match(r'python:(\d+)\.(\d+)', python_image()).groups()
     tag = f'cp{major}{minor}'
-    pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
-
-    def wheel_tags(pin):
-        name, version = pin
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-            files = json.load(response)['urls']
-        return name, {tuple(f['filename'][:-4].split('-')[-3:]) for f in files if f['filename'].endswith('.whl')}
-
-    with ThreadPoolExecutor(16) as pool:
-        missing = sorted(
-            f'{name} ({arch})'
-            for name, wheels in pool.map(wheel_tags, pins)
-            for arch in ARCHES
-            if not any(installs_on_the_image(w, int(minor), arch, image_glibc()) for w in wheels)
-            and name.lower() not in BUILT_IN_THE_VENV_STAGE
-        )
+    recorded = json.loads(FIXTURE.read_text())
+    assert set(recorded) == {f'{name}=={version}' for name, version in pins(requirements)}, (
+        'the recorded wheels do not match the pins: python3 scripts/tests/test_image_pins.py --record'
+    )
+    missing = sorted(
+        f'{key} ({arch})'
+        for key, wheels in recorded.items()
+        for arch in ARCHES
+        if not any(installs_on_the_image(tuple(w.split('-')), int(minor), arch, image_glibc()) for w in wheels)
+        and key.partition('==')[0].lower() not in BUILT_IN_THE_VENV_STAGE
+    )
     assert not missing, (
         f'no {tag} Linux wheel for glibc {image_glibc()}: {missing}; add it to BUILT_IN_THE_VENV_STAGE with its headers'
     )
 
 
+def requires_python_on_pypi(pin):
+    """The Requires-Python PyPI lists for one pinned version ('' when it names none)."""
+    return pypi_json(*pin)['info'].get('requires_python') or ''
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
 def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
-    """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh)."""
+    """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh).
+
+    The Requires-Python values come from scripts/tests/fixtures/pypi_requires_python.json, recorded from PyPI, not a
+    live call: a live call failed Release validation with a connection reset, and a published version's metadata does
+    not change. A new or bumped pin needs `python3 scripts/tests/test_image_pins.py --record`.
+    """
     from packaging.specifiers import SpecifierSet
 
     oldest = re.search(r'Python (\d+\.\d+) or newer', (ROOT / 'scripts/setup-runner.sh').read_text()).group(1)
-    pins = re.findall(r'^([A-Za-z0-9_.-]+)==(\S+)', (ROOT / requirements).read_text(), re.M)
-
-    def requires_python(pin):
-        name, version = pin
-        with urllib.request.urlopen(f'https://pypi.org/pypi/{name}/{version}/json', timeout=60) as response:
-            return name, json.load(response)['info'].get('requires_python') or ''
-
-    with ThreadPoolExecutor(16) as pool:
-        refused = sorted(
-            f'{name} ({spec})' for name, spec in pool.map(requires_python, pins) if oldest not in SpecifierSet(spec)
-        )
+    recorded = json.loads(REQUIRES_PYTHON_FIXTURE.read_text())
+    keys = [f'{name}=={version}' for name, version in pins(requirements)]
+    missing = [key for key in keys if key not in recorded]
+    assert not missing, f'no recorded Requires-Python for {missing}: python3 scripts/tests/test_image_pins.py --record'
+    refused = sorted(f'{key} ({recorded[key]})' for key in keys if oldest not in SpecifierSet(recorded[key]))
     assert not refused, f'these pins refuse Python {oldest}: {refused}'
+
+
+if __name__ == '__main__':
+    import sys
+
+    if sys.argv[1:] != ['--record']:
+        sys.exit(
+            'usage: python3 scripts/tests/test_image_pins.py --record   '
+            '(asks PyPI for the wheels and Requires-Python of every pin)'
+        )
+    found = pins('backend/requirements.txt')
+    with ThreadPoolExecutor(RECORD_WORKERS) as pool:
+        recorded = dict(zip((f'{name}=={version}' for name, version in found), pool.map(wheels_on_pypi, found)))
+    FIXTURE.parent.mkdir(parents=True, exist_ok=True)
+    FIXTURE.write_text(json.dumps(dict(sorted(recorded.items())), indent=1) + '\n')
+    print(f'recorded {len(recorded)} pins to {FIXTURE.relative_to(ROOT)}')
+    found = sorted({pin for name in ('backend/requirements.txt', 'backend/requirements-dev.txt') for pin in pins(name)})
+    with ThreadPoolExecutor(RECORD_WORKERS) as pool:
+        versions = dict(
+            zip((f'{name}=={version}' for name, version in found), pool.map(requires_python_on_pypi, found))
+        )
+    REQUIRES_PYTHON_FIXTURE.write_text(json.dumps(dict(sorted(versions.items())), indent=1) + '\n')
+    print(f'recorded {len(versions)} Requires-Python values to {REQUIRES_PYTHON_FIXTURE.relative_to(ROOT)}')

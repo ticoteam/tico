@@ -8,10 +8,10 @@ import time
 import pytest
 
 from backend import support_triage as T
+from backend import task_engine as E
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401
-from backend.tests.test_judge_spend import spend
-from backend.tests.test_watchers import hosted, report, task, tasks, wakes
+from backend.tests.helpers.judge_spend import spend
+from backend.tests.helpers.watchers import hosted, report, task, tasks, wakes
 from clients import judge as J
 from backend import bot_settings as BS
 
@@ -358,7 +358,7 @@ def test_a_held_ticket_a_person_closed_stays_away_from_the_bot(api, quiet):
     drain(api)
     (held,) = all_tasks(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (held["id"],))  # the person closed it as spam
+        E.move(c, held["id"], E.CLOSED, held["owner_id"], "Spam")  # the person closed it as spam
     before = wakes(api)
     report(
         api,

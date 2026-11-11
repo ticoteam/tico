@@ -9,13 +9,13 @@ from pathlib import Path
 
 
 from backend import releases, routines
-from backend.tests.test_api import claim, headers, post, ready
-from backend.tests.test_onboarding import (
+from backend.tests.helpers.api import claim, headers, post, ready
+from backend.tests.helpers.onboarding import (
     ASSISTANT_AGENT,
     ASSISTANT_CARD,
     BOTOPS_CARD,
     as_person,
-    build_team,  # noqa: F401
+    build_team,
     draft,
     environment,
     machine,
@@ -225,15 +225,17 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     # This fresh read exercises encode(sort_keys=True), the source of the original mismatch.
     saved = api.get("/api/v2/setup", headers=who).json()
     assert list(saved["selected"]) == sorted(templates)
+    # The Built-in group (the outside helper bots) is Tico's own; it sits first, before the wizard's groups.
+    built_in = ["built-in"]
     for _ in range(2):
         assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
         groups = api.get("/api/v2/groups", headers=who).json()
-        assert [group["id"] for group in groups] == departments
+        assert [group["id"] for group in groups] == built_in + departments
 
     # A manual group added after setup appends, even though stored keys sort it between wizard groups.
     added = api.post("/api/v2/groups", json={"name": "Legal"}, headers=signed_in())
     assert added.status_code == 200
-    expected = departments + ["legal"]
+    expected = built_in + departments + ["legal"]
     groups = api.get("/api/v2/groups", headers=who).json()
     chart = api.get("/api/v2/org", headers=who).json()["org_groups"]
     assert [group["id"] for group in groups] == expected
@@ -241,7 +243,9 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     with api.app.state.store.read() as c:
         saved = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     assert list(saved["org_groups"]) == sorted(expected)
-    assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(6)))
+    assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(
+        zip(expected, range(len(expected)))
+    )
 
 
 def test_created_groups_append_after_legacy_positions_across_reload_and_repeated_create(environment):
@@ -264,7 +268,8 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
         ).status_code
         == 200
     )
-    expected = ["marketing", "operations", "finance"]
+    # The Built-in group sits between the legacy groups and the wizard's Finance group, where the code puts it.
+    expected = ["marketing", "operations", "built-in", "finance"]
     for _ in range(2):
         assert api.post("/api/v2/setup/complete", json={}, headers=signed_in()).status_code == 200
         # Separate requests reload the persisted roster, whose object keys are alphabetically sorted.
@@ -275,4 +280,6 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
         with api.app.state.store.read() as c:
             saved = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         assert list(saved["org_groups"]) == sorted(expected)
-        assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(3)))
+        assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(
+            zip(expected, range(len(expected)))
+        )

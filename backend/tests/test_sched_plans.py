@@ -6,7 +6,7 @@ under the write lock. Each statement must name the partial index that keeps it t
 
 from backend import turn_fixer
 from backend import wake_presets as W
-from backend.tests.test_api import api, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import post  # noqa: F401  (api is a fixture)
 from backend import views
 
 NOW = "2026-10-29T14:00:00.000Z"
@@ -60,9 +60,6 @@ def test_the_periodic_reads_name_the_partial_index_that_keeps_them_to_live_rows(
     text = plan(api, start_places.LIVE_TOTALS_SQL, (NOW,))
     assert "USING INDEX attempts_live_lease" in text, text
     assert "attempts_runner_finished" not in text, text
-    # The needs-you "went away" count reads only the person's own tasks.
-    text = plan(api, views.WITHDRAWN_ASKS_SQL, ("chris", NOW))
-    assert "SCAN tasks" not in text, text
 
 
 def register_worktree_computer(c, computer):
@@ -144,7 +141,7 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
 def test_queue_refusal_scan_reads_every_bots_state_in_one_query(api):
     # The scheduler's claim observations: one read for the targets, one for all their saved states (not one per bot).
     from backend import queue_refusals
-    from backend.tests.test_task_lanes import task_bot
+    from backend.tests.helpers.task_lanes import task_bot
 
     task_bot(api, lanes=True, others=("finance", "inbox"))
     for bot in ("ops", "finance", "inbox"):

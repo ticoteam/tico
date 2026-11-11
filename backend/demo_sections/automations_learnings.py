@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from .. import automations, learnings, update_feeds, updates
+from ..demo_seed import say_done
 from ..scheduler import next_due
 from ..store import H
 
@@ -165,7 +166,6 @@ CONTENT = {
                     "id": "ask",
                     "type": "decide",
                     "out": "ask",
-                    "level": "medium",
                     "questions": {
                         "review": {"type": "noul", "instructions": "Is it about a store review or a broken unit?"}
                     },
@@ -188,7 +188,6 @@ CONTENT = {
                     "id": "sort",
                     "type": "decide",
                     "out": "sort",
-                    "level": "high",
                     "questions": {
                         "to": {
                             "type": "choice",
@@ -872,7 +871,7 @@ def _close(b, aid, closer, note, trigger_ref=None, read_by=None):
     if not task:
         return
     b.clock.at = min(b.clock.at + timedelta(hours=CONTENT["close_after_hours"]), b.now - CLOSE_MARGIN)
-    b.write(lambda c: H.task_update(c, H.bot_actor(_bot(c, closer)), task, status="done", note=note))
+    b.write(lambda c: say_done(c, H.bot_actor(_bot(c, closer)), task, note))
     if read_by:
         _read(b, task, read_by)
 

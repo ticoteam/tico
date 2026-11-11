@@ -4,109 +4,24 @@ Every test runs against a fresh database in a temp directory with a small fake r
 nothing here reads `registry/` or the real `runtime/hub.db`.
 """
 
-import hashlib
-import importlib
 import json
-import re
 import sqlite3
 import tempfile
 import unittest
-import unittest.mock
 from pathlib import Path
 
 from backend import hubdb as H
-from backend import question_tasks as QT
-from backend import market as MK
-from backend import migrations
-from backend import marketing_tasks as MT
-from backend import strategy as S
-from backend import task_relations as TR
-from backend import wake_presets as WP
 from backend import bot_settings as BS
+from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, with_legacy_run_tables
 
-# The table's DDL: migration 0070 owns it (bot_settings.py has none).
-_BOT_SETTINGS_TABLE = importlib.import_module("backend.migrations.0070_bot_settings").TABLE
 
-EMPLOYEES = {
-    "coo": {
-        "display_name": "COO",
-        "status": "active",
-        "host": "keeper",
-        "runtime": "codex",
-        "model": "gpt-6-astra",
-        "reasoning_effort": "medium",
-        "dir": "/tmp/emp-coo",
-    },
-    "cmo": {"display_name": "CMO", "status": "active", "host": "keeper", "runtime": "codex"},
-    "seo": {"display_name": "SEO", "status": "active", "runtime": "grok"},
-    "analytics": {"display_name": "Analytics", "status": "active"},
-    "legal": {"display_name": "Legal", "status": "active"},
-    "game": {"display_name": "Project Game", "status": "planned"},
-    "coach": {"display_name": "Coach", "status": "paused"},
-}
-PEOPLE = {
-    "people": [
-        {
-            "id": "ana",
-            "name": "Ana Rivera",
-            "email": "ana@acme.example",
-            "team": "leadership",
-            "primary_for": ["marketing"],
-        },
-        {"id": "ben", "name": "Ben", "email": "ben@acme.example", "team": "product", "primary_for": ["product"]},
-    ]
-}
-
-ANA = H.human_actor("ana")
-CMO = H.bot_actor("cmo")
 SEO = H.bot_actor("seo")
 COO = H.bot_actor("coo")
-ANALYTICS = H.bot_actor("analytics")
-
-# The run table as an install from before migration 0072 had it: a run's record in `turns` (the attempts table keeps
-# the lease). Its usage went to usage_facts in migration 0053, which also dropped turn_usage_segments.
-LEGACY_TURNS = (
-    "CREATE TABLE turns (id TEXT PRIMARY KEY, bot TEXT, thread_id TEXT, started_at TEXT, finished_at TEXT, "
-    "trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT, input_tokens INTEGER, "
-    "cached_tokens INTEGER, output_tokens INTEGER, model TEXT, provider TEXT, est_cost_usd REAL, "
-    "billing TEXT, trigger_kind TEXT, trigger_source TEXT, writes INTEGER, outcome TEXT, "
-    "did_nothing INTEGER, purpose TEXT)"
-)
-
-
-def with_legacy_run_tables(conn):
-    """Put back `turns` (empty) on a file `H.connect` made, and forget migration 0072, so
-    the numbered steps and the migrations run on them again as on an install from before it."""
-    conn.execute("DELETE FROM schema_migrations WHERE version>='0072' AND version NOT LIKE 'legacy%'")
-    conn.execute(LEGACY_TURNS)
-    conn.commit()
-
-
-class HubCase(unittest.TestCase):
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.conn = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(self.conn.close)
-        H.sync_registry(self.conn, EMPLOYEES, PEOPLE)
-
-    def before(self, version):
-        """The database as an install from before migration `version` left it: H.connect has applied every migration
-        file (hubdb.migrate), so the records from that one on are forgotten and migrations.apply runs them again."""
-        self.conn.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (version,))
-        self.conn.commit()
-
-    def refused(self, rule, fn, *a, **kw):
-        with self.assertRaises(H.Refused) as got:
-            fn(*a, **kw)
-        self.assertEqual(got.exception.rule, rule, got.exception.detail)
-        return got.exception
 
 
 # ----------------------------------------------------------------------------- schema, connect
 class Schema(HubCase):
-    def test_published_schema_upgrade_adds_run_rotation_and_preserves_tasks(self):
-        task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
+    def test_published_schema_upgrade_adds_run_rotation(self):
         # Main has already applied the purpose migration; rotation must be appended after it.
         published_version = H.MIGRATIONS.index(H.RUN_PURPOSE_SCHEMA) + 1
         with_legacy_run_tables(self.conn)
@@ -120,9 +35,6 @@ class Schema(HubCase):
             "turns", {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         )
         self.assertIn("rotated", {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")})
-        self.assertEqual(
-            self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0], "Prepare packet"
-        )
         self.assertEqual(
             self.conn.execute("SELECT purpose FROM attempts WHERE id='before-rotation'").fetchone()[0], "review PR"
         )
@@ -160,7 +72,6 @@ class Schema(HubCase):
                 "messages",
                 "tasks",
                 "history_events",
-                "approvals",
                 "bot_status",
                 "bot_status_history",
                 "schedules",
@@ -179,7 +90,6 @@ class Schema(HubCase):
                 "messages_conversation",
                 "messages_reply_kind",
                 "messages_from_kind",
-                "tasks_carried_by",
                 "bot_file_versions_blob_media",
                 "tasks_owner_status_cover",
                 "tasks_requester_status_cover",
@@ -188,21 +98,14 @@ class Schema(HubCase):
             indexes,
         )
 
-    def test_existing_database_gains_reply_and_carried_task_indexes(self):
-        row = H.task_create(self.conn, ANA, "Prepare packet", "Gather the source files.", CMO, lint=False)
-        self.conn.execute("UPDATE tasks SET carried_by='existing-run' WHERE id=?", (row["id"],))
+    def test_existing_database_gains_the_reply_indexes(self):
         self.conn.execute("DROP INDEX messages_reply_kind")
-        self.conn.execute("DROP INDEX tasks_carried_by")
         self.conn.execute("DROP INDEX messages_from_kind")
         self.conn.commit()
         self.conn.close()
         migrated = H.connect(Path(self.dir.name) / "hub.db")
         self.addCleanup(migrated.close)
-        self.assertEqual(
-            migrated.execute("SELECT id FROM tasks WHERE carried_by='existing-run'").fetchone()[0], row["id"]
-        )
         for query, index in (
-            ("SELECT id FROM tasks WHERE carried_by='existing-run'", "tasks_carried_by"),
             ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
             ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
         ):
@@ -236,8 +139,7 @@ class Schema(HubCase):
 
 
 class GrowthRethink(unittest.TestCase):
-    """0035_growth_rethink: a file from the release before it keeps what the retired pages held in their new homes,
-    and loses the tables."""
+    """0035_growth_rethink: a new file has none of the tables it retired."""
 
     RETIRED = (
         "growth_ideas",
@@ -254,54 +156,6 @@ class GrowthRethink(unittest.TestCase):
         self.addCleanup(self.dir.cleanup)
         self.path = Path(self.dir.name) / "hub.db"
 
-    # The retired tables and columns as the release before the rethink created them. Growth's startup schema no
-    # longer makes them, so a file from that release is rebuilt with them here.
-    BEFORE = """
-CREATE TABLE gtm_drafts (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL DEFAULT '{}',
-  revision INTEGER NOT NULL DEFAULT 0, updated_by TEXT, updated_at TEXT);
-CREATE TABLE gtm_versions (id TEXT PRIMARY KEY, n INTEGER NOT NULL UNIQUE, body TEXT NOT NULL DEFAULT '{}',
-  note TEXT NOT NULL DEFAULT '', published_by TEXT, published_at TEXT NOT NULL);
-CREATE TABLE growth_ideas (
-  task_id TEXT PRIMARY KEY REFERENCES tasks(id), hypothesis TEXT NOT NULL DEFAULT '', prediction TEXT NOT NULL DEFAULT '',
-  bet_id TEXT, kpi_id TEXT, judged_kpi_id TEXT, ice_i INTEGER, ice_c INTEGER, ice_e INTEGER,
-  status TEXT NOT NULL DEFAULT 'idea', source_kind TEXT, source_ref TEXT, test_from TEXT, test_to TEXT, change TEXT,
-  stop_if TEXT, min_events INTEGER, audience TEXT, external_ref TEXT, result TEXT, learning TEXT, bet_effect TEXT,
-  confidence TEXT, verdict_at TEXT, verdict_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-CREATE TABLE growth_idea_channels (
-  task_id TEXT NOT NULL REFERENCES tasks(id), channel_id TEXT NOT NULL, PRIMARY KEY(task_id, channel_id));
-ALTER TABLE growth_settings ADD COLUMN framework TEXT NOT NULL DEFAULT '';
-ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
-"""
-
-    def before_rethink(self):
-        """The file as the release before the rethink left it: every migration before it (not the ones after, which
-        would then sort after an applied one), the threads schema that release's modules made after the migrations
-        (0047 makes it now, unrecorded here so the full migrate still runs it), and the strategy tables store.py makes
-        at startup."""
-        conn = sqlite3.connect(self.path, isolation_level=None)
-        conn.row_factory = sqlite3.Row
-        self.addCleanup(conn.close)
-        every = migrations.files()
-        apply = migrations.apply
-        threads = importlib.import_module("backend.migrations.0047_native_threads_schema")
-
-        def apply_then_threads(conn, directory=None):
-            apply(conn, directory)
-            threads.up(conn)
-
-        with (
-            unittest.mock.patch.object(
-                migrations, "files", lambda directory=None: [m for m in every if m.version < "0035_growth_rethink"]
-            ),
-            unittest.mock.patch.object(migrations, "apply", apply_then_threads),
-        ):
-            H.migrate(conn)
-        for statement in migrations.statements(self.BEFORE):
-            conn.execute(statement)
-        for statement in S.SCHEMA:
-            conn.execute(statement)
-        return conn
-
     def tables(self, conn):
         return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
@@ -312,157 +166,26 @@ ALTER TABLE growth_settings ADD COLUMN verdict_win_pct REAL NOT NULL DEFAULT 60;
         self.assertFalse(set(self.RETIRED) & self.tables(conn))
         self.assertIn("gtm_sources", self.tables(conn))
 
-    def test_the_rethink_moves_idea_notes_channels_and_the_go_to_market_page_then_drops_the_tables(self):
-        conn = self.before_rethink()
-        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
-        conn.execute(
-            "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, type_id, created_at, updated_at) "
-            "VALUES ('t1', 'Try ads', 'Spend a small test.', 'me', 'cmo', 'open', 'idea', 'x', 'x')"
-        )
-        conn.execute(
-            "INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
-            "updated_at) VALUES ('t1', 'Ads bring buyers', 'CPA under 40', '', 'Cheap wins', 'x', 'x')"
-        )
-        conn.execute(
-            "INSERT INTO growth_channels (id, slug, name, created_at) VALUES ('ch1', 'paid-search', 'Paid search', 'x')"
-        )
-        conn.execute("INSERT INTO growth_idea_channels (task_id, channel_id) VALUES ('t1', 'ch1')")
-        conn.execute(
-            "INSERT INTO gtm_versions (id, n, body, published_at) VALUES ('g1', 1, ?, 'x')",
-            (
-                json.dumps(
-                    {
-                        "motion": {"primary": "self_serve"},
-                        "buyer": {"who_buys": "Ops leads"},
-                        "playbooks": ["Demo first"],
-                    }
-                ),
-            ),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO strategy_versions (id, n, status, sections, updated_at) "
-            "VALUES ('d1', 1, 'draft', ?, 'x')",
-            (json.dumps({"serve": "SMBs", "how": ""}),),
-        )
-        conn.execute(
-            "INSERT INTO goal_proposals (id, kind, proposed_by, proposed_at) VALUES "
-            "('p1', 'gtm_draft', 'cmo', 'x'), ('p2', 'kpi_add', 'cmo', 'x')"
-        )
-        conn.execute(
-            "INSERT INTO growth_cohorts (id, channel_id, month, updated_at) VALUES ('c1', 'ch1', '2026-10', 'x')"
-        )
-        conn.execute(
-            "INSERT INTO growth_cohorts (id, channel_id, month, segment_id, updated_at) "
-            "VALUES ('c2', 'ch1', '2026-10', 'segment/homes', 'x')"
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO growth_settings (id, unit, revenue_month, margin_pct, framework, "
-            "verdict_win_pct) VALUES (1, 'customers', 1000, 40, 'ICE', 60)"
-        )
 
-        H.migrate(conn)
-
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-        self.assertFalse(set(self.RETIRED) & self.tables(conn))
-        self.assertEqual(conn.execute("SELECT name FROM task_types WHERE id='idea'").fetchone()[0], "Marketing")
-        self.assertEqual(
-            conn.execute("SELECT body FROM tasks WHERE id='t1'").fetchone()[0],
-            "Spend a small test.\n\nHypothesis: Ads bring buyers\nPrediction: CPA under 40\nLearning: Cheap wins",
-        )
-        self.assertEqual(
-            [
-                r[0]
-                for r in conn.execute(
-                    "SELECT t.key FROM task_tags tt JOIN tags t ON t.id=tt.tag_id WHERE tt.task_id='t1'"
-                )
-            ],
-            ["channel:paid-search"],
-        )
-        sections = json.loads(conn.execute("SELECT sections FROM strategy_versions WHERE status='draft'").fetchone()[0])
-        self.assertEqual(sections["how"], "- Motion: self serve\n- Who buys: Ops leads\n- Playbook: Demo first")
-        self.assertEqual(sections["serve"], "SMBs")
-        self.assertEqual(
-            {r[0]: (r[1], r[2]) for r in conn.execute("SELECT id, status, decision_note FROM goal_proposals")},
-            {"p2": ("pending", "")},
-        )
-        self.assertEqual([r[0] for r in conn.execute("SELECT id FROM growth_cohorts")], ["c1"])
-        self.assertNotIn("segment_id", {r[1] for r in conn.execute("PRAGMA table_info(growth_cohorts)")})
-        with self.assertRaises(sqlite3.IntegrityError):
-            conn.execute(
-                "INSERT INTO growth_cohorts (id, channel_id, month, updated_at) VALUES ('c3', 'ch1', '2026-10', 'x')"
-            )
-        settings = {r[1] for r in conn.execute("PRAGMA table_info(growth_settings)")}
-        self.assertFalse({"framework", "verdict_win_pct"} & settings)
-        self.assertEqual(
-            tuple(conn.execute("SELECT unit, revenue_month, margin_pct FROM growth_settings WHERE id=1").fetchone()),
-            ("customers", 1000, 40),
-        )
-
-    def test_a_hypothesis_that_already_is_the_body_is_not_copied_into_it_again(self):
-        conn = self.before_rethink()
-        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
-        conn.execute(
-            "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, type_id, created_at, updated_at) "
-            "VALUES ('t2', 'Try ads', 'Ads bring buyers', 'me', 'cmo', 'open', 'idea', 'x', 'x')"
-        )
-        conn.execute(
-            "INSERT INTO growth_ideas (task_id, hypothesis, prediction, result, learning, created_at, "
-            "updated_at) VALUES ('t2', 'Ads bring buyers', '', '', 'Cheap wins', 'x', 'x')"
-        )
-
-        H.migrate(conn)
-
-        self.assertEqual(
-            conn.execute("SELECT body FROM tasks WHERE id='t2'").fetchone()[0],
-            "Ads bring buyers\n\nLearning: Cheap wins",
-        )
-
-    def test_a_team_that_already_has_a_marketing_type_keeps_the_idea_type_under_its_old_name(self):
-        conn = self.before_rethink()
-        conn.execute(
-            "INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x'), "
-            "('mine', 'Marketing', 'x', 'x')"
-        )
-
-        H.migrate(conn)
-
-        self.assertEqual(
-            {r[0]: r[1] for r in conn.execute("SELECT id, name FROM task_types WHERE id IN ('idea', 'mine')")},
-            {"idea": "Idea", "mine": "Marketing"},
-        )
-
-    def test_a_file_with_none_of_the_retired_rows_takes_the_same_path(self):
-        conn = self.before_rethink()
-
-        H.migrate(conn)
-
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-        self.assertFalse(set(self.RETIRED) & self.tables(conn))
-
-    def test_an_idea_type_seeded_before_scaling_gets_the_step_when_the_store_starts(self):
-        conn = self.before_rethink()
-        # The idea type as the release before the rethink seeded it: every step of Marketing but Scaling.
-        conn.execute("INSERT INTO task_types (id, name, created_at, updated_at) VALUES ('idea', 'Idea', 'x', 'x')")
-        conn.executemany(
-            "INSERT INTO task_steps (id, type_id, name, position, status) VALUES (?, 'idea', ?, ?, ?)",
-            [
-                (MT.step_id(key), name, position, status)
-                for position, (key, name, status) in enumerate(step for step in MT.STEPS if step[0] != "scaling")
-            ],
-        )
-
-        H.migrate(conn)
-        MT.ensure(conn)  # the store runs this at every start, after the migrations
-
-        self.assertEqual(conn.execute("SELECT name FROM task_types WHERE id='idea'").fetchone()[0], "Marketing")
-        self.assertEqual(
-            [r[0] for r in conn.execute("SELECT name FROM task_steps WHERE type_id='idea' ORDER BY position, id")],
-            [name for _, name, _ in MT.STEPS],
-        )
-        self.assertEqual(
-            tuple(conn.execute("SELECT name, status FROM task_steps WHERE id='idea-scaling'").fetchone()),
-            ("Working", "doing"),
-        )
+class NewDatabase(unittest.TestCase):
+    def test_a_new_file_never_makes_the_old_task_types_or_steps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            conn = sqlite3.connect(Path(folder) / "hub.db", isolation_level=None)
+            conn.row_factory = sqlite3.Row
+            try:
+                written = []
+                conn.set_trace_callback(written.append)
+                H.migrate(conn)
+                made = [
+                    s
+                    for s in written
+                    if s.lstrip().upper().startswith(("CREATE", "ALTER", "INSERT"))
+                    and ("task_types" in s or "task_steps" in s)
+                    and "schema_migrations" not in s
+                ]
+                self.assertEqual(made, [])
+            finally:
+                conn.close()
 
 
 class RegistrySync(HubCase):
@@ -482,6 +205,41 @@ class Rule1Identity(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 2
+class Rule2Reach(HubCase):
+    def test_a_template_name_reaches_the_one_live_bot_built_from_it_and_nothing_when_two_are(self):
+        BS.update(self.conn, "cmo", {"template": "marketing-lead"})  # a template's `--owner marketing-lead`
+        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead")
+        self.assertEqual(H.task(self.conn, task["id"])["owner_id"], CMO)
+
+        # A bot's slug or a person's id names that one first, whatever a template calls it.
+        BS.update(self.conn, "seo", {"template": "coo"})
+        self.assertEqual(H.resolve_actor(self.conn, "coo"), COO)
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # Two live bots built from the template: the name still reaches nobody.
+        BS.update(self.conn, "seo", {"template": "marketing-lead"})
+        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.refused(
+            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead"
+        )
+
+        # An archived bot is off the roster, so the one live bot is the only match again.
+        self.conn.execute("UPDATE bots SET state='archived' WHERE slug='seo'")
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # An open seat set up from the template claims the name too, until a bot fills it (the seat closes).
+        now = H.now()
+        self.conn.execute(
+            "INSERT INTO seats(id,title,reports_to,created_at,created_by,updated_at,updated_by,template) "
+            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'marketing-lead')",
+            (now, CMO, now, CMO),
+        )
+        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.conn.execute("UPDATE seats SET closed_at=? WHERE id='seat-marketing-lead'", (now,))
+        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+
+        # A template no bot is built from is still no one.
+        self.assertIsNone(H.resolve_actor(self.conn, "product-lead"))
 
 
 # ----------------------------------------------------------------------------- rule 3
@@ -497,336 +255,6 @@ class Rule3Caps(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 5
-class Rule5Tasks(HubCase):
-    def open_task(self, requester=CMO, owner=SEO, title="Write the September brief"):
-        return H.task_create(self.conn, requester, title, "One page on what we ship.", owner)
-
-    def test_the_owner_moves_it_but_may_not_close_it(self):
-        row = self.open_task()
-        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="doing")["status"], "doing")
-        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="done", note="posted")["status"], "done")
-        self.refused("close", H.task_close, self.conn, SEO, row["id"])
-        self.refused("close", H.task_update, self.conn, SEO, row["id"], status="closed")
-
-    def test_the_requester_closes_it_and_the_owner_is_woken(self):
-        row = self.open_task()
-        H.task_update(self.conn, SEO, row["id"], status="done", note="posted")
-        closed = H.task_close(self.conn, CMO, row["id"], note="reads well")
-        self.assertEqual((closed["status"], closed["closed_by_id"]), ("closed", CMO))
-        woken = [
-            m
-            for m in H.messages(self.conn, row["conversation_id"])
-            if m["recipient_id"] == SEO and m["body"].startswith("Closed:")
-        ]
-        self.assertEqual(len(woken), 1)
-
-    def test_reopening_clears_completion_and_preserves_history(self):
-        row = self.open_task()
-        H.task_update(self.conn, SEO, row["id"], status="done", note="posted")
-        closed = H.task_close(self.conn, CMO, row["id"], note="read")
-        opened = H.task_update(self.conn, CMO, row["id"], status="open")
-        self.assertEqual(opened["status"], "open")
-        for column, field in (("done_at", "done_at"), ("closed_at", "closed_at"), ("closed_by_id", "closed_by")):
-            self.assertIsNone(opened[column])
-            event = self.conn.execute(
-                "SELECT old,new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? ORDER BY id DESC LIMIT 1",
-                (row["id"], field),
-            ).fetchone()
-            self.assertEqual(event["old"], closed[column])
-            self.assertIsNone(event["new"])
-        self.assertEqual(
-            self.conn.execute(
-                "SELECT count(*) FROM tasks WHERE done_at IS NOT NULL OR closed_at IS NOT NULL"
-            ).fetchone()[0],
-            0,
-        )
-
-    def stale(self, row):
-        self.conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-2), row["id"]))
-
-    def closed_notices(self, row, to):
-        return [
-            m
-            for m in H.messages(self.conn, row["conversation_id"])
-            if m["recipient_id"] == to and m["body"].startswith(("Closed:", "Child closed:"))
-        ]
-
-    def test_a_person_finishes_a_bot_request_in_one_tap_and_the_bot_hears_who_did(self):
-        tapped = H.task_create(self.conn, CMO, "Decide whether to release the draft", "Review it.", ANA)
-        self.assertEqual(H.task_update(self.conn, ANA, tapped["id"], status="done")["status"], "done")
-        [told] = self.finished(tapped, CMO)
-        self.assertEqual(told["body"], "Ana Rivera marked this done: Decide whether to release the draft")
-        noted = H.task_create(self.conn, CMO, "Pick a launch date", "Choose one.", ANA)
-        H.task_update(self.conn, ANA, noted["id"], status="done", note="Keep the draft on hold; do not publish it.")
-        [told] = self.finished(noted, CMO)
-        self.assertEqual(
-            told["body"], "Ana Rivera marked this done: Pick a launch date\nKeep the draft on hold; do not publish it."
-        )
-        dropped = H.task_create(self.conn, CMO, "Pick a venue", "Choose one.", ANA)
-        self.assertEqual(H.task_close(self.conn, ANA, dropped["id"])["status"], "closed")
-        self.assertTrue(self.closed_notices(dropped, CMO), "the bot that asked is told it was closed")
-
-    def test_moving_a_task_to_review_wakes_the_bot_that_asked_for_it(self):
-        row = H.task_create(self.conn, CMO, "Speed up the overview checks", "Make them pass alone.", SEO)
-        H.task_update(self.conn, SEO, row["id"], status="review", note="Pushed; all changed scripts pass.")
-        told = [
-            m
-            for m in H.messages(self.conn, row["conversation_id"])
-            if m["recipient_id"] == CMO and m["body"].startswith("Ready for review:")
-        ]
-        self.assertEqual(len(told), 1)
-        self.assertIn("all changed scripts pass", told[0]["body"])
-
-    def test_a_task_with_a_worktree_moves_to_review_and_done_where_no_github_app_is_set_up(self):
-        """No App table, so no branch Tico could check: the hand-off is not held waiting for one."""
-        row = H.task_create(self.conn, CMO, "Trim the overview", "x", SEO)
-        self.conn.execute(
-            "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,repo,branch,updated_at,"
-            "detail) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
-            "'acme/site',?,?,'{}')",
-            (row["id"], H.now(), f"tico/{row['id'][:8]}-trim", H.now()),
-        )
-        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="review")["status"], "review")
-        self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="done")["status"], "done")
-
-    def finished(self, row, to):
-        return [
-            m
-            for m in H.messages(self.conn, row["conversation_id"])
-            if m["recipient_id"] == to and m["body"].startswith("Ana Rivera marked this done:")
-        ]
-
-    def test_a_person_finishing_a_task_tells_every_bot_on_it_once(self):
-        from backend.store import SCHEMA
-
-        # A question task's blocker clears through the server's versioned unblock path.
-        self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-        self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
-        self.conn.execute(_BOT_SETTINGS_TABLE)
-        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
-        self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,owner_id) VALUES('cmo','ana')")
-        BS.write(self.conn, 'cmo', {'bot_contact': 'tasks'})
-        parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
-        row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
-        H.task_update(self.conn, SEO, row["id"], status="waiting", waiting_on="ana", note="Pick one image.")
-        # A bot not on the task cannot ask under it (no subtask), so it is not told: only its parties are.
-        with self.assertRaises(H.Refused):
-            QT.ask_plain(self.conn, COO, ANA, "Which image?", parent=row)
-        H.task_update(self.conn, ANA, row["id"], status="done", note="Use B.")
-        self.assertFalse(self.finished(row, COO))
-        for bot in (CMO, SEO):
-            told = self.finished(row, bot)
-            self.assertEqual(len(told), 1, bot)
-            self.assertIn("Use B.", told[0]["body"])
-        self.assertFalse(self.finished(row, ANA))
-        # The parent's bot hears it once, on the parent, where its session continues.
-        self.assertFalse(self.finished(row, ANALYTICS))
-        [on_parent] = [
-            m
-            for m in H.messages(self.conn, parent["conversation_id"])
-            if m["recipient_id"] == ANALYTICS
-            and "Ana Rivera marked this subtask done: Pick the hero image" in m["body"]
-        ]
-        self.assertIn("Use B.", on_parent["body"])
-        quiet = {
-            m["recipient_id"]: bool(m["refs"].get("quiet"))
-            for m in H.messages(self.conn, row["conversation_id"])
-            if m["body"].startswith("Ana Rivera marked this done:")
-        }
-        self.assertEqual(quiet, {CMO: True, SEO: False}, "tasks-only bots hear it quietly")
-        # A private task tells only its parties: the parent's owner cannot read it.
-        secret = H.task_create(
-            self.conn, ANA, "Review the settlement", "Read it.", SEO, parent_id=parent["id"], private=True
-        )
-        H.task_update(self.conn, ANA, secret["id"], status="done", note="Signed.")
-        self.assertEqual(len(self.finished(secret, SEO)), 1)
-        self.assertFalse(self.finished(secret, ANALYTICS))
-
-    def test_a_person_finishing_a_bots_task_with_nothing_said_does_not_wake_it(self):
-        row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
-        H.task_update(self.conn, ANA, row["id"], status="done")
-        [told] = self.finished(row, SEO)
-        self.assertTrue(told["refs"].get("quiet"), "no run for a finished task with no note")
-
-    def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
-        quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
-        H.task_close(self.conn, ANA, quiet["id"])
-        H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
-        refs = {
-            row["id"]: [
-                m["refs"]
-                for m in H.messages(self.conn, row["conversation_id"])
-                if m["recipient_id"] == SEO and m["body"].startswith("Closed:")
-            ]
-            for row in (quiet, noted)
-        }
-        self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
-        self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
-        notes = self.conn.execute("SELECT body FROM notes WHERE to_actor=?", (SEO,)).fetchall()
-        self.assertEqual(len(notes), 1)
-        self.assertIn("1 task", notes[0][0])
-
-
-# ----------------------------------------------------------------------------- rule 6
-class Rule6Approvals(HubCase):
-    SEND = {
-        "to": "ops@acme.com",
-        "cc": "",
-        "subject": "Your September invoice",
-        "body_sha256": "a" * 64,
-        "mailbox": "ana@acme.example",
-    }
-
-    def test_an_exact_payload_is_requested_decided_and_spent_once(self):
-        appr = H.approval_request(self.conn, CMO, "send", self.SEND)
-        self.assertEqual(appr["payload_hash"], H.payload_hash(self.SEND))
-        self.assertIsNone(appr["decision"])
-        decided = H.approval_decide(self.conn, ANA, appr["id"], "approved", note="go")
-        self.assertEqual((decided["decision"], decided["decided_by_id"]), ("approved", ANA))
-        self.assertTrue(H.approval_consume(self.conn, CMO, appr["id"])["consumed_at"])
-        self.refused("consumed", H.approval_consume, self.conn, CMO, appr["id"])
-
-    def test_only_a_human_decides_and_only_once(self):
-        appr = H.approval_request(
-            self.conn, CMO, "spend", {"amount": 250, "account": "ads", "what": "one week of tests"}
-        )
-        self.refused("identity", H.approval_decide, self.conn, COO, appr["id"], "approved")
-        self.refused("identity", H.approval_decide, self.conn, H.KEEPER, appr["id"], "approved")
-        H.approval_decide(self.conn, ANA, appr["id"], "approved")
-        self.refused("duplicate", H.approval_decide, self.conn, ANA, appr["id"], "declined")
-
-    def test_an_undecided_or_declined_approval_cannot_be_spent(self):
-        appr = H.approval_request(self.conn, CMO, "merge", {"repo": "emp-seo", "pr": 12})
-        self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
-        H.approval_decide(self.conn, ANA, appr["id"], "declined")
-        self.refused("kind", H.approval_consume, self.conn, CMO, appr["id"])
-
-    @staticmethod
-    def publish(text, digest=None):
-        return {
-            "url": "hq-ticket:TK-0000AAAA",
-            "text": text,
-            "content_sha256": digest or hashlib.sha256(text.encode("utf-8")).hexdigest(),
-        }
-
-    def test_a_publish_text_that_matches_its_hash_is_requested(self):
-        body = self.publish("Thanks, the fix is in 0.3.41.")
-        self.assertEqual(H.approval_request(self.conn, CMO, "publish", body)["kind"], "publish")
-        self.assertEqual(H.refusals_for(self.conn, CMO), [])
-
-    def test_an_upper_case_publish_hash_is_refused_because_the_publisher_compares_it_exactly(self):
-        upper = self.publish("Upgrade to 0.3.41 and it works.")
-        upper["content_sha256"] = upper["content_sha256"].upper()
-        e = self.refused("lint", H.approval_request, self.conn, CMO, "publish", upper)
-        self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-
-    def test_a_publish_hash_that_is_not_lower_case_hex_is_refused_without_text_too(self):
-        digest = hashlib.sha256(b"Upgrade to 0.3.41 and it works.").hexdigest()
-        for given in (digest.upper(), digest[:63], " " + digest, "z" * 64, 42):
-            e = self.refused(
-                "lint",
-                H.approval_request,
-                self.conn,
-                CMO,
-                "publish",
-                {"url": "hq-ticket:TK-0000AAAA", "content_sha256": given},
-            )
-            self.assertEqual("content_sha256 must be 64 lower-case hex characters", e.detail)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-        self.assertEqual(
-            H.approval_request(self.conn, CMO, "publish", {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest})[
-                "kind"
-            ],
-            "publish",
-        )
-
-    def test_a_publish_url_with_a_user_name_is_refused_so_a_cut_card_cannot_hide_its_host(self):
-        digest = hashlib.sha256(b"Launch notes").hexdigest()
-        for url in (
-            "https://acme.example" + "a" * 400 + "@evil.example/post",
-            "https://ana@evil.example",
-            "https://acme.example:pw@evil.example/",
-            "//acme.example@evil.example",
-            "https://acme.example\\@evil.example",
-            "https://acme.example\t@evil.example",
-            "HTTPS://acme.example%2F@evil.example",
-            "https://[::1@evil.example",
-            # A browser skips any run of / and \ after a web scheme, or none, and a leading pair leaves the app.
-            "https:\\\\acme.example@evil.example",
-            "https:/acme.example@evil.example",
-            "https:acme.example@evil.example",
-            "https:///acme.example@evil.example",
-            "https:\\/acme.example@evil.example",
-            "HtTp:acme.example@evil.example",
-            "ws:acme.example@evil.example",
-            "\\\\acme.example@evil.example",
-            "/\\acme.example@evil.example",
-        ):
-            e = self.refused(
-                "lint", H.approval_request, self.conn, CMO, "publish", {"url": url, "content_sha256": digest}
-            )
-            self.assertEqual("url must not carry a user name (user@host); give the plain address", e.detail)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-        # An @ in the path, query or fragment names nobody's account on the host.
-        for url in (
-            "https://medium.example/@acme/launch",
-            "https://acme.example/share?to=ana@acme.example",
-            "https://acme.example/#@team",
-            "hq-ticket:TK-0000AAAA",
-            "mailto:ana@acme.example",
-            "/team@acme/notes",
-        ):
-            self.assertEqual(
-                H.approval_request(self.conn, CMO, "publish", {"url": url, "content_sha256": digest})["kind"], "publish"
-            )
-
-    def test_a_publish_text_that_is_not_a_string_is_refused_as_such(self):
-        digest = hashlib.sha256(b"Thanks, the fix is in 0.3.41.").hexdigest()
-        for text in (None, 42, ["Thanks"]):
-            e = self.refused(
-                "lint",
-                H.approval_request,
-                self.conn,
-                CMO,
-                "publish",
-                {"url": "hq-ticket:TK-0000AAAA", "content_sha256": digest, "text": text},
-            )
-            self.assertEqual("text must be a string", e.detail)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-
-    def test_a_publish_text_that_does_not_match_its_hash_is_refused(self):
-        other = hashlib.sha256(b"A different reply that would really be posted.").hexdigest()
-        e = self.refused(
-            "lint", H.approval_request, self.conn, CMO, "publish", self.publish("Thanks, the fix is in 0.3.41.", other)
-        )
-        self.assertIn("the text doesn't match content_sha256; send the exact text that will be published", e.detail)
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0], 0)
-
-    def test_a_publish_with_no_text_is_not_checked(self):
-        appr = H.approval_request(
-            self.conn, CMO, "publish", {"url": "https://acme.example/notes", "content_sha256": "b" * 64}
-        )
-        self.assertIsNone(appr["decision"])
-
-    def test_a_unicode_reply_with_a_trailing_newline_matches_the_file_bytes_hq_tickets_hashes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "reply.md"
-            path.write_bytes("Merci, Zoë: café ✓ fixed in 0.3.41 \u2014 see you.\r\nLine two.\n".encode("utf-8"))
-            data = path.read_bytes()  # what hq-tickets hashes
-            sent = json.loads(
-                json.dumps(
-                    {
-                        "url": "hq-ticket:TK-0000AAAA",
-                        "text": data.decode("utf-8"),
-                        "content_sha256": hashlib.sha256(data).hexdigest(),
-                    }
-                )
-            )
-        self.assertTrue(sent["text"].endswith("\n"))
-        H.approval_request(self.conn, CMO, "publish", sent)
-        self.assertEqual(H.refusals_for(self.conn, CMO), [])
 
 
 # ----------------------------------------------------------------------------- rule 7
@@ -989,6 +417,17 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
 
+    def test_tico_itself_is_named_tico_never_by_the_id_it_is_stored_under(self):
+        self.assertEqual(H.actor_name(self.conn, H.KEEPER), "Tico")
+
+    def test_a_person_refused_for_a_paused_bot_reads_when_it_is_back_not_how_bots_are_reviewed(self):
+        got = self.refused("target_inactive", H.task_create, self.conn, ANA, "Plan the week", "Draft it", "coach")
+        self.assertIn("until a person resumes it", got.detail)
+        self.assertNotIn("review", got.detail)
+        self.assertNotIn("refusals counts it", got.detail)
+        bot = self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
+        self.assertIn("opens no review of you", bot.detail)
+
     def test_an_escape_quarantine_holds_until_a_human_clears_it(self):
         H.quarantine(self.conn, "cmo", "escape: the task note reaches outside the hub: secrets/mail.env")
         self.assertEqual(H.status(self.conn, "cmo")["state"], "quarantined")
@@ -1050,7 +489,6 @@ class Rule8Counting(HubCase):
             self.assertEqual(made["body"], named)
             H.task_update(self.conn, SEO, made["id"], note=named)
             H.say(self.conn, CMO, SEO, named + f" ({i})")
-        H.approval_request(self.conn, CMO, "merge", {"repo": "emp-cmo/", "pr": 4})
         self.assertEqual(H.refusals_for(self.conn, CMO), [])
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         self.assertTrue(
@@ -1072,382 +510,7 @@ class Rule9AppendOnly(HubCase):
 
 # ----------------------------------------------------------------------------- status
 # ----------------------------------------------------------------------------- reads and the rest
-class Reads(HubCase):
-    def test_needs_you_holds_my_tasks_pending_approvals_and_declines(self):
-        H.task_create(
-            self.conn,
-            CMO,
-            "Approve the September split",
-            "Say yes or change it. It beat the old split on cost per lead.",
-            ANA,
-        )
-        H.approval_request(self.conn, CMO, "spend", {"amount": 250, "account": "ads", "what": "one week of tests"})
-        mine = H.needs_you(self.conn, "ana")
-        self.assertEqual([t["title"] for t in mine["tasks"]], ["Approve the September split"])
-        self.assertEqual(len(mine["approvals"]), 1)
-
-
-class APersonsAnswerClosesOnlyTheirQuestion(HubCase):
-    """Answering a question task closes that question and leaves other work open."""
-
-    def setUp(self):
-        super().setUp()
-        # Server tasks carry the optimistic version used when completing a blocker.
-        self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-
-    def test_an_answer_closes_its_question_without_answering_another_task(self):
-        room = H.say(self.conn, ANA, CMO, "Please write two drafts")["conversation_id"]
-        first = H.task_create(self.conn, ANA, "Draft the report", "Write a report", CMO, conversation_id=room)
-        second = H.task_create(self.conn, ANA, "Draft the update", "Write an update", CMO, conversation_id=room)
-        question = QT.ask_plain(self.conn, CMO, ANA, "Which format?", parent=first)
-        other = QT.ask_plain(self.conn, CMO, ANA, "Which audience?", parent=second)
-        self.assertNotEqual(first["conversation_id"], second["conversation_id"], "a bot's task has its own room")
-        self.assertEqual(H.unanswered_ask(self.conn, first)["id"], question["id"])
-        self.assertEqual(H.unanswered_ask(self.conn, second)["id"], other["id"])
-        H.task_update(self.conn, ANA, question["id"], status="done", note="Markdown")
-        self.assertIsNone(H.unanswered_ask(self.conn, first))
-        self.assertIsNone(H.waiting_for(self.conn, first))
-        self.assertTrue(H.waiting_for(self.conn, second))
-        self.assertEqual(H.unanswered_ask(self.conn, second)["id"], other["id"])
-        self.assertEqual([t["id"] for t in H.needs_you(self.conn, ANA)["tasks"]], [other["id"]])
-        self.assertTrue(QT.ask_plain(self.conn, CMO, ANA, "Which date?", parent=first))
-
-
-if __name__ == "__main__":
-    unittest.main()
-
-
-class WaitingWithDependency(HubCase):
-    def setUp(self):
-        super().setUp()
-        # Server tasks carry the optimistic version used when completing a blocker.
-        self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
-
-    def test_self_requested_task_can_wait_once_its_blocker_is_related(self):
-        blocker = H.task_create(self.conn, CMO, 'Prepare the build environment', '', CMO)
-        task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
-        after = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Needs the build environment')
-        self.assertEqual((after['status'], TR.blocker_ids(self.conn, task['id'])), ('waiting', [blocker['id']]))
-        self.assertEqual(H.waiting_for(self.conn, after), 'an open blocker')
-        future = H.shift(H.now(), hours=48)
-        self.assertNotIn(task['id'], [r['id'] for r in H.stalled_tasks(self.conn, at=future)])
-        H.task_update(self.conn, CMO, blocker['id'], status='done')
-        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
-        self.assertTrue(
-            any(
-                'Unblocked:' in m['body']
-                for m in H._rows(self.conn.execute("SELECT body FROM messages WHERE recipient_id=?", (CMO,)))
-            )
-        )
-
-    def test_removed_or_finished_blocker_does_not_justify_waiting(self):
-        blocker = H.task_create(self.conn, CMO, 'Prepare the build environment', '', CMO)
-        task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
-        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by', remove=True)
-        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
-        self.assertEqual(H.task(self.conn, task['id'])['status'], 'open')
-        TR.relate(self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
-        H.task_update(self.conn, CMO, blocker['id'], status='done')
-        self.refused('lint', H.task_update, self.conn, CMO, task['id'], status='waiting')
-        # A note naming what it waits on parks it, with a hint on recording the wait.
-        parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note='Waiting on the vendor reply')
-        self.assertEqual(parked['status'], 'waiting')
-        self.assertIn('goes back to open', parked['warnings'][0])
-        self.assertIn('hub task create --parent', parked['warnings'][0])
-
-    def test_a_note_only_wait_on_a_person_requested_task_warns(self):
-        # Seen live: a person's task parked "waiting on BotOps's snapshot" that BotOps never heard of.
-        task = H.task_create(self.conn, ANA, 'Check the box resources', '', CMO)
-        parked = H.task_update(self.conn, CMO, task['id'], status='waiting', note="Waiting on BotOps's snapshot")
-        self.assertIn(f"--parent {task['id']}", parked['warnings'][0])
-
-    def test_a_bot_marks_its_task_done_and_closes_open_subtasks(self):
-        parent = H.task_create(self.conn, ANA, 'Launch the pricing page', '', CMO)
-        child = H.task_create(
-            self.conn, CMO, 'Approve the final copy', 'Say yes or change it.', ANA, parent_id=parent['id']
-        )
-        done = H.task_update(self.conn, CMO, parent['id'], status='done', note='Page is live')
-        self.assertEqual(done['status'], 'done')
-        self.assertEqual(H.task(self.conn, child['id'])['status'], 'closed')
-        from backend import task_reads
-
-        # The event keeps the subtask's id; its title is written in for a reader who may open it (task_reads.children_text).
-        events = H._rows(
-            self.conn.execute(
-                "SELECT kind, new, data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='children'",
-                (parent['id'],),
-            )
-        )
-        self.assertEqual(
-            [e['new'] for e in task_reads.children_text(self.conn, '1', events)],
-            ['Closed with it: Approve the final copy'],
-        )
-
-    def test_invalid_dependency_is_refused(self):
-        task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        for blocker in ('missing-task', task['id']):
-            with self.assertRaises(H.Refused):
-                TR.relate(self.conn, CMO, task['id'], blocker, 'blocked_by')
-        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
-
-    def test_private_blocker_still_requires_access(self):
-        blocker = H.task_create(self.conn, SEO, 'Prepare a private report', '', SEO, private=True)
-        task = H.task_create(self.conn, CMO, 'Validate the release candidate', '', CMO)
-        self.refused('not-found', TR.relate, self.conn, CMO, task['id'], blocker['id'], 'blocked_by')
-        self.assertEqual(TR.blocker_ids(self.conn, task['id']), [])
-
-    def test_a_bots_ask_to_a_person_is_one_small_subtask_and_its_task_stays_the_bots_until_they_answer(self):
-        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
-        needs = lambda: H.status(self.conn, "cmo")["needs_human"]
-        ask = "Restart the build host? It refuses SSH, and I'll rerun the deploy after."
-        task = H.task_create(
-            self.conn, CMO, 'Fix the build host', 'The deploy fails at the SSH step.', CMO, private=False
-        )
-        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
-        # The task stays the bot's, blocked, and is not itself a card for Ana.
-        self.assertEqual(
-            (after['owner_id'], after['status'], after.get('waiting_on'), after['note']),
-            (CMO, 'waiting', None, f'Blocked on Ana Rivera: {ask}'),
-        )
-        # Who it waits on is derived from the question task filed for her.
-        self.assertEqual(QT.waiting_on(self.conn, H.task(self.conn, task['id'])), ANA)
-        card = H.task(self.conn, after['asked_in']['id'])
-        self.assertEqual(
-            (card['owner_id'], card['requester_id'], card['title'], card['body'], card['status']),
-            (ANA, CMO, 'Restart the build host?', ask, 'open'),
-        )
-        self.assertEqual(
-            (TR.parent_of(self.conn, card['id']), TR.blocker_ids(self.conn, task['id'])), (task['id'], [card['id']])
-        )
-        mine = H.needs_you(self.conn, 'ana')
-        self.assertEqual(([t['id'] for t in mine['tasks']], mine['waiting']), ([card['id']], []))
-        self.assertEqual(needs(), 1)
-        self.assertEqual(H.waiting_for(self.conn, H.task(self.conn, task['id'])), 'an open child task')
-        # Asking again, as the note reads now or as first said, makes no second card.
-        for note in (None, ask):
-            H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=note)
-        self.assertEqual(TR.child_ids(self.conn, task['id']), [card['id']])
-        self.assertEqual(H.task_comments(self.conn, card['id'], actor=ANA), [])
-        # Ana says yes: the bot hears it once, on its task, which opens again with her answer. No second ask.
-        H.task_update(self.conn, ANA, card['id'], status='done', note='Yes. Restarted it.')
-        back = H.task(self.conn, task['id'])
-        self.assertEqual(
-            (back['status'], back['note'], TR.blocker_ids(self.conn, task['id'])),
-            ('open', 'Ana Rivera answered: Yes. Restarted it.', []),
-        )
-        told = [
-            m['body']
-            for m in H.messages(self.conn, task['conversation_id'])
-            if m['recipient_id'] == CMO and ('Restarted it' in m['body'] or m['body'].startswith('Unblocked'))
-        ]
-        self.assertEqual(len(told), 1, told)
-        self.assertEqual((needs(), H.needs_you(self.conn, 'ana')['tasks']), (0, []))
-        # No is an answer too.
-        other = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
-        card = H.task_update(
-            self.conn,
-            CMO,
-            other['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Buy a signing key for $5? If yes, I will order it today.',
-        )['asked_in']
-        H.task_update(self.conn, ANA, card['id'], status='declined', note='No. Use the old one.')
-        self.assertEqual(
-            (
-                H.task(self.conn, other['id'])['status'],
-                H.task(self.conn, other['id'])['note'],
-                TR.blocker_ids(self.conn, other['id']),
-            ),
-            ('open', 'Ana Rivera answered: No. Use the old one.', []),
-        )
-        # Closing the card settles it too: the task opens with her words, and its bot hears it once.
-        moved = H.task_create(self.conn, CMO, 'Set up the new bots', '', CMO, private=False)
-        card = H.task_update(
-            self.conn,
-            CMO,
-            moved['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Start setup for the new bots? If yes, I will finish it today.',
-        )['asked_in']
-        H.task_close(self.conn, ANA, card['id'], note='Replaced by a setup task I filed myself.')
-        back = H.task(self.conn, moved['id'])
-        self.assertEqual(
-            (back['status'], back['note'], TR.blocker_ids(self.conn, moved['id'])),
-            ('open', 'Ana Rivera closed the ask: Replaced by a setup task I filed myself.', []),
-        )
-        told = [
-            m['body']
-            for m in H.messages(self.conn, back['conversation_id'])
-            if m['recipient_id'] == CMO and ('Replaced by' in m['body'] or m['body'].startswith('Unblocked'))
-        ]
-        self.assertEqual(len(told), 1, told)
-        # A question to a person counts too, once per task, until it is answered.
-        asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO)
-        question = QT.ask_plain(self.conn, CMO, ANA, 'Which date?', parent=asked)
-        self.assertEqual(needs(), 1)
-        H.task_update(self.conn, ANA, question['id'], status='done', note='Friday')
-        self.assertEqual(needs(), 0)
-        # A bot's private task to itself reaches the one person it asks, a reader (Dev 172), and no second one.
-        secret = H.task_create(self.conn, CMO, 'Review the payroll export', '', CMO, private=True)
-        H.task_update(
-            self.conn,
-            CMO,
-            secret['id'],
-            status='waiting',
-            waiting_on='ben',
-            note='Approve the payroll export? If yes, I will send it.',
-        )
-        self.assertEqual(H.task_readers(H.task(self.conn, secret['id'])), [H.human_actor('ben')])
-        self.refused(
-            'private',
-            H.task_update,
-            self.conn,
-            CMO,
-            secret['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Approve the payroll export? If yes, I will send it.',
-        )
-        # A person's private task still stays with its two parties.
-        theirs = H.task_create(self.conn, ANA, 'Review my payroll export', '', CMO, private=True)
-        self.refused(
-            'private',
-            H.task_update,
-            self.conn,
-            CMO,
-            theirs['id'],
-            status='waiting',
-            waiting_on='ben',
-            note='Approve the payroll export? If yes, I will send it.',
-        )
-
-    def test_one_question_one_card_when_bots_chain_on_the_same_person(self):
-        ask = "Run the vendor trial once with the key you sent? If yes, I'll add the results to the report."
-        root = H.task_create(self.conn, CMO, 'Assess the vendor trial', '', CMO, private=False)
-        # The bot hands another bot part of the work, which then needs Ana for the same thing.
-        part = H.task_create(
-            self.conn, CMO, 'Store the vendor key', 'Store it for the test.', SEO, parent_id=root['id']
-        )
-        card = H.task_update(self.conn, SEO, part['id'], status='waiting', waiting_on='ana', note=ask)['asked_in']
-        # The first bot asking her the same: no second card, its task is blocked on hers.
-        again = H.task_update(self.conn, CMO, root['id'], status='waiting', waiting_on='ana', note=ask)
-        self.assertEqual(again['asked_in']['id'], card['id'])
-        self.assertIn(card['id'], TR.blocker_ids(self.conn, root['id']))
-        cards = lambda: [t['id'] for t in H.needs_you(self.conn, 'ana')['tasks']]
-        self.assertEqual((cards(), H.needs_you(self.conn, 'ana')['waiting']), ([card['id']], []))
-        self.assertEqual(H.task_comments(self.conn, card['id'], actor=ANA), [])
-        # A different ask joins the same card.
-        H.task_update(
-            self.conn,
-            CMO,
-            root['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Can I share the results with the vendor? If yes, I will send them the report.',
-        )
-        self.assertEqual(cards(), [card['id']])
-        self.assertEqual(
-            [m['body'] for m in H.task_comments(self.conn, card['id'], actor=ANA)],
-            ['Can I share the results with the vendor? If yes, I will send them the report.'],
-        )
-        # One answer reaches both bots once, each on its own task, and both carry on.
-        H.task_update(self.conn, ANA, card['id'], status='done', note='Yes to both.')
-        self.assertEqual(
-            (H.task(self.conn, part['id'])['status'], H.task(self.conn, root['id'])['status']), ('open', 'waiting')
-        )
-        for row, bot in ((part, SEO), (root, CMO)):
-            back = H.task(self.conn, row['id'])
-            self.assertEqual(back['note'], 'Ana Rivera answered: Yes to both.')
-            woken = [
-                m
-                for m in H.messages(self.conn, back['conversation_id'])
-                if m['recipient_id'] == bot and 'Yes to both.' in m['body']
-            ]
-            self.assertEqual(len(woken), 1, bot)
-        # The root still has its own open subtask (the other bot's part), so it stays waiting on that.
-
-        cards = lambda: [t['id'] for t in H.needs_you(self.conn, 'ana')['tasks']]
-        root = H.task_create(self.conn, CMO, 'Plan the offsite', '', CMO, private=False)
-        part = H.task_create(self.conn, CMO, 'Book the rooms', 'Book them.', SEO, parent_id=root['id'])
-        public = H.task_update(
-            self.conn,
-            SEO,
-            part['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Approve the venue for Friday? If yes, I will book it.',
-        )['asked_in']
-        # A private task's ask never lands on the public card: it gets its own private one.
-        secret = H.task_create(self.conn, ANA, 'Pay the offsite staff', '', CMO, parent_id=root['id'], private=True)
-        hidden = H.task_update(
-            self.conn,
-            CMO,
-            secret['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Send the staff pay file? If yes, I will pay them today.',
-        )['asked_in']
-        self.assertNotEqual(hidden['id'], public['id'])
-        self.assertTrue(H.task_private(self.conn, H.task(self.conn, hidden['id'])))
-        self.assertEqual(H.task_comments(self.conn, public['id'], actor=ANA), [])
-        # The private task's own card is still one card: a re-sent wait and a second ask both join it.
-        again = H.task_update(
-            self.conn,
-            CMO,
-            secret['id'],
-            status='waiting',
-            waiting_on='ana',
-            note=H.task(self.conn, secret['id'])['note'],
-        )['asked_in']
-        more = H.task_update(
-            self.conn,
-            CMO,
-            secret['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Also send the tax form? If yes, I will file it with the pay.',
-        )['asked_in']
-        self.assertEqual(
-            (again['id'], more['id'], TR.blocker_ids(self.conn, secret['id'])),
-            (hidden['id'], hidden['id'], [hidden['id']]),
-        )
-        # Another task given to the person is not a card to join, and finishing it answers nothing.
-        other = H.task_create(self.conn, CMO, 'Move the office', '', CMO, private=False)
-        lease = H.task_create(
-            self.conn,
-            CMO,
-            'Sign the lease',
-            'Sign the lease by Friday? I will file it after.',
-            ANA,
-            parent_id=other['id'],
-        )
-        card = H.task_update(
-            self.conn,
-            CMO,
-            other['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Approve the movers for Monday? If yes, I will book them.',
-        )['asked_in']
-        self.assertNotEqual(card['id'], lease['id'])
-        H.task_update(self.conn, ANA, lease['id'], status='done', note='Signed.')
-        self.assertTrue(H.task(self.conn, other['id'])['note'].startswith('Blocked on Ana Rivera: Approve the movers'))
-        # A progress note while waiting does not lose the answer, and the bot is woken once.
-        H.task_update(self.conn, CMO, other['id'], note='Still waiting; checked prices meanwhile.')
-        H.task_update(self.conn, ANA, card['id'], status='done', note='Yes.')
-        back = H.task(self.conn, other['id'])
-        self.assertEqual((back['status'], back['note']), ('open', 'Ana Rivera answered: Yes.'))
-        woken = [
-            m
-            for m in H.messages(self.conn, back['conversation_id'])
-            if m['recipient_id'] == CMO and ('Yes.' in m['body'] or m['body'].startswith('Unblocked'))
-        ]
-        self.assertEqual(len(woken), 1, [m['body'] for m in woken])
-
+class PersonAskLint(HubCase):
     def test_a_plain_ask_passes_and_shorthand_does_not(self):
         # Abbreviations, initials, a year after a few letters, a standard's number and a product name are plain words.
         for ask in [
@@ -1473,50 +536,6 @@ class WaitingWithDependency(HubCase):
         ]:
             self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
 
-    def test_a_bot_gives_a_person_a_plain_ask_or_is_refused(self):
-        plain = "Approve the video tool trial on Thursday? If yes, I'll send the invite."
-        task = H.task_create(self.conn, CMO, 'Coordinate the external agent scenario', '', CMO, private=False)
-        # No ask, or the bot's shorthand as the ask, is refused even with the style warnings off, saying what
-        # failed, the rule and an example. Retrying it never quarantines the bot: it is a writing fix.
-        with unittest.mock.patch.object(H, 'STYLE_LINT', 'off'):
-            for note, failed in [
-                (None, 'is missing'),
-                (
-                    'Waiting on Ana re db14c907 / reports/2026-10-14-trial.md',
-                    'has an id or hash: "db14c907"; has a file path',
-                ),
-            ]:
-                for _ in range(H.QUARANTINE_AT + 2):
-                    with self.assertRaises(H.Refused) as refused:
-                        H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=note)
-                self.assertEqual(refused.exception.rule, 'lint')
-                self.assertIn(f'Your ask to ana {failed}', refused.exception.detail)
-                self.assertIn(f'Example: "{H.LINT_ASK_EXAMPLE}"', refused.exception.detail)
-                self.assertIn('s3:// links, tool names or error output', refused.exception.detail)
-        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
-        self.assertEqual(TR.child_ids(self.conn, task['id']), [])
-        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=plain)
-        self.assertEqual(
-            (after.get('waiting_on'), after['note'], after.get('warnings')),
-            (None, f'Blocked on Ana Rivera: {plain}', None),
-        )
-        self.assertEqual(H.task(self.conn, after['asked_in']['id'])['body'], plain)
-        # An open question to them on the task already asks (`hub task question`): no note is needed.
-        asked = H.task_create(self.conn, ANA, 'Draft the launch post', '', CMO, private=False)
-        question = QT.ask_plain(self.conn, CMO, ANA, 'Which date should it go out?', parent=asked)
-        self.assertEqual(
-            H.task_update(self.conn, CMO, asked['id'], status='waiting', waiting_on='ana')['status'], 'waiting'
-        )
-        self.assertEqual(TR.child_ids(self.conn, asked['id']), [question['id']])
-        # A task given to a person opens its body with the ask; the rest of the body is details.
-        with self.assertRaises(H.Refused) as refused:
-            H.task_create(
-                self.conn, CMO, 'Approve the video tool trial', 'Approve the video tool trial\n\nSee reports/x.md', ANA
-            )
-        self.assertIn('first paragraph of the task body', refused.exception.detail)
-        made = H.task_create(self.conn, CMO, 'Approve the video tool trial', f'{plain}\n\nThe notes: reports/x.md', ANA)
-        self.assertEqual(made['owner_id'], ANA)
-
     # The refused escalations of 2026-10-26: a pull request named in the ask, and a 71-word ask in four sentences.
     BLOCKER = "Approve the merge of PR #1555 so QA can test it? If yes, I will run the tests today."
     LONG_BLOCKER = (
@@ -1526,117 +545,6 @@ class WaitingWithDependency(HubCase):
         "If yes, I will run the tests today and post the results. "
         "If no, I will keep it parked and ask DevOps to check the runner."
     )
-
-    def test_a_person_ask_may_name_a_pull_request_and_nothing_else(self):
-        # "PR #<number>" is public and a person can look it up; it stays in the ask as written.
-        for ask in [self.BLOCKER, "Merge PR #1555.", "Review PR #12 and PR #1555 today? If yes, I merge both."]:
-            self.assertEqual(H.lint_person_ask(ask), [], ask)
-        self.assertEqual(
-            H.task_update(
-                self.conn,
-                CMO,
-                H.task_create(self.conn, CMO, 'Merge the fix', '', CMO, private=False)['id'],
-                status='waiting',
-                waiting_on='ana',
-                note=self.BLOCKER,
-            )['note'],
-            f'Blocked on Ana Rivera: {self.BLOCKER}',
-        )
-        # Any other form is a reference number, as is a hash, a private task id, a path, a tool name or error output,
-        # even beside a pull request; all of it goes under Details.
-        for ask, failed in [
-            ("Approve the merge of #1555 so QA can test it?", '#1555'),
-            ("Merge #1555.", '#1555'),
-            ("Merge PR#1555?", '#1555'),
-            ("Merge pr #1555?", '#1555'),
-            ("Merge PR #1555/files?", '#1555'),
-            ("Merge PR #1555 at 3f2a9c1d?", 'id or hash: "3f2a9c1d"'),
-            (
-                "Merge PR #1555 for 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f?",
-                'id or hash: "8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f"',
-            ),
-            ("Merge PR #1555 with backend/hubdb.py?", 'file path: "backend/hubdb.py"'),
-            ("Merge PR #1555 with hub task update?", 'tool or field name: "hub task"'),
-            ("Merge PR #1555? It failed with ValueError: bad date.", 'error output: "ValueError"'),
-        ]:
-            self.assertIn(failed, "; ".join(H.lint_person_ask(ask)), ask)
-        made = H.task_create(
-            self.conn,
-            CMO,
-            'Approve the merge',
-            f'{self.BLOCKER}\n\nDetails: head 3f2a9c1d, backend/hubdb.py, ValueError: bad date.',
-            ANA,
-        )
-        self.assertEqual(made['owner_id'], ANA)
-
-    def test_a_too_long_ask_is_refused_with_a_rewrite_the_bot_retries_once(self):
-        task = H.task_create(self.conn, CMO, 'Get the Settings change tested', '', CMO, private=False)
-        before = H.task(self.conn, task['id'])
-        with self.assertRaises(H.Refused) as refused:
-            H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=self.LONG_BLOCKER)
-        detail = refused.exception.detail
-        self.assertEqual(refused.exception.rule, 'lint')
-        self.assertIn('Your ask to ana is 71 words in 4 sentences. Retry once with this ask', detail)
-        rewrite = re.search(r'what happens after: "(.+?)" Put the rest of your text in a comment on the task', detail)[
-            1
-        ]
-        # The rewrite keeps the request, the pull request and what happens after, and passes on its own.
-        self.assertEqual(
-            rewrite,
-            "Approve the merge of PR #1555 so QA can test it on the release candidate? "
-            "If yes, I will run the tests today and post the results.",
-        )
-        self.assertEqual(H.lint_person_ask(rewrite), [])
-        self.assertEqual(H.task(self.conn, task['id'])['version'], before['version'], 'nothing written on refusal')
-        # The one retry with it reaches the person; the bot's context goes in a comment.
-        H.task_comment(self.conn, CMO, task['id'], self.LONG_BLOCKER)
-        after = H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=rewrite)
-        self.assertEqual(
-            (after['note'], H.task(self.conn, after['asked_in']['id'])['body']),
-            (f'Blocked on Ana Rivera: {rewrite}', rewrite),
-        )
-        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
-        # A task given to a person: the rewrite opens the body and the original text stays below it.
-        with self.assertRaises(H.Refused) as refused:
-            H.task_create(self.conn, CMO, 'Approve the merge', self.LONG_BLOCKER, ANA)
-        self.assertIn(
-            f'"{rewrite}" Put the rest of your text in the body under it, after a blank line', refused.exception.detail
-        )
-        made = H.task_create(self.conn, CMO, 'Approve the merge', f'{rewrite}\n\n{self.LONG_BLOCKER}', ANA)
-        self.assertEqual(
-            (made['owner_id'], H.task(self.conn, made['id'])['body']), (ANA, f'{rewrite}\n\n{self.LONG_BLOCKER}')
-        )
-        # A single sentence over the limit only by its context keeps the request; one with no outcome keeps it alone.
-        self.assertEqual(
-            H.person_ask_rewrite("Merge PR #1555. " + "The runner was slow all day. " * 8), ("Merge PR #1555.", "")
-        )
-        # What happens after is the sentence that answers the request, not context that only opens like one.
-        self.assertEqual(
-            H.person_ask_rewrite(
-                "Approve the merge of PR #1555? Then the runner failed three times. If yes, I will run the tests today."
-            ),
-            ("Approve the merge of PR #1555? If yes, I will run the tests today.", ""),
-        )
-        # A negative branch is context, not the outcome of granting the request.
-        self.assertEqual(
-            H.person_ask_rewrite(
-                "Approve PR #1555 so QA can test it? If no, I will keep it parked. "
-                "The checks failed three times today and we still need to understand "
-                "what caused that. If yes, I will run the tests today."
-            ),
-            ("Approve PR #1555 so QA can test it? If yes, I will run the tests today.", ""),
-        )
-        # An outcome that lists the bot's next actions is one outcome, not more asks.
-        context = "The vendor needs our answer today because the pricing offer ends tomorrow morning. " * 3
-        for outcome in (
-            "If yes, I'll sign it, send it and close this task.",
-            "If approved, I'll merge it, then deploy to production.",
-            "Then I'll book the venue, send invites and order food.",
-        ):
-            self.assertEqual(
-                H.person_ask_rewrite(f"Approve the $5,000 budget for Acme? {context}{outcome}"),
-                (f"Approve the $5,000 budget for Acme? {outcome}", ""),
-            )
 
     def test_negative_conditions_do_not_replace_the_affirmative_outcome(self):
         request = "Approve PR #1555 so QA can test it?"
@@ -1653,245 +561,8 @@ class WaitingWithDependency(HubCase):
             self.assertEqual((rewrite, repair), (f"{request} {outcome}", ""))
             self.assertEqual(H.lint_person_ask(rewrite), [])
 
-    def test_shortening_keeps_indirect_and_conditional_requests(self):
-        task = H.task_create(self.conn, CMO, 'Get the decisions', 'All the original details.', CMO, private=False)
-        asks = [
-            "Can you check the vendor numbers before Friday? I need you to approve the $5,000 budget for the Acme "
-            "contract as well. The vendor needs our answer today because the pricing offer ends tomorrow morning. "
-            "If yes, I'll sign it.",
-            "Approve PR #1555 so QA can test it? Once approved, please also sign the vendor contract before Friday. "
-            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
-            "If yes, I will run the tests today.",
-            "Approve PR #1555 so QA can test it? Once approved, sign the vendor contract before Friday. "
-            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
-            "If yes, I will run the tests today.",
-            "Approve PR #1555 so QA can test it? If approved, I'll merge it; sign the vendor contract too. "
-            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
-            "If yes, I will run the tests today.",
-            "Approve PR #1555 so QA can test it? And sign the vendor contract before Friday. "
-            "The vendor needs our answer today because the pricing offer ends tomorrow morning. "
-            "If yes, I will run the tests today.",
-        ]
-        before = H.task(self.conn, task['id'])
-        for ask in asks:
-            with self.assertRaises(H.Refused) as refused:
-                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
-            self.assertEqual(refused.exception.rule, 'lint')
-            self.assertIn('it asks 2 things', refused.exception.detail)
-            self.assertIn('ask any other separately', refused.exception.detail)
-            self.assertNotIn('Retry once with this ask', refused.exception.detail)
-            after = H.task(self.conn, task['id'])
-            self.assertEqual(
-                (after['version'], after['body'], after['status']),
-                (before['version'], before['body'], before['status']),
-            )
-            self.assertEqual(TR.child_ids(self.conn, task['id']), [])
-        # A sole indirect request is preserved verbatim rather than disappearing as background context.
-        self.assertEqual(
-            H.person_ask_rewrite(
-                "The vendor needs our answer today. I need you to approve the $5,000 "
-                "budget for Acme. If yes, I'll sign the contract. "
-                "The pricing offer ends tomorrow morning."
-            ),
-            ("I need you to approve the $5,000 budget for Acme. If yes, I'll sign the contract.", ""),
-        )
-
-    def test_an_ask_no_shorter_wording_keeps_gets_a_repair_and_nothing_is_sent(self):
-        task = H.task_create(
-            self.conn, CMO, 'Get the Settings change tested', 'All the runner notes.', CMO, private=False
-        )
-        context = " The runner failed three times today on the same browser test, and nobody knows why yet."
-        for ask, repair in [
-            # Two decisions: picking one would change what the person is asked.
-            (
-                "Approve the merge of PR #1555? Or should I close it and open a new one?" + context,
-                'it asks 2 things ("Approve the merge of PR #1555?"; "Or should I close it and open a new one?")',
-            ),
-            # A question and a request are two decisions too: keeping only the question drops the merge.
-            (
-                "Can you approve the merge today? Approve PR #1555 so QA can test it. The hosted checks failed three "
-                "times today on the same browser test and I cannot tell yet whether the runner or the change is at "
-                "fault.",
-                'it asks 2 things ("Can you approve the merge today?"; "Approve PR #1555 so QA can test it.")',
-            ),
-            ("The runner is slow." + context + context, 'none of its sentences asks for anything'),
-            (
-                "Approve the merge of PR #1555 " + "and the follow-up fixes " * 9 + "today?" + context,
-                'its request alone is 43 words: shorten',
-            ),
-            (
-                "Approve the merge of 3f2a9c1d today? If yes, I run the tests." + context,
-                'its request "Approve the merge of 3f2a9c1d today? If yes, I run the tests." has an id or hash',
-            ),
-        ]:
-            with self.assertRaises(H.Refused) as refused:
-                H.task_update(self.conn, CMO, task['id'], status='waiting', waiting_on='ana', note=ask)
-            self.assertIn(
-                'No shorter wording keeps the same decision, so nothing was sent and the task is unchanged. '
-                f'To fix it, {repair}',
-                refused.exception.detail,
-            )
-            self.assertIn('then retry once', refused.exception.detail)
-            self.assertNotIn('Retry once with this ask', refused.exception.detail)
-            after = H.task(self.conn, task['id'])
-            self.assertEqual(
-                (after['status'], after['body'], TR.child_ids(self.conn, task['id'])),
-                ('open', 'All the runner notes.', []),
-            )
-        # The refusals are recorded, so the blocker is never invisible, and none counts toward a quarantine.
-        self.assertEqual(
-            self.conn.execute("SELECT COUNT(*) FROM refusals WHERE actor=? AND rule='lint'", (CMO,)).fetchone()[0], 5
-        )
-        self.assertEqual(H.bot(self.conn, 'cmo')['state'], 'active')
-
-    def test_a_waiting_note_flags_ids_and_hashes_not_amounts_dates_or_words(self):
-        flagged = lambda note: [p for p in H.lint_waiting_note(note, ANA) if p.startswith('id in the note')]
-        sha = '3f2a9c1d8e7b6a5f4e3d2c1b0a9f8e7d6c5b4a39'
-        for note, ident in [
-            ('Approve the fix in db14c907.', 'db14c907'),
-            (f'Approve the fix in {sha}.', sha),
-            ('Approve the fix in 3f2a9c1.', '3f2a9c1'),
-            ('Review #388 before Friday.', '#388'),
-            ('Answer 8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f.', '8719e1a6-3f2a-4c1d-9e0b-5a6b7c8d9e0f'),
-            ('Merge #1555.', '#1555'),
-            ('Merge PR#1555 today.', '#1555'),
-            ('Read #1555/files today.', '#1555'),
-        ]:
-            self.assertEqual(
-                flagged(note), [f'id in the note for ana: "{ident}" - say what it is in plain words'], note
-            )
-        for note in [
-            'Approve the $250000 budget.',
-            'Approve the £1500000 offer.',
-            'Approve the €250000 and ¥9000000 quotes.',
-            'Name the deadbeef test host.',
-            'Pick a date after 2026-10-11 for the launch.',
-            'Approve upgrading to 0.3.40 and Python 3.12.',
-            'Tell me if the defaced page is back up.',
-            'Merge PR #1555.',
-        ]:
-            self.assertEqual(flagged(note), [], note)
-        # A currency sign spares only the amount after it, in a note only: a title keeps the shared check.
-        self.assertTrue(flagged('Approve the $250000 budget for 250000 seats.'))
-        self.assertTrue(H.lint_title('Approve the $250000 budget'))
-        self.assertEqual(
-            H.lint_title('Fix the db14c907 crash'), [], 'lowercase hex is a waiting-note check, not a title one'
-        )
-        # A colon that opens a plain clause is prose; a status code is still jargon.
-        self.assertEqual(H.lint_waiting_note('Check the order status: it says pending.', ANA), [])
-        self.assertEqual(
-            H.lint_waiting_note('Approve the release; status: doing.', ANA),
-            ['internal jargon in the note for ana: "status: doing."'],
-        )
-        self.assertEqual(
-            H.lint_human_item('Approve the release\n\nowner: bot:cmo'), ['internal codes: "owner: bot:cmo"']
-        )
-        self.assertEqual(H.lint_human_item('Approve the release\n\nThe owner: the CMO, who signs it.'), [])
-
-    def test_only_the_owner_names_who_it_waits_on_and_the_wait_is_counted_once(self):
-        H.status_set(self.conn, H.KEEPER, "cmo", state="idle")
-        H.status_set(self.conn, H.KEEPER, "seo", state="idle")
-        stored = lambda bot: self.conn.execute("SELECT needs_human FROM bot_status WHERE bot=?", (bot,)).fetchone()[0]
-        task = H.task_create(self.conn, ANA, 'Fix the build host', '', CMO, private=False)
-        wait = lambda **kw: H.task_update(
-            self.conn, CMO, task['id'], status='waiting', waiting_on='ana', **{'note': 'Restart it', **kw}
-        )
-        self.refused('identity', H.task_update, self.conn, ANA, task['id'], status='waiting', waiting_on='ana')
-        self.refused('kind', wait, owner='seo')
-        self.refused(
-            'private', H.task_update, self.conn, CMO, task['id'], status='waiting', waiting_on='ben', private=True
-        )
-        # Waiting on a person is their question task: a new note is detail beneath the wait and keeps it.
-        wait(note='Restart the build host? It refuses SSH, and I will rerun the deploy after.')
-        H.task_update(self.conn, CMO, task['id'], note='Still down')
-        self.assertEqual(QT.waiting_on(self.conn, H.task(self.conn, task['id'])), ANA)
-        self.assertEqual(stored('cmo'), 1)
-        # An approval on a task that waits on a person is the same wait.
-        key = H.task_create(self.conn, CMO, 'Buy a signing key', '', CMO, private=False)
-        H.task_update(
-            self.conn,
-            CMO,
-            key['id'],
-            status='waiting',
-            waiting_on='ana',
-            note='Approve the purchase? If yes, I will order the key.',
-        )
-        H.approval_request(self.conn, CMO, 'spend', {'amount': 5, 'account': 'ops', 'what': 'a key'}, task_id=key['id'])
-        # Two tasks wait on Ana: the build host, and the key once though it has a question and an approval.
-        self.assertEqual((H.status_live(self.conn, 'cmo')['needs_human'], stored('cmo')), (2, 2))
-        # Answering the question task ends the wait.
-        other = H.task_create(self.conn, ANA, 'Draft the launch post', '', SEO)
-        question = QT.ask_plain(self.conn, SEO, ANA, 'Which date?', parent=other)
-        self.assertEqual(stored('seo'), 1)
-        H.task_update(self.conn, ANA, question['id'], status='done', note='Friday')
-        self.assertEqual(stored('seo'), 0)
-
 
 # ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped
-class StrategyOldNamesDropped(HubCase):
-    """Installs from before v0.5.0 renamed the Strategy Bot's tables (ceo_* -> strategy_*) and kept the old names as
-    mirrors of the new ones. Migration 0006 drops the mirrors and their triggers; the new tables keep
-    every row."""
-
-    def install_as_v050_left_it(self):
-        """The old-named twins and the triggers that mirrored writes to them, as the v0.5.0 schema had them."""
-        self.before("0006")
-        for old, new in (("ceo_actions", "strategy_actions"), ("ceo_merges", "strategy_merges")):
-            self.conn.execute(f"CREATE TABLE {old} AS SELECT * FROM {new} WHERE 0")
-            self.conn.execute(f"INSERT INTO {old} SELECT * FROM {new}")
-            for event in ("insert", "update", "delete"):
-                self.conn.execute(
-                    f"CREATE TRIGGER {new}_to_old_{event} AFTER {event.upper()} ON {new} BEGIN SELECT 1; END"
-                )
-        self.conn.commit()
-
-    def names(self, kind="table"):
-        return {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type=?", (kind,))}
-
-    def rows(self, table, columns="id, state"):
-        return sorted(tuple(r) for r in self.conn.execute(f"SELECT {columns} FROM {table}"))
-
-    def act(self, ident, state):
-        self.conn.execute(
-            "INSERT INTO strategy_actions(id,created_at,actor,kind,state) VALUES(?,?,?,'level',?)",
-            (ident, H.now(), "bot:goal-manager", state),
-        )
-
-    def test_the_upgrade_drops_the_old_names_and_their_triggers_and_keeps_the_rows(self):
-        self.act("a1", "done")
-        self.conn.execute(
-            "INSERT INTO strategy_merges(merged_into,original,person,asker,created_at) "
-            "VALUES('t1','t2','human:ana','bot:coo',?)",
-            (H.now(),),
-        )
-        self.install_as_v050_left_it()
-        self.conn.commit()
-        migrations.apply(self.conn)
-        self.assertFalse({"ceo_actions", "ceo_merges"} & self.names())
-        self.assertFalse(
-            {f"{t}_to_old_{e}" for t in ("strategy_actions", "strategy_merges") for e in ("insert", "update", "delete")}
-            & self.names("trigger")
-        )
-        self.assertEqual(self.rows("strategy_actions"), [("a1", "done")])
-        self.assertEqual(self.rows("strategy_merges", "merged_into, original"), [("t1", "t2")])
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-
-    def test_writes_after_the_upgrade_go_to_the_new_tables_without_mirrors(self):
-        self.install_as_v050_left_it()
-        self.conn.commit()
-        migrations.apply(self.conn)
-        self.act("a2", "done")
-        self.conn.execute("UPDATE strategy_actions SET state='undone' WHERE id='a2'")
-        self.assertEqual(self.rows("strategy_actions"), [("a2", "undone")])
-
-    def test_a_second_start_changes_nothing(self):
-        self.act("a1", "done")
-        self.install_as_v050_left_it()
-        self.conn.commit()
-        migrations.apply(self.conn)
-        migrations.apply(self.conn)
-        self.assertEqual(self.rows("strategy_actions"), [("a1", "done")])
-        self.assertFalse({"ceo_actions", "ceo_merges"} & self.names())
 
 
 class WalLeftForLitestream(unittest.TestCase):
@@ -1916,137 +587,6 @@ class WalLeftForLitestream(unittest.TestCase):
             self.assertFalse(Path(f"{plain}-wal").exists())
 
 
-class MarketNotesMoved(HubCase):
-    """Installs from before the market pages had their own table kept them in `documents`, the repository mirror's
-    table, with the mirror's versions beside it. Migration 0008 copies the market notes into
-    market_pages and drops both tables. The mirror's other rows were never shown anywhere, so they go too."""
-
-    def install_as_before_it_moved(self):
-        self.before("0008")
-        self.conn.execute("DROP TABLE IF EXISTS market_pages")
-        self.conn.execute(
-            "CREATE TABLE documents(id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL, "
-            "payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)"
-        )
-        self.conn.execute(
-            "CREATE TABLE document_versions(id TEXT NOT NULL, digest TEXT NOT NULL, "
-            "payload_json TEXT NOT NULL, imported_at TEXT NOT NULL, PRIMARY KEY(id,digest))"
-        )
-        overview = {
-            "id": "market/overview",
-            "title": "Overview",
-            "content": "The market is small.",
-            "category": "Market",
-            "collection": "market",
-            "search": "The market is small.",
-            "format": "markdown",
-            "owner": MK.CURATOR,
-            "fetched": "2026-10-01T00:00:00.000000Z",
-            "seeded": True,
-        }
-        raw = json.dumps(overview)
-        self.conn.execute(
-            "INSERT INTO documents VALUES(?,?,?,?,?,?)",
-            ("market/overview", "external", "market", raw, "d1", "2026-10-01T00:00:00.000000Z"),
-        )
-        self.conn.execute(
-            "INSERT INTO document_versions VALUES(?,?,?,?)",
-            ("market/overview", "d1", raw, "2026-10-01T00:00:00.000000Z"),
-        )
-        self.conn.execute(
-            "INSERT INTO documents VALUES(?,?,?,?,?,?)",
-            (
-                "repo/readme.md",
-                "internal",
-                "repo",
-                json.dumps({"title": "Readme", "content": "x"}),
-                "d2",
-                "2026-10-01T00:00:00.000000Z",
-            ),
-        )
-        self.conn.commit()
-
-    def test_the_upgrade_copies_the_market_notes_and_drops_the_mirror_tables(self):
-        self.install_as_before_it_moved()
-        migrations.apply(self.conn)
-        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertNotIn("documents", names)
-        self.assertNotIn("document_versions", names)
-        self.assertEqual(
-            [
-                tuple(r)
-                for r in self.conn.execute("SELECT id, title, category, body, seeded, updated_at FROM market_pages")
-            ],
-            [("market/overview", "Overview", "Market", "The market is small.", 1, "2026-10-01T00:00:00.000000Z")],
-        )
-
-    def test_the_pages_still_read_list_and_write_after_the_upgrade(self):
-        self.install_as_before_it_moved()
-        migrations.apply(self.conn)
-        page = MK.read_page(self.conn, "market/overview")
-        self.assertEqual(
-            (page["content"], page["seeded"], page["collection"]), ("The market is small.", True, "market")
-        )
-        self.assertIsNone(MK.read_page(self.conn, "repo/readme.md"))
-        MK.write_page(self.conn, MK.SEED_ACTOR, "market/theses", "Theses", "Our bet.", "Market", record=False)
-        rewritten = MK.write_page(
-            self.conn, MK.SEED_ACTOR, "market/overview", "Overview", "Rewritten.", "Market", replace=True, record=False
-        )
-        self.assertEqual([p["id"] for p in MK.list_pages(self.conn)], ["market/overview", "market/theses"])
-        self.assertEqual((rewritten["content"], rewritten["seeded"]), ("Rewritten.", True))  # the seed's own write
-        self.assertEqual(MK.read_page(self.conn, "market/theses")["content"], "Our bet.")
-
-
-class TurnLegacyUsageDropped(HubCase):
-    """Runs from before measured usage kept a one-number tokens_in and tokens_out, and a cost, on their turn row. The
-    migration 0009 moves those into input_tokens, output_tokens and est_cost_usd where those are empty, and
-    drops the three columns. A run with measured usage keeps its own numbers."""
-
-    def install_as_before_measured_usage(self):
-        self.before("0009")
-        with_legacy_run_tables(self.conn)
-        for column, kind in (("tokens_in", "INTEGER"), ("tokens_out", "INTEGER"), ("cost", "REAL")):
-            self.conn.execute(f"ALTER TABLE turns ADD COLUMN {column} {kind}")
-        now = H.now()
-        self.conn.execute(
-            "INSERT INTO turns(id,bot,started_at,finished_at,exit,tokens_in,tokens_out,cost) "
-            "VALUES('old-run','ops',?,?,'completed',500,5,0.75)",
-            (now, now),
-        )
-        self.conn.execute(
-            "INSERT INTO turns(id,bot,started_at,finished_at,exit,tokens_in,tokens_out,cost,"
-            "input_tokens,cached_tokens,output_tokens,est_cost_usd) "
-            "VALUES('measured','ops',?,?,'completed',999,77,9,100,50,10,0.2)",
-            (now, now),
-        )
-        self.conn.execute(
-            "INSERT INTO turns(id,bot,started_at,finished_at,exit,cost) VALUES('cost-only','ops',?,?,'completed',9)",
-            (now, now),
-        )
-        self.conn.commit()
-
-    def test_the_upgrade_moves_the_legacy_tokens_and_cost_and_drops_the_columns(self):
-        self.install_as_before_measured_usage()
-        migrations.apply(self.conn)
-        columns = {r[1] for r in self.conn.execute("PRAGMA table_info(attempts)")}
-        self.assertFalse({"tokens_in", "tokens_out", "cost"} & columns)
-        self.assertEqual(
-            [
-                tuple(r)
-                for r in self.conn.execute(
-                    "SELECT id, input_tokens, cached_tokens, output_tokens, est_cost_usd FROM attempts ORDER BY id"
-                )
-            ],
-            [("cost-only", None, None, None, 9.0), ("measured", 100, 50, 10, 0.2), ("old-run", 500, None, 5, 0.75)],
-        )
-
-    def test_the_run_totals_read_the_moved_numbers(self):
-        self.install_as_before_measured_usage()
-        migrations.apply(self.conn)
-        totals = {r[0]: r[1] for r in self.conn.execute(f"SELECT a.id, {WP.RUN_TOKENS} FROM attempts a")}
-        self.assertEqual(totals, {"cost-only": 0, "measured": 160, "old-run": 505})
-
-
 def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     """One predicate for both shapes of a task ref: the id itself, or an array holding it. Any other shape never matches,
     and the same id is bound to both `?`."""
@@ -2068,3 +608,11 @@ def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
     by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
     assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
+
+    def test_a_bots_ask_to_a_person_in_shorthand_is_refused_and_a_plain_one_is_asked(self):
+        task = H.task_create(self.conn, CMO, "Coordinate the trial", "", CMO, private=False)
+        with self.assertRaises(H.Refused) as refused:
+            H.task_ask(self.conn, CMO, task["id"], "ana", "Approve PO-1234? If yes, I pay it.")
+        self.assertEqual(refused.exception.rule, "lint")
+        plain = "Approve the video tool trial on Thursday? If yes, I will send the invite."
+        self.assertTrue(H.task_ask(self.conn, CMO, task["id"], "ana", plain)["requirement_id"])

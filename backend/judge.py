@@ -1,19 +1,18 @@
-"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `hub_decision_ask` and `hub decision ask`
+"""Decisions as a Tico tool: `POST /api/v2/decisions`, the door behind `tico_decision_ask` and `tico decision ask`
 (the route, the `judge.call` audit events and this module keep their old name, `judge`).
 
-The server asks its providers in this order, each failure falling through to the next (fail open), with the same keys
-the Slack gateway routes with:
-1. the Tico AI Gateway as `tico-decide-low` (Decide Low), with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
+Every decision is Jev's, and only Jev's: no other model answers in its place, and there is no setting or picker for
+the model. The server asks Jev in this order, the second only when the first fails:
+1. the Tico AI Gateway as `tico-decide-low` (Jev), with the gateway key (`TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, at
    `TICO_GATEWAY_URL`, Tico HQ's decisions endpoint by default), else the key and URL saved in Settings > Computers
    (backend/gateway_connection.py), read at each call;
-2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`), never set by default;
-3. the team's own AI provider, when the server has that provider's API key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-   `GEMINI_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`);
-4. off: with none of them it is unconfigured, and callers carry on without it. A bot or a person sends a JSON state and typed
-questions with their own credential and gets calibrated answers back; no bot ever carries the
-key, and nothing here decides anything with the answers. The contract and the validation are
-`clients/judge.py`, shared with the direct transport, so a call that this route would refuse is
-refused the same way before it is sent.
+2. a customer's own TypeSafe key (`TYPESAFE_API_KEY` or `TICO_TYPESAFE_SECRET_ARN`) for Jev direct, never set by default;
+3. off: with neither it is unconfigured, and callers carry on without it. When Jev fails or times out the call fails
+   (`J.JudgeError`), and each caller treats that as no answer: a person decides, or the item waits. A bot or a person
+   sends a JSON state and typed questions with their own credential and gets calibrated answers back; no bot ever
+   carries the key, and nothing here decides anything with the answers. The contract and the validation are
+   `clients/judge.py`, shared with the direct transport, so a call that this route would refuse is refused the same way
+   before it is sent.
 
 What is kept: one `judge.call` event per call with the label, the question count, the value and
 confidence per answer, the provider and model that answered, the token usage and the latency. Never the state: mail
@@ -24,25 +23,25 @@ A budget per actor and day, so a loop cannot spend the key: the cap is on calls,
 the events, and a call over it is a 429 that says when to try again. And a spend cap for the team per UTC month
 (`TICO_DECISIONS_MONTHLY_USD`, $50 by default), summed from each call's `cost_usd` in the audit: at the cap every
 server-side caller (this route, listening, learnings, live meetings, the Slack gateway) carries on as if Decide were
-off. Each of them gets its model from `server_engine`, so Jev's one short try and the fallback are the same for all. The caps per role are settings
+off. Each of them gets its model from `server_engine`, so every one of them asks Jev and nothing else. The caps per role are settings
 (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`); the Slack gateway's routing counts against the
 sender's, and the market ask (`market.ask` events) has its own count under the same caps.
 
 Each answer carries `ref`, its `judge.call` event's id. The caller that then acts on the answer writes what it did with
-`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `hub decision outcome`, `hub_decision_outcome`): one
+`POST /api/v2/decisions/outcome` ({ref, verdict, action}, `tico decision outcome`, `tico_decision_outcome`): one
 `decision.outcome` event per call, target the ref, with the call's label, so a month of a set's answers can be read
 against what was done with them. Only the caller that asked records it, and a second write for the same ref returns the
 first. Short words only, never the state. Decisions Tico makes on the server (stale suggestions, listening, live
 meetings, topic change, idea triage) keep their own outcome records.
 
-`GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, Jev or fallback, answer spread
+`GET /api/v2/decisions/readout` reads the audit back per question set: calls, cost, Jev or another model (rows written before
+every decision was Jev's), answer spread
 and the month's spend against the cap (backend/decide_readout.py).
 """
 
 import json
 import logging
 import math
-import os
 import threading
 from typing import Any
 
@@ -51,7 +50,6 @@ from pydantic import Field
 
 from clients import gateway as G
 from clients import judge as J
-from clients import openrouter
 from . import gateway_connection, providers
 
 # Who the Gateway's ledger counts the server's own decisions under (gateway_connection.bot_header): no bot has this slug.
@@ -64,14 +62,12 @@ LOG = logging.getLogger("tico.judge")
 ROLES = ("owner", "human", "bot")
 # The defaults; a server's own caps are `daily_cap(settings, role)`.
 DAILY_CALLS = {role: getattr(Settings, "decisions_daily_calls_" + role) for role in ROLES}
-# The Gateway and TypeSafe each get one short try from the server; when one is slow, down or refuses the key, the next
-# provider answers, so a caller never waits through several long attempts only to receive a 503.
+# The Gateway and TypeSafe each get one short try at Jev from the server; when the Gateway is slow, down or refuses the
+# key, TypeSafe is asked, so a caller never waits through several long attempts only to receive a 503.
 JEV_TIMEOUT = 8
-# The most one chain of providers takes, all of them together: each is asked with what is left (`J.within`), so the
-# server answers before its slowest caller stops waiting (`J.HUB_WAIT`, 45 s: `hub decision ask`, the MCP tools, `J.from_env`).
+# The most one chain takes, both tries together: each is asked with what is left (`J.within`), so the server answers
+# before its slowest caller stops waiting (`J.HUB_WAIT`, 45 s: `tico decision ask`, the MCP tools, `J.from_env`).
 CHAIN_SECONDS = 25
-# The same when the Gateway answers decisions with a language model (Decisions level Medium or High: 30 s for its own try).
-SLOW_CHAIN_SECONDS = J.GATEWAY_SLOW_TIMEOUT + 5
 # Tico Decide's price in USD per 1M input and output tokens (Tico AI Gateway lineup 1.0): what the team's monthly cap
 # counts a Gateway call at when its answer carries no cost.
 GATEWAY_USD_PER_MTOK = (0.06, 0.0)
@@ -89,47 +85,7 @@ def _skip(provider, why):
     # Once per process and reason: this runs on every config read and every Slack message.
     if (provider, why) not in _skipped:
         _skipped.add((provider, why))
-        LOG.info("The decision model's fallback skips %s: %s", provider, why)
-
-
-def transport(provider):
-    """The API the server calls for a provider: its own, or OpenRouter for the models pi runs through OpenRouter.
-    None for a provider with no API the server can call (Cursor)."""
-    if provider in J.LLM_KEYS:
-        return provider
-    runtime = (providers.PROVIDER_BY_ID.get(provider) or {}).get("runtime")
-    return "openrouter" if runtime and runtime == providers.CATCH_ALL_RUNTIME else None
-
-
-def fallback_model(record, env=None):
-    """(transport, key, model) on the company's own provider, or None when no enabled provider has a server key.
-
-    The default model's provider goes first; the rest follow in the order the owner enabled them. A provider the
-    server cannot call, or whose key it does not hold, is skipped (and logged) for the next one. Models pi runs
-    through OpenRouter are asked through OpenRouter with OpenRouter's id, as the runner does."""
-    env = os.environ if env is None else env
-    default = providers.runtime_provider(record["runtime"])
-    for provider in dict.fromkeys(([default] if default else []) + record["enabled"]):
-        via = transport(provider)
-        if via is None:
-            _skip(provider, "the server has no API to call it with")
-            continue
-        key = (env.get(J.LLM_KEYS[via]) or "").strip()
-        model = record["model"] if provider == default else (providers.recommended(provider) or {}).get("id")
-        if not key:
-            _skip(provider, J.LLM_KEYS[via] + " is not set on the server")
-            continue
-        if not model:
-            _skip(provider, "it has no model")
-            continue
-        return via, key, openrouter.model_id(model) if via == "openrouter" else model
-    return None
-
-
-def fallback_engine(record, env=None):
-    """A decision model on the company's own provider (`fallback_model`), or None."""
-    found = fallback_model(record, env)
-    return J.llm(*found) if found else None
+        LOG.info("Decide skips %s: %s", provider, why)
 
 
 def _count(value):
@@ -204,16 +160,20 @@ def cost_usd(settings, model, usage):
             return round(float(value), 6)
     fresh, cached, out = tokens(usage)
     if model in J.GATEWAY_MODELS:
-        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks.
-        listed = providers.price_of(model)
-        rate_in, rate_out = (listed[0], listed[2]) if listed else GATEWAY_USD_PER_MTOK
+        # Every Decide level has a catalog price (Low is Jev's); the flat rate covers an id the catalog lacks. Cached
+        # input is billed at the catalog's cached rate, as `providers.estimate` bills every other model's.
+        if (listed := providers.price_of(model)) is None:
+            listed = (GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[0], GATEWAY_USD_PER_MTOK[1])
+        rate_in, rate_cached, rate_out = listed
     elif priced(settings, model) and str(model or "").lower().startswith("jev"):
         rate_in, rate_out = settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output
+        rate_cached = rate_in
     elif priced(settings, model) and (listed := _list_cost(model, fresh, cached, out, usage)) is not None:
         return round(listed, 6)
     else:
         rate_in, rate_out = CEILING
-    return round(((fresh + cached) * rate_in + out * rate_out) / 1_000_000, 6)
+        rate_cached = rate_in
+    return round((fresh * rate_in + cached * rate_cached + out * rate_out) / 1_000_000, 6)
 
 
 # The month's total per (database file, month): (total, rowid of the newest judge.spend row counted, that row's id). A call
@@ -229,14 +189,14 @@ NEW_SPEND_SQL = (
     "SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
     "WHERE rowid>? AND +created_at>=? AND +action=?"
 )
-# A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
-# own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
-DECIDE_BUDGET = ("decisions_monthly_usd", "judge.spend")
+# One budget for every decision call, org rule checks included: its cap is `monthly_cap_usd` saved in Automations >
+# Maintenance, else the `decisions_monthly_usd` setting, and its spend rows are `judge.spend`.
+SPEND_ACTION = "judge.spend"
 
 
 def saved_cap(c):
-    """The monthly cap saved in Settings > Maintenance (registry_metadata `maintenance`, monthly_cap_usd), or None when
-    none is saved: the environment's TICO_DECISIONS_MONTHLY_USD then holds."""
+    """The monthly cap saved in Automations > Maintenance (registry_metadata `maintenance`, `monthly_cap_usd`), or None
+    when none is saved: the environment's setting then holds."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key='maintenance'").fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
@@ -246,20 +206,19 @@ def saved_cap(c):
     return float(cap) if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap >= 0 else None
 
 
-def budget_cap(c, settings, budget=DECIDE_BUDGET):
-    """The cap a budget enforces: Decide's saved cap when one is saved, else the settings field (the environment's)."""
-    if budget == DECIDE_BUDGET:
-        saved = saved_cap(c)
-        if saved is not None:
-            return saved
-    return float(getattr(settings, budget[0], 0) or 0)
+def budget_cap(c, settings):
+    """The cap Decide enforces: the saved cap when one is saved, else `decisions_monthly_usd` (the environment's)."""
+    saved = saved_cap(c)
+    if saved is not None:
+        return saved
+    return float(getattr(settings, "decisions_monthly_usd", 0) or 0)
 
 
-def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
+def spent_this_month(c, at=None):
     """USD the team's decision calls have cost since the 1st of this UTC month: the sum of the `judge.spend` rows
-    `metered` writes after every paid call, whoever made it. (`judge.call` rows repeat the cost for reading.) Another
-    `budget` sums its own spend rows instead."""
-    month, action = (at or H.now())[:7], budget[1]
+    `metered` writes after every paid call, whoever made it, org rule checks included. (`judge.call` rows repeat the
+    cost for reading.)"""
+    month, action = (at or H.now())[:7], SPEND_ACTION
     since, path = month + "-01T00:00:00", next((r[2] for r in c.execute("PRAGMA database_list") if r[1] == "main"), "")
     with _SPEND_LOCK:
         total, last, last_id = _SPEND.get((path, month, action), (0.0, 0, None))
@@ -280,12 +239,12 @@ def spent_this_month(c, at=None, budget=DECIDE_BUDGET):
     return round(total, 6)  # a float sum of cents can land a hair under the cap
 
 
-def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
+def over_spend_cap(c, settings, at=None):
     """(spent, cap) when the month's decision spend has reached the cap, else None. A cap of 0 is no cap."""
-    cap = budget_cap(c, settings, budget)
+    cap = budget_cap(c, settings)
     if cap <= 0:
         return None
-    spent = spent_this_month(c, at, budget)
+    spent = spent_this_month(c, at)
     if spent < cap:
         return None
     _skip("every caller", f"the month's decision spend ${spent:.2f} has reached the ${cap:.2f} cap")
@@ -294,15 +253,7 @@ def over_spend_cap(c, settings, at=None, budget=DECIDE_BUDGET):
 
 # Calls in flight in this process, as USD reserved for them: a request or batch thread that checks the cap counts
 # what the others have started and not yet written down.
-_METER, _RESERVED = threading.Lock(), {0: 0.0}  # keyed 0 for Decide's own budget, else by budget
-
-
-def _held(budget):
-    return 0 if budget == DECIDE_BUDGET else budget
-
-
-def _in_flight(key):
-    return _RESERVED[key] if key == 0 else _RESERVED.get(key, 0.0)
+_METER, _RESERVED = threading.Lock(), {0: 0.0}
 
 
 def reservation(settings, models, state, questions):
@@ -313,7 +264,7 @@ def reservation(settings, models, state, questions):
     return sum(cost_usd(settings, model, usage) for model in models or [""])
 
 
-def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
+def metered(store, models, state, questions, label, call):
     """One paid decision call under the team's monthly cap, for every caller (server and Slack gateway alike).
 
     Under one lock per process: read the month's spend from the audit, add the reservations of calls in flight here
@@ -324,17 +275,16 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
     only if they fit too; so the cap can be passed by at most one process's calls in flight, each at most its
     reservation. That bound is for the two processes that ask today, the server and the Slack gateway: each further
     process with its own meter can add its own calls in flight on top. A call stays within its reservation because
-    every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher. Another
-    `budget` (cap field, spend action) meters against its own cap and writes its own spend rows."""
+    every transport caps the answer at MAX_OUTPUT_TOKENS; a provider's own reported cost can still be higher."""
     settings = store.settings
     with store.read() as c:
-        cap = budget_cap(c, settings, budget)
+        cap = budget_cap(c, settings)
     reserved = reservation(settings, models, state, questions) if cap > 0 else 0.0
     with _METER:
         if cap > 0:
             with store.read() as c:
-                spent = spent_this_month(c, None, budget)
-            if spent + _in_flight(_held(budget)) + reserved > cap:
+                spent = spent_this_month(c)
+            if spent + _RESERVED[0] + reserved > cap:
                 _skip(
                     "every caller", f"the month's decision spend ${spent:.2f} leaves no room under the ${cap:.2f} cap"
                 )
@@ -343,23 +293,23 @@ def metered(store, models, state, questions, label, call, budget=DECIDE_BUDGET):
                     f"Decide has cost ${spent:.2f} this month; the team's cap is ${cap:.2f} until the 1st (UTC)",
                     429,
                 )
-        _RESERVED[_held(budget)] = _in_flight(_held(budget)) + reserved
+        _RESERVED[0] += reserved
     try:
         try:
             result = call()
         except J.JudgeError as exc:
             if getattr(exc, "paid", None):
-                exc.cost_usd = _spend(store, label, exc.paid, state, questions, budget[1])
+                exc.cost_usd = _spend(store, label, exc.paid, state, questions)
             raise
         result = dict(result)
         paid = result.pop("paid", None) or []
-        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions, budget[1])}
+        return {**result, "cost_usd": _spend(store, label, paid + [result], state, questions)}
     finally:
         with _METER:
-            _RESERVED[_held(budget)] = max(0.0, _in_flight(_held(budget)) - reserved)
+            _RESERVED[0] = max(0.0, _RESERVED[0] - reserved)
 
 
-def _spend(store, label, attempts, state, questions, action="judge.spend"):
+def _spend(store, label, attempts, state, questions):
     """One `judge.spend` row per paid attempt (the answer is the last; any before it were unusable), in one
     transaction. Returns their total USD. An attempt whose usage gives neither a cost nor any tokens is counted at its
     most (`reservation`), not as nothing, and says `usage: unknown`."""
@@ -373,7 +323,7 @@ def _spend(store, label, attempts, state, questions, action="judge.spend"):
             H.event(
                 c,
                 H.KEEPER,
-                action,
+                SPEND_ACTION,
                 label or "",
                 {
                     "label": label,
@@ -393,7 +343,8 @@ def _own_cost(result):
 
 
 def gateway(settings, store=None, vault=None):
-    """The Tico AI Gateway as the server asks it: one try of at most `J.GATEWAY_TIMEOUT` seconds. The environment's key
+    """The Tico AI Gateway as the server asks it: Jev (`J.GATEWAY_MODEL`), one try of at most `J.GATEWAY_TIMEOUT`
+    seconds. The environment's key
     wins; without one, and with a `store`, the key saved in Settings > Computers, read at each call so saving or
     clearing it counts at once (`saved` marks that step; `live` leaves it out while no key is saved). None in rehearsal
     or with neither."""
@@ -406,12 +357,10 @@ def gateway(settings, store=None, vault=None):
     if store is None:
         return None
 
-    def engine(state, questions, label=None, level=None):
-        """`level` is a caller's own (an automation's Decide step); without one, the company's Decisions level."""
+    def engine(state, questions, label=None):
         from .credentials import Vault
 
         with store.read() as c:
-            level = level or providers.load(c, settings)["decide_level"]
             if settings.gateway_key:
                 secret, url, bot = settings.gateway_key, settings.gateway_url, None
             else:
@@ -421,17 +370,9 @@ def gateway(settings, store=None, vault=None):
                 bot = gateway_connection.bot_header(c, keys, DECIDE_BOT)
         if not secret:
             raise J.JudgeError("unconfigured", "no Tico AI Gateway key is saved")
-        return J.gateway(secret, url, model=J.decide_model(level), timeout=J.decide_timeout(level), headers=bot)(
-            state, questions, label
-        )
-
-    def level():
-        with store.read() as c:
-            return providers.load(c, settings)["decide_level"]
+        return J.gateway(secret, url, headers=bot)(state, questions, label)
 
     engine.model, engine.provider, engine.saved = J.GATEWAY_MODEL, J.GATEWAY_PROVIDER, not settings.gateway_key
-    engine.level = level
-    engine.current_model = lambda: J.decide_model(level())
     return engine
 
 
@@ -526,23 +467,21 @@ def ordered(steps):
     """One engine that asks each of `steps` in turn and returns the first answer, or None when there are none.
 
     The request is checked against the contract once, first: a request the contract refuses is `invalid` and no
-    provider is asked. After that every failure moves on to the next step (fail open), a provider's own 422 too: the
-    request was valid, so that refusal is the provider's. All of them answer within CHAIN_SECONDS together (`J.within`).
-    An answer after a failure says `fallback` with the first failure's code, and `paid` lists the unusable answers
-    before it (`metered` counts them); when every step fails, the last error is raised, carrying all of `paid`. The
-    engine keeps its `steps`, so `server_engine` can put the company's own model after them."""
+    provider is asked. After that every failure moves on to the next step, a provider's own 422 too: the request was
+    valid, so that refusal is the provider's. All of them answer within CHAIN_SECONDS together (`J.within`). An answer
+    after a failure says `fallback` with the first failure's code, and `paid` lists the unusable answers before it
+    (`metered` counts them); when every step fails, the last error is raised, carrying all of `paid`."""
     steps = [step for step in steps if step is not None]
     if len(steps) < 2:
         return steps[0] if steps else None
 
-    def engine(state, questions, label=None, level=None):
+    def engine(state, questions, label=None):
         J.validate(state, questions, label)
         failed, first, paid = None, None, []
-        slow = any(J.normalize_level(level or step.level()) != "low" for step in steps if hasattr(step, "level"))
-        with J.within(SLOW_CHAIN_SECONDS if slow else CHAIN_SECONDS):
+        with J.within(CHAIN_SECONDS):
             for i, step in enumerate(steps):
                 try:
-                    result = ask(step, state, questions, label, level)
+                    result = step(state, questions, label)
                 except J.JudgeError as exc:
                     paid += getattr(exc, "paid", None) or []
                     if i == len(steps) - 1:
@@ -560,67 +499,37 @@ def ordered(steps):
     return engine
 
 
-def takes_level(engine):
-    """Whether a decision engine takes a caller's `level` (the Gateway's steps and the chains around them do; Jev, a
-    company's own model and older test fakes do not)."""
-    import inspect
-
-    try:
-        params = inspect.signature(engine).parameters.values()
-    except (TypeError, ValueError):
-        return False
-    return any(p.name == "level" or p.kind is p.VAR_KEYWORD for p in params)
-
-
-def ask(engine, state, questions, label=None, level=None):
-    """One call to `engine`, at `level` when one is given and the engine takes it (CONTRACT §2 Decide level)."""
-    if level and takes_level(engine):
-        return engine(state, questions, label, level=level)
-    return engine(state, questions, label)
-
-
-def step_models(steps, default=J.MODEL, level=None):
-    """The model each of `steps` asks as (`default` for one that does not say: a test's fake). A step whose model follows
-    the company's Decisions level says it now (`current_model`), so the spend reservation prices the model that will run."""
-    return [
-        (J.decide_model(level) if level and hasattr(step, "current_model") else "")
-        or (getattr(step, "current_model", None) or (lambda: ""))()
-        or getattr(step, "model", "")
-        or default
-        for step in steps
-    ]
+def step_models(steps, default=J.MODEL):
+    """The model each of `steps` asks as (`default` for one that does not say: a test's fake)."""
+    return [getattr(step, "model", "") or default for step in steps]
 
 
 def primary_engine(settings, store=None, vault=None):
-    """The server's own providers before the company's model: the Gateway (the environment's key, else with a `store`
-    the one saved in Settings), then a customer's own TypeSafe key."""
+    """Jev, the only decision model: the Gateway (the environment's key, else with a `store` the one saved in
+    Settings), then a customer's own TypeSafe key."""
     return ordered([gateway(settings, store, vault), jev(settings)])
 
 
-def server_engine(store, c, primary=None, budget=DECIDE_BUDGET):
+def server_engine(store, c, primary=None):
     """The decision model every server-side caller uses, or None for "carry on as if Decide were off": rehearsal, no
-    model at all, a demo, or the month's spend at the cap. `primary` is the Gateway and the own TypeSafe key
-    (`primary_engine(settings)`, or the test's fake); when they are slow, down or refused, the company's own model answers
-    and the result says `fallback`. Each call goes through `metered`, so a batch that reuses one engine (listening,
-    learnings) stops at the cap call by call; each result carries `cost_usd`. Another `budget` meters against its own
-    cap instead of Decide's."""
+    model at all, a demo, or the month's spend at the cap. `primary` is Jev (`primary_engine(settings)`, or the test's
+    fake), and nothing else is asked: when Jev is slow, down or refused, the call raises `J.JudgeError` and the caller
+    treats it as no answer. Each call goes through `metered`, so a batch that reuses one engine (listening, learnings)
+    stops at the cap call by call; each result carries `cost_usd`."""
     settings = store.settings
     # A demo's provider keys are made up (demo_sections/services.py): asking with them is a refused key or a timeout,
-    # never an answer, and a seed that waits on either builds a different company from run to run.
-    if settings.rehearsal or settings.demo or over_spend_cap(c, settings, None, budget):
+    # never an answer, and a seed that waits on either builds a different company from run to run. The seed's own app
+    # runs with `demo` off (it takes writes), so it says `demo_build`.
+    if settings.rehearsal or settings.demo or settings.demo_build or over_spend_cap(c, settings):
         return None
-    backup = fallback_engine(providers.load(c, settings))
     steps = live(primary, c, settings)
-    chain = ordered(steps + [backup])
+    chain = ordered(steps)
     if chain is None:
         return None
-    asks_as = step_models(steps) + ([getattr(backup, "model", "")] if backup is not None else [])
+    asks_as = step_models(steps)
 
-    def engine(state, questions, label=None, level=None):
-        models = (step_models(steps, level=level) + asks_as[len(steps) :]) if level else asks_as
-        return metered(
-            store, models, state, questions, label, lambda: ask(chain, state, questions, label, level), budget
-        )
+    def engine(state, questions, label=None):
+        return metered(store, asks_as, state, questions, label, lambda: chain(state, questions, label))
 
     engine.model, engine.provider = asks_as[0], getattr(chain, "provider", "")
     return engine
@@ -724,7 +633,7 @@ def install_judge(app, store, auth):
         with store.read() as c:
             used = used_today(c, who.actor)
             steps = [] if settings.rehearsal else live(app.state.judge, c, settings)
-            first = steps[0] if steps else None if settings.rehearsal else fallback_engine(providers.load(c, settings))
+            first = steps[0] if steps else None
             spent = spent_this_month(c)
         engine = first
         return {
@@ -771,8 +680,7 @@ def install_judge(app, store, auth):
         if engine is None:
             raise Problem(
                 "judge_unconfigured",
-                "No decision model is configured on this server: set a Tico AI Gateway "
-                "key, your own TypeSafe key, or the API key of one of the team's AI providers",
+                "No decision model is configured on this server: set a Tico AI Gateway key or your own TypeSafe key",
                 503,
             )
         try:

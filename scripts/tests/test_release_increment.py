@@ -16,7 +16,7 @@ A, B, C = ("a" * 40, "b" * 40, "c" * 40)
 TABLES = {
     "seconds": {"backend/tests/test_a.py": 30.0, "backend/tests/test_slow.py": 900.0},
     "browser": {"threads": 10.0, "task-code": 5.0},
-    "slow": {"backend/tests/test_slow.py"},
+    "slow_only": {"backend/tests/test_slow.py"},
 }
 PYTEST_FAILURES = (
     "FAILED backend/tests/test_company_file.py::test_one - AssertionError\n"
@@ -189,12 +189,11 @@ def test_failures_are_named_from_the_logs_and_by_their_job():
         "ui/tests/threads.cjs",
         "ui/tests/task-code.cjs",
     }
-    named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("factory-sim-2", ""), ("release-check", "")])
+    named = ri.failed_tokens([("python-3", PYTEST_FAILURES), ("release-check", "")])
     assert named == {
         "backend/tests/test_company_file.py",
         "ui/tests/threads.cjs",
         "ui/tests/task-code.cjs",
-        ri.FACTORY,
     }
     assert ri.failed_tokens([("product", ""), ("desktop", "")]) == {"product", "desktop"}
 
@@ -215,7 +214,7 @@ def test_a_red_at_mains_head_waits_for_a_push():
 
 def test_a_red_waits_until_a_commit_since_it_selects_what_failed():
     go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_y.py"})
-    assert go is False and "the window waits" in why and "test_x.py" in why
+    assert go is False and "the train waits" in why and "test_x.py" in why
     go, why = ri.red_rule(red({"backend/tests/test_x.py"}), C, {"backend/tests/test_x.py", "ui/tests/threads.cjs"})
     assert go is True and "a commit since" in why and "test_x.py" in why
 
@@ -285,20 +284,12 @@ def test_an_app_change_runs_the_desktop_part_and_a_caddy_change_the_product_part
     assert [job["name"] for job in plan["jobs"]] == ["product", "desktop"]
 
 
-def test_a_carried_factory_failure_runs_the_factory_sim():
-    assert plan_of(selected(), carried={ri.FACTORY}, smoke=(), gone=())["factory"] is True
-
-
-def test_a_docs_only_incremental_plans_no_factory_jobs_when_the_control_checkout_is_sparse(tmp_path):
-    # The planner runs from validation-control's sparse checkout, which has no evals/factory/call_path.json. The sim's
-    # recorded paths come from the candidate's checkout, so a docs-only change plans no factory jobs.
-    candidate = tmp_path / "candidate"
-    (candidate / "evals" / "factory").mkdir(parents=True)
-    (candidate / pr_checks.FACTORY_CALL_PATH).write_text((pr_checks.ROOT / pr_checks.FACTORY_CALL_PATH).read_text())
-    plan = plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=candidate)
-    assert plan["factory"] is False
-    # Where the recorded paths cannot be read, the sim runs: a missing measurement never skips the check.
-    assert plan_of(selected(), changed=("docs/releasing.md",), smoke=(), gone=(), factory_root=tmp_path)["factory"]
+def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
+    # Both parts run native_binaries (hosted_release_check.py), so their VMs must wait for and place the binaries.
+    plan = plan_of(selected(caddy=True), changed=["app/src/main.rs"], smoke=(), gone=())
+    include = ri.matrix_of(json.dumps(plan))["include"]
+    assert [entry["name"] for entry in include] == ["product", "desktop"]
+    assert all("binaries" not in entry for entry in include)
 
 
 def test_a_plan_of_any_size_is_made_because_release_validation_makes_it_itself():
@@ -336,9 +327,15 @@ def test_a_vm_of_an_incremental_plan_runs_its_own_files_through_the_queue_runner
 
 def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms():
     full = ri.matrix_of("")["include"]
-    assert len(full) == 34
+    assert len(full) == ri.FULL_PYTHON_SHARDS + 6
     assert full[0] == {"name": "product", "part": "product", "shard": "", "workers": "2", "runner": ri.RUNNER}
-    assert full[5] == {"name": "python-1", "part": "python", "shard": "1/28", "workers": "4", "runner": ri.RUNNER}
+    assert full[5] == {
+        "name": "python-1",
+        "part": "python",
+        "shard": f"1/{ri.FULL_PYTHON_SHARDS}",
+        "workers": "4",
+        "runner": ri.RUNNER,
+    }
     assert full[-1]["name"] == "desktop"
     plan = plan_of(selected(python=["backend/tests/test_a.py"]), smoke=("sign-in-redirect",), gone=())
     include = ri.matrix_of(json.dumps(plan))["include"]
@@ -357,3 +354,57 @@ def test_the_full_matrix_is_the_gate_and_an_incremental_plan_lists_only_its_vms(
 def test_a_plan_naming_an_unknown_vm_is_refused(text):
     with pytest.raises(ValueError):
         ri.matrix_of(text)
+
+
+def test_a_file_only_the_release_table_records_is_slow_only_when_every_test_is_slow(tmp_path):
+    # The default table is recorded from older runs: a plain file can be missing from it, and a mixed file runs its slow
+    # tests in the contracts lane and its plain tests in the python lane. Only an all-slow file is slow-only.
+    tests = tmp_path / "backend" / "tests"
+    tests.mkdir(parents=True)
+    (tests / "test_plain.py").write_text("def test_a():\n    pass\n")
+    (tests / "test_marked.py").write_text("import pytest\n\n@pytest.mark.slow\ndef test_b():\n    pass\n")
+    (tests / "test_mixed.py").write_text(
+        "import pytest\n\n@pytest.mark.slow\ndef test_b():\n    pass\n\ndef test_c():\n    pass\n"
+    )
+    table = tmp_path / "test-timings.json"
+    table.write_text(
+        json.dumps(
+            {
+                "default": {"backend/tests/test_known.py": 5.0},
+                "release": {
+                    "backend/tests/test_known.py": 5.0,
+                    "backend/tests/test_plain.py": 40.0,
+                    "backend/tests/test_marked.py": 300.0,
+                    "backend/tests/test_mixed.py": 90.0,
+                },
+            }
+        )
+    )
+    tables = ri.load_tables(table, tmp_path)
+    assert tables["slow_only"] == {"backend/tests/test_marked.py"}
+    assert tables["seconds"]["backend/tests/test_plain.py"] == 40.0
+
+
+def test_a_string_or_a_parametrised_slow_case_is_not_a_slow_only_file(tmp_path):
+    fixture = tmp_path / "test_fixture_strings.py"
+    fixture.write_text('MARK = "@pytest.mark.slow"\n\ndef test_a():\n    assert MARK\n')
+    param = tmp_path / "test_param.py"
+    param.write_text(
+        "import pytest\n\n@pytest.mark.parametrize('x', [1, pytest.param(2, marks=pytest.mark.slow)])\n"
+        "def test_b(x):\n    pass\n"
+    )
+    assert ri.slow_marks(fixture) == (False, False)
+    assert ri.slow_marks(param) == (True, False)
+
+
+def test_a_large_contracts_lane_splits_into_timed_vms_and_a_small_one_keeps_its_name():
+    files = [f"backend/tests/test_s{i}.py" for i in range(20)]
+    tables = {"seconds": {name: 100.0 for name in files}, "browser": {}, "slow": set(files)}
+    jobs = ri.build_jobs([], [], files, False, [], False, False, tables)
+    names = [job["name"] for job in jobs]
+    assert names == ["contracts-1", "contracts-2", "contracts-3"]  # 2000 one-worker seconds: three VMs of about 330 s
+    ri.matrix_of(json.dumps({"jobs": jobs}))  # the gate accepts numbered contracts VMs
+    assert sorted(sum((job["files"] for job in jobs), [])) == sorted(files)
+    assert all(job["part"] == "python" for job in jobs)
+    small = ri.build_jobs([], [], files[:2], False, [], False, False, tables)
+    assert [job["name"] for job in small] == ["contracts"]

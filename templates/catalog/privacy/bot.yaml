@@ -8,7 +8,7 @@ reasoning_effort: high
 max_run_minutes: 60
 
 # The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
 routines:
   - id: weekly-privacy-desk
     title: Weekly privacy desk

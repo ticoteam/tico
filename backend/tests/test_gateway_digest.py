@@ -1,11 +1,11 @@
-"""POST /api/v2/gateway/digest and `hub_gateway_digest` (backend/providers_routes.py, clients/hubtools.py): the items and
+"""POST /api/v2/gateway/digest and `tico_gateway_digest` (backend/providers_routes.py, clients/hubtools.py): the items and
 the focus go to the Gateway with the company's key, the Gateway's groups come back, and a refused request never reaches
 it. The Gateway is faked: no call leaves the test."""
 
 import pytest
 
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import gateway as G
 
 ITEMS = [
@@ -75,7 +75,7 @@ def test_the_digest_route_refuses_a_bad_request_and_maps_the_gateways_refusals(a
 def test_the_digest_tool_sends_the_items_and_returns_the_groups(api, monkeypatch):
     from clients import hubtools
 
-    tool = hubtools.BY_NAME["hub_gateway_digest"]
+    tool = hubtools.BY_NAME["tico_gateway_digest"]
     assert tool["inputSchema"]["required"] == ["items"]
     assert tool["inputSchema"]["properties"]["items"]["maxItems"] == 300
     connect(api)
@@ -85,12 +85,12 @@ def test_the_digest_tool_sends_the_items_and_returns_the_groups(api, monkeypatch
         "digest",
         lambda base, key, items, focus, style, header: asked.append((items, focus, style)) or (200, dict(GROUPS), ""),
     )
-    error, out = call(api, "hub_gateway_digest", {"items": ITEMS, "focus": "pricing", "style": "full"})
+    error, out = call(api, "tico_gateway_digest", {"items": ITEMS, "focus": "pricing", "style": "full"})
     assert not error and out == GROUPS
     assert asked == [(ITEMS, "pricing", "full")]
-    error, out = call(api, "hub_gateway_digest", {"items": ITEMS})
+    error, out = call(api, "tico_gateway_digest", {"items": ITEMS})
     assert not error and asked[-1] == (ITEMS, None, "brief")
-    error, out = call(api, "hub_gateway_digest", {"items": []})
+    error, out = call(api, "tico_gateway_digest", {"items": []})
     assert error and len(asked) == 2
 
 

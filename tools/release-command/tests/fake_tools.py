@@ -91,10 +91,10 @@ elif name == 'gh':
         print(json.dumps(dict(isDraft=False)))
     else:
         sys.exit(f'Unexpected gh invocation: {args}')
-elif name == 'hub':
+elif name == 'tico':
     assert args[:4] == ['task', 'create', '--owner', 'docs-writer'], args
     body = args[args.index('--body') + 1]
-    assert 'v1.0.0..v1.0.1' in body and 'Changelog-Release: v1.0.1' in body and '  ' not in body, body
+    assert 'v1.0.0..v1.0.1' in body and 'release-approval' in body and '  ' not in body, body
     with (root / 'writer-tasks').open('a') as stream:
         stream.write(args[args.index('--title') + 1] + '\n')
     if config.get('hub_lost'):

@@ -83,22 +83,23 @@ def test_json_is_accepted_anywhere_on_the_line(capsys):
 def test_a_command_without_its_id_prints_its_usage_and_an_example(capsys):
     code, err = parse_failure(capsys, ["task", "show"])
     assert code == 2
-    assert "usage: hub task show" in err
-    assert "Example: hub task show <id>" in err
+    assert "usage: tico task show" in err
+    assert "Example: tico task show <id>" in err
 
 
 def test_a_mistyped_command_names_the_closest_commands_that_exist(capsys):
     code, err = parse_failure(capsys, ["task", "lst"])
     assert code == 2
-    assert "Did you mean: hub task list" in err.splitlines()[-1]
+    assert "Did you mean: tico task list" in err.splitlines()[-1]
 
 
 def test_a_bad_flag_value_lists_its_choices(capsys):
     code, err = parse_failure(capsys, ["task", "list", "--status", "todo"])
     assert code == 2
     listed = err.split("choose from", 1)[1]  # quoted on newer Pythons, bare on older ones: match the names only
-    for status in ("open", "doing", "waiting", "review", "ready", "done", "closed", "declined"):
+    for status in ("open", "done", "closed"):
         assert status in listed
+    assert "doing" not in listed and "waiting" not in listed
 
 
 def test_an_unknown_flag_suggests_the_closest_flag_of_that_command(capsys):
@@ -127,7 +128,6 @@ def _leaves(p, skip_aliases):
     "words, command",
     [
         (["tasks", "list"], "task list"),
-        (["approvals", "show", "x"], "approval show"),
         (["automations", "list"], "automation list"),
         (["bots", "status", "list"], "bot status list"),
         (["rule", "list"], "rules list"),

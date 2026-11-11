@@ -12,8 +12,9 @@ from types import SimpleNamespace
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, as_member, assign, claim, headers, post, ready, runner
+from backend.tests.helpers.api import as_member, headers, post, ready
 from backend import bot_settings as BS
+from backend.tests.helpers.sql import column, query, world
 
 SECRET_TABLES = (
     "credentials",
@@ -41,14 +42,15 @@ REJECTED = (
 )
 
 
-def query(api, sql, token="ana-test", expected=200, **body):
-    r = api.post("/api/v2/sql", json={"sql": sql, **body}, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
+def firsts(bodies):
+    return [body.split("\n")[0] for body in bodies]
 
 
-def column(api, sql, token="ana-test"):
-    return sorted(row[0] for row in query(api, sql, token)["rows"])
+def fixture_owner(c, tid, sql, args=()):
+    """A fixture's direct change to a task's owner, past the engine's guard (tasks_move_only), as test data only."""
+    c.execute("UPDATE task_move_guards SET open=1, task_id=? WHERE id=1", (tid,))
+    c.execute(sql, args)
+    c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
 
 
 def error(api, sql, token="ana-test"):
@@ -58,7 +60,7 @@ def error(api, sql, token="ana-test"):
 def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(api, monkeypatch):
     from backend import sql as S, views
     from backend.auth import Identity
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     store, auth = api.app.state.store, api.app.state.auth
     who = Identity("human:cara", "human", email="cara@acme.example")
@@ -125,34 +127,6 @@ def test_sql_private_task_inventory_reuses_snapshot_rights_and_sees_revocation(a
             fresh.close()
     finally:
         held.close()
-
-
-@pytest.fixture
-def world(api):
-    """Two people's private Tico rooms, a private bot's task, and a ops turn granted Ana's room."""
-    with api.app.state.store.transaction() as c:
-        c.execute("CREATE TABLE IF NOT EXISTS _litestream_seq(id INTEGER PRIMARY KEY, seq INTEGER)")
-        c.execute("INSERT INTO _litestream_seq VALUES(1, 1)")
-    ana_room = post(api, "chat/ops", {"text": "Ana private context."})["conversation_id"]
-    steven_room = post(api, "chat/ops", {"text": "Ben private context."}, token="ben-test")["conversation_id"]
-    machine = runner(api)
-    assign(api, machine, "ops")
-    ready(api, machine, ["ops"])
-    attempt = claim(api, machine)
-    with api.app.state.store.transaction() as c:  # a person's Mac: its credential reads as them
-        c.execute("UPDATE runners SET platform='darwin' WHERE id=?", (machine["runner_id"],))
-    private = post(api, "tasks", {"owner": "inbox", "title": "Sort the inbox", "body": "Private to Ana."})
-    coo_task = post(api, "tasks", {"owner": "ops", "title": "Summarize the week", "body": "For ops."})
-    finance_task = post(api, "tasks", {"owner": "finance", "title": "Close the books", "body": "For finance."})
-    return {
-        "ana_room": ana_room,
-        "steven_room": steven_room,
-        "machine": machine,
-        "attempt": attempt,
-        "private": private,
-        "coo_task": coo_task,
-        "finance_task": finance_task,
-    }
 
 
 def test_the_sql_page_examples_all_run(api):
@@ -289,7 +263,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
     assert tasks == sorted(world[k]["id"] for k in ("private", "coo_task", "finance_task"))
     assert "inbox" in column(api, "SELECT slug FROM bots")
     bodies = column(api, "SELECT body FROM messages")
-    assert "Ana private context." in bodies and "New task from human:ana: Sort the inbox" in bodies
+    assert "Ana private context." in bodies and "Sort the inbox is in To do (General)." in firsts(bodies)
     assert "Ben private context." not in bodies
     personal = column(api, "SELECT id FROM conversations WHERE scope='personal'")
     assert world["ana_room"] in personal and world["steven_room"] not in personal
@@ -331,10 +305,8 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "redesign_cutover",
         "release-history",
         "repositories-access-migrated",
-        "roadmap_ready_to_ship_step",
         "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text",
-        "stale_review_repair",
         "strategy-bot",
         "task_session_default",
         "threads-migration",
@@ -353,10 +325,11 @@ def test_a_person_sees_the_company_but_not_private_bots_or_other_rooms(api, worl
         b for b in column(api, "SELECT bot FROM bot_status") if b != "inbox"
     )
     # Their own room, and the own rooms of the public tasks; not Ana's room or its "Started task" line.
-    assert column(api, "SELECT body FROM messages", ben) == [
+    # A task's first line in its own room says where it stands (the rest is the bot's brief).
+    assert firsts(column(api, "SELECT body FROM messages", ben)) == [
         "Ben private context.",
-        "New task from human:ana: Close the books",
-        "New task from human:ana: Summarize the week",
+        "Close the books is in To do (General).",
+        "Summarize the week is in To do (General).",
     ]
     assert column(api, "SELECT id FROM conversations", ben) == sorted(
         [world["steven_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
@@ -382,11 +355,11 @@ def test_a_bot_reads_ordinary_tasks_but_only_its_granted_rooms_and_no_private_da
     assert query(api, "SELECT 1", token)["rows"] == [[1]]
     bodies = column(api, "SELECT body FROM messages", token)
     # Its granted room, and the own rooms of the ordinary tasks it may read.
-    assert bodies == [
+    assert firsts(bodies) == [
         "Ana private context.",
-        "New task from human:ana: Close the books",
-        "New task from human:ana: Summarize the week",
+        "Close the books is in To do (General).",
         "Started task: Summarize the week",
+        "Summarize the week is in To do (General).",
     ]
     assert column(api, "SELECT id FROM conversations", token) == sorted(
         [world["ana_room"], world["coo_task"]["conversation_id"], world["finance_task"]["conversation_id"]]
@@ -618,8 +591,8 @@ def test_every_guarded_view_prepares_for_each_caller(api, world):
 
 def test_page_message_gate_skips_plain_refs_and_keeps_review_permissions(api, world, monkeypatch):
     from backend import sql as S
-    from backend.tests.test_page_audience import edit
-    from backend.tests.test_pages import page
+    from backend.tests.helpers.page_audience import edit
+    from backend.tests.helpers.pages import page
 
     made = page(api, world['attempt'])
     assert made.status_code == 200, made.text
@@ -724,7 +697,12 @@ def test_direct_messages_reuse_room_checks_and_match_recursive_privacy(api, worl
 
     # A fresh request must rebuild decisions after a task becomes private.
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?", (public,))
+        fixture_owner(
+            c,
+            public,
+            "UPDATE tasks SET private=1,owner_id='bot:finance',requester_id='human:ben' WHERE id=?",
+            (public,),
+        )
     with store.read() as c:
         assert not ReadIndex(c, who).message('progress-after-revocation', room, json.dumps({'task': public}), None)
 
@@ -822,7 +800,7 @@ def test_direct_run_messages_keep_denied_attempt_provenance(api, world, source):
             )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
-            c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
             H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'tasks': [hidden['id']]})
     with store.read() as c:
@@ -984,7 +962,7 @@ def test_bot_replies_whose_run_names_a_denied_task_stay_out_of_full_scans(api, w
             )
             c.execute('INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)', (aid, msg['id']))
         elif source == 'carried':
-            c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+            c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
         else:
             H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     for token in callers:
@@ -1013,13 +991,13 @@ def test_carried_private_tasks_and_unknown_plain_rooms_stay_hidden(api, world):
 
     # The job message stays readable; only the carried task hides this run.
     with store.transaction() as c:
-        c.execute('UPDATE tasks SET carried_by=? WHERE id=?', (aid, hidden['id']))
+        c.execute('UPDATE attempts SET task_id=? WHERE id=?', (hidden['id'], aid))
     assert rows('attempts', aid) == []
     with store.transaction() as c:
-        c.execute('UPDATE tasks SET carried_by=NULL WHERE id=?', (hidden['id'],))
+        c.execute('UPDATE attempts SET task_id=NULL WHERE id=?', (aid,))
     assert rows('attempts', aid) == [[aid]]
 
-    # Retained next-run provenance survives independently of tasks.carried_by.
+    # Retained next-run provenance survives independently of attempts.task_id.
     with store.transaction() as c:
         event = H.event(c, H.KEEPER, 'task.next-run.carried', aid, {'bot': 'ops', 'tasks': [hidden['id']]})
     assert rows('attempts', aid) == []
@@ -1199,7 +1177,9 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'")
+        fixture_owner(
+            c, 'tree-5', "UPDATE tasks SET owner_id='bot:finance',requester_id='human:ben',private=1 WHERE id='tree-5'"
+        )
         c.execute(
             "UPDATE bot_config SET access=? WHERE bot='ops'",
             (
@@ -1214,10 +1194,10 @@ def test_materialized_visibility_matches_the_predicate_and_never_survives_a_requ
     for who in callers:
         compare(who)
     # Cached columns are metadata only: schema changes cannot leave a newly added column hidden/stale.
-    query(api, 'SELECT * FROM task_types')
+    query(api, 'SELECT * FROM tags')
     with store.transaction() as c:
-        c.execute('ALTER TABLE task_types ADD COLUMN synthetic_fixture TEXT')
-    assert 'synthetic_fixture' in query(api, 'SELECT * FROM task_types')['columns']
+        c.execute('ALTER TABLE tags ADD COLUMN synthetic_fixture TEXT')
+    assert 'synthetic_fixture' in query(api, 'SELECT * FROM tags')['columns']
 
 
 def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_path):
@@ -1290,8 +1270,8 @@ def test_parallel_audits_share_a_commit_without_early_ack_or_lost_context(tmp_pa
 
 def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write(api, world):
     from backend import assistant
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_mcp import call, rpc
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.mcp import call, rpc
 
     with api.app.state.store.transaction() as c:
         assistant.ensure_schema(c)
@@ -1329,13 +1309,13 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
                 "assistant",
             ),
         )
-        H.event(c, "bot:ops", "mcp.call", "hub_task_show", {"tool": "hub_task_show", "ms": 40})
+        H.event(c, "bot:ops", "mcp.call", "tico_task_show", {"tool": "tico_task_show", "ms": 40})
         H.event(
             c,
             "human:ana",
             "mcp.call",
-            "hub_assistant_send",
-            {"tool": "hub_assistant_send", "ms": 900, "via": "ana-laptop"},
+            "tico_assistant_send",
+            {"tool": "tico_assistant_send", "ms": 900, "via": "ana-laptop"},
         )
     token = world["attempt"]["token"]
     totals = "SELECT status, sum(actions) FROM assistant_action_weekly GROUP BY status"
@@ -1357,24 +1337,24 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
         ["assistant", "done", 2, 66.7],
         ["bot:botops", "done", 1, 100.0],
     ]
-    assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["hub_task_show", 1]]
+    assert query(api, "SELECT tool, calls FROM mcp_call_weekly", token)["rows"] == [["tico_task_show", 1]]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
-    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1}
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"tico_task_show": 1}
     # People keep their existing all-caller stats; the narrow grant cannot borrow them.
     owner_stats = api.get("/api/v2/live/stats", headers=headers()).json()["tools"]
-    assert {r["tool"]: r["calls"] for r in owner_stats} == {"hub_task_show": 1, "hub_assistant_send": 1}
-    # Failed MCP calls record caller-typed names too, even when they resemble a hub name.
-    for name in ("Ana wants to pay Dana's private invoice", "hub_ana_private_invoice"):
+    assert {r["tool"]: r["calls"] for r in owner_stats} == {"tico_task_show": 1, "tico_assistant_send": 1}
+    # Failed MCP calls record caller-typed names too, even when they resemble a tool name.
+    for name in ("Ana wants to pay Dana's private invoice", "tico_ana_private_invoice"):
         assert rpc(api, "tools/call", {"name": name, "arguments": {}}, token=token)["error"]["code"] == -32602
     assert query(api, "SELECT tool, calls FROM mcp_call_weekly ORDER BY tool", token)["rows"] == [
-        ["hub_task_show", 1],
         ["other", 2],
+        ["tico_task_show", 1],
     ]
     stats = api.get("/api/v2/live/stats", headers=headers(token))
     assert stats.status_code == 200
-    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"hub_task_show": 1, "other": 2}
-    failed, via_mcp = call(api, "hub_mcp_stats", token=token)
+    assert {r["tool"]: r["calls"] for r in stats.json()["tools"]} == {"tico_task_show": 1, "other": 2}
+    failed, via_mcp = call(api, "tico_mcp_stats", token=token)
     assert not failed and via_mcp["tools"] == stats.json()["tools"]
     assert api.get("/api/v2/live/stats?via=ana-laptop", headers=headers(token)).status_code == 403
     # Still no row: not the table, not a hidden column, not the base events the totals are built from.
@@ -1412,7 +1392,7 @@ def test_a_granted_bot_reads_outcome_totals_but_no_proposal_row_and_cannot_write
 def test_outcome_grants_require_owner_sign_in_and_delegation_does_not_lend_owner_reads(api):
     import sqlite3
     from backend import assistant, sql as S
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.assistant import assistant_turn
 
     # Mint a real personal token, so authentication sets via_token rather than a test identity shortcut.
     personal = post(api, "me/tokens", {"label": "synthetic owner script"})["token"]
@@ -1531,7 +1511,7 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     from backend import sql as S
     from backend.auth import Identity
     from backend.store import H, encode
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     store, auth = api.app.state.store, api.app.state.auth
     people = [
@@ -1655,3 +1635,38 @@ def test_an_event_or_blob_on_a_message_whose_task_list_cannot_be_read_is_hidden_
     assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'") == ['blob-scalar']
     # The bot reads the same rows through its own gate and reaches the scalar message's blob too.
     assert column(api, "SELECT id FROM blobs WHERE id LIKE 'blob-%'", world["attempt"]["token"]) == ['blob-scalar']
+
+
+def test_sql_opens_on_a_new_database_for_the_owner_and_a_member(company):
+    """Every table the SQL views name is in a new database: none of the tables the cut-over dropped is named."""
+    from backend import sql as S
+    from backend.auth import Auth, Identity
+
+    auth = Auth(company)
+    for who in (Identity('human:ana', 'owner'), Identity('human:ben', 'human')):
+        with company.read() as c:
+            conn = S.connect(company.settings.db_path, c, auth, who)
+            try:
+                assert S.run(conn, 'SELECT count(*) FROM tasks', [], 10, 20)['rows'] == [[0]]
+            finally:
+                conn.close()
+
+
+def test_task_waits_reads_the_engines_waits_over_the_callers_own_tasks(api, world):
+    """`task_waits` is what each open task waits on, as the engine reads it (H.task_waits), one row per wait with the
+    headline first; a task the caller may not read has no row."""
+    as_member(api, "ben@acme.example")
+    ids = [world[k]["id"] for k in ("private", "coo_task", "finance_task")]
+    with api.app.state.store.read() as c:
+        expected = {tid: [w.state for w in waits] for tid, waits in H.task_waits(c, ids).items()}
+    rows = query(api, "SELECT task_id, position, state, waiting_on, line FROM task_waits ORDER BY task_id, position")
+    got = {}
+    for tid, position, state, _who, line in rows["rows"]:
+        got.setdefault(tid, []).append(state)
+        assert isinstance(line, str)
+    assert {tid: got.get(tid) for tid in ids} == expected
+    assert all(expected.values())
+    ben = column(api, "SELECT DISTINCT task_id FROM task_waits", "ben-test")
+    assert ben == sorted(world[k]["id"] for k in ("coo_task", "finance_task"))
+    # Built only for a statement that names it.
+    assert query(api, "SELECT count(*) FROM tasks", "ben-test")["rows"] == [[2]]

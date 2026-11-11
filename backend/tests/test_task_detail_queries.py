@@ -7,9 +7,10 @@ import pytest
 
 from backend import task_privacy
 from backend.store import H
-from backend.tests import test_api as T
-from backend.tests.test_api import api, assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
-from backend.tests.test_bot_list_reads import add_bots
+from backend.tests.helpers import api as T
+from backend.tests.helpers.api_app import api_client
+from backend.tests.helpers.api import assign, claim, post, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.bot_list_reads import add_bots
 
 # Tool calls each run streams. Every step names its own call id, so a run of N steps used to cost about N queries.
 STEPS = 10
@@ -24,11 +25,6 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     tid = post(api, "tasks", {"owner": "ops", "title": "Grow the task", "body": "Do it."})["id"]
-    with api.app.state.store.transaction() as c:
-        kids = [
-            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
-            for k in range(max(children, comments, people_comments))
-        ]
     for k in range(max(comments, 1)):
         if k:
             post(api, f"tasks/{tid}/comments", {"text": f"@ops step {k}"})
@@ -48,7 +44,12 @@ def build(api, comments=0, people_comments=0, events=0, children=0, bots=0):
             {"outcome": "completed", "text": f"Reply {k}.", "last_seq": len(rows)},
             machine["token"],
         )
+    # The child tasks come after the runs: a parent waits on its sub-tasks, so its own wakes would have no turn left.
     with api.app.state.store.transaction() as c:
+        kids = [
+            H.task_create(c, "human:ana", f"Child {k}", "Part of it.", "bot:ops", parent_id=tid)["id"]
+            for k in range(max(children, comments, people_comments))
+        ]
         for k in range(people_comments):
             H.task_comment(c, "human:ben", tid, f"Ben note {k}", wake=False, extra_refs={"task": [kids[k]]})
         for k in range(events):
@@ -95,7 +96,7 @@ def test_the_task_page_takes_the_same_statements_however_many_of_each_it_holds(t
     counted = {}
     for name, scale in (("small", small), ("big", big)):
         (tmp_path / name).mkdir()
-        install = T.api.__wrapped__(tmp_path / name, None)
+        install = api_client(tmp_path / name, None)
         api = next(install)
         try:
             tid = build(api, **scale)

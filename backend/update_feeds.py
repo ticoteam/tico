@@ -202,12 +202,12 @@ def _sections(body):
 # these (`authored`).
 TICO_REASONS = (
     "it removes or deprecates something; check what your Instructions rely on",
-    "it changes MCP tools, hub commands or the API; check the tools your Instructions use",
-    "no MCP, hub command, API or removal entries",
+    "it changes MCP tools, tico commands or the API; check the tools your Instructions use",
+    "no MCP, tico command, API or removal entries",
 )
 TEMPLATE_OTHER = "it changes only the template's other files"
-# Words in a release that touch what a bot calls: its MCP tools, `hub` commands and the API.
-_TOOLING = re.compile(r"\bMCP\b|\bhub_[a-z_]+|`hub\s|\bhub CLI\b|\bAPI\b", re.I)
+# Words in a release that touch what a bot calls: its MCP tools, `tico` commands and the API.
+_TOOLING = re.compile(r"\bMCP\b|\btico_[a-z_]+|`(?:hub|tico)\s|\b(?:hub|tico) CLI\b|\bAPI\b", re.I)
 
 
 def tico_item(release):
@@ -240,7 +240,7 @@ def tico_item(release):
         "published_at": published,
         "summary": summary,
         "files": "",
-        "source_url": f"{REPO}/blob/v{version}/CHANGELOG.md",
+        "source_url": f"{REPO}/releases/tag/v{version}",
         "version_url": f"{REPO}/releases/tag/v{version}",
         "action": action,
         "reason": reason,

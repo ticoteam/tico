@@ -1,6 +1,6 @@
 """Bots end to end: a message becomes a job, a runner leases it, the real Rust runner (runner-rs/, built on the test run)
-runs it through a fake harness, and the reply is visible in the conversation. A bot hands a message to another bot,
-and a bot's approval is decided by its owner and consumed once.
+runs it through a fake harness, and the reply is visible in the conversation. A bot hands a message to another bot.
+A bot's OK, given by the person asked and used once, is test_task_asks_routes.py (v3 asks; /api/v2/approvals is gone).
 
 Slow: the runner binary is built once per run (cargo), and the runner starts as a process. Run it on RunsOn:
 `python3 scripts/remote.py --setup rust -- python3 -m pytest -q -o addopts='' -m slow backend/tests/test_e2e_bots.py`.
@@ -8,9 +8,9 @@ Slow: the runner binary is built once per run (cargo), and the runner starts as 
 
 import pytest
 
-from backend.tests.test_api import api, assign, get, post, ready, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import assign, get, post, ready, setup_attempt  # noqa: F401
 from backend.tests.live import block_outside_network, live  # noqa: F401
-from runner_support.tests.test_conformance import Computer, reply_to, rust_binary, until  # noqa: F401
+from runner_support.tests.helpers.conformance import Computer, reply_to, rust_binary, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
 
@@ -69,21 +69,3 @@ def test_a_bot_hands_a_message_to_another_bot_that_needs_action_and_the_other_bo
     attempt = post(api, "jobs/claim", {"next_run": True, "bot": "cpo"}, token=r["token"])["attempt"]
     assert attempt["bot"] == "cpo" and attempt["message"]["id"] == handoff["id"]
     assert attempt["message"]["sender_id"] == "bot:ops"
-
-
-def test_an_approval_a_bot_asks_for_is_decided_by_its_owner_and_consumed_once(api):
-    _, _, bot = setup_attempt(api)
-    payload = {"url": "https://acme.example/draft", "content_sha256": "a" * 64}
-    approval = post(api, "approvals", {"kind": "publish", "payload": payload}, token=bot["token"])
-    path = "approvals/" + approval["id"]
-    assert get(api, path, token="ana-test")["decision"] in (None, "")
-
-    post(api, path, {"decision": "approved"}, token="ben-test", expected=403)  # not the decider
-    post(api, path, {"decision": "approved"})
-    assert get(api, path, token="ana-test")["decision"] == "approved"
-
-    result = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
-    assert result["consumed_at"]
-    again = post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], key="send-1")
-    assert again == result  # a repeat is a replay
-    post(api, path + "/consume", {"payload_hash": approval["payload_hash"]}, token=bot["token"], expected=422)

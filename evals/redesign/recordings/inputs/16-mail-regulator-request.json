@@ -20,7 +20,10 @@
     "is_calendar_invite": false,
     "labels": [
       "INBOX"
-    ]
+    ],
+    "from_domain": "acme.example",
+    "category": "",
+    "known_sender": false
   },
   "note": "A regulator's demand with a deadline: needs the owner and legal, and is urgent this week."
 }

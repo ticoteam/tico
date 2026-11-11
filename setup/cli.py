@@ -3,10 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import backup as bk, settings as st
+from . import backup as bk, settings as st, state
 from .ui import IO, MissingInput
 from .runner_setup import run_runner
-from . import aws as awsmod, hosted, support
+from . import aws as awsmod, hosted, owned, support
 from .wizard import Deps, destroy, doctor, run
 
 COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "owner-link")
@@ -14,7 +14,7 @@ COMMANDS = ("run", "doctor", "destroy", "runner", "backup-storage", "support", "
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="tico setup",
+        prog="python3 -m setup",
         description="Set up Tico on one Docker server, from a domain to a signed-in app.",
         epilog="Secrets are never taken as flags: set TICO_OIDC_CLIENT_SECRET, CLOUDFLARE_API_TOKEN, "
         "CLOUDFLARE_TUNNEL_TOKEN, TICO_INBOUND_KEY or OPENAI_API_KEY (ANTHROPIC_/GEMINI_) "
@@ -111,8 +111,24 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--plan-bucket-region", metavar="REGION", help="the --plan-bucket's region (default --aws-region)")
     p.add_argument(
         "--name",
-        help="AWS: the server's name: its resources are tico-<name>, tagged tico-setup-name=<name>, and its "
-        "settings are in /tico/<name>/env (default: derived from --domain); destroy: the tico-setup-name tag value",
+        help="AWS: the server's name: its resources are <prefix>-<name>, tagged <prefix>-setup-name=<name>, and its "
+        "settings are in /<prefix>/<name>/env (default: derived from --domain); destroy: the <prefix>-setup-name tag "
+        "value. <prefix> is --asset-prefix, tico by default",
+    )
+    p.add_argument(
+        "--asset-prefix",
+        metavar="PREFIX",
+        help="AWS: the word every AWS name, tag and path setup makes starts with, in place of tico (1 to 10 lowercase "
+        "letters, digits and dashes, starting with a letter). Saved with the install the first time; every later command "
+        "that changes it (runs, runner, destroy, backup-storage, owner-link) must name it again and is refused without "
+        "it or with another; doctor reads it. Names on the server itself (/opt/tico, containers) stay",
+    )
+    p.add_argument(
+        "--confirm-dns",
+        metavar="NAME",
+        default="",
+        help="run, --asset-prefix: the record set at NAME that setup's last run sent to Route 53 without hearing back "
+        "is this install's (check it in the Route 53 console first); setup asks for this when it cannot tell",
     )
     p.add_argument(
         "--dns",
@@ -223,16 +239,26 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
     """A server should not hold credentials that can create buckets and IAM users, so this runs where they are."""
     if not args.domain or not args.aws_region:
         raise MissingInput("backup-storage needs --domain and --aws-region")
-    _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
-    values = bk.create_s3(
-        deps.aws_s3(args.aws_region, args.aws_profile),
-        iam,
-        domain=args.domain,
-        region=args.aws_region,
-        account_id=account,
-        name=awsmod.slug(args.domain),
-        say=io.say,
+    domain = args.domain.lower()
+    saved = state.record(state.load(domain)[0])
+    mine = state.record(state.load_backup(domain))  # an earlier strict-mode backup-storage for this domain
+    prefix = awsmod.asset_prefix(args.asset_prefix, saved or mine, what=domain)
+    owned.check_mode(
+        domain, getattr(args, "name", None) or awsmod.saved_name(saved) or awsmod.slug(domain), prefix, saved
     )
+    if owned.strict(prefix):
+        values = _backup_storage_strict(args, io, deps, domain, saved, mine)
+    else:
+        _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
+        values = bk.create_s3(
+            deps.aws_s3(args.aws_region, args.aws_profile),
+            iam,
+            domain=args.domain,
+            region=args.aws_region,
+            account_id=account,
+            name=awsmod.slug(args.domain),
+            say=io.say,
+        )
     io.say("\nOn the server, before the installer (the key is shown once; keep it out of shell history and chat):")
     io.say(f"  export LITESTREAM_ACCESS_KEY_ID={values['LITESTREAM_ACCESS_KEY_ID']}")
     io.say(f"  export LITESTREAM_SECRET_ACCESS_KEY={values['LITESTREAM_SECRET_ACCESS_KEY']}")
@@ -243,6 +269,79 @@ def backup_storage(args, io: IO, deps: Deps) -> int:
         f"  (non-interactive: -- --backup existing --backup-url {values['TICO_BACKUP_URL']} --backup-region {values['TICO_BACKUP_REGION']})"
     )
     return 0
+
+
+def _backup_storage_strict(args, io: IO, deps: Deps, domain: str, saved: dict, mine: dict) -> dict:
+    """Strict mode (owned.py): the storage of a saved install with an id, or a new one with its own id."""
+    if (saved and not saved.get("install_id")) or (mine and not mine.get("install_id")):
+        raise MissingInput(
+            f"The saved state for {domain} has no install id, so setup cannot prove which backup bucket and IAM user are "
+            "its own; refusing to change anything. Check by hand what exists in S3 and IAM before running this again."
+        )
+    install_id = saved.get("install_id") or mine.get("install_id") or awsmod.new_install_id()
+    names = awsmod.Names(awsmod.asset_prefix(args.asset_prefix, saved or mine), install_id)
+    name = (args.name or mine.get("name") or awsmod.saved_name(saved) or awsmod.slug(domain)).strip().lower()
+    if not awsmod.NAME_RE.fullmatch(name):
+        raise MissingInput(
+            "--name is 1 to 40 lowercase letters, digits and dashes, starting and ending with a letter or digit"
+        )
+    owned.check_name(args.name, mine.get("name", "") or awsmod.saved_name(saved), domain)
+    # Both records: the storage's own, and the server install's when there is one (its bucket is the server's).
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        owned.check_region(
+            rec.get("aws_region", "") if rec.get("target", "aws") == "aws" else "", args.aws_region, what
+        )
+    _, iam, _, account = deps.aws_clients(args.aws_region, args.aws_profile)
+    for rec, what in ((mine, f"Backup storage for {domain}"), (saved, domain)):
+        owned.check_account(rec.get("aws_account_id", ""), account, what)
+    # Before the first AWS write, beside (never in) the server's state: a retry keeps it all without the flags.
+    record = {**mine, "asset_prefix": names.prefix, "name": name, "aws_region": args.aws_region}
+    record["aws_account_id"], record["install_id"] = account, install_id
+    ids = record.setdefault("aws_ids", {})
+    # The server install's journal holds what its own run made of the storage (its bucket and backup user): both
+    # records must agree, and what either recorded is what this run holds to.
+    theirs = saved.get("aws_ids") or {}
+    kinds = ("backup_bucket", "backup_user")
+    for kind in kinds:
+        if ids.get(kind) and theirs.get(kind) and ids[kind] != theirs[kind]:
+            raise MissingInput(
+                f"The two records of {domain}'s backup storage disagree: backup.json has {kind} {ids[kind]}, the server "
+                f"install's state.json {theirs[kind]}. Refusing to change anything; check by hand in S3 and IAM which "
+                "one is this install's, and fix the other record."
+            )
+        if theirs.get(kind) and not ids.get(kind):
+            ids[kind] = theirs[kind]
+        intent = (theirs.get("intents") or {}).get(kind)
+        if intent and not ids.get(kind):
+            ids.setdefault("intents", {})[kind] = intent
+    # The backup user's access keys either run recorded making: only those are ever deleted.
+    keys = list(dict.fromkeys((ids.get("backup_keys") or []) + (theirs.get("backup_keys") or [])))
+    if keys:
+        ids["backup_keys"] = keys
+    state.save_backup(domain, record)
+
+    def save() -> None:
+        state.save_backup(domain, record)
+        server = state.load(domain)[0]
+        if saved and server.get("install_id") == install_id:  # the server install's record says the same
+            journal = dict(server.get("aws_ids") or {})
+            journal.update({k: ids[k] for k in (*kinds, "backup_keys") if ids.get(k)})
+            state.save(domain, {**server, "aws_ids": journal})
+
+    return owned.create_s3(
+        deps.aws_s3(args.aws_region, args.aws_profile),
+        iam,
+        domain=domain,
+        region=args.aws_region,
+        account_id=account,
+        name=name,
+        say=io.say,
+        names=names,
+        ids=ids,
+        save=save,
+        record=f"{state.home() / domain / 'backup.json'}"
+        + (f" (and in {state.home() / domain / 'state.json'})" if saved else ""),
+    )
 
 
 def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None = None) -> int:
@@ -268,7 +367,7 @@ def main(argv: list[str] | None = None, deps: Deps | None = None, io: IO | None 
             "owner-link": hosted.rotate,
         }[args.command](args, io, deps)
     except KeyboardInterrupt:
-        io.say("\nInterrupted. Re-run `tico setup`; it resumes.")
+        io.say("\nInterrupted. Re-run the setup wizard; it resumes.")
         return 130
     except MissingInput as e:
         io.say(str(e))

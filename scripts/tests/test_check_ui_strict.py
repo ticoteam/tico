@@ -2,6 +2,7 @@
 the shift-left rules."""
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -78,12 +79,13 @@ def test_the_old_single_file_layout_is_the_base_at_a_ref(monkeypatch):
 
 
 def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept_files(monkeypatch):
+    monkeypatch.setattr(strict, "KEPT_JS", {"ui/app/kept.js": "a reason"})
     monkeypatch.setattr(
         strict,
         "js_on_disk",
         lambda: [
-            "ui/app/finance.js",
             "ui/app/new.js",
+            "ui/app/kept.js",
             "ui/assets/observability-vendors.js",
             "ui/tests/x.cjs",
             "ui/vendor/marked.js",
@@ -95,7 +97,7 @@ def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept
 
 
 def test_every_kept_javascript_file_is_a_js_file_with_a_reason():
-    assert strict.KEPT_JS and all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
+    assert all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
 
 
 def test_a_repeated_cast_is_a_hit_and_a_single_cast_is_not():
@@ -121,6 +123,11 @@ def test_any_is_a_hit_wherever_it_is_written():
 
 def test_names_that_only_contain_any_or_are_members_are_not_hits():
     assert strict.shift_left_hits("let anything: string = o.any;\nconst anyway = 1;\n") == []
+
+
+def test_a_key_named_any_is_not_a_hit():
+    assert strict.shift_left_hits("const words = {week: 'Next 7 days', any: 'Has a date'};\n") == []
+    assert len(strict.shift_left_hits("const f = (a: string, b: any) => b;\n")) == 1
 
 
 def test_comments_and_strings_are_not_read():
@@ -181,3 +188,170 @@ def test_shift_left_reads_only_the_strict_files_without_a_piece(monkeypatch):
     problems = strict.check_shift_left({"ui/app/piece.ts": 2})
     assert problems[0] == "SHIFT-LEFT ui/app/bad.ts: 1 hit(s)"
     assert len(problems) == 2 and problems[1].startswith("    ui/app/bad.ts:1: uses `any`")
+
+
+def worker_root(tmp_path, monkeypatch, config=None):
+    """A checkout holding only the worker config, today's unless `config` replaces it."""
+    if config is None:
+        config = json.loads((strict.ROOT / strict.WORKER_CONFIG).read_text(encoding="utf-8"))
+    (tmp_path / "ui").mkdir()
+    (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    return config
+
+
+def test_the_worker_config_is_strict_and_names_only_the_service_worker():
+    assert strict.check_worker_config() == []
+    assert "./sw.ts" in json.loads((strict.ROOT / strict.CONFIG).read_text())["exclude"]
+
+
+def test_a_worker_finding_fails_the_gate_with_no_baseline(monkeypatch):
+    found = [strict.Finding("ui/sw.ts", 8, 49, "TS2551", "Property 'skipWaitin' does not exist.")]
+    monkeypatch.setattr(strict, "check_worker_config", lambda: [])
+    monkeypatch.setattr(strict, "run_tsc", lambda command, config: (found, []))
+    problems = strict.check_worker()
+    assert problems[0].startswith("WORKER: 1 finding(s)") and "ui/sw.ts:8:49: TS2551" in problems[1]
+    assert strict.main(["--worker-only"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("change", "expected"),
+    [
+        (lambda c: c["compilerOptions"].update(strict=False), "strict must be true"),
+        (lambda c: c["compilerOptions"].pop("noUncheckedIndexedAccess"), "noUncheckedIndexedAccess must be true"),
+        (lambda c: c["compilerOptions"].update(strictNullChecks=False), "strictNullChecks may not be false"),
+        (lambda c: c["compilerOptions"].update(allowJs=True), "allowJs must be false"),
+        (lambda c: c["compilerOptions"].update(lib=["ES2022", "WebWorker", "DOM"]), "lib must be"),
+        (lambda c: c["compilerOptions"].update(types=["node"]), "types must be []"),
+        (lambda c: c["compilerOptions"].update(noCheck=True), "noCheck is not allowed"),
+        (lambda c: c.update(extends="./tsconfig.json"), "extends not allowed"),
+        (lambda c: c.update(include=["./**/*.ts"]), "include must be []"),
+    ],
+)
+def test_weakening_the_worker_config_fails(tmp_path, monkeypatch, change, expected):
+    config = worker_root(tmp_path, monkeypatch)
+    change(config)
+    (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+    problems = strict.check_worker_config()
+    assert any(expected in problem for problem in problems), problems
+
+
+def test_dropping_the_service_worker_from_the_worker_program_fails(tmp_path, monkeypatch):
+    config = worker_root(tmp_path, monkeypatch)
+    for files in ([], ["other.ts"], ["sw.ts", "other.ts"]):
+        config["files"] = files
+        (tmp_path / strict.WORKER_CONFIG).write_text(json.dumps(config))
+        assert any("files must be" in p for p in strict.check_worker_config()), files
+    (tmp_path / strict.WORKER_CONFIG).unlink()
+    assert "cannot be read as JSON" in strict.check_worker_config()[0]
+
+
+def test_the_page_config_may_exclude_the_service_worker_and_nothing_else_new():
+    assert "./sw.ts" in strict.ALLOWED_EXCLUDE and "./app/**" not in strict.ALLOWED_EXCLUDE
+
+
+def _tests_root(tmp_path, monkeypatch, config, effective=None):
+    """A ui/tests folder holding one script and `config` as its raw tsconfig.json. tsc --showConfig is not run: the gate
+    reads `effective` (the raw config when not given) as the options in effect, extends followed."""
+    (tmp_path / "ui/tests").mkdir(parents=True)
+    (tmp_path / "ui/tests/x.cts").write_text("export {};\n")
+    (tmp_path / "ui/tests/tsconfig.json").write_text(json.dumps(config))
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    monkeypatch.setattr(strict, "show_tests_config", lambda: config if effective is None else effective)
+    return tmp_path
+
+
+GOOD_TESTS_CONFIG = {
+    "compilerOptions": {
+        "strict": True,
+        "erasableSyntaxOnly": True,
+        "verbatimModuleSyntax": True,
+        "moduleDetection": "force",
+    },
+    "include": ["./**/*.cts"],
+}
+EXTENDING_TESTS_CONFIG = {"extends": "../../tsconfig.node.json", "include": ["./**/*.cts"]}
+
+
+def test_a_diagnostic_in_a_test_script_fails_the_tests_gate(tmp_path, monkeypatch):
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
+    monkeypatch.setattr(
+        strict, "run_tests_tsc", lambda: (2, "ui/tests/x.cts(1,7): error TS2322: Type 'number' is not assignable.\n")
+    )
+    problems = strict.check_tests_gate()
+    assert problems[0] == "ui/tests: tsc exited 2; fix every diagnostic (no baseline)"
+    assert any("TS2322" in problem for problem in problems)
+
+
+def test_a_weakened_test_config_fails_without_running_tsc(tmp_path, monkeypatch):
+    weak = {"compilerOptions": {"strict": False, "verbatimModuleSyntax": True}, "include": ["./**/*.cts"]}
+    _tests_root(tmp_path, monkeypatch, weak)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    problems = strict.check_tests_gate()
+    assert any("strict must be true" in p for p in problems)
+    assert any("erasableSyntaxOnly must be true" in p for p in problems)
+
+
+def test_a_declare_global_in_a_test_script_fails_without_running_tsc(tmp_path, monkeypatch):
+    root = _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
+    (root / "ui/tests/y.cts").write_text("declare global {\n  var post: () => void;\n}\nexport {};\n")
+    (root / "ui/tests/z.d.cts").write_text("declare global {\n  var helper: number;\n}\nexport {};\n")
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run with a declare global"))
+    problems = strict.check_tests_gate()
+    assert len(problems) == 1 and problems[0].startswith("ui/tests/y.cts: `declare global` is not allowed")
+
+
+def test_the_test_config_must_keep_module_detection_force(tmp_path, monkeypatch):
+    loose = {
+        **GOOD_TESTS_CONFIG,
+        "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"], "moduleDetection": "auto"},
+    }
+    _tests_root(tmp_path, monkeypatch, loose)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    assert strict.check_tests_gate() == [
+        'ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)'
+    ]
+
+
+def test_options_inherited_through_extends_count(tmp_path, monkeypatch):
+    # The raw file names none of the flags; the base it extends holds them all, as tsconfig.node.json does.
+    _tests_root(tmp_path, monkeypatch, EXTENDING_TESTS_CONFIG, effective=GOOD_TESTS_CONFIG)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: (0, ""))
+    assert strict.check_tests_gate() == []
+
+
+def test_a_base_that_turns_module_detection_off_fails_though_the_raw_file_looks_strict(tmp_path, monkeypatch):
+    in_effect = {**GOOD_TESTS_CONFIG, "compilerOptions": {**GOOD_TESTS_CONFIG["compilerOptions"]}}
+    in_effect["compilerOptions"].pop("moduleDetection")
+    in_effect["compilerOptions"]["verbatimModuleSyntax"] = False
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG, effective=in_effect)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on a weakened config"))
+    assert strict.check_tests_gate() == [
+        "ui/tests/tsconfig.json: verbatimModuleSyntax must be true (the test scripts' strict rule)",
+        'ui/tests/tsconfig.json: moduleDetection must be "force" (each script is its own scope)',
+    ]
+
+
+def test_the_test_config_is_read_with_show_config_from_the_root(tmp_path, monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs["cwd"]))
+        return subprocess.CompletedProcess(command, 0, json.dumps(GOOD_TESTS_CONFIG), "")
+
+    monkeypatch.setattr(strict, "ROOT", tmp_path)
+    monkeypatch.setattr(strict.node_types.subprocess, "run", run)
+    assert strict.show_tests_config() == GOOD_TESTS_CONFIG
+    [(command, cwd)] = calls
+    assert command[-3:] == ["-p", strict.TESTS_CONFIG, "--showConfig"] and cwd == tmp_path
+
+
+def test_a_test_config_tsc_cannot_read_fails_without_running_tsc(tmp_path, monkeypatch):
+    _tests_root(tmp_path, monkeypatch, GOOD_TESTS_CONFIG)
+
+    def unreadable():
+        raise strict.node_types.ConfigError("ui/tests/tsconfig.json: tsc --showConfig exited 1: error TS5083")
+
+    monkeypatch.setattr(strict, "show_tests_config", unreadable)
+    monkeypatch.setattr(strict, "run_tests_tsc", lambda: pytest.fail("tsc must not run on an unreadable config"))
+    assert strict.check_tests_gate() == ["ui/tests/tsconfig.json: tsc --showConfig exited 1: error TS5083"]

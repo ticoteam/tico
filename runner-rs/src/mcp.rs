@@ -485,12 +485,12 @@ pub fn codex_config(servers: &[Value], env: &Env, process_env: &Env) -> Map<Stri
     out
 }
 
-/// The bot's servers merged beside Codex's stubbed operator ones: a name the stubs (or the hub) already use
-/// takes a `tico_` prefix, so a bot's table never merges into a disabled stub.
+/// The bot's servers merged beside Codex's stubbed operator ones: a name the stubs (or Tico's own server, `tico`)
+/// already use takes a `bot_` prefix, so a bot's table never merges into a disabled stub or replaces Tico's.
 pub fn codex_merge(servers: &mut Map<String, Value>, remote: Map<String, Value>) {
     for (name, table) in remote {
-        let key = if servers.contains_key(&name) || name == "hub" {
-            format!("tico_{name}")
+        let key = if servers.contains_key(&name) || name == "tico" {
+            format!("bot_{name}")
         } else {
             name
         };
@@ -753,12 +753,12 @@ mod tests {
         stubs.insert("svc".into(), json!({"enabled": false}));
         let mut remote = Map::new();
         remote.insert("svc".into(), json!({"url": "a"}));
-        remote.insert("hub".into(), json!({"url": "b"}));
+        remote.insert("tico".into(), json!({"url": "b"}));
         remote.insert("new".into(), json!({"url": "c"}));
         codex_merge(&mut stubs, remote);
         assert_eq!(
             stubs.keys().cloned().collect::<Vec<_>>(),
-            ["svc", "tico_svc", "tico_hub", "new"]
+            ["svc", "bot_svc", "bot_tico", "new"]
         );
     }
 

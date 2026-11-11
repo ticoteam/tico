@@ -13,12 +13,12 @@ import pytest
 from backend import assistant, cloud_access, cloud_machines as CM, team_rules
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, headers, setup_attempt
-from backend.tests.test_openapi_v2 import conforms
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_mcp import call as mcp
-from backend.tests.test_member_bots import botops, finish, turn
-from backend.tests.test_settings_assistant import mcp as assistant_mcp
+from backend.tests.helpers.api import headers, setup_attempt
+from backend.tests.helpers.openapi_v2 import conforms
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.mcp import call as mcp
+from backend.tests.helpers.member_bots import botops, finish, turn
+from backend.tests.helpers.settings_assistant import mcp as assistant_mcp
 
 PATH = "/api/v2/cloud-machines/support"
 KEY = "tgw-synthetic-fixture-key-0042"
@@ -415,22 +415,22 @@ def test_owner_assistant_needs_the_same_confirmation_as_the_support_access_rule(
 
 def test_cloud_support_catalogue_is_owner_only_and_reads_hq_through_mcp(api, hq):
     key = "team.rules.cloud_machine_support"
-    err, found = mcp(api, "hub_settings_find", {"words": "cloud support"})
+    err, found = mcp(api, "tico_settings_find", {"words": "cloud support"})
     assert not err, found
     entry = next(e for e in found["result"] if e["key"] == key)
     assert entry["who"] == "owner" and entry["class"] == "confirm"
     assert entry["method"] == "PUT" and entry["route"] == PATH and entry["body"] == {"on": "<bool>"}
     shown = api.get("/api/v2/settings/catalog/" + key, headers=headers()).json()
     assert shown["read"] == {"path": "cloud-machines/support", "pointer": "on"}
-    err, shown = mcp(api, "hub_settings_show", {"key": key})
+    err, shown = mcp(api, "tico_settings_show", {"key": key})
     assert not err and shown["value"] is True and shown["you_may"] is True, shown
     for token in ("ben-test", "cara-test"):
-        err, shown = mcp(api, "hub_settings_show", {"key": key}, token)
+        err, shown = mcp(api, "tico_settings_show", {"key": key}, token)
         assert not err and shown["you_may"] is False, shown
-        err, refused = mcp(api, "hub_settings_set", {"key": key, "value": "off"}, token)
+        err, refused = mcp(api, "tico_settings_set", {"key": key, "value": "off"}, token)
         assert err and refused["error"] == "forbidden", refused
     assert hq.on is True and audit(api) == []
-    err, changed = mcp(api, "hub_settings_set", {"key": key, "value": "off"})
+    err, changed = mcp(api, "tico_settings_set", {"key": key, "value": "off"})
     assert not err and changed["value"] is False, changed
     assert hq.on is False
     assert audit(api) == [("human:ana", {"after": {"cloud_machine_support": False}})]
@@ -441,10 +441,10 @@ def test_cloud_support_catalogue_waits_for_the_owners_confirmation(api, hq, boto
     args = {"key": "team.rules.cloud_machine_support", "value": "off"}
     if via == "botops":
         attempt = turn(api, botops, person="ana-test", text="Turn cloud machine support off")
-        err, card = mcp(api, "hub_settings_set", args, attempt["token"])
+        err, card = mcp(api, "tico_settings_set", args, attempt["token"])
     else:
         _, attempt = assistant_turn(api, "ana-test", "Turn cloud machine support off")
-        err, card = assistant_mcp(api, "hub_settings_set", {**args, "on_behalf_of": "turn"}, attempt["token"])
+        err, card = assistant_mcp(api, "tico_settings_set", {**args, "on_behalf_of": "turn"}, attempt["token"])
     assert not err and card["needs_confirm"] is True, card
     action = card["action"]
     assert action["method"] == "PUT" and action["path"] == PATH and action["body"] == {"on": False}

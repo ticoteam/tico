@@ -14,8 +14,9 @@ schedule, set before the window starts (the bookkeeping the scheduler keeps, as 
 import json
 from datetime import timedelta, timezone
 
-from .. import automations, cloud_access, demo_content as D, judge, routines, strategy_bot
+from .. import automations, cloud_access, demo_content as D, routines, strategy_bot
 from .. import runner_states
+from ..demo_seed import say_done
 from ..scheduler import next_due
 from ..store import H
 from .automations_learnings import _hold_queued, _keep_focus, _release_held
@@ -76,21 +77,16 @@ def seed(b):
     # The jobs the bots' queues already hold (the history's assignments, never claimed) are held while the window's
     # runs are answered, so each computer claim is handed one of the runs' jobs; they are queued again after it.
     queued = b.write(_hold_queued)
-    # A reply's rule check (org_rule_check) would ask the model; the build asks none. With the bots' daily cap at 0 the
-    # check is "unchecked" before any call, as it is when the cap is spent, so the build makes no provider call.
-    cap = judge.daily_cap(b.store.settings, "bot")
-    b.store.settings.decisions_daily_calls_bot = 0
-    try:
-        for due in sorted(plan):
-            b.clock.at = due
-            b.write(lambda c, due=due: _pass(c, b.store, due, [row["id"] for row, _ in plan[due]]))
-            b.clock.at = due + START_LAG
-            b.store.automations.drain()
-            due_rows = {row["id"]: (row["flow"], index) for row, index in plan[due]}
-            _work(b, _runs_at(b, due, list(due_rows)), due_rows)
-            b.store.automations.drain()
-    finally:
-        b.store.settings.decisions_daily_calls_bot = cap
+    # A reply's rule check (org_rule_check) asks no model here: the build's app says `demo_build` (demo_seed.py), so
+    # the check is "unchecked" before any call.
+    for due in sorted(plan):
+        b.clock.at = due
+        b.write(lambda c, due=due: _pass(c, b.store, due, [row["id"] for row, _ in plan[due]]))
+        b.clock.at = due + START_LAG
+        b.store.automations.drain()
+        due_rows = {row["id"]: (row["flow"], index) for row, index in plan[due]}
+        _work(b, _runs_at(b, due, list(due_rows)), due_rows)
+        b.store.automations.drain()
     b.write(lambda c: _release_held(c, queued))
     b.write(lambda c: _contact_after(c, contact["saved"]))
     # The occurrences before now are played; each schedule's next time is its first one after now.
@@ -229,11 +225,7 @@ def _work(b, runs, occurrences):
         # Every run of a routine is a task, and the bot closes it when it is done; until then the schedule absorbs
         # its next occurrence (automations._absorbed), so the bot closes it with its answer as its note.
         if task := (claim.get("task") or {}).get("id"):
-            b.write(
-                lambda c, slug=slug, task=task, note=body["text"]: H.task_update(
-                    c, H.bot_actor(slug), task, status="done", note=note
-                )
-            )
+            b.write(lambda c, slug=slug, task=task, note=body["text"]: say_done(c, H.bot_actor(slug), task, note))
         _keep_focus(b, slug)
 
 

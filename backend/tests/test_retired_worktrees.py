@@ -6,9 +6,9 @@ import uuid
 import pytest
 
 from backend import hubdb as H, worktrees as W, worktree_waits as waits
-from backend.tests.test_github_app import api, gh, auth  # noqa: F401
-from backend.tests.test_worktrees import prepared, post, mark_ready  # noqa: F401
-from backend.tests.test_repositories import put
+from backend.tests.helpers.github_app import api, gh, auth  # noqa: F401
+from backend.tests.helpers.worktrees import end, give, prepared, post, mark_ready  # noqa: F401
+from backend.tests.helpers.repositories import put
 
 READY = {'schema_version': 1, 'bots': {}, 'worktrees': True, 'worktree_waits': True, 'worktree_recovery': True}
 
@@ -75,7 +75,7 @@ def test_retired_status_health_recovery_and_old_reports(prepared, revoked):
         assert W.inventory(c, 'old') == []
         assert W.holdings(c, 'bot:cmo') == []
         notes = W.recovery_prompt(c, H.task(c, tid), 'cmo')
-        assert f'hub task worktree add Acme/product --task {tid}' in notes[0]
+        assert f'tico task worktree add Acme/product --task {tid}' in notes[0]
         assert W.recovery_prompt(c, H.task(c, tid), 'cpo') == []
     # Health uses the same retirement projection, including the last report's facts.
     with api.app_state.store.read() as c:
@@ -229,7 +229,7 @@ def test_recovered_tree_restores_after_cleanup_when_its_task_reopens(prepared, t
     assert [(a['link_id'], a['action']) for a in preparing.json()['worktree_actions']] == [(old['link_id'], 'prepare')]
     assert mark_ready(api, tid, old['link_id']).status_code == 200
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (tid,))
+        end(c, tid)
     cleanup = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert cleanup.status_code == 200, cleanup.text
     assert [a['action'] for a in cleanup.json()['worktree_actions']] == ['remove']
@@ -238,7 +238,7 @@ def test_recovered_tree_restores_after_cleanup_when_its_task_reopens(prepared, t
     assert removed.status_code == 200, removed.text
     assert removed.json()['worktree_actions'] == []
     with api.app_state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tid,))
+        end(c, tid, 'open')
     restored = post(api, 'runners/heartbeat', beat, 'runner-test')
     assert restored.status_code == 200, restored.text
     actions = restored.json()['worktree_actions']
@@ -333,9 +333,9 @@ def test_idle_recovery_rechecks_the_task_owner_and_current_computer(prepared):
         row = dict(c.execute('SELECT * FROM task_links WHERE id=?', (moved['link_id'],)).fetchone())
         detail = json.loads(row['detail'])
         assert W.preparable(c, row, detail)
-        c.execute("UPDATE tasks SET owner_id='bot:cpo' WHERE id=?", (tid,))
+        give(c, tid, 'bot:cpo')
         assert not W.preparable(c, row, detail)
-        c.execute("UPDATE tasks SET owner_id='bot:cmo' WHERE id=?", (tid,))
+        give(c, tid, 'bot:cmo')
         c.execute("DELETE FROM assignments WHERE bot='cmo'")
         assert not W.preparable(c, row, detail)
 

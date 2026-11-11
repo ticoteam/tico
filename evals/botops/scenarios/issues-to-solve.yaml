@@ -13,7 +13,7 @@ done:
 reply: "Two things. Scribe had no computer, so I put it on your Mac and turned it on. Writer is paused; I left it that way, say the word and I will turn it back on."
 limits: {person_steps: 0, jargon: 0, duplicates: 0, sent_elsewhere: 0}
 script:
-  - tool: hub_health_check
+  - tool: tico_health_check
     args: {}
-  - tool: hub_bot_go_live
+  - tool: tico_bot_go_live
     args: {bot: scribe, setup: false}

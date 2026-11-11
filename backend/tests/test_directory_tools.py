@@ -1,4 +1,4 @@
-"""The Directory's routes, end to end (track 4): `hub directory` as a bot runs it, the same questions over MCP, and what a
+"""The Directory's routes, end to end (track 4): `tico directory` as a bot runs it, the same questions over MCP, and what a
 reader without access gets back from any route. The store's own rules are in test_entities_store.py; these pin that each
 route answers what the store says over the API's real request path, and that a reader without access learns nothing.
 """
@@ -8,8 +8,8 @@ import pytest
 from backend import hubdb as H
 from backend import mailbox_access as MA
 from backend.entities import store as ES
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubcli, remotecli
 from clients.tico import APIError
 
@@ -17,7 +17,7 @@ ANA, CARA = "human:ana", "human:cara"
 
 
 class Forward:
-    """The client `hub directory` calls, answered by the app's own test client as `token`: each request is the real one."""
+    """The client `tico directory` calls, answered by the app's own test client as `token`: each request is the real one."""
 
     def __init__(self, api, token):
         self.api, self.token = api, token
@@ -42,7 +42,7 @@ def answer(api, method, path, token, **kwargs):
 
 @pytest.fixture
 def cli(api, monkeypatch):
-    """`hub directory` argv in, as ana: the command's request goes to the app and its answer comes back."""
+    """`tico directory` argv in, as ana: the command's request goes to the app and its answer comes back."""
     monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Forward(api, "ana-test"))
     return lambda *argv: remotecli.run(hubcli.parser().parse_args(["directory", *argv]))
@@ -84,7 +84,7 @@ def test_a_person_written_by_the_cli_is_read_back_by_the_cli_and_the_mcp_door(ap
     assert [note["body"] for note in cli("get", jane)["notes"]] == ["Prefers phone"]
 
     assert [row["id"] for row in cli("find", "person", "--name", "jane")["rows"]] == [jane]
-    isError, over_mcp = call(api, "hub_directory_get", {"ref": "jane@example.test"})
+    isError, over_mcp = call(api, "tico_directory_get", {"ref": "jane@example.test"})
     assert isError is False and over_mcp["values"]["title"]["value"] == "Chief Financial Officer"
 
 
@@ -160,7 +160,7 @@ def test_self_and_rules_answer_the_same_through_the_cli_and_the_mcp_door(api, cl
 
     me = cli("self")
     assert me["name"] == "Acme Lights" and [place["name"] for place in me["operates_in"]] == ["Ontario"]
-    assert call(api, "hub_directory_self") == (False, me)
+    assert call(api, "tico_directory_self") == (False, me)
     assert cli("rules", "acme.example") == {"entity": self_id, "action": None, "as_bot": None, "rules": []}
 
 
@@ -194,7 +194,7 @@ def test_a_reader_without_access_gets_nothing_from_card_find_history_or_rules(ap
     listed = answer(api, "get", "entities/find/person", "cara-test", params={"name": "jane"})
     assert listed.status_code == 200 and listed.json()["rows"] == [] and listed.json()["count"] == 0
 
-    isError, payload = call(api, "hub_directory_get", {"ref": "jane@quiet.example"}, token="cara-test")
+    isError, payload = call(api, "tico_directory_get", {"ref": "jane@quiet.example"}, token="cara-test")
     assert isError is True and payload["error"] == "not_found"
     assert jane not in str(payload) and "Jane Quiet" not in str(payload)
 
@@ -239,3 +239,22 @@ def test_the_store_resolves_targets_types_and_the_company_summary_by_the_one_rea
         assert ES.describe_type(c, "person")["type"]["key"] == "person"
         assert ES.describe_type(c, "no-such-type") is None
         assert ES.type_exists(c, "place") and not ES.type_exists(c, "no-such-type")
+
+
+def test_only_an_owner_or_an_admin_changes_where_we_operate(api):
+    with api.app.state.store.transaction() as c:
+        ES.ensure_self(c, company_name="Acme Lights", domain="acme.example")
+        texas = ES.upsert(c, ANA, "place", match={"name": "Texas"}, name="Texas")["id"]
+    add = {"from_ref": "acme.example", "link_key": "operates_in", "to_ref": texas}
+
+    refused = answer(api, "post", "entities/links", "cara-test", json=add)
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden"
+    assert answer(api, "get", "entities/self", "cara-test").json()["operates_in"] == []
+
+    link = answer(api, "post", "entities/links", "ben-test", json=add).json()["id"]
+    [place] = answer(api, "get", "entities/self", "cara-test").json()["operates_in"]
+    assert place["id"] == texas and place["link_id"] == link
+
+    assert answer(api, "post", "entities/unlink", "cara-test", json={"link_id": link}).status_code == 403
+    assert answer(api, "post", "entities/unlink", "ana-test", json={"link_id": link}).json() == {"id": link}
+    assert answer(api, "get", "entities/self", "ana-test").json()["operates_in"] == []

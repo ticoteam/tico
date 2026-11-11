@@ -9,7 +9,7 @@ lead: true
 icon: lightbulb
 suggest: default
 tags: [saas, software, roadmap, prioritisation, discovery, b2b, b2c]
-team_templates: [feedback-analyst, product-researcher, product-manager, product-analyst, product-ops, ux-writer, pricing]
+team_templates: [segment-product-owner, feedback-analyst, product-researcher, product-manager, product-analyst, product-ops, ux-writer, pricing]
 summary: "Runs the product team's week: roadmap status, the decisions waiting on a human, what each product bot found, and evidence-scored proposals for what to build next. Roadmap changes happen only when asked and a Tool allows them."
 when: "A software team with a roadmap, more requests than capacity, and nobody whose job is to keep the evidence and the decisions in one place."
 pains:
@@ -43,7 +43,7 @@ prerequisites:
 onboarding:
   - ask: "What is the product outcome for this quarter, in one sentence, and which goal in Tico does it serve?"
     why: "Every proposal is scored against it. Without one, prioritising is taste."
-  - ask: "Where does the roadmap live (a doc, GitHub milestones, a board) and what is committed for this quarter?"
+  - ask: "Where does the roadmap live (a doc, GitHub milestones, a tracker) and what is committed for this quarter?"
     why: "Sets the list I report on as on track or at risk, and where I read it."
   - ask: "Who decides what gets built, and who else is on the product team, humans and bots?"
     why: "Decisions go to that human; routing goes to the right owner."

@@ -4,7 +4,7 @@ import base64
 import hashlib
 
 from backend.doc_sources import FetchFailure
-from backend.tests.test_docs import api, call, make  # noqa: F401
+from backend.tests.helpers.docs import call, make  # noqa: F401
 from clients import github_scope
 
 
@@ -116,7 +116,7 @@ def test_scope_parsing_preserves_slash_references():
 
 
 def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
-    from backend.tests.test_mcp import call as tool
+    from backend.tests.helpers.mcp import call as tool
     from clients.docs_ask import parse_citations
 
     source, worker, github = setup_source(
@@ -130,12 +130,12 @@ def test_search_finds_a_nested_passage_and_tools_read_it_as_untrusted(api):
     assert hit['path'] == 'docs/nested/retries.md' and hit['section'] == 'Backoff'
     assert hit['trust'] == 'untrusted_external' and '?plain=1#L3-L4' in hit['citation_url']
     assert hits.index(hit) < next(i for i, row in enumerate(hits) if row.get('path') == '_librarian/index.md')
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
     from backend.openapi_v2 import generate
 
     schema = generate()
     assert conforms({'results': hits}, schema['components']['schemas']['DocsSearchResults'], schema) is None
-    err, answer = tool(api, 'hub_context_show', {'id': hit['id'], 'revision': hit['commit']})
+    err, answer = tool(api, 'tico_doc_read', {'ref': hit['id'], 'revision': hit['commit']})
     assert not err and answer['doc']['trust'] == 'untrusted_external'
     assert 'cobalt jitter' in answer['doc']['content']
     fast = call(api, 'GET', 'context/search', params={'q': 'cobalt', 'source': 'docs'})['results'][0]

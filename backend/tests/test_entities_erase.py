@@ -15,7 +15,7 @@ from backend import hubdb as H
 from backend import market as M
 from backend.entities import erase as ER
 from backend.entities import store as ES
-from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.helpers.api import get, headers  # noqa: F401
 
 ANA, BEN, CARA, BOT = "human:ana", "human:ben", "human:cara", "bot:ops"
 # What names the person in the database: her id, names, addresses and CRM id. A scan for any of them must find nothing.
@@ -87,6 +87,10 @@ def _a_person_with_everything(c):
     c.execute(
         "INSERT INTO entity_mentions (id, mentionable_type, mentionable_id, entity_id, role, quote, created_at) "
         "VALUES ('men_jane', 'task', 'task_jane', ?, 'mentioned', 'Jane asked for terms', ?)",
+        (jane, now),
+    )
+    c.execute(
+        "INSERT INTO entity_lookups (id, attempt_id, entity_id, created_at) VALUES ('look_jane', 'att_jane', ?, ?)",
         (jane, now),
     )
     c.execute(
@@ -191,3 +195,26 @@ def test_a_live_entitys_history_stays_append_only(api):
         with pytest.raises(sqlite3.IntegrityError):
             c.execute("DELETE FROM history_events WHERE subject_id = ?", (jane,))
         assert c.execute("SELECT count(*) FROM history_events WHERE subject_id = ?", (jane,)).fetchone()[0] == before
+
+
+def test_an_entity_a_project_names_is_kept_for_the_books(api):
+    """An organization no contact holds, but a project's customer: the erase is refused with a 409 that names what keeps
+    it, and nothing goes. The check reads every table with a key to entities, so a business table added later counts."""
+    from backend.store import Problem
+
+    with tx(api) as c:
+        _setup(c)
+        acme = ES.upsert(c, ANA, "organization", match={"domain": "builders.example"}, name="Acme Builders")["id"]
+        c.execute(
+            "INSERT INTO projects (id, name, customer_id, created_at, created_by_id) "
+            "VALUES ('prj-roof', 'Roof', ?, '2026-11-01T00:00:00Z', ?)",
+            (acme, ANA),
+        )
+        with pytest.raises(Problem) as error:
+            ER.erase(c, ANA, acme, "request")
+        assert (error.value.status, error.value.code) == (409, "kept_for_books")
+        assert error.value.detail == (
+            "Kept for the books: Acme Builders has Finance records (projects). Erase them in Finance first."
+        )
+        assert c.execute("SELECT 1 FROM entities WHERE id = ?", (acme,)).fetchone()
+        assert c.execute("SELECT customer_id FROM projects WHERE id = 'prj-roof'").fetchone()[0] == acme

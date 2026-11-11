@@ -2,9 +2,9 @@
 
 import pytest
 
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_live_meetings import attach, chunk, live, settle  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.helpers.live_meetings import attach, chunk, live, settle  # noqa: F401
+from backend.tests.helpers.mcp import call
 
 
 def test_added_person_can_add_people_and_bots_without_joining_private_meeting(live):
@@ -105,9 +105,9 @@ def test_nonowner_bot_and_added_people_read_participants_only_filed_meeting(live
     assert any(v["metadata"].get("note") == "Shared planning notes" for v in versions)
     assert rid in {r["id"] for r in get(live, "meetings/search?q=shared", token="ops-live")["results"]}
     assert not get(live, "meetings/search?q=shared", token="finance-live")["results"]
-    err, transcript = call(live, "hub_meeting_read", {"id": rid}, token="ops-live")
+    err, transcript = call(live, "tico_meeting_read", {"id": rid}, token="ops-live")
     assert not err and "shared transcript" in transcript["text"]
-    err, _ = call(live, "hub_meeting_read", {"id": rid}, token="finance-live")
+    err, _ = call(live, "tico_meeting_read", {"id": rid}, token="finance-live")
     assert err
     post(
         live,

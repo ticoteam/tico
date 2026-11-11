@@ -12,33 +12,8 @@ import pytest
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import file_library, thread_bot_digest, thread_retention, thread_webhooks, threads
 from backend.store import H
-from backend.tests.test_api import api, headers, post  # noqa: F401  (the fixture and its helpers)
-
-
-def new_thread(api, audience="members", members=("human:ben",), title="Budget", token="ana-test"):
-    payload = {"title": title, "audience": audience}
-    if audience == "members":
-        payload["members"] = list(members)
-    response = api.post("/api/v2/threads", json=payload, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def say(api, thread_id, text, token="ana-test", key=None, parent=None):
-    payload = {"text": text, **({"parent_message_id": parent} if parent else {})}
-    response = api.post(f"/api/v2/threads/{thread_id}/messages", json=payload, headers=headers(token, key))
-    assert response.status_code == 200, response.text
-    return response.json()
-
-
-def bot_post(api, bot, thread_id, text, **kwargs):
-    with api.app.state.store.transaction() as c:
-        return threads.post(c, bot, thread_id, text, **kwargs)
-
-
-def rows(api, sql, *args):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(sql, args).fetchall()]
+from backend.tests.helpers.api import headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.threads_delivery import bot_post, delivery, new_thread, queued_job, rows, say
 
 
 def follower(api, thread_id, actor):
@@ -49,16 +24,6 @@ def follower(api, thread_id, actor):
         actor,
     )
     return found[0] if found else None
-
-
-def delivery(api, message_id, recipient):
-    found = rows(api, "SELECT * FROM message_deliveries WHERE message_id=? AND recipient=?", message_id, recipient)
-    return found[0] if found else None
-
-
-def queued_job(api, carrier_id):
-    found = rows(api, "SELECT state FROM jobs WHERE message_id=?", carrier_id)
-    return found[0]["state"] if found else None
 
 
 def on_digest(api, bot, thread_id):
@@ -622,9 +587,9 @@ def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
             calls.append((path, body))
             return {}
 
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": 30})
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": None})
-    hubtools.BY_NAME["hub_thread_update"]["fn"](Api(), {"thread": "t1", "title": "Plan"})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": 30})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "retention_days": None})
+    hubtools.BY_NAME["tico_thread_update"]["fn"](Api(), {"thread": "t1", "title": "Plan"})
     assert [body for _, body in calls] == [{"retention_days": 30}, {"retention_days": None}, {"title": "Plan"}]
 
     parser = hubcli.build_parser() if hasattr(hubcli, "build_parser") else hubcli.parser()

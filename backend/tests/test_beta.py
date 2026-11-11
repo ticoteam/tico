@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 
 from backend import beta
-from backend.tests.test_onboarding import environment, signed_in  # noqa: F401
-from backend.tests.test_support import hq  # noqa: F401  (the fake HQ, autouse)
+from backend.tests.helpers.onboarding import environment, signed_in  # noqa: F401
+from backend.tests.helpers.support import hq  # noqa: F401  (the fake HQ, autouse)
 
 DOCS = Path(__file__).resolve().parents[2] / "docs"
 

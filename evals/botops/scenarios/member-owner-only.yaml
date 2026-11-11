@@ -10,6 +10,6 @@ done:
 reply: "I cannot change that for you: only an owner or an admin can set how many bots members may have. Ask one of them, or tell me which bot you need and I will help within the limit."
 limits: {person_steps: 0, jargon: 0, duplicates: 0, sent_elsewhere: 0}
 script:
-  - tool: hub_api
+  - tool: tico_api
     args: {method: PUT, path: access/limits, body: {member_bot_limit: 20}}
     expect_refused: true

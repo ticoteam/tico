@@ -1,5 +1,5 @@
-"""The Health page reads in set queries: its statements do not grow with the stalled waiting tasks, looping tasks or
-silent waits it summarises. On the Tico Team hub (Nov 3) a call took 384 statements and 1.2 s, rising as escalations
+"""The Health page reads in set queries: its statements do not grow with the bots, computers and pull requests it
+summarises. On the Tico Team hub (Nov 3) a call took 384 statements and 1.2 s, rising as escalations
 and loops piled up: each escalated waiting task cost its own reads (measured here: 100 of them, +103 statements)."""
 
 import json
@@ -7,10 +7,9 @@ import uuid
 
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.test_api import api  # noqa: F401  (the fixture)
-from backend.tests.test_api import assign, headers, post, runner
-from backend.tests.test_claim_statements import seed, traced
-from backend.tests.test_getting_started import heartbeat
+from backend.tests.helpers.api import assign, headers, post, runner
+from backend.tests.helpers.claim_statements import seed, traced
+from backend.tests.helpers.getting_started import heartbeat
 
 OLD = H.shift(H.now(), hours=-5)
 PR_OLD = H.shift(H.now(), hours=-13)
@@ -27,76 +26,8 @@ def health(api):
     return response.json(), len(seen)
 
 
-def stall(api, count, prefix, blocked=0):
-    """`count` waiting bot tasks nothing moves; the first `blocked` wait on a quiet subtask of their own, open and as quiet
-    as they are. The bot's queued chats are finished first: a queued chat keeps a bot busy, and a busy bot is not stalled."""
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='few-00' AND state='queued'")
-        for n in range(count):
-            tid = f"{prefix}{n}"
-            c.execute(
-                "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
-                "VALUES(?,?,?,?,?,?,?,0)",
-                (tid, "Stalled " + tid, "human:ana", "bot:few-00", "waiting", OLD, OLD),
-            )
-            if n < blocked:
-                kid = tid + "-child"
-                c.execute(
-                    "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
-                    "VALUES(?,?,?,?,?,?,?,0)",
-                    (kid, "Child " + tid, "bot:few-00", "bot:few-00", "open", OLD, OLD),
-                )
-                for frm, to, kind in ((kid, tid, "parent"), (kid, tid, "blocks")):
-                    c.execute(
-                        "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,?)",
-                        (frm, to, kind, OLD),
-                    )
-
-
-def loop(api, count, start=0):
-    with api.app.state.store.transaction() as c:
-        for n in range(start, start + count):
-            tid = f"loop{n}"
-            c.execute(
-                "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at,updated_at,private) "
-                "VALUES(?,?,?,?,?,?,?,0)",
-                (tid, "Looping " + tid, "human:ana", "bot:few-00", "open", OLD, OLD),
-            )
-            for k in range(22):
-                c.execute(
-                    "INSERT INTO history_events(id,subject_type,subject_id,created_at,actor_id,kind,old,new) "
-                    "VALUES(?,'task',?,?,?,?,?,?)",
-                    (uuid.uuid4().hex, tid, H.shift(H.now(), minutes=-k), "human:ana", "status", "a", "b"),
-                )
-
-
 def check(body, key):
     return next((x for x in body["checks"] if x["id"] == key), None)
-
-
-def test_health_statements_do_not_grow_with_stalled_waiting_tasks(api):
-    seed(api, "few", 6)
-    stall(api, 3, "a", blocked=1)
-    health(api)  # first-time reads
-    small_body, small = health(api)
-    stall(api, 100, "b")
-    body, large = health(api)
-    assert large <= small + 4, (small, large)
-    # The blocked task and its quiet subtask are named, and only them: the other waiting tasks have no blocker.
-    for found in (small_body, body):
-        stalled = check(found, "stalled_tasks")
-        assert stalled and {i["task"] for i in stalled["items"]} == {"a0", "a0-child"}, stalled
-
-
-def test_health_statements_do_not_grow_with_looping_tasks(api):
-    seed(api, "few", 6)
-    loop(api, 3)
-    health(api)
-    body, small = health(api)
-    loop(api, 20, start=3)
-    _, large = health(api)
-    assert check(body, "task_loops")
-    assert large <= small + 4, (small, large)
 
 
 def status(api):
@@ -154,8 +85,7 @@ def reviews(api, prefix, count):
 def fleet(api, prefix, count):
     """`count` each of the work Health and Status read per bot, per computer, per task and per pull request: bots on an
     online computer whose tool credential is missing and some of whose models are not signed in, bots on a computer
-    that never checked in, stalled waiting tasks held by a quiet subtask of their own, and pull requests waiting for
-    review."""
+    that never checked in, and pull requests waiting for review."""
     store = api.app.state.store
     machine = seed(api, prefix, count)  # bots on an online computer, a queued chat each
     slugs = [f"{prefix}-{n:02d}" for n in range(count)]
@@ -189,7 +119,6 @@ def fleet(api, prefix, count):
     for s in off:
         assign(api, silent, s)
         post(api, "chat/" + s, {"text": "Please summarize the current work."})
-    stall(api, count, prefix + "s", blocked=count)
     reviews(api, prefix, count)
 
 
@@ -203,7 +132,7 @@ def test_health_and_status_statements_do_not_grow_with_the_fleet(api):
     body, large = health(api)
     _, large_status = status(api)
     # The scenario reaches each check it measures; a check that went quiet would make the counts mean nothing.
-    for key in ("stalled_tasks", "aged_prs", "tool_credentials"):
+    for key in ("aged_prs", "tool_credentials"):
         assert check(small_body, key) and check(body, key), key
     assert large <= small + 4, (small, large)
     assert large_status <= small_status + 4, (small_status, large_status)

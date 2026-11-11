@@ -77,7 +77,7 @@ def validate_schedules(entries, read_file=None):
                 raise ValueError(
                     f'Routine {index} has an unknown event; Tico emits {", ".join(EVENTS)} '
                     'and webhook.<trigger id> for a trigger in Automations › Incoming webhooks '
-                    '(hub event-types lists every event)'
+                    '(tico event-types lists every event)'
                 )
             cron = ''
         elif not isinstance(cron, str) or len(cron) > 100 or len(cron.split()) != 5 or not croniter.is_valid(cron):

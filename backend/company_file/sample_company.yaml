@@ -30,7 +30,7 @@ employees:
         body: |
           Write a short welcome note for the owner of Sample Co, the made-up company this Tico was started with.
 
-          1. Read the team (`hub team show`) and the first tasks the other four bots were just given.
+          1. Read the team (`tico team show`) and the first tasks the other four bots were just given.
           2. Write the note, under 250 words: one line on what Sample Co is, one line per bot (who it is, what it is
              doing first, what it will ask the owner), and where the owner answers them (Needs you).
           3. Put the note on this task as one comment, so the owner reads it where they answer.

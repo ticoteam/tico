@@ -6,12 +6,12 @@ import pytest
 
 from backend import threads
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the fixture and its helpers)
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the fixture and its helpers)
 
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -315,21 +315,6 @@ def test_a_reply_reaches_its_author_only_while_they_read_the_thread_and_asks_nee
     )
     again = again.get("message", again)
     assert delivery(api, again["id"], "human:cara") is None, "a past reader is reached no more"
-
-
-def test_an_ask_on_a_task_reaches_only_whom_it_asks(api):
-    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile and close May."})
-    follow(api, row["id"], "bot:finance")
-    follow(api, row["id"], "cara")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
-        from backend import question_tasks
-
-        asked = question_tasks.ask_plain(
-            c, "bot:ops", "human:ana", "Which bank feed should I trust?", parent=H.task(c, row["id"])
-        )
-    assert asked["owner_id"] == "human:ana"
-    assert bot_jobs(api, "finance") == [], "a follower bot is not woken by a question put to a person"
 
 
 def test_joining_a_tasks_thread_follows_nobody(api):

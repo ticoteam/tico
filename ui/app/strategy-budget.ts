@@ -37,12 +37,12 @@ interface BudgetCap { sender: string; receiver: string; per_day?: number | null;
 interface BudgetGroup { id: string; name?: string; lead?: string; order?: number }
 type BudgetCapsReply = { caps?: BudgetCap[] };
 type BudgetGroupsReply = BudgetGroup[] | { groups?: BudgetGroup[] };
-type BudgetUsage = import('../types/api').Usage;
+type BudgetUsage = Omit<import('../types/api').Usage, 'rows'> & { rows?: UseRow[] };   // the rows are usage.ts's UseRow
 interface BudgetPerson { id?: string; name?: string; role?: string; team?: string; hidden?: boolean }
-// One entry of the org tree (sidebar.ts orgTreeWithHelpers): a group, a person or a bot, with its chart entries.
-type BudgetChartKind = 'group' | 'person' | 'bot';
-interface BudgetOrgNode { kind: BudgetChartKind | 'seat'; id: string; name: string; order?: number; helpers?: boolean; person?: BudgetPerson }
-type BudgetChartNode = BudgetOrgNode & { kind: BudgetChartKind };
+// One entry of the org tree (sidebar.ts orgTreeWithHelpers): a group, a person or a bot (recruiting seats left off). A
+// bot's name is its slug (GET /api/employees always sends it). The tree reads person and order off every kind (a group
+// has no person; a person and a bot no order).
+type BudgetChartNode = (OrgGroupNode | OrgPersonNode | (OrgBotNode & { name: string })) & { person?: BudgetPerson | undefined; order?: number | undefined };
 type BudgetKind = 'company' | 'group' | 'person' | 'bot' | 'branch';
 interface BudgetNode {
   key: string; kind: BudgetKind; id: string; ref: string; name: string; parent: BudgetNode | null; depth: number; kids: BudgetNode[];
@@ -129,7 +129,7 @@ function budgetFigure(row: BudgetRow | null | undefined, rollup: BudgetSpent | u
 // parent, depth}. Helpers (the Strategy Bot too) are off the chart but spend, so they get a branch of their own; a bot
 // the hub lists that the chart leaves out (a branch, a bot this person hides) goes under Other.
 function budgetTree(limits: BudgetLimits | null): BudgetTree {
-  const by: Record<string, BudgetOrgNode[]> = orgTreeWithHelpers(orgTreeByParent()), nodes = new Map<string, BudgetNode>();
+  const by = orgTreeWithHelpers(orgTreeByParent()), nodes = new Map<string, BudgetNode>();
   const groupOf = (id: string) => (S.orgGroups || []).find(g => g.id === id);
   const make = (n: BudgetChartNode, parent: BudgetNode | null): BudgetNode | null => {
     const kind = n.kind, id = kind === 'person' ? n.id : kind === 'bot' ? n.name : n.id;

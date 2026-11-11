@@ -12,7 +12,7 @@
 //!
 //! The turn's MCP servers (the hub, the bot's streamable HTTP servers and the repository's `.mcp.json`) are its agent
 //! directory's `mcp.json` (`mcp_json`), with `--tools` naming no `mcp__` entry so they stay callable. There are no
-//! permission prompts (the bot also reaches Tico with the hub CLI over bash). OPENROUTER_API_KEY reaches the process
+//! permission prompts (the bot also reaches Tico with the tico CLI over bash). OPENROUTER_API_KEY reaches the process
 //! from the bot's granted credential.
 //!
 //! The Tico AI Gateway's models (a level and Fast, such as `tico-medium-1.0` or `tico-high-fast-1.0`) run on pi too,
@@ -309,7 +309,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
             .flatten()
             .map(|(k, _)| (k.clone(), json!(format!("${{{k}}}"))))
             .collect();
-        servers.insert("hub".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
+        servers.insert("tico".into(), json!({"command": hub["command"], "args": hub["args"], "env": vars, "exposure": "direct"}));
     }
     // pi starts a stdio server with the whole process environment, so the Gateway key (hidden from bash by
     // settings.json), the model keys and the hub token would reach it. An empty value in the server's own env
@@ -321,7 +321,7 @@ pub fn mcp_json(settings: &Settings, env: &Env) -> Value {
             for key in MCP_BLANKED_ENV
                 .iter()
                 .copied()
-                .filter(|k| *k != "HUB_TOKEN" || name.as_str() != "hub")
+                .filter(|k| *k != "HUB_TOKEN" || name.as_str() != "tico")
             {
                 if !own.contains_key(key) {
                     own.insert(key.into(), json!(""));
@@ -2144,7 +2144,7 @@ mod tests {
     fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_as_direct_http_servers() {
         let dir = std::env::temp_dir().join(format!("pi-mcp-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "legacy": {"type": "sse", "url": "https://old.example/sse"}, "hub": {"command": "stale"}}}"#).unwrap();
+        std::fs::write(dir.join(".mcp.json"), r#"{"mcpServers": {"repo": {"command": "npx", "args": ["x"]}, "legacy": {"type": "sse", "url": "https://old.example/sse"}, "tico": {"command": "stale"}}}"#).unwrap();
         let ws = dir.display().to_string();
         let mut s = Settings {
             cwd: ws.clone(),
@@ -2189,18 +2189,18 @@ mod tests {
             "an SSE server of the repository is left out"
         );
         assert_eq!(
-            servers["hub"]["command"],
+            servers["tico"]["command"],
             crate::hosts::hub_mcp_server(&s.env).unwrap()["command"]
         );
         assert_eq!(
             (
-                &servers["hub"]["env"]["HUB_TOKEN"],
-                &servers["hub"]["exposure"]
+                &servers["tico"]["env"]["HUB_TOKEN"],
+                &servers["tico"]["exposure"]
             ),
             (&json!("${HUB_TOKEN}"), &json!("direct"))
         );
         // Every stdio server's environment names the Gateway key empty, so pi's inherited copy never reaches it.
-        for stdio in ["repo", "hub"] {
+        for stdio in ["repo", "tico"] {
             assert_eq!(servers[stdio]["env"][GATEWAY_KEY_ENV], json!(""), "{stdio}");
         }
         // The turn's `--tools` names no `mcp__` entry, so pi keeps every MCP tool declared to the model.
@@ -2247,8 +2247,8 @@ mod tests {
             json!({"OPENROUTER_API_KEY": "", "ANTHROPIC_API_KEY": "anthropic-synthetic", "OPENAI_API_KEY": "", "XAI_API_KEY": "", "GEMINI_API_KEY": "", "HUB_TOKEN": "", "TICOAI_GATEWAY_KEY": ""})
         );
         // The hub keeps its token through `${HUB_TOKEN}`, and the model keys stay blank for it too.
-        assert_eq!(servers["hub"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
-        assert_eq!(servers["hub"]["env"]["OPENROUTER_API_KEY"], json!(""));
+        assert_eq!(servers["tico"]["env"]["HUB_TOKEN"], json!("${HUB_TOKEN}"));
+        assert_eq!(servers["tico"]["env"]["OPENROUTER_API_KEY"], json!(""));
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,4 +1,4 @@
-"""A subtask a bot runs on another model: `hub task child --check-model <runtime>[:<model>] --role review|check`.
+"""A subtask a bot runs on another model: `tico task child --check-model <runtime>[:<model>] --role review|check`.
 
 The subtask stays the bot's own. Its turns run on the named runtime and model, in a session of their own, and
 read only the subtask's room. Only the runtime, model, harness and effort change: the bot's repository, tools,

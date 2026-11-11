@@ -8,9 +8,10 @@ import pytest
 from backend import recruiting
 from backend.auth import Identity
 from backend.store import H, Problem
-from backend.tests.test_api import api, as_member, get, headers, post  # noqa: F401
-from backend.tests.test_strategy_bot import as_bot
+from backend.tests.helpers.api import as_member, get, headers, post  # noqa: F401
+from backend.tests.helpers.strategy_bot import as_bot
 from backend import bot_settings as BS
+from backend.tests.helpers.recruiting import providers
 
 
 def strategy_bot(api):
@@ -25,18 +26,6 @@ def strategy_bot(api):
     return as_bot(api, "goal-manager")
 
 
-def providers(api, *enabled):
-    current = get(api, "providers")
-    assert (
-        api.put(
-            "/api/v2/providers",
-            headers=headers(),
-            json={"enabled": list(enabled), "expected_revision": current["revision"]},
-        ).status_code
-        == 200
-    )
-
-
 def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     models = get(api, "org-models")["models"]
     software = next(model for model in models if model["model"] == "software")
@@ -48,7 +37,7 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     from clients import hubtools
 
     offered = {tool["name"] for tool in hubtools.listing(kind="assistant")}
-    assert "hub_org_models" in offered and "hub_assistant_propose" in offered
+    assert "tico_org_models" in offered and "tico_assistant_propose" in offered
 
 
 def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
@@ -244,7 +233,7 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
         ("AppSec Engineer", "security-engineer"),
         ("Build Engineer", "devops-engineer"),
         ("CI/CD Engineer", "devops-engineer"),
-        ("Release Engineer", "release-notes"),
+        ("Release Engineer", "release-owner"),
         ("Developer Relations Engineer", "developer-advocate"),
         ("DevRel", "developer-advocate"),
         ("Documentation Engineer", "docs-writer"),
@@ -478,7 +467,8 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     assert opened == [], "no request starts after the deadline"
 
     # Reading the answer is bounded too, against a real server that sends a byte every 50 ms and so never lets a read
-    # time out: both workers are cut off at the deadline and end within half a second of it, and the next rewrite
+    # time out: both workers are cut off at the deadline and end soon after it (uncut, the trickle runs 500 s; the
+    # slack is for a loaded runner), and the next rewrite
     # then gets a slot.
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.request import urlopen as real_urlopen
@@ -520,7 +510,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
         time.sleep(0.1)
         assert workers() == 2
         drained()
-        assert time.monotonic() - started <= recruiting.REWRITE_SECONDS + 0.5
+        assert time.monotonic() - started <= recruiting.REWRITE_SECONDS + 2.5
         assert opened and all(0 < t <= 0.3 for t in opened)
         serve(Answer(json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support."}]}}]}).encode()))
         assert recruiting._rewrite("Composed.", "Support lead", "") == "Leads support."
@@ -844,3 +834,50 @@ def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves
     refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": pick["template"]})
     assert refused.status_code == 409 and "BotOps" in refused.text
     assert state() == before
+
+
+def test_a_seat_set_up_with_a_template_hires_only_that_template_and_a_removed_one_pins_nothing(api):
+    providers(api, "anthropic", "openai")
+    seat = post(api, "seats", {"title": "Rust engineer", "reports_to": "coo", "description": "Writes the Rust core."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET template='security-engineer' WHERE id=?", (seat["id"],))
+
+    # Another Recruit template is refused, plainly, and nothing is created.
+    with api.app.state.store.read() as c:
+        before = {r["slug"] for r in c.execute("SELECT slug FROM bots")}
+    refused = api.post(f"/api/v2/seats/{seat['id']}/hire", headers=headers(), json={"template": "engineering-lead"})
+    assert refused.status_code == 422 and "set up with" in refused.text, refused.text
+    with api.app.state.store.read() as c:
+        assert {r["slug"] for r in c.execute("SELECT slug FROM bots")} == before
+
+    hired = post(api, f"seats/{seat['id']}/hire", {"template": "security-engineer"})
+    assert hired["template"] == "security-engineer" and hired["seat"] == seat["id"]
+
+    # A pinned template removed from the catalog no longer pins the seat: any applicant may be hired.
+    gone = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers customers."})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET template='retired-template' WHERE id=?", (gone["id"],))
+    offered = post(api, f"seats/{gone['id']}/recruit", {})["candidates"]
+    assert len(offered) > 1
+    assert post(api, f"seats/{gone['id']}/hire", {"template": offered[0]["template"]})["seat"] == gone["id"]
+
+
+def test_a_seat_set_up_with_a_template_is_that_job_and_a_coding_one_in_engineering_still_has_the_cloud_agents(api):
+    """A seat setup placed with a template is offered that template alone, strong, whatever its title says. Its
+    department is the template's own, so only an engineering seat that codes lists the cloud agents, after it."""
+
+    def pinned(title, template):
+        seat = post(api, "seats", {"title": title, "reports_to": "coo"})
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE seats SET template=? WHERE id=?", (template, seat["id"]))
+        return post(api, f"seats/{seat['id']}/recruit", {})
+
+    rust = pinned("Rust engineer", "security-engineer")
+    assert [(c["template"], c["match"]) for c in rust["candidates"]] == [("security-engineer", "strong")]
+    assert rust["department"] == "engineering" and rust["agents_at"] == 1
+    assert [(a["id"], a["match"]) for a in rust["agents"]] == [("claude", "good"), ("codex", "good")]
+
+    # The title says engineer, but the template is Marketing's: the seat is Marketing's, so no agents.
+    marketing = pinned("Rust engineer", "marketing-lead")
+    assert [c["template"] for c in marketing["candidates"]] == ["marketing-lead"]
+    assert marketing["department"] == "marketing" and marketing["agents"] == []

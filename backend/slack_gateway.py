@@ -67,11 +67,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-import yaml
 
 from . import hubdb as H
 from . import people as P
-from . import providers
 from . import task_privacy as privacy
 from . import visuals
 from . import org_rule_check as OR
@@ -403,7 +401,7 @@ def humanize(text, names=None):
 
 def completion_result(c, notice):
     """The result a task-done notice reports: the owner's newest comment on the task that has visuals, written before
-    the notice and after the task's previous done or declined notice (a reopened task's earlier visuals are not this
+    the notice and after the task's previous done or closed notice (a reopened task's earlier visuals are not this
     result), or None. A comment is what the task page shows, so the link lands on it."""
     task_id = H._task_ref(notice["refs"].get("task"))  # a list names its first task (hubdb._task_ref)
     if not task_id:
@@ -650,7 +648,7 @@ class Gateway:
         self._auth = None  # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage = "", []  # the last `ask`'s model and usage per call, for the audit
         self.last_cost = 0.0  # and what its calls cost, in USD (backend/judge.py cost_usd)
-        self.last_provider = ""  # and who answered (the Tico AI Gateway, TypeSafe, the team's LLM)
+        self.last_provider = ""  # and who answered (the Tico AI Gateway or TypeSafe)
         from .slack_threads import Bridge  # imported here: slack_threads reads this module's helpers
 
         self.bridge = Bridge(self)  # native threads: a linked channel is carried into its thread
@@ -658,18 +656,17 @@ class Gateway:
     # ------------------------------------------------------------------ start-up
     @property
     def judge(self):
-        """The Tico AI Gateway, then an own TypeSafe key (backend/judge.py `primary_engine`), then the company's own
-        provider, each failure falling through to the next; None with none of them. One short try each per pass: the
-        gateway's own retry (RETRY_SECONDS, up to ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP
-        attempt a minute per provider, not three, and never blocks the loop long."""
-        from .judge import fallback_engine, live, ordered, primary_engine
+        """Jev (backend/judge.py `primary_engine`): the Tico AI Gateway, then an own TypeSafe key, and no other model;
+        None with neither. One short try each per pass: the gateway's own retry (RETRY_SECONDS, up to
+        ROUTE_GIVE_UP_SECONDS) is the only retry, so an outage costs one HTTP attempt a minute per provider, not three,
+        and never blocks the loop long."""
+        from .judge import live, ordered, primary_engine
 
         if self._judge is None:
             self._judge = primary_engine(self.settings, self.store)
-        # The saved Gateway key and the company's provider are looked up each time: the owner can change either while
-        # this runs.
+        # The saved Gateway key is looked up each time: the owner can change it while this runs.
         with self.store.read() as c:
-            return ordered(live(self._judge, c, self.settings) + [fallback_engine(providers.load(c, self.settings))])
+            return ordered(live(self._judge, c, self.settings))
 
     def verify_app(self):
         """Refuse to start unless the token is the configured workspace's and app's."""
@@ -2027,10 +2024,6 @@ class Gateway:
             ).strip()
             url = self.settings.public_url + "/#/task/" + urllib.parse.quote(task["id"], safe="")
             footer = f"(sent from {name} on <{slack_escape(url)}|{slack_escape(label[:80])}>)"
-            from .task_roundup import follow_up
-
-            if follow_up(c, task):  # only a time a person or bot set, never a snooze's date (task_roundup)
-                footer += "\nFollow up by " + slack_escape(task["check_back_at"])
         else:
             footer = f"(sent from {name})"
         return {
@@ -2638,11 +2631,11 @@ def conversation_for(c, actor, bot, event, now):
 
 
 def say_to_bot(c, actor, bot, event, text, refs, now):
-    """One person's message into the bot's thread conversation, as the write makes it: a reply to the bot's last line,
-    which may answer its open question task. Returns {message, conversation_id, opened}; a refusal raises H.Refused."""
+    """One person's message into the bot's thread conversation, as the write makes it: a reply to the bot's last line.
+    It answers no ask: an ask is answered in Tico. Returns {message, conversation_id, opened}; a refusal raises
+    H.Refused."""
     cid, opened = conversation_for(c, actor, bot, event, now)
-    # A follow-up replies to the bot's last line; when the bot asked this person a question task since they last
-    # wrote here, the follow-up answers it (question_tasks.answer_from_reply).
+    # A follow-up replies to the bot's last line.
     reply_to = None
     last = c.execute(
         "SELECT id,sender_id FROM messages WHERE conversation_id=? ORDER BY created_at DESC LIMIT 1", (cid,)
@@ -2657,16 +2650,6 @@ def say_to_bot(c, actor, bot, event, text, refs, now):
         c.execute("ROLLBACK TO slack_write")
         c.execute("RELEASE slack_write")
         raise
-    if reply_to and H.is_human(actor):
-        from . import question_tasks
-        from .store import Problem
-
-        c.execute("SAVEPOINT slack_answer")
-        try:
-            question_tasks.answer_from_reply(c, actor, "bot:" + bot, cid, message)
-        except (H.Refused, Problem):
-            c.execute("ROLLBACK TO slack_answer")  # the reply stands; the question stays open for Tico
-        c.execute("RELEASE slack_answer")
     c.execute(
         "UPDATE slack_threads SET last_routed_at=? WHERE channel=? AND thread_ts=? AND bot=?",
         (now, event["channel"], event["thread_ts"], bot),

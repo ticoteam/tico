@@ -8,10 +8,10 @@
 A PR runs only the tests for what it changed, so the full suite runs here, once, right before a release. `--release`
 runs the journey's previous-release install while it builds the candidate images once. After all builds finish,
 it runs Python tests except Docker isolation (parallel, then `alone` wall-clock budget tests with no workers) and
-every browser test (`node scripts/ui-tests.cjs --all`), alongside the Docker isolation tests
+every browser test (`node scripts/ui-tests.cts --all`), alongside the Docker isolation tests
 and whole-product checks against the successfully built images: docker/smoke.sh,
 docker/side-jobs-smoke.sh and `scripts/journey-test.sh --release` (install and seed the previous release, upgrade
-to the candidate, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
+to the candidate, or across 0.6 prove the candidate refuses that database and upgrade a new one, bot turns on the previous and the candidate runner, roll back a migrating update, a second updater
 hop). The journey starts installing the previous release while the images build. Each check gets its own Docker names, smoke a free host port, and each compose stack its own edge network range
 (EDGE, checked to be creatable side by side before any stack starts), so they run
 side by side; two release checks must not run at once, since the journey's candidate tags are fixed.
@@ -86,7 +86,7 @@ def full():
     env = {**os.environ, 'TICO_PYTHON': sys.executable}
     for name, command in (
         ('Python', [sys.executable, '-m', 'pytest', '-q']),
-        ('Browser', ['node', 'scripts/ui-tests.cjs']),
+        ('Browser', ['node', 'scripts/ui-tests.cts']),
     ):
         before = time.monotonic()
         result = subprocess.run(command, cwd=ROOT, env=env)
@@ -567,10 +567,10 @@ def bin_shards(counts, timings, total):
 
 
 def browser_shard(index, total):
-    """The browser scripts of shard `index` of `total` of `ui-tests.cjs --all`, grouped like the Python files: by
+    """The browser scripts of shard `index` of `total` of `ui-tests.cts --all`, grouped like the Python files: by
     recorded seconds ('browser' in TIMINGS) where there are any, otherwise one script weighs as much as another."""
     scripts = subprocess.run(
-        ['node', 'scripts/ui-tests.cjs', '--list', '--all'], cwd=ROOT, capture_output=True, text=True, check=True
+        ['node', 'scripts/ui-tests.cts', '--list', '--all'], cwd=ROOT, capture_output=True, text=True, check=True
     ).stdout.split()
     if len(scripts) < total:
         raise RuntimeError(f'{len(scripts)} browser scripts cannot fill {total} shards')
@@ -677,7 +677,7 @@ def record_shard_timings(report_dir):
 
 
 def record_browser_timings(*logs):
-    """Rewrite the 'browser' seconds in TIMINGS, by script name as `--list` prints it, from `ui-tests.cjs` logs
+    """Rewrite the 'browser' seconds in TIMINGS, by script name as `--list` prints it, from `ui-tests.cts` logs
     (`ok    name.cjs (12.3s)` lines). A failed script's time is how long it took to fail, not to pass, so it is left
     out and weighs like an unrecorded one."""
     seconds = {}
@@ -844,13 +844,13 @@ def release(args):
             checks.append(
                 Check(
                     f'browser-{shard[0]}-of-{shard[1]}',
-                    ['node', 'scripts/ui-tests.cjs', *browser_shard(shard[0], shard[1])],
+                    ['node', 'scripts/ui-tests.cts', *browser_shard(shard[0], shard[1])],
                     logs,
                     test_env,
                 )
             )
         else:
-            checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cjs', '--all'], logs, test_env))
+            checks.append(Check('all-browser', ['node', 'scripts/ui-tests.cts', '--all'], logs, test_env))
     # Its own VM in the hosted gate; a whole local gate runs it where the app can build and says when it cannot.
     if part == 'desktop' or part is None and desktop_buildable():
         checks.append(Check('desktop-update', DESKTOP_TEST, logs, test_env, tests=True))

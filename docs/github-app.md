@@ -16,7 +16,6 @@ changes; bots keep using whatever git access their computer already has.
 | Actions | read (read and write to run workflows) | a bot reads workflow runs, such as whether a deploy succeeded, in any repository it can read. With read alone it cannot start, rerun or cancel them; see [Letting a bot run workflows](#letting-a-bot-run-workflows) |
 | Workflows | none (read and write to edit workflow files) | not in the manifest. Add it only for a bot that must create or change `.github/workflows` files; see [Letting a bot edit workflow files](#letting-a-bot-edit-workflow-files) |
 | Checks, Commit statuses | read | a bot reads a pull request's checks (`gh pr checks`) in any repository it can read. It cannot create, rerun or change them |
-| Checks | read and write for pipeline approvals | not in the manifest. Tico posts a check run named `Tico: <requirement>` on a pull request's commit when a pipeline requirement is met, failed or waiting, with its own token. Until an Owner sets **Checks** to **Read and write** on the App's GitHub settings page and accepts the updated permissions on the installation, the check is withheld and nothing is posted. Requiring the check on a branch is a repository setting |
 | Deployments | read | a bot reads deployments, such as a pull request's preview link, in any repository it can read. It cannot create or change them |
 | Administration | write, on by default | lets the app create and delete repositories and change their settings. Only the server uses it: Tico mints a token with it just to create a bot's repository or delete one the Owner requests, and bots' run tokens never carry it. Untick **Let BotOps create bot repositories** to leave it out; a person then creates every new bot's repository |
 
@@ -41,7 +40,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `hub bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
+   `tico bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
 repositories keep their own tokens, since GitHub permissions apply to a whole token. Tico asks GitHub for the
@@ -62,7 +61,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `hub bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
+   `tico bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Workflows: write. A grant
@@ -107,6 +106,26 @@ repositories and connect that one. "All repositories" then covers only what bots
 mistake in a token's scope cannot expose the rest. The app itself can reach whatever it is installed on;
 the per-bot limit is enforced by Tico when it asks GitHub for a token.
 
+### Connecting from an agent
+
+An owner's agent can run the same setup through the API with the owner's token. It needs one browser step, the owner's
+click on GitHub's **Create** button, and the code GitHub returns is kept until the agent finishes:
+
+1. `GET /api/v2/github/app/manifest?org=<account>` returns `manifest`, `action` and a single-use `state`. Post the
+   manifest to `action` from a browser (a form with a `manifest` field), and the owner clicks **Create**.
+2. GitHub sends the browser to `/api/v2/github/app/callback`. Without an owner session there, Tico keeps the code on
+   that state and does not exchange it. A browser is sent to the sign-in page (where the proxy has one) and back to the same return, which an owner
+   session then finishes itself, or to Tools; any other caller gets `{"parked": true, "finish": "/api/v2/github/app/finish"}`.
+3. The agent calls `POST /api/v2/github/app/finish` with `{"state": "<state>"}`. Tico exchanges the parked code once for
+   the owner and returns `{"install_url": ...}`. Before GitHub has returned, the answer is `409 github_not_returned`;
+   a used, expired or another person's state is `400 github_state`.
+4. The owner opens `install_url` and chooses the repositories. After the install click, the agent can call
+   `GET /api/v2/github/app/installed` with the owner's token to record the install; the same call answers the install's
+   return in a browser.
+
+The state is still single use and bound to the owner who asked for it, and finishing needs that owner's token as well. The
+callback without a session only parks a code; it never exchanges one.
+
 Bots' repositories must live in the connected account or organization. A bare repository name is completed by
 `TICO_GITHUB_OWNER`, then by the connected account or organization.
 
@@ -118,18 +137,52 @@ rather than `github.com/organizations/<org>/settings/apps/...`). GitHub makes th
 so the connected account is the one GitHub reports, which may differ from the name typed.
 
 What works the same as for an organization: connecting, installing on **All repositories**, each bot's run token
-(scoped to its own repository and its grants), and the bot's work in its own repository.
+(scoped to its own repository and its grants), the bot's work in its own repository, and deleting a repository
+(with the installation's Administration).
 
-What does not work yet:
+Creating a bot's repository in a personal account needs one step by the owner: **authorize Tico** once. Tools, GitHub
+shows the line **Let Tico create repositories** with one **Authorize** button. GitHub asks the owner to sign in as that
+account and allow the app, then returns to Tico with a code. Tico checks that the sign-in is the account the app was made
+for, by GitHub's numeric account id as well as its login (a login can be renamed), and keeps the owner's user token for
+that account, sealed like the app's secrets (see "Where the key lives"). Tico uses that token for one thing: creating an
+empty private repository in the account (`POST /user/repos`). A bot's repository made from a template, and every other
+call, still uses installation tokens.
 
-- **Creating repositories.** Tico does not create a bot's repository in a personal account, even with
-  Administration on. A new bot waits for a person: create `<login>/bot-<slug>` as an empty private repository from
-  the link on the Needs-you task (or in Tools, GitHub) and the bot finishes on its own once it exists.
-- **Product repositories** and **deleting repositories** are not offered for a personal account.
+- Each return from GitHub carries a single-use state that Tico made for the owner's session: the Authorize link, or the
+  install link. Every Install link in Tools goes through Tico's `/api/v2/github/app/install`, which makes the state and
+  sends the owner on to GitHub; the install may ask for the authorization too (`request_oauth_on_install`). A return
+  with a code, or with an error and a state, is refused unless the state is valid: one Tico made, for the same owner, not
+  used before, and under an hour old. An install's return with no state is covered by the next bullet. An error with no
+  state (the owner declined on GitHub's page) goes back to Tools with nothing changed.
+- An install's return with no state is taken only when its installation is on the owner's own account. Tico asks
+  GitHub for that installation (`GET /app/installations/{id}`, which answers for this App alone) and compares the
+  account's numeric id with the one the App was made for; any other installation is refused with
+  `github_installation`. The install step runs on that return. A code on that return (the install may ask for the
+  authorization too) is exchanged only after that check, and its token is kept only when `GET /user` gives the owner's
+  numeric id as well; any other token is revoked and never saved, and the return is refused with 409
+  `github_user_login`. A code that comes with a state is checked strictly as above and never takes this path. This
+  covers an install return whose state GitHub does not send back.
+- The token is refreshed automatically when fewer than ten minutes of it remain. GitHub rotates the refresh token on each
+  refresh, and Tico stores the new one before it uses the new access token. Refreshes run one at a time.
+- A refresh GitHub refuses, or a token GitHub rejects, forgets that authorization only (a newer one is kept). Tools asks
+  for it again, and a waiting bot's Needs-you task says so. Authorizing again finishes the waiting bots on its own.
+- GitHub failing on a refresh (a server error or a rate limit) is retryable, not an authorization problem: nothing is
+  forgotten and no Needs-you task is filed.
+- A sign-in as a different login or numeric account id than the app's is refused, and that sign-in's authorization is
+  revoked on GitHub at once.
+- Disconnecting revokes the owner's whole authorization of the app on GitHub (the grant, with its refresh token; best
+  effort, `DELETE /applications/{client_id}/grant`) and forgets it here. Connecting a new app forgets the earlier app's
+  authorization. The owner can also remove the authorization in GitHub's settings under Applications.
+- Tools shows a **Callback URL** only for an app connected before the authorization was part of its setup. Add that
+  address (`<public address>/api/v2/github/app/authorized`) as the app's Callback URL on its General settings page, then
+  authorize again.
 
-The one-time Administration change does nothing for a personal account yet, so Tools shows the waiting bots and their
-create links instead of the Administration fix. Tico already requests **Administration** when it makes a personal account's
-app, so one acceptance covers automatic repository creation once that lands; until then Tico does not use it there.
+Until the owner authorizes Tico, a bot whose repository cannot be created waits: its Needs-you task asks for the
+authorization, or for the owner to create the repository on GitHub. Product repositories in a personal account follow
+the same rule: an empty private repository, created with the owner's authorization.
+
+The one-time Administration change works the same as for an organization: Tico requests **Administration** when it
+makes a personal account's app, and one acceptance covers both template and empty repositories.
 
 ## Separate identity for reviewers
 
@@ -179,12 +232,12 @@ repository access to themselves.
 An authorized review bot posts its findings with:
 
 ```sh
-hub repo review Acme/product 7 --head <full-reviewed-commit-sha> --verdict approve --body-file review.txt
+tico repo review Acme/product 7 --head <full-reviewed-commit-sha> --verdict approve --body-file review.txt
 ```
 
 Use `--verdict changes` for blocking findings. The server appends the final line
 `VERDICT: approve PR #7 head <sha>` or `VERDICT: changes PR #7 head <sha>`; leave that line out of the input file.
-The equivalent MCP tool is `hub_repo_review`; the bot-only API is `POST /api/v2/github/reviews` with
+The equivalent MCP tool is `tico_repo_review`; the bot-only API is `POST /api/v2/github/reviews` with
 `repository`, `number`, `head`, `verdict` and `body`, plus `Idempotency-Key`.
 
 The command checks the PR is open at the supplied head and sends GitHub `event: APPROVE` or
@@ -221,7 +274,6 @@ bot repository and read product repositories, even when an existing product gran
 use the server-side command with an existing read or write grant; ordinary primary-App callers still need
 a write grant. This credential boundary prevents reviewer-App product authorship; the ruleset alone does not
 choose the team's reviewers. Verify during human setup that the App approval counts before enabling the rule.
-The factory's second independent review remains a task gate.
 See GitHub's [review API](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) and
 [ruleset API](https://docs.github.com/en/rest/repos/rules#create-a-repository-ruleset).
 
@@ -239,8 +291,8 @@ Tick the team's repositories in Settings → General → Repositories, then choo
 
 With administration allowed, the owner can create `<org>/bot-<slug>` privately from a template:
 
-    hub bot repo-create botops            # from ticoteam/botops
-    hub bot repo-create sales --template <org>/bot-template
+    tico bot repo-create botops            # from ticoteam/botops
+    tico bot repo-create sales --template <org>/bot-template
 
 The BotOps bot (`bot:botops`) may make the same call when the connected app permits repository creation.
 To delegate this to an engineering bot or another selected bot, an Owner or admin enables
@@ -267,7 +319,7 @@ one-step fix:
 3. Back in Tico, select **Check again** (`POST /api/v2/github/app/check-permissions`). Tico also notices on
    its own: through the installation webhook, or within a few minutes.
 
-When BotOps builds a bot without that permission, `hub bot create` (and `hub bot repo-create`) stops with
+When BotOps builds a bot without that permission, `tico bot create` (and `tico bot repo-create`) stops with
 `github_permission_missing` and a non-zero exit: a person must act. The bot stays planned with its files on
 the computer that built it, and the owner gets one Needs-you task for that bot (repeating the command never
 adds a second) with two fixes: create `<org>/bot-<slug>` as an empty private repository (the link opens
@@ -277,13 +329,13 @@ computer publishes its history into it on the bot's next run, as for any empty r
 
 ## Creating a product repository
 
-An Owner can create an exact product repository without the `bot-` prefix (not yet in a personal account) from **Settings → General → Repositories**
+An Owner can create an exact product repository without the `bot-` prefix (in a personal account, once Tico is authorized for it, see Personal accounts) from **Settings → General → Repositories**
 → **New repository**. Enter one repository name, select **Preview** to review the connected organization, exact
 name, and private/empty settings, then select **Create repository**. The API also exposes this flow to the Hub CLI, for the Owner and
 for a bot with **Create product repositories** ([below](#bots-that-create-product-repositories)):
 
-    hub repo product-create tico-recorder
-    hub repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
+    tico repo product-create tico-recorder
+    tico repo product-create tico-recorder --confirm <org>/tico-recorder     # a bot's turn: no terminal
 
 The command prints the same preview and requires the exact `org/name` before it writes: typed at a terminal,
 or given as `--confirm`, which must match the preview exactly. Both flows
@@ -292,7 +344,7 @@ history can be published separately. The write is audited as `github.product_rep
 the same request key replay the saved receipt. It does not alter the bot-prefixed creator. When the Owner
 creates one, no bot gets access to it.
 
-The MCP tool `hub_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
+The MCP tool `tico_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
 review step. Call it with `name` and a
 stable `operation_id` to receive the preview. After reviewing the returned `org/name` and capability, call
 it again with the same `operation_id` and `confirm_repository` set to that exact `org/name`. The tool
@@ -378,7 +430,7 @@ a template copy. `--empty` (API `{"slug": ..., "empty": true}`, no template) cre
 `<org>/bot-<slug>` with nothing in it (`POST /orgs/<org>/repos`, `auto_init` false). Then, from the
 bot's checkout:
 
-    hub bot repo-create <slug> --empty
+    tico bot repo-create <slug> --empty
 
 Then set the bot's repository (Settings, Bots) to `<org>/bot-<slug>`; a bare `bot-<slug>` there also
 works and means the connected organization (an existing `emp-<slug>` repository keeps its name). Nobody pushes by hand: a run's token
@@ -392,15 +444,17 @@ Settings, Bots says the same); fix the cause and the next run publishes.
 
 ## Where the key lives
 
-The Team Owner can delete a repository in the connected organization (not yet in a personal account) with
-`hub api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
+The Team Owner can delete a repository in the connected organization or personal account with
+`tico api DELETE github/repos/<owner>/<repo>`, or ask BotOps to do it with the Owner's rights.
 This runs directly and uses a repository-scoped GitHub App token with Administration (write).
 The App must have access to that repository and the installation must accept Administration permission.
 Tico records the exact repository in its history. Success returns `deleted: true`; a 404 under a
 limited identity does not prove deletion. Removing a bot uses archive and preserves its history;
 it does not delete its repository.
 
-The app's private key, client secret and webhook secret are encrypted (AES-GCM) in the Tico database.
+The app's private key, client secret and webhook secret are encrypted (AES-GCM) in the Tico database. The owner's user
+token for a personal account is encrypted the same way, in its own table, with its refresh token, and is never written to
+logs, events or the API.
 With `TICO_CREDENTIAL_KMS_KEY` set the key is the credential vault's KMS-wrapped data key; otherwise
 it is a random `github-app.key` (mode 0600) beside the database, so a database copy alone does not
 carry the app's key. Backups copy that file beside the database and `restore` puts it back
@@ -445,7 +499,8 @@ app and reconnect, so Tico stores a key GitHub still accepts. Cached tokens keep
 
 ## Disconnect and uninstall
 
-Disconnect in Tico only forgets the app locally; bots fall back to their computers' git access. To
+Disconnect in Tico forgets the app and the owner's personal-account authorization here, and asks GitHub to revoke that
+authorization; bots fall back to their computers' git access. To
 revoke access on GitHub, uninstall the app from the account's or organization's installed apps page, or delete the
 app from its settings page.
 
@@ -477,8 +532,7 @@ new conflict, request for changes, comment from a person or PR closed without
 merging, with events per task grouped into one wake within three minutes. A single check
 finishing sends nothing. Once every check suite, run and status on a head has finished the
 owner gets one `pr_checks_done` for it, naming the failures, and one more only if the head's
-result changes. It wakes the owner when the ticket is at a working step (status open or doing);
-at any other step it is a note carried by the owner's next run. A review or comment that is
+result changes. It wakes the owner of an open task; a done, closed or snoozed task is not woken. A review or comment that is
 not from a person (a GitHub App's `[bot]` login, a bot's own configured login or anything
 posted through an App) is a note too, and a person's keeps the grouped wake. The bot's own
 comments never wake it. A
@@ -490,14 +544,14 @@ Checks left pending are read afresh from GitHub: by the background pass once a l
 GitHub's current check runs, statuses and suites. A suite that has had no check run for 10 minutes never started (an
 installed App's suite, such as a deploy or monitoring service with nothing to run on that push). That suite is not
 pending, so it never holds a green head. Checks that leave pending this way finish the head as a webhook's last
-check would: the ticket moves on, or the Builder is woken to merge, at most once per head.
+check would: the owner gets the head's one `pr_checks_done`, at most once per head.
 The grouping survives server restarts and keeps at most 50 distinct notice items per burst.
 Wake rules for `pr_checks_done` and `pr_review` (in the **What wakes** automations on the Automations page) change what these do.
 
-A bot waiting on one result can arm a one-shot wake on a PR link: `hub task link <task> <pr url> --wake-once`
-(`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `hub_task_link`; `--no-wake-once` disarms it). The
+A bot waiting on one result can arm a one-shot wake on a PR link: `tico task link <task> <pr url> --wake-once`
+(`wake_once: true` on `POST /api/v2/tasks/{id}/links` or `tico_task_link`; `--no-wake-once` disarms it). The
 owner then hears once, in the task's conversation (the head's `pr_checks_done`, so a link armed for it
-is never woken twice for one head, at any step), at the first of: every check suite, check run and status
+is never woken twice for one head), at the first of: every check suite, check run and status
 GitHub has reported on the PR's current head has completed (passed, or failed naming every failing suite, run
 and status, with the checks link and commit; judged when a suite completes, or when a run or status that was
 pending finishes after one has; a run whose own suite is still running holds it), a review is submitted approving or requesting changes (with the reviewer and
@@ -505,10 +559,8 @@ review link), or a release ships the merged PR. A PR merged in a repository othe
 never ships, so its merge is the wake. The link disarms in the same write, so redelivered events never repeat
 it; the link's `detail.wake_once_fired` records what fired. Arming needs the connected App and is refused
 on a closed or shipped PR, or one already merged outside the release repository; it is off unless armed,
-creates no task and never changes the task's status or step. While armed on an open or merged PR that the App
-has sent an event for, or in a repository it reaches, the task counts as waiting on GitHub, so a waiting task
-is not sent back to open. A snoozed task gets the notice quietly, like any other news. A CI run or deploy with
-no PR is not covered.
+creates no task and never moves the task. A snoozed task is not woken. A CI run or deploy with no PR is not
+covered.
 
 A review request can also put the reviewer on the task. Set `TICO_GITHUB_REVIEW_ROLE` to a task role
 (for example `reviewer`) and restart the API, then give each person their GitHub login under **GitHub**
@@ -518,17 +570,13 @@ the review arrived leaves them on. Logins are unique on the team: setting one so
 `409 github_taken`, and a login two people already share changes nobody. Unknown logins, people who
 cannot read a private task, and finished tasks are skipped. Unset, review requests change no roles.
 
-A PR that names one active Dev ticket as "Dev 665", "Dev #665" or "Dev ticket 665" in its branch, title or body links
-itself to that ticket when it is opened, reopened or edited, as `hub task link` would, so a forgotten link does not leave
-the ticket without a PR. A bare "#665" is never read. A PR that names two tickets, a finished or non-Dev ticket, or a
-ticket that already has an open PR links nothing.
-
-GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on active
-Dev tickets whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
+GitHub sends no event when the base branch moves under an open PR. Every few minutes Tico reads open PRs on open
+tasks whose mergeability is unknown (after five minutes) or last read over thirty minutes ago, at most 30 per
 pass, and wakes the owner once per head when one now conflicts.
 
 Several PRs can belong to one task. A PR on a task is information only: GitHub events, release
-tags and deploys never change the task's status or step; a person moves the task. A merged PR
+tags and deploys never move the task. When a linked PR merges, the bot that owns the open task is woken once to
+carry it on: say it is done, or close it. A merged PR
 becomes Shipped once the running release includes its merge commit; merged PRs in another
 repository stay Merged.
 When push deliveries were missed, the enabled background scheduler also checks up to 20 merge/deployed

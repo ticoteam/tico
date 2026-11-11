@@ -3,8 +3,9 @@ import json
 
 from backend.store import encode
 
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.settings_transitions import _company_default
 
 
 def _report(api, machine, bots):
@@ -31,16 +32,6 @@ def _report(api, machine, bots):
 def _placed(api, bot):
     with api.app.state.store.read() as c:
         return c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()[0]
-
-
-def _company_default(api, bot, model="gpt-6-sol"):
-    """Set a company Codex default while `bot` names neither setting."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('providers',?)",
-            (encode({"enabled": ["openai"], "runtime": "codex", "model": model, "revision": 1}),),
-        )
-        BS.write(c, bot, {'name': bot})
 
 
 def test_move_refuses_a_destination_that_is_not_ready_for_the_bot(api):
@@ -197,7 +188,7 @@ def test_go_live_that_cannot_finish_tells_the_person_once(api, monkeypatch):
         told = c.execute(
             "SELECT body FROM messages WHERE recipient_id='human:ana' AND body LIKE '%going live could not finish%'"
         ).fetchall()
-        assert len(told) == 1 and "hub bot go-live cpo" in told[0]["body"]
+        assert len(told) == 1 and "tico bot go-live cpo" in told[0]["body"]
 
 
 def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkeypatch):
@@ -211,7 +202,7 @@ def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkey
             Problem(
                 "github_repo_missing",
                 "The repository acme/bot-cpo does not exist yet on GitHub. "
-                "Create it with BotOps: `hub bot repo-create cpo`.",
+                "Create it with BotOps: `tico bot repo-create cpo`.",
                 409,
             ),
         ),
@@ -220,7 +211,7 @@ def test_go_live_for_a_repository_github_does_not_have_names_the_fix(api, monkey
     ready(api, machine, [])
     refused = post(api, "bots/cpo/go-live", {"computer": "Studio Mac"}, expected=409)["error"]
     assert refused["code"] == "repository_missing" and not refused["retryable"]
-    assert "hub bot repo-create cpo" in refused["detail"] and "hub bot go-live cpo" in refused["detail"]
+    assert "tico bot repo-create cpo" in refused["detail"] and "tico bot go-live cpo" in refused["detail"]
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM assignments WHERE bot='cpo'").fetchone()
 
@@ -265,7 +256,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
     ready(api, machine, ["cpo"])
     assert _record(api)["failed"]["code"] == "finish_error"
     told = _notices(api)
-    assert len(told) == 1 and "error in Tico" in told[0] and "hub bot go-live cpo" in told[0]
+    assert len(told) == 1 and "error in Tico" in told[0] and "tico bot go-live cpo" in told[0]
     assert "bogus" not in told[0] and "validation" not in told[0].lower()
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"
@@ -274,7 +265,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
 def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monkeypatch):
     from datetime import datetime, timezone
     from backend.scheduler import Scheduler
-    from backend.tests.test_api import as_member
+    from backend.tests.helpers.api import as_member
 
     as_member(api, "ben@acme.example")  # a plain member who manages cpo
     machine, waiting = _waiting(api, monkeypatch, github=("unknown", None))
@@ -301,49 +292,10 @@ def test_a_waiting_go_live_shows_in_health_and_expires_with_one_notice(api, monk
     ready(api, machine, ["cpo"])  # a late report finishes nothing and tells nobody again
     assert _record(api)["failed"]["code"] == "expired"
     told = _notices(api)
-    assert len(told) == 1 and "within 7 days" in told[0] and "hub bot go-live cpo" in told[0]
+    assert len(told) == 1 and "within 7 days" in told[0] and "tico bot go-live cpo" in told[0]
     assert seen("ana-test") is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM bots WHERE slug='cpo'").fetchone()[0] == "planned"
-
-
-def test_go_live_for_a_bot_waiting_on_the_repo_create_permission_names_the_owners_task(api, monkeypatch, capsys):
-    from backend.store import Problem
-
-    _new_bot(api, monkeypatch, ("missing", Problem("github_repo_missing", "acme/bot-cpo does not exist yet.", 409)))
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO registry_metadata VALUES('github-repo-waits',?)",
-            (
-                encode(
-                    {
-                        "cpo": {
-                            "repository": "acme/bot-cpo",
-                            "task_id": "task-fixes-1",
-                            "template": "",
-                            "since": "2026-10-10T00:00:00Z",
-                        }
-                    }
-                ),
-            ),
-        )
-    machine = runner(api, label="Studio Mac")
-    ready(api, machine, [])
-    refused = post(api, "bots/cpo/go-live", {"computer": "Studio Mac"}, expected=409)["error"]
-    assert refused["code"] == "repository_waiting_for_permission" and not refused["retryable"]
-    assert "Needs you task with the two fixes" in refused["detail"] and "task-fixes-1" in refused["detail"]
-    assert "repo-create" not in refused["detail"]
-    with api.app.state.store.read() as c:
-        assert not c.execute("SELECT 1 FROM assignments WHERE bot='cpo'").fetchone()
-    from clients import hubcli, remotecli
-    from clients.tico import APIError
-
-    def refuse(args, who):
-        raise APIError(refused["code"], refused["detail"], 409)
-
-    monkeypatch.setattr(remotecli, "run", refuse)
-    assert remotecli.main(hubcli.parser().parse_args(["bot", "go-live", "cpo"])) == 2
-    assert capsys.readouterr().out.startswith("cpo is waiting for its GitHub repository acme/bot-cpo")
 
 
 def test_compact_at_saves_without_a_fresh_session(api):

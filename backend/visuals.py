@@ -314,7 +314,7 @@ def loading_references(data):
 # The one script a visual page runs (lead, Oct 19): it tells the frame around it how tall the page is. Its hash is
 # the only script the page's content policy allows, so the page's own scripts and inline handlers stay dead. A frame
 # laid out at zero width reports an inflated height the app cannot shrink back from, so it sends nothing until the
-# page has a width and reports again on every resize (ui/tests/visual-reporter.cjs runs the same file). It reports
+# page has a width and reports again on every resize (ui/tests/visual-reporter.cts runs the same file). It reports
 # the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
 # page measured once too tall (wrapped at a passing narrow width) could otherwise never come back down.
 # It also marks the page's view. A card frame names its view in the fragment, which never reaches the server:
@@ -535,13 +535,13 @@ def _head(blobs, digest):
 def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     """The stored attachments for a message, in the order given, and what each page left unembedded.
 
-    Each is a version of a file on that task (task_review.comment_file's rule) or in that conversation. A page or SVG
+    Each is a version of a file on that task (files.comment_file's rule) or in that conversation. A page or SVG
     whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
     posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
     from .bot_home_merge import file_in_room
     from .counsel import no_attachments
     from .store import H, Problem
-    from .task_review import comment_file
+    from .files import comment_file
 
     no_attachments(who, items)
     out, report = [], []

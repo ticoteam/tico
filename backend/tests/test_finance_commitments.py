@@ -4,10 +4,10 @@ authorization; and the bank or card row that pays a bill takes the bill's id, wi
 with."""
 
 from backend.finance import reads as FR
-from backend.tests.test_finance_ap import _bill, _ingest, _txn, _vendor
-from backend.tests.test_finance_ap_review import _approved, _mark
-from backend.tests.test_finance_banking import _arrives, _card_for_eve
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_ap import _bill, _ingest, _txn, _vendor
+from backend.tests.helpers.finance_ap_review import _approved, _mark
+from backend.tests.helpers.finance_banking import _arrives, _card_for_eve
+from backend.tests.helpers.finance_fixtures import (
     MERCURY,
     OWNER,
     FakeMercury,
@@ -19,7 +19,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import HOURS
+from backend.tests.helpers.finance_payments import HOURS
 
 
 def _commitments(c, provider_id: str) -> tuple:

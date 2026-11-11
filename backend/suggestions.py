@@ -21,7 +21,11 @@ MAX_ITEMS = 100
 DELIVERY_MAX = 10
 ID = re.compile(r"sg_[0-9a-f]{32}\Z")
 FINGERPRINT = re.compile(r"sha256:[0-9a-f]{64}\Z")
-ROLES = {"botops": ("botops",), "goal_manager": ("goal-manager",), "engineering_lead": ("engineering-lead",)}
+ROLES = {
+    "botops": ("botops",),
+    "goal_manager": ("goal-manager",),
+    "engineering_lead": ("engineering-lead", "engineering-team-manager"),
+}
 OUTCOMES = {"delivered", "acted", "dismissed", "expired", "condition_false"}
 # This is the whole outbound dictionary. New local facts cannot silently become outbound fields.
 COUNTS = {
@@ -96,9 +100,7 @@ def snapshot(c, settings, local=False):
     out = {"snapshot_version": 1, "bots_total": len(bots)}
     for role, templates in {**ROLES, "finance_bot": postal_mail.FINANCE_TEMPLATES}.items():
         out["bots_" + role] = sum(row["template"] in templates for row in bots)
-    out["tasks_open"] = c.execute(
-        "SELECT count(*) FROM tasks WHERE status IN ('open','doing','waiting','review','ready')"
-    ).fetchone()[0]
+    out["tasks_open"] = c.execute("SELECT count(*) FROM tasks WHERE status='open'").fetchone()[0]
     out["automations_count"] = c.execute(
         "SELECT count(*) FROM automations WHERE enabled=1 AND builtin=0 AND deleted_at IS NULL"
     ).fetchone()[0]

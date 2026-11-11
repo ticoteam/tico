@@ -2,7 +2,6 @@
 
 import difflib
 import json
-import re
 from types import SimpleNamespace
 
 from clients.catalog import free_slug, slug_from_name
@@ -18,8 +17,7 @@ from . import providers
 from . import app_delivery
 from . import rooms
 from . import shared_bots
-from . import auto_tasks, profiles, start_places, task_models, task_run_models, update_feeds, wake_presets
-from .auth import Identity
+from . import profiles, start_places, task_models, task_run_models, update_feeds, wake_presets
 from .execution import _reported, stranded
 from .harnesses import EXTERNAL_HARNESSES, HARNESS_BY_ID, normalize_fallback, resolve_harness, runtime_of
 from .readiness import absolute, can_run
@@ -333,7 +331,6 @@ class SettingsAdmin:
             "review_model": effective.get("review_model"),
             # What the bot's tasks run on (backend/task_models.py): null when all of it is the same as the bot.
             "task_model": task_models.stored(effective),
-            "keep_tasks_going": auto_tasks.of(_json(config["config"], {}) or {}),
             # Most turns at once across every computer (start_places.bot_limit); null is no limit.
             "turns_at_once": start_places.bot_limit(_json(config["config"], {}) or {}),
             "capture_stream": (_json(config["config"], {}) or {}).get("capture_stream"),
@@ -355,7 +352,7 @@ class SettingsAdmin:
         if template not in names:
             closest = difflib.get_close_matches(template, names, n=3)
             hint = " Closest: " + ", ".join(closest) + "." if closest else ""
-            raise Problem("template", f"Unknown template {template}. Use hub_template_list.{hint}", 422)
+            raise Problem("template", f"Unknown template {template}. Use tico_template_list.{hint}", 422)
 
     def template_repo_defaults(self, template):
         from pathlib import Path
@@ -375,6 +372,20 @@ class SettingsAdmin:
             if mode in ("own", "all") and access in ("read", "write")
             else {}
         )
+
+    def template_private_default(self, template):
+        """The `private_tasks_default` the template's card declares: a bot made from it keeps its tasks private unless
+        the person says otherwise. False when the card declares none (or is missing), so no slug is named here."""
+        from pathlib import Path
+        import yaml
+
+        if not template:
+            return False
+        try:
+            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "card.yaml").read_text()) or {}
+        except (OSError, yaml.YAMLError):
+            return False
+        return isinstance(manifest, dict) and manifest.get("private_tasks_default") is True
 
     def template_gateway(self, template):
         """The template's bot.yaml `gateway:` block ({level, fast}, docs/creating-bots.md), kept in the new bot's settings
@@ -616,7 +627,7 @@ class SettingsAdmin:
             "private_tasks_default": (
                 body.private_tasks_default
                 if "private_tasks_default" in body.model_fields_set
-                else body.template == "general-counsel"
+                else self.template_private_default(body.template)
             ),
             "model_managed_by": "cloud",
         }
@@ -842,8 +853,8 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper and the Brand Owner are
-        # built in: nobody archives them, the owner included.
+        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
+        # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
@@ -852,6 +863,8 @@ class SettingsAdmin:
             "task-manager",
             "bookkeeper",
             H.BRAND_OWNER,
+            "updates-owner",
+            "automations-owner",
         ):
             raise Problem(
                 "system_bot",
@@ -868,6 +881,10 @@ class SettingsAdmin:
                     if bot == "bookkeeper"
                     else "The Brand Owner"
                     if bot == H.BRAND_OWNER
+                    else "The Updates Owner"
+                    if bot == "updates-owner"
+                    else "The Automations Owner"
+                    if bot == "automations-owner"
                     else "The " + strategy_bot.name(c)
                 )
                 + " is built in to every team and cannot be archived or deleted; you can pause or rename it",
@@ -1179,8 +1196,6 @@ class SettingsAdmin:
             return task_models.stored(_json(config["config"], {}) or {})
         if field == "compact_at":
             return compact_at(_json(config["config"], {}))
-        if field == auto_tasks.KEY:
-            return auto_tasks.of(_json(config["config"], {}) or {})
         if field == start_places.BOT_KEY:
             return start_places.bot_limit(_json(config["config"], {}) or {})
         if field == "wake_preset":
@@ -1354,7 +1369,7 @@ class SettingsAdmin:
 
         # The change applies at once. The bot's session is the bot's runtime's business: the
         # hub asks for no checkpoint turn and rebuilds nothing; a bot that wants what was said
-        # before reads it with `hub conversation show`.
+        # before reads it with `tico conversation show`.
         c.execute("UPDATE bot_transitions SET state='prepared',updated_at=? WHERE id=?", (H.now(), transition_id))
         self._apply(c, who, c.execute("SELECT * FROM bot_transitions WHERE id=?", (transition_id,)).fetchone())
         return self.get(c, who, transition_id)
@@ -1781,14 +1796,6 @@ class SettingsAdmin:
                 ),
                 undo_change_id=change_id,
             )
-        if change["field"] == auto_tasks.KEY:
-            return self.set_keep_tasks_going(
-                c,
-                who,
-                bot,
-                SimpleNamespace(keep_tasks_going=before, expected_revision=body.expected_revision),
-                undo_change_id=change_id,
-            )
         if change["field"] == start_places.BOT_KEY:
             return self.set_turns_at_once(
                 c,
@@ -2182,25 +2189,6 @@ class SettingsAdmin:
         H.event(c, who.actor, "bot.compact_at_changed", bot, {"before": before, "after": body.compact_at})
         return {"bot": bot, "compact_at": body.compact_at, "revision": config["revision"] + 1}
 
-    def set_keep_tasks_going(self, c, who, bot, body, undo_change_id=None):
-        self._manager(c, who, bot)
-        config = self._config(c, bot)
-        if config["revision"] != body.expected_revision:
-            raise Problem("version_conflict", "Bot configuration changed; refresh before saving", 409)
-        declared = _json(config["config"], {}) or {}
-        before = auto_tasks.of(declared)
-        declared[auto_tasks.KEY] = body.keep_tasks_going
-        BS.write(c, bot, declared)
-        c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
-        self.record(c, who.actor, bot, auto_tasks.KEY, before, body.keep_tasks_going)
-        if undo_change_id:
-            c.execute(
-                "UPDATE settings_changes SET undone_by=?,undone_at=? WHERE id=? AND undone_at IS NULL",
-                (who.actor, H.now(), undo_change_id),
-            )
-        H.event(c, who.actor, "bot.keep_tasks_going_changed", bot, {"before": before, "after": body.keep_tasks_going})
-        return {"bot": bot, "keep_tasks_going": body.keep_tasks_going, "revision": config["revision"] + 1}
-
     def set_turns_at_once(self, c, who, bot, body, undo_change_id=None):
         """The most turns the bot runs at once across every computer; null is no limit (start_places.bot_limit)."""
         self._manager(c, who, bot)
@@ -2311,13 +2299,16 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
             _set_parent(c, actor, row["bot"], successor or parent, ts)
 
     heir = "bot:" + successor if successor else H.human_actor(config["owner_id"])
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    for field, column in (("owner", "owner_id"), ("requester", "requester_id")):
-        for task in c.execute(
-            f"SELECT id FROM tasks WHERE {column}=? AND status IN ({marks})", ("bot:" + bot, *H.ACTIVE_STATUSES)
-        ).fetchall():
-            H._task_event(c, task["id"], actor, field, "bot:" + bot, heir, "Its bot was removed")
-            c.execute(f"UPDATE tasks SET {column}=?,updated_at=?,version=version+1 WHERE id=?", (heir, ts, task["id"]))
+    gone = "bot:" + bot
+    why = f"{H.actor_name(c, gone)} was removed"
+    # Tico gives each open task it owns to the heir, as any reassign is made. One it cannot give stays where it is and
+    # says Paused ("was removed") in the list of whoever can fix it.
+    for task in c.execute("SELECT id FROM tasks WHERE owner_id=? AND status='open'", (gone,)).fetchall():
+        H.attempt(c, H.task_reassign, H.KEEPER, task["id"], heir, why)
+    # Who asked for a task is not the engine's: it changes here, with its line in the task's history.
+    for task in c.execute("SELECT id FROM tasks WHERE requester_id=? AND status='open'", (gone,)).fetchall():
+        H._task_event(c, task["id"], actor, "requester", gone, heir, why)
+        c.execute("UPDATE tasks SET requester_id=?,updated_at=? WHERE id=?", (heir, ts, task["id"]))
     H._recount(c, "bot:" + bot)
     H._recount(c, heir)
     # Its tasks' reconnect cards retired as they changed hands; a card for its own account on another bot's task too.

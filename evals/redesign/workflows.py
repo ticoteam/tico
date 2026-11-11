@@ -1,4 +1,4 @@
-"""The ten fake-day workflows (TESTING L2c): python -m evals.redesign.run --workflows [names or numbers].
+"""The nine fake-day workflows (TESTING L2c): python -m evals.redesign.run --workflows [names or numbers].
 
 Each workflow is a day across bots on the fake clock, fed through the product's real paths (CONTRACT §2 Feeding
 input): mail through the mail sync's publish route, Slack through the gateway's events route, listening through the
@@ -36,7 +36,6 @@ from .harness import (
     OPENAI,
     OPENAI_ID,
     OPENAI_REF,
-    PRIYA_ID,
     RELEASE_ID,
     W2,
     W3,
@@ -65,11 +64,6 @@ from .harness import (
     turn_of,
 )
 from .record import INPUTS, load_inputs
-
-try:  # the migration fixture's org bots, for workflow 10's Scenario.bots; the fixture itself is imported in its steps
-    from .cases.migration_fixture import FIXTURE_BOTS
-except ImportError:  # pragma: no cover (the fixture ships beside this file)
-    FIXTURE_BOTS = {}
 
 UTC, LA = dt.timezone.utc, ZoneInfo("America/Los_Angeles")  # LA: the team's time zone (backend/updates.py ZONE)
 DANA_MAIL, PRIYA_MAIL = "dana@acme.example", "priya@acme.example"
@@ -117,6 +111,7 @@ def mail_from(state, msg_id, mailbox=None, date=None):
         "list_id": state["list_id"] or "",
         "is_internal": bool(state["is_internal"]),
         "has_unsubscribe": bool(state["unsubscribe"]),
+        "known_sender": state["known_sender"],
     }
 
 
@@ -391,39 +386,10 @@ class TimedJudge(ReplayJudge):
             self.calls[-1]["at"] = now
 
 
-class SteadyJudge(TimedJudge):
-    """Answers every call with the same middle answer for its questions (workflow 10): the day checks the cut-over
-    install, not the judge, so it gets the same answer whatever it is asked."""
-
-    def __call__(self, state, questions, label=None, level=None):
-        if level is not None:
-            self.script.append(middle_answers(questions))
-        return super().__call__(state, questions, label, level)
-
-
 def state_key(state):
     state = state if isinstance(state, dict) else {}
     message = state.get("message") if isinstance(state.get("message"), dict) else {}
     return state.get("subject") or state.get("url") or message.get("ts") or message.get("text")
-
-
-def middle_answers(questions):
-    pairs = questions.items() if isinstance(questions, dict) else (questions or [])
-    answers = {}
-    for qid, q in pairs:
-        q = q if isinstance(q, dict) else {}
-        options = list(q.get("criteria") or [])
-        if q.get("type") == "choice" and options:
-            answers[qid] = {
-                "choice": options[-1],
-                "confidence": 0.5,
-                "probabilities": {o: round(1 / len(options), 4) for o in options},
-            }
-        elif q.get("type") == "score" and options:
-            answers[qid] = {"score": 0, "confidence": 0.5, "probabilities": [round(1 / len(options), 4)] * len(options)}
-        else:
-            answers[qid] = {"noul": 0.5}
-    return answers
 
 
 def triage(bucket, confidence=0.9, money=0.1, ask=0.5, legal=0.05, urgency=1):
@@ -665,7 +631,7 @@ def slack_diag(org, gateway):
                 person, _user, denied = gateway.verify_sender(c, r)
                 senders[r["ts"]] = {"person": (person or {}).get("id"), "denied": denied}
     stored = [
-        {k: r[k] for k in ("ts", "channel", "channel_kind", "author", "state", "processed", "received")}
+        {k: r[k] for k in ("ts", "channel", "channel_kind", "author", "state", "processed", "received") if k in r}
         for r in rows
         if str(r["ts"]).startswith("wf1-")
     ]
@@ -727,8 +693,10 @@ def wf1_steps(org, f):
     do(org, f, "slack_autos", W3, make_slack_autos, org)
     for wave, (sent, batch, stems, made) in WAVES1.items():
         at(org, la(DAY1, sent))
+        # Each recorded mail arrives as the wave is sent: its recorded date can be days older, and a mailbox's first
+        # sync acts only on the last day's mail (backend/automations.py MAIL_LOOKBACK_HOURS).
         mail = [
-            mail_from(found[stem]["state"], mail_id1(stem))
+            mail_from(found[stem]["state"], mail_id1(stem), date=iso(org.now()))
             for stem in sorted(found)
             if stem[:2] in stems and found[stem].get("kind") == "mail"
         ]
@@ -924,10 +892,10 @@ def wf1_slack(f):
     wrong = {}
     for m in msgs:
         key = CHANNEL.get(m["channel"])
-        counts = {k: len(naming(per[k], m["created_at"])) for k in per}
+        counts = {k: len(naming(per[k], m["ts"])) for k in per}
         want = {k: (1 if k == key else 0) for k in per}
         if counts != want:
-            wrong[m["created_at"]] = counts
+            wrong[m["ts"]] = counts
     if not wrong:
         return True, "each Slack message ran its channel's automation once"
     states = {e.get("event_id"): e.get("state") for e in (got(f, "slack").body.get("events") or [])}
@@ -941,6 +909,12 @@ LEAD_CAP, DANA_CAP = 4, 2
 
 
 def wf2_caps(org):
+    """Dana opens the builders' reach (a bot reaches only its org-chart neighbors by default, backend/reach.py), so
+    their tasks to her are counted by the caps, then sets the four caps."""
+    for bot in (CLAUDE_ID, OPENAI_ID):
+        reply = org.api("put", f"/api/v2/reach/settings/bot:{bot}", {"mode": "open"}, wave=W2)
+        if not 200 <= reply.status < 300:
+            raise Unmet(W2, f"reach {bot}: {reply.status} {reply.excerpt()}")
     for sender in (CLAUDE_REF, OPENAI_REF):
         for receiver, per_day in ((LEAD_REF, LEAD_CAP), (DANA_REF, DANA_CAP)):
             reply = put_cap(org, sender, receiver, per_day)
@@ -1510,7 +1484,7 @@ def wf5_steps(org, f):
             {"type": "webhook", "id": "stripe-payments"},
             [
                 act(
-                    "ticket",
+                    "task",
                     "create_task",
                     owner="bot:" + BILLING,
                     title="Payment failed for {{webhook.data.data.object.customer}}",
@@ -1589,6 +1563,22 @@ def wf5_receiver(f):
 
 
 # ================================================================================================ 6 release
+def publish_release(org, tag):
+    """A release arrives as GitHub's release webhook delivers it (backend/github.py `release`): the milestone is recorded
+    once (a repeat delivery is ignored there) and the first recording runs release_flow.published, which tells the
+    automations. Calling `published` directly would skip that dedupe."""
+    from backend import github
+
+    repo = org.store.settings.release_repo  # the server's release repository: the webhook's repository must match it
+    payload = {
+        "action": "published",
+        "repository": {"full_name": repo},
+        "release": {"tag_name": tag, "draft": False, "html_url": f"https://github.com/{repo}/releases/tag/{tag}"},
+    }
+    with org.store.transaction() as c:
+        return github.release(c, payload, release_repo=repo)
+
+
 def release_sending(org):
     """The owner turns on the Release Manager's outbound sending: a bot's webhook to an outside address needs that
     switch (backend/webhooks.py), and a bot may not set it itself (as billing_sending does for Billing)."""
@@ -1733,12 +1723,21 @@ def builtin_health(org):
     return Reply(200, found[0], W5)
 
 
+def health_bot(org):
+    found = org.sql("SELECT state FROM bots WHERE id=?", (HEALTH,))
+    if not found:
+        raise Unmet(W5, "no health-monitor bot")
+    return Reply(200, {"on": found[0]["state"] == "active"}, W5)
+
+
 def wf7_steps(org, f):
     # The Health built-in is the cutover's mirror of the health-monitor bot (CONTRACT section 6). The cutover ran at
     # startup with nobody yet to own it; the automations tick (the Org's first, then this one) catches up for Dana.
     at(org, org.now() + dt.timedelta(minutes=2))
     do(org, f, "health", W5, builtin_health, org)
-    do(org, f, "monitor", W5, org.api, "get", "/api/v2/health/findings", who=DANA, wave=W5)
+    # The built-in mirrors the health-monitor bot's state (backend/redesign_migration.py); the findings page has no
+    # on/off since Check health replaced the bot (Nov 4).
+    do(org, f, "monitor", W5, health_bot, org)
     # The run guard trips on its own (backend/turn_budgets.py): WF9's loop from one seed task. Its held notices are the
     # hub's (CONTRACT section 1). Health's event path is a later PR (CONTRACT section 6).
     do(org, f, "budget", W2, wf9_budget, org)
@@ -1755,7 +1754,7 @@ def wf7_builtin(f):
 
 
 def wf7_enabled(f):
-    """The Health built-in is enabled exactly when the Health monitor is on, as the convert set them."""
+    """The Health built-in is enabled exactly when the health-monitor bot is active."""
     setup(f, "health", "monitor")
     enabled = body(f, "health").get("enabled")
     on = bool(body(f, "monitor").get("on"))
@@ -1763,7 +1762,7 @@ def wf7_enabled(f):
 
 
 def wf7_notices(f):
-    """A run-guard trip sends one held notice to BotOps and one to the Health monitor: hub notices from the keeper, kind
+    """A run-guard trip sends one held notice to BotOps and one to the Health monitor: notices from the hub, kind
     notice, refs.held naming the bot (CONTRACT section 1)."""
     setup(f, "budget", "seed", "notices")  # "loop" is a list of turns, read by wf9_loop; it is not a reply
     held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
@@ -1813,6 +1812,9 @@ def wf8_steps(org, f):
     )
 
     def edit(token, attempt):
+        # Only Dana's chat turn edits; BotOps's other turns (its Health tasks) are about something else.
+        if attempt.get("task"):
+            return None
         return org.api(
             "patch",
             f"/api/v2/automations/{aid(f, 'auto')}",
@@ -1862,7 +1864,7 @@ def wf8_applied(f):
     """Its edit, with Dana's rights, is the live version 2 at once: nothing pending."""
     setup(f, "auto", "chat", "pending", "current")
     turns = got(f, "helper")
-    edit = turns[0]["did"] if turns else None
+    edit = next((t["did"] for t in turns if t["did"] is not None), None)
     if isinstance(edit, Unmet):
         raise edit
     pending = [v for v in rows(body(f, "pending")) if v.get("status") == "pending"]
@@ -2039,7 +2041,7 @@ def hub_holds(org):
 
 
 def wf9_notices(f):
-    """One held notice each to BotOps and to the Health monitor: hub notices from the keeper, kind notice, refs.held
+    """One held notice each to BotOps and to the Health monitor: notices from the hub, kind notice, refs.held
     naming the bot (CONTRACT section 1). They are hub messages, not Tico Team notices, so they are read from the hub."""
     setup(f, "budget", "auto", "notices")
     held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
@@ -2059,289 +2061,6 @@ def wf9_release(f):
         resumed is not None and before == after,
         f"turn after release {'ran' if resumed else 'none'}; runs {before} -> {after}",
     )
-
-
-# ================================================================================================ 10 migration day
-DAY10 = (2026, 10, 21)
-MAIL10 = {
-    "03-mail-customer-question": DANA_MAIL,
-    "04-mail-refund-request": DANA_MAIL,
-    "09-mail-deadline-ask": DANA_MAIL,
-    "07-mail-calendar-invite": PRIYA_MAIL,
-    "14-mail-product-feedback": PRIYA_MAIL,
-}
-PEOPLE10 = (DANA_ID, PRIYA_ID)
-WEBHOOKS10 = ("release.published", "market.briefing", "task.created", "task.commented")
-HEALTH_BOT = "health-monitor"  # migration_fixture.HEALTH
-
-
-def handler(org, f, actor):
-    """The name a teammate is counted under, or None when it is left out (the Health Monitor, a built-in off the
-    chart). The Inbox Managers retire and the person's Assistant handles the mail; the CEO Bot is the Strategy Bot."""
-    from .cases.migration_fixture import HEALTH, INBOXES, STRATEGY
-
-    slug = str(actor or "").split(":", 1)[-1]
-    if slug == HEALTH or "health" in slug:
-        return None
-    for person, (bot, _mailbox) in INBOXES.items():
-        if slug == bot or f["assistants"].get(slug) == person:
-            return "inbox handler for " + person
-    if slug in (STRATEGY, "strategy-bot", "strategy"):
-        return "strategy"
-    return slug
-
-
-def masked(title):
-    """A task title with a find item's ` · <item title>`, dates and the release tag dropped."""
-    title = (title or "").split(" · ", 1)[0]
-    title = re.sub(r"v1\.5\.\d+", "v1.5.N", title)
-    return re.sub(r"\d{4}-\d{2}-\d{2}", "<date>", title)
-
-
-def find_assistants(org, f):
-    for person in PEOPLE10:
-        try:
-            slug = assistant_slug(org, person)
-        except Unmet:
-            return
-        if slug:
-            f["assistants"][slug] = person
-
-
-def drain_all(org, f, errors):
-    find_assistants(org, f)
-    for slug in list(org.bot_slugs):
-        try:
-            drain(org, slug, None, limit=6, text="Done for today.")
-        except Exception as exc:  # noqa: BLE001 (kept with the day: a claim the product refuses is reported)
-            errors.append(f"{slug}: {type(exc).__name__}: {getattr(exc, 'what', exc)}"[:160])
-
-
-def publish_release(org, tag):
-    """A release arrives as GitHub's release webhook delivers it (backend/github.py `release`): the milestone is recorded
-    once (a repeat delivery is ignored there) and the first recording runs release_flow.published, which tells the
-    automations. Calling `published` directly would skip that dedupe."""
-    from backend import github
-
-    repo = org.store.settings.release_repo  # the server's release repository: the webhook's repository must match it
-    payload = {
-        "action": "published",
-        "repository": {"full_name": repo},
-        "release": {"tag_name": tag, "draft": False, "html_url": f"https://github.com/{repo}/releases/tag/{tag}"},
-    }
-    with org.store.transaction() as c:
-        return github.release(c, payload, release_repo=repo)
-
-
-def fake_day(org, f, receiver):
-    """The install's working day after the cutover, measured over its window."""
-    day, errors = DAY10, []
-
-    def safe(label, fn, *args):
-        try:
-            return fn(*args)
-        except Exception as exc:  # noqa: BLE001
-            if DEBUG:
-                traceback.print_exc()
-            errors.append(f"{label}: {type(exc).__name__}: {getattr(exc, 'what', exc)}"[:200])
-
-    found = inputs()
-    safe("settle", at, org, utc(day, 3, 55))
-    drain_all(org, f, errors)
-    start = org.now()
-    safe("05:00", at, org, utc(day, 5))
-    ids = {}
-    for mailbox in (DANA_MAIL, PRIYA_MAIL):
-        mail = [
-            mail_from(found[stem]["state"], f"wf10-{stem}", mailbox=mailbox, date=iso(org.now()))
-            for stem, box in MAIL10.items()
-            if box == mailbox
-        ]
-        ids[mailbox] = [m["msg_id"] for m in mail]
-        reply = safe("mail " + mailbox, publish_mail, org, mailbox, mail)
-        if reply is not None and reply.status >= 300:
-            errors.append(f"mail {mailbox}: {reply.status} {reply.excerpt()}")
-    safe("05:30", at, org, utc(day, 5, 30))
-    tasks = {CLAUDE_ID: "Fix the CSV export", OPENAI_ID: "Review the billing page copy"}
-    for bot, title in tasks.items():
-        made = safe("task " + bot, send, org, DANA, bot, title)
-        f["task:" + bot] = made if made is not None else Unmet(W5, "task not made")
-    safe("06:00", at, org, utc(day, 6))
-    f["commented_at"] = org.now()
-    for bot in tasks:
-        safe("comment " + bot, comment, org, f, "task:" + bot, DANA, "One more detail: keep the old format too.")
-    drain_all(org, f, errors)
-    fx = f.get("fixture") or {}
-    for minutes in range(390, 16 * 60 + 1, 30):
-        safe(f"{minutes // 60:02d}:{minutes % 60:02d}", at, org, utc(day, minutes // 60, minutes % 60))
-        if minutes == 600:
-            safe("release", publish_release, org, "v1.5.1")
-        if minutes == 660:
-            hook_ = fx.get("hook") or {}
-            if hook_.get("id") and hook_.get("secret"):
-                answer = safe(
-                    "deploy hook",
-                    org.api,
-                    "post",
-                    f"/api/v2/hooks/{hook_['id']}/{hook_['secret']}",
-                    {"service": "api", "status": "failed"},
-                )
-                if answer is not None and answer.status >= 300:
-                    errors.append(f"deploy hook: {answer.status} {answer.excerpt()}")
-            else:
-                errors.append("deploy hook: the fixture's trigger has no address")
-        org.scheduler_pass()
-        drain_all(org, f, errors)
-    end = org.now()
-    safe("deliver", deliver, org.app, receiver)
-    return measure(org, f, start, end, ids, receiver, errors)
-
-
-def measure(org, f, start, end, ids, receiver, errors):
-    def inside(row, since=start):
-        at_ = when_of(row["created_at"])
-        return at_ is not None and since <= at_ <= end
-
-    tasks = Counter()
-    for row in sql(org, "SELECT owner_id,title,created_at FROM tasks"):
-        who = handler(org, f, row["owner_id"])
-        if who and inside(row):
-            tasks[f"{who} | {masked(row['title'])}"] += 1
-    woken, after_comment = Counter(), Counter()
-    for row in sql(org, "SELECT bot_id, created_at FROM jobs"):
-        who = handler(org, f, row["bot_id"])
-        if who and not who.startswith("inbox handler") and inside(row):
-            woken[who] += 1
-            after_comment[who] += inside(row, f["commented_at"])
-    hooks = Counter()
-    for request in receiver.seen:
-        text = request.content.decode(errors="replace")
-        try:
-            kind = str(json.loads(text).get("type"))
-        except ValueError:
-            kind = "unreadable"
-        if not kind.startswith("health") and HEALTH_BOT not in text:
-            hooks[kind] += 1
-    mail = {}
-    for mailbox, msg_ids in ids.items():
-        stored = {r["msg_id"] for r in sql(org, "SELECT msg_id FROM mail_messages WHERE mailbox=?", (mailbox,))}
-        mail[mailbox] = len([i for i in msg_ids if i in stored and i in mail_runs(org, f, mailbox)])
-    return {
-        "tasks": dict(tasks),
-        "woken": dict(woken),
-        "after_comment": dict(after_comment),
-        "webhooks": dict(hooks),
-        "mail": mail,
-        "errors": sorted(set(errors))[:8],
-        "window": [iso(start), iso(end)],
-    }
-
-
-def mail_runs(org, f, mailbox):
-    """The text of every run of a message automation on `mailbox` (CONTRACT §2 trigger message {inbox})."""
-    if mailbox in f.setdefault("mail_runs", {}):
-        return f["mail_runs"][mailbox]
-    listing = org.api("get", "/api/v2/automations", wave=W5)
-    text = ""
-    for auto in rows(listing.body) if listing.status == 200 else []:
-        trigger = auto.get("trigger") or {}
-        if trigger.get("type") == "message" and str(trigger.get("inbox", "")).lower() == mailbox:
-            found = all_runs(org, auto["id"])
-            text += canon(found.body) if found.status == 200 else ""
-    f["mail_runs"][mailbox] = text
-    return text
-
-
-def close_open(org):
-    """Dana closes what the install left open (a PR sweep run), so the day starts from an empty board."""
-    left = 0
-    for row in sql(org, "SELECT id FROM tasks WHERE status NOT IN ('closed','done')"):
-        task = org.api("get", f"/api/v2/tasks/{row['id']}", wave=W5)
-        version = (task.body.get("task") or task.body).get("version") if isinstance(task.body, dict) else None
-        done = org.api("post", f"/api/v2/tasks/{row['id']}", {"version": version, "status": "closed"}, wave=W5)
-        left += done.status >= 300
-    return left
-
-
-def wf10_steps(org, f):
-    from .cases.migration_fixture import install_fixture, report, upgrade
-
-    f["assistants"] = {}
-    attach_judge(org, SteadyJudge(org))
-    do(org, f, "endpoint", W5, endpoint, org, "Ops feed", "https://hooks.acme.example/ops", ["*"])
-    install_fixture(org, f)
-    do(org, f, "cutover", W5, upgrade, org)
-    do(org, f, "report", W5, report, org)
-    close_open(org)
-    deliver(org.app, Receiver())  # what the install and the cutover sent belongs to no day
-    do(org, f, "day", W5, fake_day, org, f, Receiver())
-
-
-def day(f):
-    data = got(f, "day")
-    if not isinstance(data, dict):
-        raise Unmet(W5, "the day was not measured")
-    return data
-
-
-def wf10_moved(f):
-    """The cutover converted the install: every fixture routine, wake rule and inbox moved, nothing left pending or
-    failed."""
-    from .cases.migration_fixture import INBOXES, ROUTINES, WAKE_RULES, routine_id, rule_id
-
-    made = got(f, "cutover")
-    data = got(f, "report")
-    if not isinstance(made, dict) or not isinstance(data, dict):
-        return False, f"cutover {canon(made)[:80]}; report {canon(data)[:80]}"
-    now = {i["id"]: i.get("now") for i in data.get("items") or []}
-    wanted = (
-        [routine_id(n) for n in ROUTINES]
-        + [rule_id(n) for n in WAKE_RULES]
-        + ["inbox:" + box for _bot, box in INBOXES.values()]
-    )
-    off = {i: now.get(i) for i in wanted if now.get(i) not in ("moved", "runs as before")}
-    stuck = sorted(i for i, n in now.items() if str(n).startswith("pending") or n == "failed")
-    return not off and not stuck and not made.get(
-        "failed"
-    ), f"not moved {off}; pending or failed {stuck[:4]}; cutover failed {made.get('failed')}"
-
-
-def wf10_day(f):
-    """The converted day does the work: tasks opened, bots woken, webhooks sent, no step refused."""
-    one = day(f)
-    ok = one["tasks"] and one["woken"] and one["webhooks"] and not one["errors"]
-    return (
-        bool(ok),
-        f"{sum(one['tasks'].values())} tasks, {sum(one['woken'].values())} wakes, "
-        f"{sum(one['webhooks'].values())} webhooks; errors {one['errors'][:3]}",
-    )
-
-
-def wf10_once(f):
-    """No double fire: one release-notes task and one deploy-triage task."""
-    one = day(f)
-    release = sum(n for k, n in one["tasks"].items() if k.startswith(RELEASE_ID) and "Release notes" in k)
-    deploy = sum(n for k, n in one["tasks"].items() if k.startswith(LEAD_ID) and "Deploy failure triage" in k)
-    return release == 1 and deploy == 1, f"release-notes tasks {release}, deploy-triage tasks {deploy}"
-
-
-def wf10_mail(f):
-    """Each mailbox's mail is handled by its converted inbox automation."""
-    mail = day(f)["mail"]
-    return mail == {DANA_MAIL: 3, PRIYA_MAIL: 2}, f"handled per mailbox {mail}"
-
-
-def wf10_woken(f):
-    """Dana's comments wake both builders."""
-    woke = day(f)["after_comment"]
-    return all(woke.get(b) for b in (CLAUDE_ID, OPENAI_ID)), f"wakes after the comments {woke}"
-
-
-def wf10_hooks(f):
-    """The ops feed hears the release, the converted briefing's post and the day's tasks."""
-    sent = day(f)["webhooks"]
-    want = [k for k in WEBHOOKS10 if not sent.get(k)]
-    return not want, f"missing {want}; sent {sent}"
 
 
 # ================================================================================================ the list
@@ -2474,21 +2193,5 @@ WORKFLOWS = [
             Check("paused and released, the bot works again", W2, wf9_release),
         ],
         bots={BOTOPS: ("botops", "claude"), HEALTH: ("health", "claude")},
-    ),
-    Scenario(
-        "10",
-        "workflow-10-migration-day",
-        "The fixture install cut over on startup, then a working day on the automations",
-        wf10_steps,
-        [
-            Check("the cutover moved every routine, wake rule and inbox; none pending or failed", W5, wf10_moved),
-            Check("the day opens tasks, wakes bots and sends webhooks, no step refused", W5, wf10_day),
-            Check("no double fire: one release-notes and one deploy-triage task", W5, wf10_once),
-            Check("each mailbox's mail handled by its inbox automation", W5, wf10_mail),
-            Check("Dana's comments wake both builders", W5, wf10_woken),
-            Check("the ops feed hears the release, the briefing and the tasks", W5, wf10_hooks),
-        ],
-        bots=FIXTURE_BOTS,
-        first_tick=False,
     ),
 ]

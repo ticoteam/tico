@@ -6,7 +6,7 @@ import json
 from backend.task_delete import delete_tasks
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post  # noqa: F401  (the fixture)
 
 
 def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_list(api):
@@ -22,7 +22,7 @@ def test_delete_removes_imported_tickets_and_refuses_one_with_work_outside_the_l
             "owner": "priya",
             "title": "Write the post",
             "body": "x",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
 
@@ -65,7 +65,7 @@ def test_a_person_deletes_a_task_they_asked_for_and_nobody_else_can(api):
             "owner": "ben",
             "title": "Write the post",
             "body": "x",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
         token="priya-test",
     )
@@ -282,7 +282,7 @@ def test_a_bulk_delete_and_restore_keeps_links_inside_the_list(api):
             "owner": "ben",
             "title": "Copy the cards",
             "body": "x",
-            "relations": [{"task": parent["id"], "kind": "parent"}],
+            "parent": parent["id"],
         },
     )
     with store.transaction() as c:
@@ -322,57 +322,50 @@ def test_a_purged_tasks_number_is_never_given_out_again(api):
     store = api.app.state.store
     first = post(api, "tasks", {"owner": "ben", "title": "Fix the about page", "body": "x"}, token="priya-test")
     second = post(api, "tasks", {"owner": "ben", "title": "Fix the terms page", "body": "x"}, token="priya-test")
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO task_types(id,name,created_at,updated_at,numbered) VALUES('t2','Bug',?,?,1)",
-            (H.now(), H.now()),
-        )
-        c.execute("UPDATE tasks SET type_id='t2', number=90 WHERE id=?", (first["id"],))
-        c.execute("UPDATE tasks SET type_id='t2' WHERE id=?", (second["id"],))
+    with store.transaction() as c:  # General numbers its tasks once it has a prefix
+        c.execute("UPDATE pipelines SET prefix='G' WHERE id=?", (H.GENERAL_PIPELINE,))
+        c.execute("UPDATE tasks SET number=90 WHERE id=?", (first["id"],))
+        c.execute("UPDATE tasks SET number=NULL WHERE id=?", (second["id"],))
     post(api, f"tasks/{first['id']}/delete", {}, token="priya-test")
     with store.transaction() as c:
         c.execute("UPDATE task_trash SET deleted_at='2020-01-01T00:00:00.000000Z'")
         assert purge_trash(c, 30, apply=True)["applied"] is True
-        H._next_number(c, "human:priya", second["id"], "t2")
+        H._next_number(c, "human:priya", second["id"], H.GENERAL_PIPELINE)
         assert c.execute("SELECT number FROM tasks WHERE id=?", (second["id"],)).fetchone()[0] == 91
     assert get(api, "deleted-tasks", token="priya-test")["tasks"] == []
 
 
-def test_a_milestone_wait_takes_the_blocker_gate_and_comes_back_with_a_restored_task(api):
-    from backend.task_delete import restore_tasks
+def _launch(api):
+    """A pipeline of two work stages that tasks leave by hand: Plan, then Build."""
+    from backend.tests.helpers.engine import pipeline
 
-    task = post(api, "tasks", {"owner": "ben", "title": "Cut v1.3.0", "body": "x"}, token="priya-test")
-    # A requester outside the mover teams may not park someone else's task, by a blocker or by a milestone alike.
-    refused = post(
-        api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="priya-test", expected=403
-    )
-    assert refused["error"]["code"] == "identity"
-    post(api, f"tasks/{task['id']}/waits", {"on": "release:acme/tico@v1.2.0"}, token="ben-test")
+    with api.app.state.store.transaction() as c:
+        return pipeline(
+            c, "launch", "Launch", stages=[{"name": "Plan", "by_hand": True}, {"name": "Build", "by_hand": True}]
+        )
+
+
+def test_a_deleted_task_whose_stage_was_removed_comes_back_in_the_first_stage(api):
     store = api.app.state.store
-    with store.transaction() as c:
-        assert delete_tasks(c, [task["id"]], apply=True)["applied"] is True
-        assert c.execute("SELECT count(*) FROM task_milestone_waits WHERE task_id=?", (task["id"],)).fetchone()[0] == 0
-        restore_tasks(c, [task["id"]])
-        assert [r[0] for r in c.execute("SELECT target FROM task_milestone_waits WHERE task_id=?", (task["id"],))] == [
-            "acme/tico@v1.2.0"
-        ]
-
-
-def test_a_deleted_task_whose_step_was_retired_still_comes_back(api):
-    store = api.app.state.store
+    launch = _launch(api)
     ticket = post(
-        api, "tasks", {"owner": "priya", "title": "Fix the billing page", "body": "Imported."}, token="ben-test"
+        api,
+        "tasks",
+        {"owner": "priya", "title": "Fix the billing page", "body": "Imported.", "pipeline": "launch"},
+        token="ben-test",
     )
+    moved = post(api, f"tasks/{ticket['id']}/move", {"to": "Build", "version": ticket["version"]}, token="ben-test")
+    assert moved["stage"]["id"] == launch["stages"]["Build"]
     with store.transaction() as c:
         c.execute("UPDATE tasks SET number=52 WHERE id=?", (ticket["id"],))
-        c.execute("INSERT INTO task_steps(id,type_id,name,position,status) VALUES('gone','general','Gone',99,'review')")
-        c.execute("UPDATE tasks SET step_id='gone' WHERE id=?", (ticket["id"],))
     post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
     with store.transaction() as c:
-        c.execute("DELETE FROM task_steps WHERE id='gone'")
+        c.execute("DELETE FROM stages WHERE id=?", (launch["stages"]["Build"],))
     assert post(api, "tasks/52/restore", {}, token="ben-test")["restored"] == ticket["id"]
     with store.read() as c:
-        assert c.execute("SELECT number, step_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()[:] == (52, None)
+        assert c.execute(
+            "SELECT number, pipeline_id, stage_id, status FROM tasks WHERE id=?", (ticket["id"],)
+        ).fetchone()[:] == (52, "launch", launch["stages"]["Plan"], "open")
 
 
 def test_a_task_filed_with_a_check_model_deletes_and_comes_back_with_it(api):
@@ -469,30 +462,23 @@ def test_a_deleted_task_keeps_its_quarantine_hold_when_restored(api):
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
-def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_general(api):
+def test_a_task_whose_pipeline_was_retired_while_it_was_in_the_trash_comes_back_on_general(api):
     store = api.app.state.store
-    typ = post(
-        api,
-        "task-types",
-        {"name": "Sales", "steps": [{"name": "Lead", "status": "open"}, {"name": "Won", "status": "closed"}]},
-    )["type"]
+    _launch(api)
     ticket = post(
         api,
         "tasks",
-        {"owner": "priya", "title": "Call the florist", "body": "x", "type": "Sales", "step": "Lead"},
+        {"owner": "priya", "title": "Call the florist", "body": "x", "pipeline": "launch"},
         token="ben-test",
     )
     post(api, f"tasks/{ticket['id']}/delete", {}, token="ben-test")
-    post(api, f"task-types/{typ['id']}/delete", {})  # no live task uses it
+    with store.transaction() as c:  # no live task is in it
+        c.execute("UPDATE pipelines SET retired_at=? WHERE id='launch'", (H.now(),))
     assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]
     after = get(api, "tasks/" + ticket["id"], token="ben-test")["task"]
-    assert (after["type_id"], after["step_id"], after["status"]) == ("general", None, "open")
+    assert (after["pipeline"]["id"], after["status"]) == (H.GENERAL_PIPELINE, "open")
     with store.read() as c:
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        detail = c.execute(
-            "SELECT detail FROM events WHERE action='task.restored' AND target=?", (ticket["id"],)
-        ).fetchone()[0]
-    assert "type" in detail
 
 
 def test_a_trashed_idea_whose_snapshot_holds_a_dropped_growth_row_comes_back_and_the_report_counts_it(api):
@@ -559,7 +545,7 @@ def _as_saved_before(rows, renames_map):
 def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(api):
     # task_trash.rows keeps whole rows keyed by the column names they had when the task was deleted. A restore after
     # the `*_json` renames must read them under the new names: dropping them lost the task's acceptance criteria,
-    # labels, resume note, room participants and message refs for good, since the snapshot goes once it is back.
+    # labels, room participants and message refs for good, since the snapshot goes once it is back.
     import json
     from backend.migrations.renames_data import COLUMNS
 
@@ -578,13 +564,11 @@ def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(ap
     post(api, f"tasks/{ticket['id']}/comments", {"text": "Copied from the old board."}, token="ben-test")
     with store.transaction() as c:
         c.execute(
-            "UPDATE tasks SET resume=?, labels=? WHERE id=?",
-            (json.dumps({"note": "pick up at step 2"}), json.dumps(["web"]), ticket["id"]),
+            "UPDATE tasks SET labels=? WHERE id=?",
+            (json.dumps(["web"]), ticket["id"]),
         )
         before = dict(
-            c.execute(
-                "SELECT acceptance, labels, resume, conversation_id FROM tasks WHERE id=?", (ticket["id"],)
-            ).fetchone()
+            c.execute("SELECT acceptance, labels, conversation_id FROM tasks WHERE id=?", (ticket["id"],)).fetchone()
         )
         participants = c.execute(
             "SELECT participants FROM conversations WHERE id=?", (before["conversation_id"],)
@@ -604,8 +588,8 @@ def test_a_task_deleted_before_the_column_renames_comes_back_with_every_value(ap
 
     assert post(api, f"tasks/{ticket['id']}/restore", {}, token="ben-test")["restored"] == ticket["id"]
     with store.read() as c:
-        after = dict(c.execute("SELECT acceptance, labels, resume FROM tasks WHERE id=?", (ticket["id"],)).fetchone())
-        assert after == {k: before[k] for k in ("acceptance", "labels", "resume")}
+        after = dict(c.execute("SELECT acceptance, labels FROM tasks WHERE id=?", (ticket["id"],)).fetchone())
+        assert after == {k: before[k] for k in ("acceptance", "labels")}
         assert (
             c.execute("SELECT participants FROM conversations WHERE id=?", (before["conversation_id"],)).fetchone()[0]
             == participants

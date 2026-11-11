@@ -15,8 +15,8 @@ tools:
   - service: github
     identity: "the product repositories the owner lists for this bot"
     can: [read]
-    note: "reads the listed repositories, pull requests and checks; opening branches and pull requests, and merging, need write access the owner grants"
+    note: "reads the listed repositories, pull requests and checks; opening branches and pull requests needs write access the owner grants; it never merges"
 # A starter is read only, and the owner grants write once the bot should build. The team's GitHub App token can write,
-# so the only things between this bot and a release, a force push or a review are the granted access and
-# .claude/settings.json, which allows branches, pull requests and merges and denies reviews, closes, releases, API calls
-# and forced pushes.
+# so the only things between this bot and a merge, a release, a force push or a review are the granted access and
+# .claude/settings.json, which allows branches and pull requests and denies merges, reviews, closes, releases, API
+# calls and forced pushes. The Engineering pipeline's Merge stage queues each pull request.

@@ -14,8 +14,6 @@ from datetime import date
 
 import pytest
 
-from backend import bot_settings as BS
-from backend import hubdb as H
 from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.finance import ad_import as AI
@@ -28,119 +26,28 @@ from backend.finance.core.errors import NOT_FOUND, FinanceError
 from backend.finance.store import ads as SA
 from backend.finance.store import ap as SAP
 from backend.finance.store import budgets as SB
+from backend.finance.store import contacts as SC
 from backend.store import Store
-from backend.tests.test_finance_fixtures import (
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     account,
     act,
     books,
-    close_month,  # noqa: F401  (fixtures)
+    close_month,
     finance_template,
     spend,
     store,
 )
-
-ADS = {
-    "cmo": ("sales", "human:dan"),
-    "paid-rental-ads": ("sales", "bot:cmo"),
-    "rental-social-ad-owner": ("sales", "bot:cmo"),
-}
-
-
-def _bots(c: sqlite3.Connection) -> None:
-    H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in ADS}, None)
-    for slug, (team, boss) in ADS.items():
-        c.execute(
-            "INSERT OR REPLACE INTO bot_config(bot,team,owner_id,reports_to) VALUES(?,?,?,?)", (slug, team, OWNER, boss)
-        )
-        BS.write(c, slug, {"team": team})
-
-
-def _tool(c: sqlite3.Connection, tid: str, service: str) -> None:
-    c.execute(
-        "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
-        "updated_at) VALUES(?,?,?,'','bearer','','computer',?,?,?)",
-        (tid, tid, service, OWNER, AT, AT),
-    )
-
-
-def world(store: Store, at: str = AT) -> dict[str, str]:
-    """An Advertising line, Google Ads and Meta imports booking to it, one ad account per bot, the platforms' vendor
-    contacts, and budgets: a Marketing one over the whole line and, under it, each bot's (warn only). The ids by name."""
-    with store.transaction() as c:
-        _bots(c)
-        made = act(
-            c,
-            OWNER,
-            "account_create",
-            {"code": "6300", "name": "Advertising", "type": "expense", "parent_id": account(c, "6000")},
-            at=at,
-        )
-        adv = str(made.result["account_id"])
-        out = {"adv": adv}
-        for tid, service, platform, external, name, bot in (
-            ("gads", "google-ads", "google_ads", "123", "Paid rental", "paid-rental-ads"),
-            ("meta", "meta-ads", "meta_ads", "act_1", "Rental social", "rental-social-ad-owner"),
-        ):
-            _tool(c, tid, service)
-            SA.save_import(
-                c,
-                SA.AdImport(
-                    id="",
-                    tool_id=tid,
-                    platform=platform,
-                    enabled=True,
-                    history_from="2026-01-01",
-                    account_id=adv,
-                    created_by=OWNER,
-                ),
-                at,
-            )
-            iid = str(c.execute("SELECT id FROM fin_ad_imports WHERE tool_id=?", (tid,)).fetchone()[0])
-            SA.finish(c, iid, "ok", "", at, imported=True)
-            out[platform] = SA.upsert_account(c, tid, platform, external, name, "USD", at)
-            SA.set_bot(c, out[platform], bot, at)
-            out[platform + "_vendor"] = AI.ensure_vendor(c, platform, at)
-        for key, body in (
-            ("marketing", {"name": "Marketing", "amount": 1_000_000}),
-            (
-                "google",
-                {
-                    "name": "Rental Google Ad Owner",
-                    "teammate": "bot:paid-rental-ads",
-                    "vendor": out["google_ads_vendor"],
-                    "amount": 300_000,
-                },
-            ),
-            (
-                "meta",
-                {
-                    "name": "Rental Social Ad Owner",
-                    "teammate": "bot:rental-social-ad-owner",
-                    "vendor": out["meta_ads_vendor"],
-                    "amount": 300_000,
-                },
-            ),
-        ):
-            under = {"parent_id": out["marketing"]} if key != "marketing" else {}
-            done = act(c, OWNER, "budget_create", {**body, **under, "account_id": adv, "at_limit": "warn"}, at=at)
-            assert done.status == "committed", done
-            out[key] = str(done.result["budget_id"])
-    return out
-
-
-def platform_spend(store: Store, ad_account: str, rows: list[tuple[str, int]], start: str, end: str) -> None:
-    with store.transaction() as c:
-        SA.replace_spend(
-            c, ad_account, start, end, [SA.SpendRow(d, "c1", "Spring", cents, "USD") for d, cents in rows], AT
-        )
-
-
-def rows_by_name(
-    c: sqlite3.Connection, viewer: str, at: str = AT, on: str | None = None
-) -> dict[str, dict[str, object]]:
-    return {str(r["name"]): r for r in reads.budgets(c, viewer, at=at, on=on)["budgets"]}  # type: ignore[union-attr]
+from backend.tests.helpers.finance_ad_budgets import (
+    ADS,
+    WARN_AT,
+    platform_spend,
+    rows_by_name,
+    warn,
+    warning_notes,
+    world,
+)
 
 
 def test_platform_spend_stands_in_for_the_card_charge_never_both(books: Store):
@@ -263,11 +170,9 @@ def _mirrored(store: Store, w: dict[str, str]) -> None:
     """The books become a provider's: Google's and Meta's contacts are the provider's own ("Google", and a Meta one
     known by its alias "facebook"), not the ones the import makes."""
     with store.transaction() as c:
-        c.execute(
-            "DELETE FROM fin_vendor_aliases WHERE contact_id IN (?,?)", (w["google_ads_vendor"], w["meta_ads_vendor"])
-        )
-        c.execute("UPDATE fin_contacts SET name='Google' WHERE id=?", (w["google_ads_vendor"],))
-        c.execute("UPDATE fin_contacts SET name='Facebook Inc' WHERE id=?", (w["meta_ads_vendor"],))
+        SC.alias_drop_contact(c, [w["google_ads_vendor"], w["meta_ads_vendor"]])
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Google"})
+        SAP.update(c, "fin_contacts", w["meta_ads_vendor"], {"name": "Facebook Inc"})
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         SAP.alias_add(c, book, "facebook", w["meta_ads_vendor"], AT)
         c.execute("UPDATE fin_books SET mode='mirror'")
@@ -300,7 +205,7 @@ def test_a_mirrored_book_with_no_platform_vendor_reports_only(books: Store):
         spend(c, "6300", 30_000, day="2026-10-12", teammate="bot:paid-rental-ads", vendor="GOOGLE *ADS")
     _mirrored(books, w)
     with books.transaction() as c:
-        c.execute("UPDATE fin_contacts SET name='Alphabet Workspace' WHERE id=?", (w["google_ads_vendor"],))
+        SAP.update(c, "fin_contacts", w["google_ads_vendor"], {"name": "Alphabet Workspace"})
         before = contacts(c)
         assert AI.ensure_vendor(c, "google_ads", AT) == ""
         assert contacts(c) == before  # never made: Tico writes no contact to QuickBooks or Xero
@@ -412,12 +317,18 @@ def test_every_hold_at_the_platform_comes_out_card_ach_bill_and_order(books: Sto
     gv = w["google_ads_vendor"]
     with books.transaction() as c:
         book = _money_account(c)
-        other = str(
-            c.execute(
-                "INSERT INTO fin_contacts(id,book_id,name,kind,created_at,created_by,updated_at) "
-                "VALUES('k-bill',?,'Billboard Co','vendor',?,?,?) RETURNING id",
-                (book, AT, OWNER, AT),
-            ).fetchone()[0]
+        other = SAP.insert(
+            c,
+            "fin_contacts",
+            {
+                "id": "k-bill",
+                "book_id": book,
+                "name": "Billboard Co",
+                "kind": "vendor",
+                "created_at": AT,
+                "created_by": OWNER,
+                "updated_at": AT,
+            },
         )
         c.execute(
             "INSERT INTO fin_feed_txns(id,money_account_id,provider_id,txn_date,amount,currency,counterparty,"
@@ -565,24 +476,7 @@ def test_each_bot_sees_its_own_ad_budget_and_the_manager_bot_its_reports(books: 
         assert refused.value.code == NOT_FOUND and str(refused.value.message) == "Not in your view."
 
 
-# ------------------------------------------------------------------------------------------------ warnings
-WARN_AT = "2026-10-06T12:00:00.000000Z"
 FOOT = "This is a warning only. Nothing has been paused."
-
-
-def warning_notes(c: sqlite3.Connection) -> list[tuple[str, str]]:
-    return [
-        (str(r[0]), str(r[1]))
-        for r in c.execute(
-            "SELECT to_actor, body FROM notes WHERE from_actor=? AND body LIKE 'Finance · budget warning%' ORDER BY rowid",
-            (H.KEEPER,),
-        )
-    ]
-
-
-def warn(store: Store, at: str = WARN_AT) -> list[tuple[str, tuple[str, ...]]]:
-    with store.transaction() as c:
-        return [(s.bot, s.levels) for s in ad_warnings.run(c, at)]
 
 
 def test_the_spending_bot_gets_one_line_per_level_and_nobody_else(books: Store):
@@ -739,7 +633,7 @@ def test_an_ad_budget_only_warns(books: Store):
 
 def test_a_google_card_charge_over_an_ad_budget_is_not_declined_and_freezes_no_card(books: Store):
     from backend.finance import cards
-    from backend.tests.test_finance_fixtures import FakeMercury, connect
+    from backend.tests.helpers.finance_fixtures import FakeMercury, connect
 
     connect(books, FakeMercury())
     w = world(books)
@@ -781,7 +675,11 @@ def test_a_google_card_charge_over_an_ad_budget_is_not_declined_and_freezes_no_c
 
 
 def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
+    """The shipped data fix (20261106085449) runs before 20261108203140_finance_fold_in turns the contact tables into
+    views, so it runs here on the contact tables as they were then."""
     import importlib
+
+    from backend.tests.helpers.finance_fold_in_migration import old_contact_tables  # noqa: F401
 
     fix = importlib.import_module("backend.migrations.20261106085449_ad_budgets_warn_only")
     w = world(books)
@@ -809,6 +707,7 @@ def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
         )
         assert named.status == "committed", named
         c.execute("UPDATE fin_budgets SET at_limit='decline' WHERE vendor<>''")
+        old_contact_tables(c)
         fix.up(c)
         fix.up(c)
         limits = dict(c.execute("SELECT name, at_limit FROM fin_budgets WHERE account_id=?", (w["adv"],)).fetchall())

@@ -38,8 +38,6 @@ interface RuleStats { on: boolean; checks_today: number; unchecked_today: number
 type HoldDialog = HTMLElement & {rhEl?: HTMLElement};
 /** The task a held comment belongs to (ruleTaskHeld): its id and its dialog. */
 interface HoldTask { id: string | number; dialog: HoldDialog; }
-/** The chat a hold list belongs to: the parts of its state (ui/app/chat.ts) that the hold code reads and writes. */
-interface HoldChat { slug?: string; conv?: {id?: string} | null; holds?: RuleHold[]; }
 /** Called for each card an action was taken on: the card, its hold id and the action's path. */
 type HoldAfter = (card: HTMLElement, hid: string, path: string) => unknown;
 
@@ -137,7 +135,7 @@ function ruleHoldsWire(slot: HTMLElement, id: string | undefined,
 
 // ----------------------------------------------------------------- a held reply in a chat
 // The keeper's one line where a bot's reply would have been: the rule, never the text (execution.complete).
-function ruleHeldNoteHTML(m: {id?: string | null; body?: string | null; created_at?: WhenInput}) {
+function ruleHeldNoteHTML(m: {id?: string | null | undefined; body?: string | null | undefined; created_at?: WhenInput}) {
   return `<div class="chat-system rh-note" data-message="${esc(m.id || '')}"><span class="rh-note-dot" aria-hidden="true"></span>${
     esc(plainActors(m.body))}<div class="chat-meta"><time class="chat-time" title="${esc(fmt(m.created_at))}">${esc(ago(m.created_at))}</time></div></div>`;
 }
@@ -146,7 +144,7 @@ function ruleHeldNoteHTML(m: {id?: string | null; body?: string | null; created_
 // The holds a chat shows under its messages: the person's own held writes (with the rule, and Edit and resend), and those
 // an editor of the rule may send or keep. A held send is shown at once from its answer; the list is read when the chat
 // is drawn (ui/app/chat.ts v2ChatRender), so a reopened chat still shows what is held.
-async function ruleChatHoldsLoad(state: HoldChat) {
+async function ruleChatHoldsLoad(state: ChatState) {
   const thread = state.conv?.id;
   if (!thread) return;
   let page: RuleHoldPage = {holds: []};
@@ -159,7 +157,7 @@ async function ruleChatHoldsLoad(state: HoldChat) {
   v2ChatRender(state);
 }
 // A held send, as its answer gives it: its card under the chat, and the text back in the box once Edit and resend is taken.
-function ruleChatHeld(state: HoldChat, hold: RuleHold) {
+function ruleChatHeld(state: ChatState, hold: RuleHold) {
   state.holds = [hold, ...(state.holds || []).filter(h => h.id !== hold.id)];
   if (V2C === state) v2ChatRender(state);
 }
@@ -176,7 +174,7 @@ function ruleTaskHeld(state: HoldTask, hold: RuleHold) {
   ruleHoldsWire(slot, id);
 }
 // A chat's cards: an action takes its card out of the thread; Edit and resend also puts the text back in this bot's box.
-function ruleChatWire(state: HoldChat, thread: HTMLElement) {
+function ruleChatWire(state: ChatState, thread: HTMLElement) {
   ruleHoldsWire(thread, state.conv?.id, (card, hid, path) => {
     const hold = (state.holds || []).find(h => h.id === hid);
     state.holds = (state.holds || []).filter(h => h.id !== hid);
@@ -186,7 +184,7 @@ function ruleChatWire(state: HoldChat, thread: HTMLElement) {
   });
 }
 function ruleRestoreDraft(slug: string | undefined, text: string) {
-  if (BOT_PILL?.slug !== slug) return;
+  if (!BOT_PILL || BOT_PILL.slug !== slug) return;
   const box = pq(BOT_PILL, '.p-text');
   if (!box) return;
   box.value = text;

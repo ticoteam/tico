@@ -2,10 +2,12 @@
 
 import pytest
 
-from backend.tests.test_meeting_items import api, record, add, items, change, headers  # noqa: F401
-from backend.tests.test_meeting_task_links import task, get
-from backend.tests.test_recorder_audience import live_meeting, readable
-from backend.tests.test_api import post
+from backend import task_engine as E
+
+from backend.tests.helpers.meeting_items import record, add, items, change, headers  # noqa: F401
+from backend.tests.helpers.meeting_task_links import task, get
+from backend.tests.helpers.recorder_audience import live_meeting, readable
+from backend.tests.helpers.api import post
 
 
 def accept(api, rid, iid, token='ana-test', key=None, expected=200):
@@ -28,7 +30,7 @@ def test_accepting_a_closed_task_proposal_links_without_creating_a_task(api):
     )['item']
     with api.app.state.store.transaction() as c:
         before = c.execute('SELECT count(*) FROM tasks').fetchone()[0]
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (target['id'],))
+        E.move(c, target['id'], E.CLOSED, 'human:ana', 'Settled in the meeting')
     result = accept(api, rid, proposal['id'], 'cara-test', 'accept-retry')
     assert result['pushed'] and result['item']['result_ref'] == target['id']
     assert not accept(api, rid, proposal['id'])['pushed']
@@ -104,8 +106,8 @@ def test_this_mac_deletes_pending_discards_live_content_and_keeps_sent_tasks(api
 
 
 def test_link_proposals_keep_person_and_assistant_permissions_and_refuse_bot_tokens(api):
-    from backend.tests.test_assistant import assistant_turn
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.assistant import assistant_turn
+    from backend.tests.helpers.api import setup_attempt
 
     rid, target = record(api), task(api, private=False)
     iid = add(api, rid, {'section': 'task', 'text': 'Follow up', 'proposed_task_id': target['id']})['item']['id']
@@ -144,7 +146,7 @@ def test_task_trash_keeps_proposals_with_the_meeting_and_restores_only_the_point
     ],
 )
 def test_push_keeps_private_and_participants_meeting_text_private_for_human_owners(api, audience, requested_private):
-    from backend.tests.test_meeting_items import push
+    from backend.tests.helpers.meeting_items import push
 
     if audience.get('audience') == 'participants':
         mid = live_meeting(api, visibility='private', added='ana')
@@ -178,7 +180,7 @@ def test_push_keeps_private_and_participants_meeting_text_private_for_human_owne
 
 @pytest.mark.parametrize('original', [{}, {'owner': 'human:ben'}])
 def test_post_save_create_applies_current_edits_under_the_saved_version_and_replays_once(api, original):
-    from backend.tests.test_meeting_items import push
+    from backend.tests.helpers.meeting_items import push
 
     rid = record(api)
     saved = add(api, rid, {'section': 'task', 'text': 'Send the original plan', 'detail': original})['item']
@@ -208,7 +210,7 @@ def test_post_save_create_applies_current_edits_under_the_saved_version_and_repl
 
 
 def test_missing_trashed_and_unreadable_targets_do_not_block_links_or_item_creation(api):
-    from backend.tests.test_meeting_task_links import link
+    from backend.tests.helpers.meeting_task_links import link
 
     rid = record(api)
     available = task(api, private=False)

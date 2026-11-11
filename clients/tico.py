@@ -41,8 +41,8 @@ def inbound_wait_timeout(method, path, body, default, *, query=None):
     return max(default, wait + 10)
 
 
-# Routes the server answers only after a chain of model calls (backend/judge.py SLOW_CHAIN_SECONDS, 35 s with Decisions
-# at Medium or High): their callers wait past it.
+# Routes the server answers only after a chain of model calls (backend/judge.py CHAIN_SECONDS, 25 s, for decisions):
+# their callers wait past it.
 SLOW_POSTS = frozenset(
     {"/api/v2/decisions", "/api/v2/gateway/search", "/api/v2/gateway/fetch", "/api/v2/gateway/digest"}
 )
@@ -212,11 +212,12 @@ class Client:
                         payload = {}
                     error = payload.get("error", {})
                     if isinstance(error, str):
-                        # A flat refusal (CONTRACT §1 task caps): `error` is the code, `message` the words, the rest is extra.
+                        # A flat refusal: `error` is the code, `detail` (a task refusal) or `message` (CONTRACT §1 task
+                        # caps) the words, the rest is extra (a task refusal's `missing`, `next` and `version`).
                         error = {
                             "code": error,
-                            "detail": payload.get("message") or "",
-                            **{k: v for k, v in payload.items() if k not in ("error", "message")},
+                            "detail": payload.get("detail") or payload.get("message") or "",
+                            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
                         }
                     if not isinstance(error, dict):
                         error = {}

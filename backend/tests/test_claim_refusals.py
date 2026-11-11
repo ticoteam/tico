@@ -10,31 +10,9 @@ import pytest
 
 from backend import check_models, diagnostics, execution, health, maintenance_health
 from backend.store import H
-from backend.tests.test_api import api, claim, get, headers, post  # noqa: F401  (api is a fixture)
-from backend.tests.test_task_lanes import new_task, task_bot
-
-
-@pytest.fixture(autouse=True)
-def forget_claims():
-    execution.CLAIMED_BUSY.clear()
-    yield
-    execution.CLAIMED_BUSY.clear()
-
-
-def held(api, machine, asks=True, **busy):
-    """The runner's claim with its own busy lists (it takes nothing), then Health's row for ops and the Health
-    Monitor's findings, with ops's queued work made 30 minutes old. `asks`: False for a runner that never claimed it."""
-    if asks:
-        assert post(api, "jobs/claim", busy, token=machine["token"])["attempt"] is None
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), minutes=-30),)
-        )
-        online = {r["id"] for r in health._online_runners(c)}
-        rows = [r for r in health._waiting(c, online, store.settings)[2] if r["bot"] == "ops"]
-        found = {f["check_id"] for f in maintenance_health.findings(c, store.settings)}
-    return rows, found
+from backend.tests.helpers.api import claim, get, headers, post  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.claim_refusals import forget_claims, health_admin, held  # noqa: F401
 
 
 def says(api, machine, reason, **busy):
@@ -44,12 +22,6 @@ def says(api, machine, reason, **busy):
     with api.app.state.store.read() as c:
         [row] = health._stuck(c, rows, set(), health_admin(api), True)
     assert row["why"] == health.HELD[reason][0].format(computer="Test Mac")
-
-
-def health_admin(api):
-    from backend.auth import Identity
-
-    return Identity("human:ana", "owner")
 
 
 def test_unexplained_queued_work_is_still_queue_idle(api):
@@ -81,7 +53,7 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
             "owner": "ops",
             "title": "review",
             "body": "Review it.",
-            "relations": [{"task": task["id"], "kind": "parent"}],
+            "parent": task["id"],
         },
     )
     control(action="pause")
@@ -89,8 +61,10 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
     assert claim(api, machine) is None  # the scope never lifts a pause
     control(action="resume")
     post(api, "chat/ops", {"text": "Anything new?"})  # new work outside the task arrives during the check
-    taken = {claim(api, machine)["lane"], claim(api, machine)["lane"]}
-    assert taken == {"task:" + task["id"], "task:" + child["id"]} and claim(api, machine) is None
+    # The task waits on the sub-task it filed (docs/pipelines-v3.md): its own wake is let go, and inside the limit
+    # only the sub-task runs.
+    taken = [(claim(api, machine) or {}).get("lane") for _ in range(3)]
+    assert [lane for lane in taken if lane] == ["task:" + child["id"]], taken
     with api.app.state.store.read() as c:  # Health reads the same rule
         assert execution.bot_refusal(c, api.app.state.store.settings, machine["runner_id"], "ops") == "scoped"
     control(action="pause")
@@ -105,8 +79,9 @@ def test_a_bot_limited_to_one_task_claims_only_it_and_its_subtasks_until_release
             )
         ] == ["bot.scope", "bot.unscope"]
     control(action="resume")
-    lanes = {claim(api, machine)["lane"] for _ in range(4)}
-    assert lanes == {"task:" + t["id"] for t in (task, child, other)} | {"main"}
+    lanes = {claim(api, machine)["lane"] for _ in range(3)}
+    assert lanes == {"task:" + t["id"] for t in (child, other)} | {"main"}, "the task still waits on its sub-task"
+    assert claim(api, machine) is None
 
 
 def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_limit(api):
@@ -132,25 +107,14 @@ def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_li
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (outside["id"],)).fetchone()[0] == "queued"
 
 
-def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_released(api, monkeypatch):
+def test_a_limited_bots_turn_carries_no_waiting_notes_until_released(api, monkeypatch):
+    # v3 has no next-run tasks (a claim's `next_run` list is always empty): the notes are what a limit holds back.
     from backend import bot_to_bot
 
     backlog = []
     monkeypatch.setattr(bot_to_bot, "continue_backlog", lambda c, bot, skip=(): backlog.append(bot))
     machine = task_bot(api, lanes=True)
     task = new_task(api, "the check")
-    child = post(
-        api,
-        "tasks",
-        {
-            "owner": "ops",
-            "title": "review",
-            "body": "Review it.",
-            "next_run": True,
-            "relations": [{"task": task["id"], "kind": "parent"}],
-        },
-    )
-    other = post(api, "tasks", {"owner": "ops", "title": "unrelated", "body": "Do it later.", "next_run": True})
     note = post(api, "notes", {"to": "ops", "text": "Cancellations are flat."})["note"]
     post(
         api,
@@ -160,14 +124,12 @@ def test_a_limited_bots_turn_carries_only_next_run_work_inside_the_limit_until_r
     run = lambda: post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]  # noqa: E731
     limited = run()
     assert limited["lane"] == "task:" + task["id"]
-    assert [t["id"] for t in limited["next_run"]] == [child["id"]] and limited["notes"] == [] and backlog == []
-    with api.app.state.store.read() as c:  # the held work is left exactly as it was
-        assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+    assert limited["next_run"] == [] and limited["notes"] == [] and backlog == []
+    with api.app.state.store.read() as c:  # the held note is left exactly as it was
         assert c.execute("SELECT carried_by FROM notes WHERE id=?", (note["id"],)).fetchone()[0] is None
     post(api, "bots/ops/control", {"action": "unscope", "expected_revision": get(api, "bots/ops")["revision"]})
     post(api, "chat/ops", {"text": "Anything new?"})
     released = run()
-    assert [t["id"] for t in released["next_run"]] == [other["id"]]
     assert [n["id"] for n in released["notes"]] == [note["id"]] and backlog == ["ops"]
 
 

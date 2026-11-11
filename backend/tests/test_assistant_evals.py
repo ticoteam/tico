@@ -31,8 +31,8 @@ _spec.loader.exec_module(live)
 # The Assistant's new commands land on the chris/assistant-tools branch, not on main. A case may expect them; on main the
 # parser must still reject them. Delete an entry here when its command lands, so the case is checked against the real parser.
 NEW_COMMANDS = []
-# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, decline, approval
-# without the setting, and the everyday jobs.
+# Every case the Assistant suite must keep: the real Nov 3 chat split into its asks, undo, injection, a send back, an OK it
+# refuses to give, and the everyday jobs.
 REQUIRED = {
     "queue-clear-old-tasks",
     "queue-stop-release-notices",
@@ -42,10 +42,10 @@ REQUIRED = {
     "queue-morning-summary",
     "approvals-injection-bot-message",
     "approvals-decline-replaced-release",
-    "approvals-no-setting-no-approve",
-    "approvals-read-back-named",
+    "approvals-named-two-links",
     "approvals-vendor-text-task",
     "approvals-clear-stale-direct",
+    "safety-approve-go-ahead-never",
     "background-daily-sweep",
     "jobs-launch-status",
     "jobs-route-paid-trials",
@@ -183,7 +183,7 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
             "jsonrpc": "2.0",
             "id": 3,
             "method": "tools/call",
-            "params": {"name": "hub_task_close", "arguments": {"id": "x", "note": "y"}},
+            "params": {"name": "tico_task_close", "arguments": {"id": "x", "why": "y", "version": 3}},
         },
     ]
     proc = subprocess.run(
@@ -201,7 +201,7 @@ def test_the_mcp_surface_lists_the_real_tools_and_logs_a_call_as_a_canon_line(tm
     assert [t["name"] for t in replies[2]["result"]["tools"]] == real
     assert not replies[3]["result"]["isError"], replies[3]
     logged = [json.loads(l) for l in log.read_text().splitlines()]
-    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "hub_task_close", logged
+    assert logged[-1]["via"] == "mcp" and logged[-1]["tool"] == "tico_task_close", logged
     assert re.search(r"^task close\b", logged[-1]["argv"]), logged[-1]
 
 
@@ -273,7 +273,7 @@ def test_a_sample_runs_its_claude_command_on_every_surface(tmp_path, monkeypatch
     if surface == "cli":
         assert servers == {}
     else:
-        assert servers["hub"]["command"] and servers["hub"]["args"][0].endswith("fake_mcp.py"), servers
+        assert servers["tico"]["command"] and servers["tico"]["args"][0].endswith("fake_mcp.py"), servers
 
 
 def _hub_answer(tmp_path, monkeypatch, canned):
@@ -380,43 +380,35 @@ def test_an_uncanned_list_read_is_an_empty_list_with_a_note(tmp_path, monkeypatc
     assert out["messages"] == [] and out["note"] == "no canned data"
 
 
-def test_approval_list_is_built_from_the_message_list_in_the_real_shape(tmp_path, monkeypatch):
-    old, new = "2a7f0c9e-4000-4000-8000-000000000001", "5f3e21c0-4000-4000-8000-000000000002"
-    long_text = "Approve this spend: " + "x" * 300
-    messages = [
-        {
-            "id": "m1",
-            "from_actor": "bot:release",
-            "text": "Approve this publish:\n{\"release\": \"v0.5.17\"}",
-            "refs": {"approval": old, "task": "b1c2d3e4"},
-            "created": "2026-10-30T10:00:00Z",
-        },
-        {
-            "id": "m2",
-            "from_actor": "bot:growth",
-            "text": long_text,
-            "refs": {"approval": new},
-            "created": "2026-11-01T09:00:00Z",
-        },
-    ]
-    answer = _hub_answer(
-        tmp_path, monkeypatch, [{"match": r"^message list", "out": {"actor": "human:dana", "messages": messages}}]
-    )
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert set(env) == {"actor", "status", "total", "approvals", "next"}
-    assert (env["actor"], env["status"], env["total"], env["next"]) == ("human:dana", "pending", 2, None)
-    rows = env["approvals"]
-    assert [r["id"] for r in rows] == [new, old]  # newest first
-    assert set(rows[0]) == {"id", "status", "from_actor", "summary", "message_id", "task_id", "created", "link"}
-    assert rows[0]["task_id"] is None and rows[0]["link"] is None
-    assert len(rows[0]["summary"]) <= 200 and rows[0]["summary"].endswith("...")
-    assert rows[1]["summary"] == 'Approve this publish: {"release": "v0.5.17"}'  # one line, lead-in kept
-    assert rows[1]["task_id"] == "b1c2d3e4" and rows[1]["link"] == "#/task/b1c2d3e4"
-    answer(["approval", "decline", "5f3e21c0"], "cli")
-    env = json.loads(answer(["approval", "list"], "cli")[0])
-    assert [r["id"] for r in env["approvals"]] == [old] and env["total"] == 1
-    env = json.loads(answer(["approval", "list", "--status", "declined"], "cli")[0])
-    assert env["status"] == "declined" and [(r["id"], r["status"]) for r in env["approvals"]] == [(new, "declined")]
+NEEDS = {
+    "actor": "human:dana",
+    "count": 3,
+    "by_kind": {"ask": 2, "task": 1},
+    "items": [
+        {"kind": "ask", "id": "r1-0000", "task_id": "t-aaaa", "requirement_id": "r1-0000", "line": "OK to send"},
+        {"kind": "ask", "id": "r2-0000", "task_id": "t-bbbb", "requirement_id": "r2-0000", "line": "Which date?"},
+        {"kind": "task", "id": "t-cccc", "task_id": "t-cccc", "requirement_id": None, "line": "Vendor list"},
+    ],
+    "next": None,
+}
+
+
+def test_an_answered_ask_and_a_closed_task_leave_needs_you(tmp_path, monkeypatch):
+    """`task answer <task> <requirement> ...` takes that ask out of a later `needs-you show`, and `task close|done` takes
+    every item of that task out, with the counts following, as the real list is read from the tasks."""
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
+    answer(["task", "answer", "t-bbbb", "r2", "Oct 8", "--version", "3"], "cli")
+    answer(["task", "close", "t-cccc", "-m", "old", "--version", "2"], "cli")
+    out = json.loads(answer(["needs-you", "show"], "cli")[0])
+    assert [i["id"] for i in out["items"]] == ["r1-0000"]
+    assert out["count"] == 1 and out["by_kind"] == {"ask": 1}
+
+
+def test_a_dry_run_answer_leaves_the_ask(tmp_path, monkeypatch):
+    answer = _hub_answer(tmp_path, monkeypatch, [{"match": r"^needs-you show", "out": NEEDS}])
+    answer(["task", "answer", "t-aaaa", "r1", "no", "--dry-run"], "cli")
+    assert json.loads(answer(["needs-you", "show"], "cli")[0])["count"] == 3
 
 
 FAKE_CLAUDE = r"""#!/usr/bin/env python3
@@ -575,3 +567,11 @@ def test_rerun_errors_selects_only_the_errored_samples(tmp_path):
     for r in rows:
         (tmp_path / f"{r['id']}.s{r['sample']}.json").write_text(json.dumps(r))
     assert live.errored_samples(tmp_path) == {("a", 2), ("b", 1)}
+
+
+def test_the_filter_close_playbook_keeps_mine_by_default_and_closes_each_on_their_yes():
+    """Job 12a: keeping the caller's tasks is the default, the count comes first, and each task is closed with its version."""
+    text = (EVALS.parents[1] / "templates/catalog/assistant/playbooks/jobs.md").read_text()
+    job = text[text.index("12a.") : text.index("\n13. ")]
+    assert "Keep mine is the default" in job and "Close N? Say yes." in job
+    assert 'tico task close <id> -m "<why>" --version N' in job and "bulk" not in job

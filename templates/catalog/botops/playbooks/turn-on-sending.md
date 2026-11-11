@@ -18,7 +18,7 @@ Done when: the sending policy reads back On their own or Ask first, or the refus
 Every send goes through Tico's send queue, which decides it under the bot's sending policy, set in Tico:
 
 1. **On their own**: the bot sends within the rules the human gave it, each send after a short undo window.
-2. **Ask first**: each send waits until a person approves it in Tico.
+2. **Ask first**: each send waits until a person OKs it in Tico.
 3. **Never**: nothing is sent; drafts only.
 
 Some sends always ask a person whatever the mode (a new correspondent, attachments, an outside Cc, legal or money
@@ -27,14 +27,14 @@ turn it off again in one message.
 
 ## Steps
 
-1. **Get the facts from the message.** Which bot (`hub api GET bots/<slug>` if they did not name it), who it may
+1. **Get the facts from the message.** Which bot (`tico api GET bots/<slug>` if they did not name it), who it may
    answer, and where it forwards what. Ask one question only if an address is missing: "Where should I forward it?"
-2. **Record the permission as them.** The bot already has a gmail tool (`hub tool list --bot <slug>` shows its id):
-   `hub tool update <tool-id> --bot <slug> --can read,draft,send`. It changes the entry in place; never remove it and
+2. **Record the permission as them.** The bot already has a gmail tool (`tico tool list --bot <slug>` shows its id):
+   `tico tool update <tool-id> --bot <slug> --can read,draft,send`. It changes the entry in place; never remove it and
    add it again, which files a "Remove Gmail access" task nobody wants. No gmail tool yet:
-   `hub tool add <slug> gmail --can read,draft,send --identity <the bot's mailbox>`. This is the step the server
+   `tico tool add <slug> gmail --can read,draft,send --identity <the bot's mailbox>`. This is the step the server
    checks against their rights; it answers at once. A refusal ends the playbook. It files one task for you with the
-   entry; when step 3 has put that entry in `bot.yaml`, close it: `hub task update <id> --status done --note "..."`.
+   entry; when step 3 has put that entry in `bot.yaml`, close it: `tico task done <id> -m "..." --version N`.
 3. **Change the bot's repository** (`$HUB_WORKSPACE/bot-<slug>`):
    - `bot.yaml`: the gmail entry's `can: [read, draft, send]`. The sending policy itself is the person's, in Tico
      (step 5); `bot.yaml` carries no sending setting.
@@ -46,11 +46,11 @@ turn it off again in one message.
      `inbox-preferences.md` now. Nothing else about what it may send changes.
    - `questions/mail-triage.json` must exist in the repository; if it is missing, copy it from
      `$HUB_DIR/questions/mail-triage.json`.
-4. **Check and commit.** `hub bot check <slug>`; fix what it reports; commit with one line. Put the decision in
+4. **Check and commit.** `tico bot check <slug>`; fix what it reports; commit with one line. Put the decision in
    `memory/decisions.md` (who asked, which rules, which addresses).
 5. **Ask them to set the sending policy themselves.** Only a person who manages the bot can, and never you, even as
    them: Tools > the mailbox > Limits, **On their own** or **Ask first**, or
-   `hub email policy --bot <slug> --settings '{"mode":"on_their_own"}'` with their own token.
+   `tico email policy --bot <slug> --settings '{"mode":"on_their_own"}'` with their own token.
 6. **Report in one message.** Say what you changed, what the rules are (the recipients and forward address(es) by
    name), what each mode means, that Tico's always-ask rules, caps and blocklist still apply, and how to turn it off
    (the same setting, Never). Once they say it is set, `$HUB_DIR/scripts/mail.sh policy show --as <slug>` prints the
@@ -63,12 +63,12 @@ is a change to the rules in `## Sending`. Taking an address off the list is reve
 
 ## When it goes sideways
 
-- **The server refuses `hub tool add` or `hub tool update`.** They do not manage the bot. Say who does.
+- **The server refuses `tico tool add` or `tico tool update`.** They do not manage the bot. Say who does.
 - **`on_behalf_of` refused.** The run was not started by the human's own chat message or comment. Tell whoever is on the task;
   do not act as anyone and do not turn anything on.
 - **`mail.sh policy show` says Never.** The person has not set it in Tico yet. Never report "on" before it says
   On their own or Ask first.
-- **The bot is not its person's message bot yet.** `hub health check` says so; link it as them
+- **The bot is not its person's message bot yet.** `tico health check` says so; link it as them
   (`playbooks/set-up-a-bot.md`, step 3).
 
 ## Who turns it on

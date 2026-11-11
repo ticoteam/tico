@@ -46,7 +46,7 @@ def home_id(api, actor):
     return api.get(f"/api/v2/threads/home/{actor}").json()["id"]
 
 
-def test_the_rules_say_who_follows_them_and_with_whom(built):
+def _the_rules_say_who_follows_them_and_with_whom(built):
     _, settings, _rows = built
     with signed_in(settings) as api:
         rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
@@ -68,7 +68,7 @@ def test_the_rules_say_who_follows_them_and_with_whom(built):
             assert [x["id"] for x in rule["with"][key]] == with_.get(key, []), (item["key"], key)
 
 
-def test_peer_rules_fill_the_with_column(built):
+def _peer_rules_fill_the_with_column(built):
     _, settings, _rows = built
     with signed_in(settings) as api:
         rules = api.get("/api/v2/rules", params={"kind": "internal", "status": "active"}).json()["rules"]
@@ -79,7 +79,7 @@ def test_peer_rules_fill_the_with_column(built):
     assert ben["who"]["all_bots"] and [p["id"] for p in ben["with"]["people"]] == ["ben"]
 
 
-def test_every_mention_in_a_rule_names_a_real_teammate(built):
+def _every_mention_in_a_rule_names_a_real_teammate(built):
     """A rule names a teammate as @slug (a bot) or @handle (a person), the way the Rules page shows a mention chip."""
     _, settings, _rows = built
     with signed_in(settings) as api:
@@ -95,7 +95,7 @@ def test_every_mention_in_a_rule_names_a_real_teammate(built):
     assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
 
 
-def test_bens_rule_suggestion_waits_as_a_suggestion(built):
+def _bens_rule_suggestion_waits_as_a_suggestion(built):
     _, settings, _rows = built
     suggestion = CONTENT["suggestion"]
     with signed_in(settings) as api:
@@ -107,7 +107,7 @@ def test_bens_rule_suggestion_waits_as_a_suggestion(built):
     assert suggestion["text"] not in [r["text"] for r in active]
 
 
-def test_the_refund_draft_is_held_for_ben_and_written_nowhere(built):
+def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     directory, settings, _rows = built
     with signed_in(settings) as api:
         care = timeline(api, home_id(api, "bot:support-lead"))
@@ -131,7 +131,7 @@ def test_the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     assert task["title"] == "Rule review"
 
 
-def test_the_engineering_home_has_the_pause_and_its_fix_thread(built):
+def _the_engineering_home_has_the_pause_and_its_fix_thread(built):
     _, settings, _rows = built
     # The Home is shared with the other sections' posts (recruit, automations), so this checks this section's own messages.
     said = [item["say"] for item in CONTENT["messages"] if item["in"] == "eng"]
@@ -147,7 +147,7 @@ def test_the_engineering_home_has_the_pause_and_its_fix_thread(built):
     assert all(NOW - timedelta(days=7) <= stamp <= NOW for stamp in stamps)
 
 
-def test_ana_sidebar_lists_her_department_homes_and_her_dms(built):
+def _ana_sidebar_lists_her_department_homes_and_her_dms(built):
     _, settings, _rows = built
     with signed_in(settings) as api:
         sidebar = api.get("/api/v2/threads").json()  # rooms and DMs are paged apart: threads, dms
@@ -161,7 +161,7 @@ def test_ana_sidebar_lists_her_department_homes_and_her_dms(built):
     assert [d for d in dms if d not in listed] == [], "DMs missing from the sidebar"
 
 
-def test_the_company_thread_and_ana_assistant_dm_show(built):
+def _the_company_thread_and_ana_assistant_dm_show(built):
     _, settings, _rows = built
     first = max((m for m in CONTENT["messages"] if m["in"] == "coo"), key=lambda m: m["ago"])
     with signed_in(settings) as api:
@@ -172,7 +172,7 @@ def test_the_company_thread_and_ana_assistant_dm_show(built):
     assert CONTENT["threads"]["all"]["title"] in titles
 
 
-def test_ana_and_pricing_talk_through_the_december_price(built):
+def _ana_and_pricing_talk_through_the_december_price(built):
     _, settings, _rows = built
     said = [m["say"] for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing"), key=lambda m: -m["ago"])]
     with signed_in(settings) as api:
@@ -206,3 +206,20 @@ def _content(path):
             ).fetchall(),
             "holds": db.execute("SELECT id, author, reviewer, state, created_at FROM org_rule_holds").fetchall(),
         }
+
+
+def test_the_demo_threads_and_rules_tell_their_story(built, subtests):
+    """Every check reads the one demo build, in file order, each as its own subtest."""
+    for check in (
+        _the_rules_say_who_follows_them_and_with_whom,
+        _peer_rules_fill_the_with_column,
+        _every_mention_in_a_rule_names_a_real_teammate,
+        _bens_rule_suggestion_waits_as_a_suggestion,
+        _the_refund_draft_is_held_for_ben_and_written_nowhere,
+        _the_engineering_home_has_the_pause_and_its_fix_thread,
+        _ana_sidebar_lists_her_department_homes_and_her_dms,
+        _the_company_thread_and_ana_assistant_dm_show,
+        _ana_and_pricing_talk_through_the_december_price,
+    ):
+        with subtests.test(check.__name__):
+            check(built)

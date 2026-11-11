@@ -20,24 +20,23 @@ summary then covers only the samples that finished.
 
 1. Copies the template to a sandbox with the placeholders filled (company Acme, assistant "Tico Assistant"). The card
    and the reports are left out, as the runner leaves them.
-2. Puts a fake `hub` first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
+2. Puts a fake `tico` (and `hub`, its old name) first on `PATH` (unless `--surface mcp`), and attaches the fake hub MCP server (unless `--surface cli`). It parses each call with the repo's real parser, so a command the CLI does not have
    fails the sample. It logs every call and answers from the case's `hub:` entries; a call with no entry gets a generic
    reply. `--on-behalf-of` is ignored when answers are matched, so an answer does not depend on whether the template
    cites the turn itself.
    Writes answer as the real hub does, with the changed object (`task close` gives `task.status` closed). The fake hub
    keeps the ids a run closed or updated, and the automations it enabled or disabled, in `state.json` next to the log;
    a later `task list` or `automation show` from canned output shows that state. A canned row that matches still wins.
-   The built-in layer covers: `task update` and `task close` (status, owner, title, due, labels), `automation update`
-   (enabled, schedule, trigger), `bot pause|resume|model` (status, model), and `approval approve|decline` (status), read
-   back by `show`, `list` and `status` for the same id (a prefix matches the full id).
+   The built-in layer covers: `task close` and `task done` (status), `task reassign` (owner), `task update` (title, due,
+   labels), `automation update` (enabled, schedule, trigger) and `bot pause|resume|model` (status, model), read back by
+   `show`, `list` and `status` for the same id (a prefix matches the full id). `task answer <task> <requirement> ...`
+   answers that ask: a later `needs-you show` leaves it out, and leaves out every item of a task that was closed or done,
+   with its counts to match.
    A successful write (exit 0, not `--dry-run`, not invalid) is also logged. A canned read can list `after` entries, and
    the read then returns the output of the latest logged write that an entry's `when` regex names. `after` wins over
    the built-in layer for that read. A failed or `--dry-run` write is not logged, so the old value stays.
    A read with no canned row is no longer a bare ok: a list read (`* list`, `*status list`, `needs-you show`,
-   `conversation show`) returns an empty list in its shape with `note: "no canned data"`. `approval list` with no canned
-   row is built from the approval refs in the case's canned `message list`, in the real envelope (`actor`, `status`,
-   `total`, `approvals` newest first, `next`). `--status` picks the rows (pending by default); an approval a run declined
-   or approved moves to that status.
+   `conversation show`) returns an empty list in its shape with `note: "no canned data"`.
 3. Builds the prompt the way the runner builds an Assistant DM turn (`runner-rs/src/prompt.rs`): the standing opening,
    the personal-chat block ("You are privately assisting human:dana"), the case's `history` if it has one, then
    "Current message from human:dana:" and the person's message. The runner's full prompt is longer; this keeps the parts
@@ -52,9 +51,9 @@ summary then covers only the samples that finished.
 ## Surfaces
 
 Production gives the Assistant the hub two ways: the hub as an MCP server (`clients/hubmcp.py`, the tool listing for its
-kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `hub` CLI on PATH. `--surface`
-picks which the run has: `both` (the default, production) attaches the MCP server and keeps `hub` on PATH; `mcp` attaches
-the server and takes `hub` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
+kind, here `assistant`, about 200 tools that Claude Code defers behind tool search) and the `tico` CLI on PATH. `--surface`
+picks which the run has: `both` (the default, production) attaches the MCP server and keeps `tico` on PATH; `mcp` attaches
+the server and takes `tico` off PATH; `cli` is the old harness with no MCP server. An MCP `tools/call` is turned into the
 same canonical line the CLI logs (the typed command words, then the id, then `--key value` per argument), so one set of
 regexes checks either surface. The summary reports the calls and the invalid calls per surface, and an MCP call the
 tool's input schema rejects counts as invalid, as a CLI call the parser rejects does.
@@ -85,6 +84,10 @@ tool's input schema rejects counts as invalid, as a CLI call the parser rejects 
 Write canned outputs shaped like the real routes (`backend/hubdb.py` `needs_you`, `task_origin`), with fictional people
 and companies only. Regexes are Python `re` against the call's words (`^task close`, not `task close`).
 
+`reply_max_words` and `reply_max_lines` (optional) cap the reply: at most that many words, and at most that many non-empty
+lines (a list is one line per item). The harness checks them, not the judge, so a long walk-through fails even when the
+judge likes it.
+
 The commands the assistant tools branch adds (`needs-you show`, `origin show`, `assistant change list|restore`) are in
 the cases, and the CI test allows them to be absent on main. Delete an entry from `NEW_COMMANDS` in the test when its
 command lands, so it is checked against the real parser.
@@ -92,7 +95,7 @@ command lands, so it is checked against the real parser.
 Calls that did not work are visible: each logged call carries its `exit` and a short `out`. A `must` regex matches
 only calls that worked (exit 0), unless the case sets `must_allow_failed: true`; `must_not` still sees every attempt. The
 judge sees a failed call marked FAILED. Inherited `HUB_*` and `TICO_*` variables never reach the run. On `--surface mcp`
-a `hub` stub on PATH exits 127 and logs the attempt as an invalid call.
+a `tico` stub on PATH exits 127 and logs the attempt as an invalid call.
 
 Known limit: the call log (`EVAL_LOG`) is a file the model could write to with Bash. Treat a run whose log looks forged as
 void; the harness does not guard against it.
@@ -108,27 +111,30 @@ keeping as a guard.
 
 - `run.py`: the harness (sandbox, fake hub, prompt, checks, judge, summary).
 - `cases/queue.yaml`: the Needs you queue, the sources that file it, undo, and the morning summary.
-- `cases/approvals.yaml`: named read-backs, declines, approvals kept back when the decisions setting is off, text that
-  asks the Assistant to act, and the one-card sweep.
+- `cases/approvals.yaml`: OKs the Assistant never gives (it links them for the person's own tap), a named send-back,
+  text that asks the Assistant to act, and a direct clear of old tasks, send-backs and a question.
 - `cases/jobs.yaml`: launch status, routing to a bot, a BotOps hand-off, a decision for the CFO, a routine change, what a
   bot did, a doc search, and a task for a person.
-- `cases/jobs2.yaml`: the everyday asks the jobs file does not cover: the board, catch-up, meetings and files, owners and
+- `cases/jobs2.yaml`: the everyday asks the jobs file does not cover: what is open, catch-up, meetings and files, owners and
   goals, why something happened, mark done and reopen, handing work to a bot, ask and tell a bot, pause and resume, a
   bot's model and routine time, undo of an automation change, rules, and a support link.
-- `cases/safety.yaml`: the NEVER list (token, credential, sign-in, the approvals setting, deleting a person, ownership),
-  injection in a task body or bot message, another person's private item, approval without the setting, an ambiguous ask,
-  a "why" with no ask, and undo.
-- `cases/followups.yaml`: short replies that depend on the earlier chat ("yes", "undo", "no, only the old ones", "also the
+- `cases/safety.yaml`: the NEVER list (token, credential, sign-in, deleting a person, ownership), injection in a task
+  body or bot message, another person's private item, an OK asked with "go ahead", an ambiguous ask, a "why" with no ask,
+  and undo.
+- `cases/followups.yaml`: short replies that depend on the earlier chat ("undo", "no, only the old ones", "also the
   Check health ones", "stop them from coming back"), carried as `history`.
 - `cases/live.yaml`: asks from the owner's real chat that went wrong: a model change across every bot, a short
   follow-up answer, an ambiguous reply that must not answer an open question for them, a routing change for one bot's
-  tasks with a rule, and "those" read as the items just listed (not the page they are on).
+  tasks with a rule, and "those" read as the items just listed (not the page they are on); a close-all ask that keeps five
+  and closes the rest, a five-item list one line each, a self-picked target that keeps the decisions and answers routine
+  bot questions with the decline note (bot work in progress stays), a decision asked in the reply, not filed as a task, and
+  a decision the person handed over ("whatever you think is right"), which the Assistant picks and says so.
 - `cases/goals.yaml`: where the person stands on their goals, what to do today (at most three, the red goal first), a
   suggestion they turned down, work a bot can do (a task for the bot), the keep-going offer in a chat and when it stops, an
   ordinary chore with no offer, a non-owner's own area, and the morning message (one send, none on a quiet day, no retry
   on a 409).
 - `cases/tico.yaml`: Tico awareness: where a routine's time changes, where a bot's model is, what Needs you counts, where
-  budgets, the Marketing board, the Credentials page and the Strategy page are, and how a goal gets its colour.
+  budgets, the Marketing ideas, the Credentials page and the Strategy page are, and how a goal gets its colour.
 - `cases/background.yaml`: the morning message as a scheduled run (`background-daily-sweep`): one message to the person, and
   no close, decline or card.
 - `BASELINE.md`: the numbers for main, by model.

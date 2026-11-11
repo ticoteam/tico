@@ -15,7 +15,7 @@ import os
 import secrets
 import shlex
 
-from . import contract, envfile, remote, settings as st, state
+from . import aws as awsmod, contract, envfile, owned, remote, settings as st, state
 from .settings import Settings
 from .ui import IO, MissingInput
 
@@ -35,9 +35,25 @@ def check_dns_identity(args, dns_name: str, dns_zone: str) -> None:
             raise MissingInput(f"--{field.replace('_', '-')} conflicts with saved DNS identity; omit it or use {saved}")
 
 
+def read_handoff(s: Settings) -> None:
+    """TICO_SETUP_HANDOFF, from the environment only (never a flag, so never in a command line or a process list, like
+    TICO_GATEWAY_INVITE): the one-time secret the owner's coding agent trades for a personal token of the owner
+    (backend/setup_handoff.py). HQ makes it and keeps it; this run keeps only its sha256, in the settings and the server's
+    .env. A re-run without it keeps the hash the first run saved."""
+    secret = os.environ.get("TICO_SETUP_HANDOFF", "")
+    if not secret:
+        return
+    if not st.HANDOFF_RE.fullmatch(secret):
+        raise MissingInput(
+            "TICO_SETUP_HANDOFF is not a setup handoff secret (32 to 128 letters, digits, - and _). It is not shown here."
+        )
+    s.setup_handoff_hash = hashlib.sha256(secret.encode()).hexdigest()
+
+
 def gather(args, s: Settings, dry: bool) -> None:
     """Our operator's flags, checked before anything is asked or created. A self-hosted install leaves all of it unset."""
     check_dns_identity(args, s.dns_name, s.dns_zone)
+    read_handoff(s)
     hosted = (getattr(args, "hosted", None) or s.hosted or "").strip().lower()
     preset = (getattr(args, "preset", None) or s.preset or "").strip().lower()
     auth = getattr(args, "auth", None) or ""
@@ -125,6 +141,12 @@ def plan_lines(s: Settings) -> list[str]:
                 else "No Gateway invite in the environment (TICO_GATEWAY_INVITE): the Gateway is not set up by this run."
             )
         )
+    if s.setup_handoff_hash:
+        out.append(
+            "Setup handoff: the server keeps only the hash of the one-time secret in TICO_SETUP_HANDOFF. Whoever holds "
+            "the secret trades it once, within a week of the first start, for a personal token of the owner "
+            "(POST /api/v2/setup/handoff); it is never printed or saved here."
+        )
     return out
 
 
@@ -195,7 +217,9 @@ def shell_for(s: Settings, deps) -> remote.Shell | None:
     if s.target == "ssh":
         return deps.ssh_shell(s.ssh_host, s.ssh_port, s.ssh_identity)
     if s.target == "aws" and s.aws_instance_id:
-        _, _, ssm, _ = deps.aws_clients(s.aws_region, s.aws_profile)
+        ec2, _, ssm, account = deps.aws_clients(s.aws_region, s.aws_profile)
+        if owned.strict(s.asset_prefix):  # the default path's calls stay main's
+            owned.prove_server(ec2, account, s)
         return remote.SSMShell(ssm, s.aws_instance_id, deps.sleep)
     return None
 
@@ -210,7 +234,10 @@ def rotate(args, io: IO, deps) -> int:
         domain = known[0]
     saved, env_text = state.load(domain)
     if not saved:
-        raise MissingInput(f"No saved setup for {domain}; run `tico setup` first.")
+        raise MissingInput(f"No saved setup for {domain}; run the setup wizard first.")
+    if owned.strict(saved.get("asset_prefix", "")):  # bound to its domain and install, as every strict command
+        awsmod.asset_prefix(getattr(args, "asset_prefix", None), saved)  # named again: it changes the server
+        owned.check_mode(domain, saved.get("aws_name", ""), saved["asset_prefix"], saved)
     s = st.from_saved(saved, env_text)
     if s.auth != st.OWNER_LINK and not (s.hosted and s.auth == "oidc"):
         raise MissingInput(f"{domain} does not use the owner sign-in link (it was set up with --auth {s.auth}).")

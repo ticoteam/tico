@@ -1,47 +1,8 @@
 """Spend limits (backend/usage_limits.py, docs/usage.md): a bot over a limit takes no new job and a run already going
 finishes, the 80% notice comes once, raising the limit resumes the bot, and who may set one."""
 
-from backend.tests.test_api import api, as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_usage import complete
-
-
-def put(api, path, body, token="ana-test", expected=200):
-    r = api.put("/api/v2/" + path, json=body, headers=headers(token))
-    assert r.status_code == expected, r.text
-    return r.json()
-
-
-def cost(output_tokens):
-    """A usage report priced by gpt-6-sol at $10 per million output tokens."""
-    return {
-        "input_tokens": 0,
-        "cached_tokens": 0,
-        "output_tokens": output_tokens,
-        "model": "gpt-6-sol",
-        "runtime": "codex",
-    }
-
-
-def start(api, r, text="Please look at this."):
-    post(api, "chat/ops", {"text": text})
-    attempt = claim(api, r)
-    return attempt
-
-
-def finish(api, r, attempt, output_tokens):
-    complete(api, r, attempt, cost(output_tokens))
-
-
-def fleet(api):
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    return r
-
-
-def paused(api):
-    status = get(api, "status")["bots"]
-    return next((s for s in status if s["bot"] == "ops"), {})
+from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.usage_limits import finish, fleet, groups, paused, put, start
 
 
 def test_a_bot_over_its_limit_takes_no_new_job_a_running_turn_finishes_and_raising_it_resumes(api):
@@ -124,39 +85,28 @@ def test_who_may_set_a_limit_and_what_the_default_keeps(api):
 
 
 def test_a_message_or_task_for_a_bot_over_its_limit_is_saved_and_the_sender_is_told_why_it_waits(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     r = fleet(api)
     put(api, "usage/limits/ops", {"daily_usd": 1})
     finish(api, r, start(api, r), 500_000)  # $5 against a $1 limit
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Check the Acme invoice."})
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "Check the Acme invoice."})
     assert not err and sent["id"]  # saved: it runs once the limit allows
     assert sent["warning"] == (
         "ops is over its daily limit ($5.00 of $1.00); it starts again at 00:00 UTC or when a person raises the limit."
     )
-    err, made = call(api, "hub_task_create", {"owner": "ops", "title": "Review the Acme invoice", "body": "Please."})
+    err, made = call(api, "tico_task_create", {"owner": "ops", "title": "Review the Acme invoice", "body": "Please."})
     assert not err and made["task"]["id"] and "over its daily limit" in made["warning"]
     assert paused(api)["limit"] == {**paused(api)["limit"], "period": "daily", "spent": 5, "limit": 1}
     put(api, "usage/limits/ops", {"daily_usd": 50})
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "And this."})
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "And this."})
     assert not err and "warning" not in sent
-
-
-def groups(api, ops_team):
-    """Engineering with Product nested under it; ops in `ops_team`."""
-    import json
-
-    with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
-        c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 
 def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set_before_counts_the_hour(api):
     from datetime import datetime
     from backend import usage_limits
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     r = fleet(api)
     groups(api, "product")  # ops is in Product, under Engineering
@@ -166,7 +116,7 @@ def test_a_group_or_team_limit_holds_every_bot_it_covers_and_an_hourly_limit_set
     assert claim(api, r) is None  # the parent group's limit holds it
     assert paused(api)["focus"] == "Paused: the Engineering group is over its daily limit"
     assert "spent" not in paused(api)["limit"]  # the group's total is not every reader's
-    err, sent = call(api, "hub_message_send", {"to": "ops", "text": "Check the Acme invoice."})
+    err, sent = call(api, "tico_message_send", {"to": "ops", "text": "Check the Acme invoice."})
     assert not err and "the Engineering group is over its daily limit" in sent["warning"]
     pools = get(api, "usage/limits")["pools"]
     assert pools["groups"]["eng"]["day_spent"] == 5 and pools["groups"]["eng"]["blocked"] == "daily"
@@ -200,9 +150,18 @@ def _jobs(api, bot="ops"):
         ]
 
 
+def turn_wake(c, task_id):
+    """The message of the queued run a new task's turn woke its owner bot with."""
+    return c.execute(
+        "SELECT j.message_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued' AND m.wake_key LIKE ? || ':%'",
+        (task_id,),
+    ).fetchone()[0]
+
+
 def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     from backend.store import H
-    from backend.tests.test_threads_runner import make_thread, say
+    from backend.tests.helpers.threads_runner import make_thread, say
 
     r = fleet(api)
     groups(api, "product")  # ops is in Product, under Engineering
@@ -210,14 +169,13 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     post(api, "chat/ops", {"text": "Please keep this."})
     thread = make_thread(api, title="Review notes", members=["bot:ops"])
     carried = say(api, thread, "@ops please check this too")
-    made = post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})
-    task = made["task"] if isinstance(made, dict) and made.get("task") else made
+    post(api, "tasks", {"title": "Review the patch", "body": "Look at the patch.", "owner": "bot:ops"})  # Ana's turn
     with api.app.state.store.transaction() as c:
+        # A task Tico made on its own: its turn is the automatic wake.
+        task = H.task_create(c, H.KEEPER, "Refresh the export", "Refresh it.", H.bot_actor("ops"), lint=False)
         row = H.task(c, task["id"])
-        before_status = row["status"]
-        before_step = row.get("step_id")
-        automatic = H._wake(c, row, row["owner_id"], "Review 1 gave approve at head abcdef1.", {"handoff": "verdict"})
-        H._wake(c, row, row["owner_id"], "Ana asked about this.", {"caused_by": "human:ana"})
+        before = (row["status"], row["stage_id"], row["owner_id"])
+        automatic = {"id": turn_wake(c, task["id"])}
     post(api, "usage/queues/purge", {"scope": "group:missing"}, expected=404)
     result = post(api, "usage/queues/purge", {"scope": "group:eng"})
     jobs = _jobs(api)
@@ -227,10 +185,10 @@ def test_clearing_the_automatic_queue_keeps_people_running_work_and_tasks(api):
     assert any(j["state"] == "queued" and j["caused_by"] == "human:ana" for j in jobs)
     assert any(j["state"] == "queued" and H._json(j["refs"], {}).get("carries") == carried["id"] for j in jobs)
     assert next(j for j in jobs if j["message_id"] == automatic["id"])["state"] == "canceled"
-    assert all(j["state"] != "queued" or H.person_sent(j) or j["caused_by"] == "human:ana" for j in jobs)
+    assert all(j["state"] != "queued" or H.in_person_name(j) or j["caused_by"] == "human:ana" for j in jobs)
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == before_status
-        assert H.task(c, task["id"]).get("step_id") == before_step
+        row = H.task(c, task["id"])
+        assert (row["status"], row["stage_id"], row["owner_id"]) == before
         assert c.execute("SELECT state FROM attempts WHERE id=?", (running["id"],)).fetchone()[0] in (
             "leased",
             "running",
@@ -252,11 +210,9 @@ def test_clearing_a_group_leaves_other_groups_and_clears_held_jobs(api):
     groups(api, "product")
     messages = {}
     for bot in ("ops", "finance"):
-        made = post(api, "tasks", {"title": "Review for " + bot, "body": "Check it.", "owner": "bot:" + bot})
-        task = made.get("task", made)
         with api.app.state.store.transaction() as c:
-            row = H.task(c, task["id"])
-            messages[bot] = H._wake(c, row, row["owner_id"], "Review 1 gave approve.", {"handoff": "verdict"})["id"]
+            task = H.task_create(c, H.KEEPER, "Review for " + bot, "Check it.", H.bot_actor(bot), lint=False)
+            messages[bot] = turn_wake(c, task["id"])
             c.execute("UPDATE jobs SET held=1 WHERE message_id=?", (messages[bot],))
     result = post(api, "usage/queues/purge", {"scope": "group:eng"})
     assert result["cancelled"] == 1

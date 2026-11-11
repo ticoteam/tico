@@ -10,6 +10,7 @@ import urllib.parse
 from dataclasses import asdict, dataclass, field, fields
 
 from . import contract, envfile
+from .aws import DEFAULT_PREFIX
 from .ui import IO, MissingInput
 
 DOMAIN_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
@@ -40,6 +41,9 @@ HOSTED = ("own", "invited")
 PRESETS = ("recommended",)
 # The Gateway invite our operator gives the preset (Dev 210 enrolls with it); checked whole, never shown.
 INVITE_RE = re.compile(r"[A-Za-z0-9_-]{8,200}")
+# The one-time secret HQ gives the installer for the owner's coding agent (TICO_SETUP_HANDOFF); the server holds only its
+# sha256. The same pattern the server accepts (backend/setup_handoff.py).
+HANDOFF_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
 
 # Not persisted to state.json: they live in the private .env copy or come from the environment.
 SECRET_FIELDS = (
@@ -55,7 +59,17 @@ SECRET_FIELDS = (
     "company_file_data",
 )
 # This run's only, never saved: a re-run without the flag must not inherit permission to repoint a record.
-TRANSIENT_FIELDS = ("runner_given",)
+TRANSIENT_FIELDS = ("runner_given", "confirm_dns")
+# Saved only when set (strict mode), each with its unset value.
+STRICT_FIELDS = {
+    "asset_prefix": DEFAULT_PREFIX,
+    "install_id": "",
+    "aws_ids": {},
+    "aws_account_id": "",
+    "dns_zone_id": "",
+    "dns_records": [],
+    "dns_pending": [],
+}
 # Only these named settings migrate from the private env; never copy ambient or arbitrary keys.
 RUNTIME_ENV = {
     "domain_aliases": "TICO_DOMAIN_ALIASES",
@@ -93,6 +107,14 @@ class Settings:
     domain: str = ""
     dns_name: str = ""  # optional operational record, separate from the public domain
     dns_zone: str = ""  # exact authoritative Route 53 zone for dns_name
+    install_id: str = ""  # aws.Names.install_id: made once by a new install, saved before its first AWS write
+    aws_ids: dict = field(default_factory=dict)  # aws.Deployer.ids: the immutable ids of what this install made
+    dns_zone_id: str = ""  # the Route 53 zone setup wrote this install's records in
+    # The exact record sets (name, type, TTL, values) setup created there, and the ones journalled before a CREATE
+    # whose answer has not come back yet: re-runs and destroy act only on a record set equal to one of them.
+    dns_records: list = field(default_factory=list)
+    dns_pending: list = field(default_factory=list)
+    confirm_dns: str = ""  # --confirm-dns, this run only: a pending record set at this name, found in the zone, is ours
     front_door: str = "caddy"
     updater: bool = True
     company: str = ""
@@ -128,7 +150,11 @@ class Settings:
     aws_instance_type: str = "t4g.small"
     aws_os: str = "ubuntu"
     aws_instance_id: str = ""
-    aws_name: str = ""  # --name: the resources are tico-<name>; blank derives it from the domain
+    aws_account_id: str = ""  # from STS: a later run or destroy with another account is refused
+    aws_name: str = ""  # --name: the resources are <asset_prefix>-<name>; blank derives it from the domain
+    asset_prefix: str = (
+        DEFAULT_PREFIX  # --asset-prefix: the first word of every AWS name; saved the first time, then fixed
+    )
     aws_permissions_boundary: str = ""
     plan_bucket: str = ""  # --plan-bucket: the starter plan goes to the server by this S3 bucket, not in the env
     plan_bucket_region: str = ""
@@ -150,6 +176,8 @@ class Settings:
     hosted: str = ""
     hosted_zone: str = ""  # our DNS zone; the domain must be under it
     owner_link_hash: str = ""  # sha256 of the owner's first sign-in link; the link itself is only in a 0600 file here
+    # sha256 of the setup handoff secret from TICO_SETUP_HANDOFF (hosted.read_handoff); the secret is never kept here
+    setup_handoff_hash: str = ""
     preset: str = ""  # recommended: the sample company, subscriptions plus Gateway, Support
     support: str = ""  # with the preset: on, or off with --no-support
     gateway_invite: str = ""
@@ -183,7 +211,9 @@ class Settings:
 
     def public(self) -> dict:
         validate_runtime(self)
-        return {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
+        out = {k: v for k, v in asdict(self).items() if k not in SECRET_FIELDS + TRANSIENT_FIELDS}
+        # Strict mode's (owned.py) only: the default prefix saves exactly what it saved before --asset-prefix.
+        return {k: v for k, v in out.items() if k not in STRICT_FIELDS or v != STRICT_FIELDS[k]}
 
     def runner(self) -> str:
         return "" if self.front_door != "cloudflared" or self.runner_host in ("", "none") else self.runner_host
@@ -236,6 +266,8 @@ class Settings:
             e["TICO_VISUAL_SECRET"] = self.visual_secret
         if self.hosted:
             e["TICO_HOSTED"] = self.hosted
+        if self.setup_handoff_hash:
+            e["TICO_SETUP_HANDOFF_HASH"] = self.setup_handoff_hash
         if self.auth == OWNER_LINK:
             e.update(TICO_AUTH_PROXY=OWNER_LINK, TICO_OWNER_LINK_HASH=self.owner_link_hash)
         elif self.auth == "cloudflare":

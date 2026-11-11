@@ -8,8 +8,8 @@ from backend import system_routines as SR
 from backend.finance import reads as FR
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_bookkeeper import built, checks, ensure
-from backend.tests.test_onboarding import environment  # noqa: F401
+from backend.tests.helpers.bookkeeper import built, checks, ensure
+from backend.tests.helpers.onboarding import environment  # noqa: F401
 
 FINDING = {
     "kind": "duplicate_charge",
@@ -128,7 +128,7 @@ def test_a_finished_watch_task_is_not_listed_again_when_a_new_finding_arrives(en
         assert BK.watch(c, api.app.state.auth, H.now())["items"] == 1
     (first,) = checks(api)
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
+        H.task_done(c, BK.ACTOR, first["id"], "Reviewed.", seen_version=H.task(c, first["id"])["version"])
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING), dict(NEWER)])
     with store.transaction() as c:
         made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))

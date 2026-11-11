@@ -4,14 +4,14 @@ The Company page is a read-only site for your company, separate from the app. It
 to share: the board and investors get a monthly edition, the public gets a monthly page, and people you invite with a
 Tico sign-in can read the private parts. It is **unreleased**; the pieces below ship together.
 
-Nothing reaches the page until a person approves it. The default is **Closed**, and every structured figure starts
+Nothing reaches the page until a person OKs it. The default is **Closed**, and every structured figure starts
 **Hidden**. Bots can keep writing updates that feed the page, but they cannot publish an edition, change what is shown,
 or add a reader.
 
 ## Where to find it
 
 Owners and admins open **Company → Share** (`#/overview/company-page`). The tab shows the page as it would read
-for the audience you pick, approved or not. The share icon has transparency, the address and, unless the page
+for the audience you pick, OK'd or not. The share icon has transparency, the address and, unless the page
 is Closed, the people who can read: add one by email or copy a one-time invite link. **Manage** (`#/company-page`) has
 everything else: editions, disclosure, stats, audiences, reader settings, CSV import, invite links, accent and logo. ⌘K finds it too.
 Nobody else sees the tab.
@@ -88,17 +88,17 @@ Every write of an edition is checked, by anyone who writes it, the Assistant inc
 
 A failed, flagged or unavailable check **holds** the edition. A person can override a held edition with a note, and the
 note is kept with it. Source updates are prose, so the promise is that figures are enforced in code and a person reads
-and approves every word.
+and OKs every word.
 
-## Approval
+## OK
 
-A person approves each edition. The approval covers that exact text, its version, audience, disclosure revision and
-figures, and it is the person's own click: the Assistant, bots and "my assistant can decide approvals" cannot approve
-for them. An approval that is not used within 14 days lapses; the edition shows that and asks again.
+A person OKs each edition: an ask on a task in their [Needs you](tasks.md#needs-you). The OK covers that exact text,
+its version, audience, disclosure revision and figures, and it is the person's own click: the Assistant and bots cannot
+OK for them. If the edition changes after the OK, the OK no longer matches and the edition asks again.
 
-Stats are approved separately. Approving an edition covers its text. Approving the **stats board** covers which figures
+Stats are OK'd separately. An OK of an edition covers its text. An OK of the **stats board** covers which figures
 appear, in which form, under which disclosure revision. After that, the values refresh daily by code, with no model
-involved. Adding a figure or loosening a rule needs a new approval; tightening applies at once.
+involved. Adding a figure or loosening a rule needs a new OK; tightening applies at once.
 
 ## Readers and sign-in
 
@@ -140,16 +140,16 @@ switched in, and the old one is deleted.
 
 ## Reading it from the CLI and tools
 
-Owners and admins can read the page and its editions from the hub CLI and the MCP tools. These are read-only: nothing
+Owners and admins can read the page and its editions from the tico CLI and the MCP tools. These are read-only: nothing
 here publishes an edition, changes transparency or adds a reader.
 
 | CLI | Tool | Shows |
 |---|---|---|
-| `hub company-page` | `hub_company_page` | Transparency, public address and last update |
-| `hub audiences list` | `hub_audiences_list` | Audiences, built in and added |
-| `hub editions list [--audience ID] [--status S]` | `hub_editions_list` | Editions, newest first |
-| `hub editions show ID` | `hub_editions_show` | One edition's text, status, checks and approval |
-| `hub readers list` | `hub_readers_list` | Readers (owners and admins only) |
+| `tico company-page` | `tico_company_page` | Transparency, public address and last update |
+| `tico audiences list` | `tico_audiences_list` | Audiences, built in and added |
+| `tico editions list [--audience ID] [--status S]` | `tico_editions_list` | Editions, newest first |
+| `tico editions show ID` | `tico_editions_show` | One edition's text, status, checks and OK |
+| `tico readers list` | `tico_readers_list` | Readers (owners and admins only) |
 
 The matching API is under `/api/v2` (`company-page`, `audiences`, `editions`, `readers`).
 
@@ -157,4 +157,4 @@ The matching API is under `/api/v2` (`company-page`, `audiences`, `editions`, `r
 
 Bots keep writing the updates that feed the page. They cannot draft or publish an edition, change transparency,
 audiences, disclosure, readers, rules or the page itself. A bot that acts for a person follows that person's rights,
-except that the approval click stays with the person.
+except that the OK click stays with the person.

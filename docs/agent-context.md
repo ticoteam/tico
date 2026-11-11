@@ -6,26 +6,26 @@ Once the owner has published a [strategy](strategy.md) version, every bot's run 
 `GET /api/v2/strategy/summary` under a **Team strategy** header, about 500 characters: the summary, one line per active
 bet with its wrong-if, then "version N". It is there on every turn, not only the Strategy Bot's, so a bot reads the team's bets
 before it reads its task. Nothing is added while no version is published, and a bot never sees the owner's draft. The full
-published page (the seven sections, every bet with its why, what it rules out and its health) is `hub strategy show` /
-`hub_strategy_show`; the same short text is `hub strategy summary` / `hub_strategy_summary`. Publishing sends no note to any
+published page (the seven sections, every bet with its why, what it rules out and its health) is `tico strategy show` /
+`tico_strategy_show`; the same short text is `tico strategy summary` / `tico_strategy_summary`. Publishing sends no note to any
 bot: the context is how they learn of it. A bot reads; only the owner writes the draft and publishes.
 
 ## Search and reads
 
-The `hub` CLI and MCP expose the same read-only functions, and one that files a meeting:
+The `tico` CLI and MCP expose the same read-only functions, and one that files a meeting:
 
 | CLI | MCP | Purpose |
 | --- | --- | --- |
-| `hub strategy show` | `hub_strategy_show` | The published strategy version, with its bets, the goals under each and each bet's health. |
-| `hub strategy summary` | `hub_strategy_summary` | The short text every bot gets in context. |
-| `hub doc search --market "pricing"` | `hub_doc_search` | Search full team document text and market entities/evidence. |
-| `hub doc read <document-id>` | `hub_doc_read` | Read a complete document found by search. |
-| `hub meeting search "pricing"` | `hub_meeting_search` | Search meeting titles, notes, and transcripts; omit the query for recent history. |
-| `hub meeting read <meeting-id>` | `hub_meeting_read` | Read the full transcript in bounded pages. |
-| `hub meeting import call.vtt --source zoom` | `hub_meeting_import` | File a transcript from another tool as a meeting of yours (humans only; [Meetings](meetings.md)). |
+| `tico strategy show` | `tico_strategy_show` | The published strategy version, with its bets, the goals under each and each bet's health. |
+| `tico strategy summary` | `tico_strategy_summary` | The short text every bot gets in context. |
+| `tico doc search --market "pricing"` | `tico_doc_search` | Search full team document text and market entities/evidence. |
+| `tico doc read <document-id>` | `tico_doc_read` | Read a complete document found by search. |
+| `tico meeting search "pricing"` | `tico_meeting_search` | Search meeting titles, notes, and transcripts; omit the query for recent history. |
+| `tico meeting read <meeting-id>` | `tico_meeting_read` | Read the full transcript in bounded pages. |
+| `tico meeting import call.vtt --source zoom` | `tico_meeting_import` | File a transcript from another tool as a meeting of yours (humans only; [Meetings](meetings.md)). |
 
 Doc search accepts `--market` (also the market's notes, entities and evidence), `--manual` (only the Tico manual) and `--limit` (1–50). Results
-include source IDs, links, and matching excerpts. Use the existing `hub market show`
+include source IDs, links, and matching excerpts. Use the existing `tico market show`
 to inspect a market entity. Search is keyword-based, not a generated answer.
 
 Meeting search accepts `--person`, `--since YYYY-MM-DD`, `--until YYYY-MM-DD`,

@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 
 from backend import trigger_presets as P
 from backend import triggers
-from backend.auth import Identity
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_triggers import hook, listener, rule_row, sig, turns
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.triggers import hook, listener, rule_row, sig, turns
+from backend.tests.helpers.triggers_incoming import as_bot, stored_rows
 
 
 def stripe_sig(secret, body, t):
@@ -122,20 +122,6 @@ def test_type_extraction_and_header_handling():
     assert kept == {"x-event": "e"}
 
 
-def as_bot(api, slug):
-    """The bot itself, as an agent credential (backend/tests/test_company.py bot)."""
-    from backend.store import H
-
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
-        c.execute(
-            "INSERT OR IGNORE INTO agents(bot,harness,token_hash,created_at,created_by) "
-            "VALUES(?,'hermes',?,?,'human:ana')",
-            (slug, "x-" + slug, H.now()),
-        )
-    api.app.state.store.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="hermes")
-
-
 def routine(api, trigger="shop", bot="ops"):
     """An automation on the webhook that hands `bot` each call in a Bot turn (what a routine on it was)."""
     return listener(api, trigger, bot, text="Ship it. Type {{webhook.type}}.", name="Order")
@@ -143,11 +129,6 @@ def routine(api, trigger="shop", bot="ops"):
 
 def runs(api, aid):
     return get(api, f"automations/{aid}/runs")["runs"]
-
-
-def stored_rows(api, sql, *args):
-    with api.app.state.store.read() as c:
-        return c.execute(sql, args).fetchall()
 
 
 def test_a_sender_id_stays_a_duplicate_after_the_log_and_the_body_are_gone(api, monkeypatch):
@@ -450,14 +431,14 @@ def test_a_sender_id_that_looks_like_a_replay_still_counts_toward_the_hourly_cap
 
 
 def test_the_hub_tools_cover_the_whole_life_of_a_trigger(api):
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
-    bad, made = call(api, "hub_trigger_create", {"name": "Shop"})
+    bad, made = call(api, "tico_trigger_create", {"name": "Shop"})
     assert not bad and made["id"] == "shop"
     routine(api)
-    assert not call(api, "hub_trigger_update", {"id": "shop", "hourly": 5, "type_from": "/kind", "unheard": "note"})[0]
-    assert call(api, "hub_trigger_show", {"id": "shop"})[1]["hourly"] == 5
-    signed = call(api, "hub_trigger_sign", {"id": "shop", "preset": "github"})[1]
+    assert not call(api, "tico_trigger_update", {"id": "shop", "hourly": 5, "type_from": "/kind", "unheard": "note"})[0]
+    assert call(api, "tico_trigger_show", {"id": "shop"})[1]["hourly"] == 5
+    signed = call(api, "tico_trigger_sign", {"id": "shop", "preset": "github"})[1]
     assert signed["preset"] == "github" and len(signed["signing_secret"]) == 64
     body = b'{"kind": "k1"}'
     assert (
@@ -469,14 +450,14 @@ def test_the_hub_tools_cover_the_whole_life_of_a_trigger(api):
         ).status_code
         == 202
     )
-    rows = call(api, "hub_trigger_deliveries", {"id": "shop"})[1]["result"]
+    rows = call(api, "tico_trigger_deliveries", {"id": "shop"})[1]["result"]
     assert rows[0]["delivery"] == "a/b c" and rows[0]["type"] == "k1" and rows[0]["stored"] is True
-    shown = call(api, "hub_trigger_delivery", {"id": "shop", "delivery": "a/b c"})[1]
+    shown = call(api, "tico_trigger_delivery", {"id": "shop", "delivery": "a/b c"})[1]
     assert json.loads(shown["body"]) == {"kind": "k1"}
-    assert call(api, "hub_trigger_replay", {"id": "shop", "delivery": "a/b c"})[1]["delivery"] == "a/b c:replay:1"
-    assert call(api, "hub_trigger_list")[1]["result"][0]["preset"] == "github"
-    assert call(api, "hub_trigger_rotate", {"id": "shop"})[1]["url"] != made["url"]
-    assert call(api, "hub_trigger_delete", {"id": "shop"})[1]["deleted"] is True
+    assert call(api, "tico_trigger_replay", {"id": "shop", "delivery": "a/b c"})[1]["delivery"] == "a/b c:replay:1"
+    assert call(api, "tico_trigger_list")[1]["result"][0]["preset"] == "github"
+    assert call(api, "tico_trigger_rotate", {"id": "shop"})[1]["url"] != made["url"]
+    assert call(api, "tico_trigger_delete", {"id": "shop"})[1]["deleted"] is True
 
 
 def test_a_cap_above_the_log_size_still_holds(api):

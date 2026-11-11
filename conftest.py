@@ -3,7 +3,6 @@
 import os
 import sys
 import threading
-import weakref
 from pathlib import Path
 
 os.environ["TICO_REGISTRY_DIR"] = str(Path(__file__).parent / "backend/tests/fixtures/registry")
@@ -42,19 +41,10 @@ route_memo.install()
 import re  # noqa: E402
 import pytest  # noqa: E402
 
-from backend import store as _store  # noqa: E402
+from backend.tests import connection_guard  # noqa: E402
 
-# Every store a test makes, so its idle connections can be closed when the test ends (store_pools_close below).
-_test_stores = weakref.WeakSet()
-_store_init = _store.Store.__init__
-
-
-def _recording_init(self, *args, **kwargs):
-    _store_init(self, *args, **kwargs)
-    _test_stores.add(self)
-
-
-_store.Store.__init__ = _recording_init
+# The per-test check of pooled connections: a test that leaves one open fails at its own teardown.
+from backend.tests.connection_guard import pooled_connections_closed  # noqa: E402, F401
 
 
 def pytest_addoption(parser):
@@ -68,6 +58,26 @@ def pytest_addoption(parser):
         action="store_true",
         help="Build API fixture databases from empty paths (migration checks and benchmarks)",
     )
+    _flake_quarantine().addoption(parser)
+
+
+def _flake_quarantine():
+    """scripts/flake_quarantine.py, loaded by path like scripts/heavy_slot.py (scripts/ is not on every sys.path)."""
+    import importlib.util
+
+    name = "tico_flake_quarantine"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).parent / "scripts/flake_quarantine.py")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def pytest_collection_modifyitems(config, items):
+    """PR checks and the merge queue pass --quarantine (scripts/pr_checks.py run --quarantine): each test listed in
+    ci/quarantine/ runs as a non-strict xfail. Release validation never passes it."""
+    _flake_quarantine().modify(config, items)
 
 
 def unix_socket_path_under_tmp_path(address, basetemp=None):
@@ -162,28 +172,69 @@ def pytest_sessionfinish(session, exitstatus):
         )
 
 
+# The threads a scheduler tick starts for its passes (backend/scheduler.py): maintenance, thread ranking, stale review.
+TICK_PASS_THREADS = ("maintenance-run", "thread-rank", "stale-review")
+
+
 @pytest.fixture(autouse=True)
-def maintenance_runs_end(tmp_path):
-    """A scheduler tick starts its maintenance run on a thread that outlives the test. Join those runs here, before the
-    test's tmp_path is removed at teardown: a run still going would find its database gone (tmp_path is the dependency
-    that makes this teardown run first)."""
+def maintenance_runs_end(pooled_connections_closed, tmp_path):
+    """A scheduler tick starts its maintenance run, thread ranking and stale review passes on threads that outlive the
+    test. Join them here, before the test's tmp_path is removed at teardown: a pass still going would find its database
+    gone (tmp_path is the dependency that makes this teardown run first), or open a connection during a later test (a
+    thread-rank pass did, and that test's teardown closed it under the pass's statement: a segfaulted xdist worker). It
+    takes the pooled-connection guard as a parameter so the guard is set up first and tears down last: a pass this join
+    waits for can still hold a connection the guard checks."""
     yield
     for thread in threading.enumerate():
-        if thread.name == "maintenance-run":
+        if thread.name in TICK_PASS_THREADS:
             thread.join(timeout=60)
             if thread.is_alive():
-                pytest.fail("maintenance run still going 60 s after the test")
+                pytest.fail(f"{thread.name} still going 60 s after the test")
 
 
 @pytest.fixture(autouse=True)
-def store_pools_close():
+def store_pools_close(pooled_connections_closed):
     """A store's idle connections stay open until the store is freed, and a store in a reference cycle is freed only by
     the garbage collector, possibly during a later test, which then warns about the connections. Closing every store
     the test made, when the test ends, closes those connections on the spot. A closed store still works: its next read
-    opens a new connection."""
+    opens a new connection. Takes the guard as a parameter, so it tears down before the guard (see maintenance_runs_end)."""
     yield
-    for store in list(_test_stores):
-        store.close()
+    connection_guard.close_stores()
+
+
+def pytest_runtest_logreport(report):
+    """Under xdist the workers' teardown reports reach the controller here, so the check's cost is summed over them."""
+    if report.when == "teardown":
+        connection_guard.add_report(report)
+
+
+def pytest_terminal_summary(terminalreporter):
+    cost = connection_guard.SUMMED
+    terminalreporter.write_line(
+        f"pooled connection check: {cost['tests']} tests, {cost['seconds']:.1f} s of its own work "
+        f"({cost['joined']:.1f} s joining threads); the store's own connects took {cost['connect']:.1f} s, not counted"
+    )
+
+
+@pytest.fixture
+def api(tmp_path, api_database):
+    """A test client on a new hub database with the fictional company (backend/tests/helpers/api_app.py). A test takes
+    it by name and imports nothing for it: only this body imports the app, so the PR test selector does not count every
+    change the app can reach as a change to each test that uses the fixture (scripts/pr_checks.py, rule 2)."""
+    from backend.tests.helpers.api_app import api_client
+
+    yield from api_client(tmp_path, api_database)
+
+
+@pytest.fixture
+def company(tmp_path, api_database):
+    """A store on a new hub database with the fictional company and no app (backend/tests/helpers/company.py): for
+    tests of code below the routes, which need a transaction and not a client."""
+    from backend.tests.helpers.company import company_store
+
+    store = company_store(tmp_path, api_database)
+    yield store
+    store.close()
 
 
 @pytest.fixture(scope="session")
@@ -198,7 +249,7 @@ def api_database(tmp_path_factory, request):
     import sqlite3
     from contextlib import closing
     from backend.store import Store
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
         return None

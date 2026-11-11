@@ -1,8 +1,8 @@
 """Source discovery is identical over HTTP and MCP, with no private-source leakage."""
 
 from backend import market, meetings
-from backend.tests.test_api import api, headers, setup_attempt, runner  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import headers, setup_attempt, runner  # noqa: F401
+from backend.tests.helpers.mcp import call
 
 
 def seed(api):
@@ -40,7 +40,7 @@ def test_meetings_search_and_full_transcript_respect_source_access(api):
     _, _, attempt = setup_attempt(api)
     token = attempt["token"]
     args = {"q": "Cancellation", "person": "Dana"}
-    err, result = call(api, "hub_meeting_search", args, token=token)
+    err, result = call(api, "tico_meeting_search", args, token=token)
     assert not err
     assert result == api.get('/api/v2/meetings/search', params=args, headers=headers(token)).json()
     assert [r["id"] for r in result["results"]] == ["shared"]
@@ -48,11 +48,11 @@ def test_meetings_search_and_full_transcript_respect_source_access(api):
     assert api.get('/api/v2/recordings/search', params=args, headers=headers(token)).json() == result
     assert result["results"][0]["passages"][0]["start_ms"] == 1000
     for rid in ("private", "note", "missing"):
-        err, _ = call(api, "hub_meeting_read", {"id": rid}, token=token)
+        err, _ = call(api, "tico_meeting_read", {"id": rid}, token=token)
         assert err
-    err, first = call(api, "hub_meeting_read", {"id": "shared", "limit": 12}, token=token)
+    err, first = call(api, "tico_meeting_read", {"id": "shared", "limit": 12}, token=token)
     assert not err and first["next_offset"] == 12
-    err, rest = call(api, "hub_meeting_read", {"id": "shared", "offset": 12}, token=token)
+    err, rest = call(api, "tico_meeting_read", {"id": "shared", "offset": 12}, token=token)
     assert not err and rest["next_offset"] is None
     assert first["text"] + rest["text"] == "Cancellation window is seven days"
     # Human owner/attendee access remains available; bots do not borrow that identity.

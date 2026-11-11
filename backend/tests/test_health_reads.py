@@ -1,41 +1,12 @@
 """The health checks read the company's settings once a page, and each bot's own rows once for all the bots."""
 
-import contextlib
 import re
 from collections import Counter
 
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_assigned_start import advance, cancel, clock, sweep  # noqa: F401
-from backend.tests.test_status_reads import busy, setup
-from backend.tests.test_task_lanes import new_task, task_bot
-from backend.tests.hold_rows import set_holds
-
-
-def counted(api, monkeypatch, path, token="ana-test", trace=None):
-    """GET `path` as `token`: the body, and the statements it took on the one snapshot it read."""
-    store, seen = api.app.state.store, []
-    if trace is not None:
-        seen = trace
-    store.roster_rows.clear()  # per-store caches start empty, so every count is the same count
-    with monkeypatch.context() as patched:
-        for name in ("read", "read_transaction"):
-
-            def traced(opened=getattr(store, name)):
-                @contextlib.contextmanager
-                def borrowed():
-                    with opened() as c:
-                        c.set_trace_callback(lambda q: seen.append(q))
-                        try:
-                            yield c
-                        finally:
-                            c.set_trace_callback(None)
-
-                return borrowed()
-
-            patched.setattr(store, name, traced)
-        response = api.get(path, headers=headers(token))
-    assert response.status_code == 200, response.text
-    return response.json(), len(seen)
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.status_reads import busy, setup
+from backend.tests.helpers.task_lanes import new_task, task_bot
+from backend.tests.helpers.health_reads import counted
 
 
 def warmed(api, monkeypatch, path, trace):
@@ -99,61 +70,12 @@ def test_health_issues_health_and_employees_cost_few_or_no_statements_per_extra_
     )
 
 
-def lost_assignments(api, clock, names):
-    """Tasks of one bot whose first start was lost: rewoken once, and still not started two hours on."""
-    for name in names:
-        new_task(api, name)
-    cancel(api)
-    advance(api, clock, 1)
-    sweep(api)
-    advance(api, clock, 3)
-
-
-def overdue_items(body):
-    return next((c["items"] for c in body["checks"] if c["id"] == "assigned_not_started"), [])
-
-
-def test_health_reads_the_same_statements_for_many_overdue_assigned_tasks(api, clock, monkeypatch):
-    # Each overdue assignment of one bot used to read that bot's whole start check again (owner, config, computer,
-    # claim refusal, lanes): about 20 statements a task. The bot's check is read once for all of its tasks now.
-    task_bot(api, lanes=True)
-    lost_assignments(api, clock, [f"Lost {n}" for n in range(3)])
-    counted(api, monkeypatch, "/api/v2/health")
-    body, few = counted(api, monkeypatch, "/api/v2/health")
-    assert len(overdue_items(body)) == 3
-    lost_assignments(api, clock, [f"Lost {n}" for n in range(3, 27)])
-    body, many = counted(api, monkeypatch, "/api/v2/health")
-    assert len(overdue_items(body)) == 27
-    # Each overdue task still reads its own queued job's fences (put-back, check model, attempts): about 9 each, not 47.
-    assert many - few <= 10 * (27 - 3)
-
-
-def test_review_children_seek_the_parent_instead_of_scanning_every_task(api):
-    """A waiting PR's review check looks for the children of one task. Starting from every task (a scan that read each
-    row's pages) took 26 ms a check on Tico Team's 8k tasks; the parent's children are a seek on task_relations_to."""
-    from backend import hubdb as H
-    from backend.health import review_children_sql
-
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.executemany(
-            "INSERT INTO tasks(id,title,body,requester_id,owner_id,status,created_at,updated_at,private) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
-            [(H.new_id(), "Task", "Done.", "human:ana", "bot:ops", "done", H.now(), H.now(), 0) for _ in range(2000)],
-        )
-        c.execute("ANALYZE")
-    with store.read_transaction() as c:
-        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + review_children_sql("1"), ("x",))]
-    assert any(line.startswith("SEARCH r USING") and "task_relations_to" in line for line in plan), plan
-    assert not [line for line in plan if line.startswith("SCAN tasks")], plan
-
-
 def stuck_company(api, monkeypatch, count):
     """Production's shape on Tico Team: `count` bots with old queues whose tasks wait on another bot's subtask or
     on a blocker, a few running, and a refusal Health has watched for over 12 hours on each."""
     from backend import health
     from backend.store import H, encode
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     monkeypatch.setattr(
         health,
@@ -167,17 +89,9 @@ def stuck_company(api, monkeypatch, count):
         for k in range(count):
             slug, other = f"busy-{k}", f"busy-{(k + 1) % count}"
             tasks = [r[0] for r in c.execute("SELECT id FROM tasks WHERE owner_id=? ORDER BY rowid", ("bot:" + slug,))]
+            # A task that waits on the one it filed, and one filed for another bot by a person.
             H.task_create(c, "bot:" + slug, f"Part of {slug}", "Part.", "bot:" + other, parent_id=tasks[0])
-            c.execute("UPDATE tasks SET status='waiting' WHERE id=?", (tasks[0],))
-            set_holds(c, tasks[0], blocked_since=H.now(), blocked_kind='dependency')
-            blocker = H.task_create(c, "human:ana", f"First for {slug}", "First.", "bot:" + other)
-            c.execute(
-                "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) "
-                "VALUES(?,?,'blocks','human:ana',?)",
-                (blocker["id"], tasks[3], H.now()),
-            )
-            if k % 3 == 0:
-                c.execute("UPDATE tasks SET status='doing' WHERE id=?", (tasks[2],))
+            H.task_create(c, "human:ana", f"First for {slug}", "First.", "bot:" + other)
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with api.app.state.store.transaction() as c:
         for k in range(count):
@@ -193,7 +107,7 @@ def stuck_company(api, monkeypatch, count):
 def refuse_queues(api, monkeypatch, slugs):
     """Each of these bots' queues refused for over 12 hours, as stuck_company leaves them."""
     from backend.store import H, encode
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     at(monkeypatch, api, "2026-10-24T12:40:00.000000Z")
     with api.app.state.store.transaction() as c:
@@ -210,7 +124,7 @@ def refuse_queues(api, monkeypatch, slugs):
 def test_refused_queue_checks_read_the_company_limit_once_for_all_bots(api, monkeypatch):
     # Each refused queue's claim check read the company's limit default fresh: its budget cutoffs (the Finance book
     # first, one read a bot) and every period's spend. One pass over the refused queues shares that default now.
-    from backend.tests.test_run_backoff import at
+    from backend.tests.helpers.run_backoff import at
 
     machine = setup(api, monkeypatch, tasks=2)
     at(monkeypatch, api, "2026-10-24T12:00:00.000000Z")
@@ -229,7 +143,7 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     # Tico Team (Oct 30): GET /api/v2/health ran about 1,600 statements a poll, 1.1 s of SQL. Every queued job of
     # every bot with old work was checked by the claim's rules one at a time, twice (bot_claimable, then
     # queued_reasons), plus each 12-hour refusal (queue_refusals.current): its task's queue return, step, check model,
-    # fallback continuation and every wait (blockers, subtasks, questions, approvals, worktrees, milestones). Those
+    # fallback continuation and every wait. Those
     # reads are made once a table for all the jobs now, and the page says exactly what it said.
     from backend import execution
 
@@ -238,15 +152,14 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     body, total = counted(api, monkeypatch, "/api/v2/health")
     primed = api.get("/api/v2/health", headers=headers("ana-test")).content
     assert any(row["id"] == "waiting" for row in body["checks"])
-    # 288 now: the Needs you plate and Dev board checks (3fea68e53, Nov 6) read on every poll, by design. 2,360 before
-    # the batching; a return to per-job reads is far above this bound.
+    # About 200 on v3: the Needs you plate reads every open task's waits together (waiting_on.prime), with each bot's
+    # "can it run" (task_wakes.prime_bots) and each queued job's snooze (execution.prime_job_checks) read once for
+    # all. 2,360 before the batching; a return to per-job reads is far above this bound.
     assert total < 320, total
     with monkeypatch.context() as unprimed:
-        # Each job read on its own, every task asked every wait: what the checks read before.
-        unprimed.setattr(execution, "_queue_suspects", lambda c, queue: None)
+        # Each job read on its own: what the checks read before.
         unprimed.setattr(execution, "prime_job_checks", lambda c, jobs: None)
         alone, slow = counted(api, monkeypatch, "/api/v2/health")
-        # The control still reads several times the batched total: its per-task question reads are batched too now
-        # (hubdb.prime_asks), so it is 1,388 where it was over 1,500.
-        assert slow > 1000, slow
+        # The control reads several times the batched total (about 560 against 200).
+        assert slow > 2 * total, (total, slow)
         assert api.get("/api/v2/health", headers=headers("ana-test")).content == primed

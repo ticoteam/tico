@@ -6,11 +6,11 @@ import sqlite3
 import pytest
 
 from backend import hubdb as H, meetings
-from backend.tests.test_api import api, as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
-from backend.tests.test_mcp import call
-from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_lifecycle import debrief
-from backend.tests.test_new_bot_flows import create_bot
+from backend.tests.helpers.api import as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401
+from backend.tests.helpers.lifecycle import debrief
+from backend.tests.helpers.new_bot_flows import create_bot
 
 
 def imported(api, token='ben-test', **fields):
@@ -150,10 +150,10 @@ def test_botops_can_review_only_the_requesting_persons_queue(api, botops):
     mine = imported(api, token='cara-test')
     other = imported(api)
     attempt = turn(api, botops, 'cara-test', 'Share my pending meetings')
-    err, pending = call(api, 'hub_meeting_pending', {}, token=attempt['token'])
+    err, pending = call(api, 'tico_meeting_pending', {}, token=attempt['token'])
     assert not err and [r['id'] for r in pending['meetings']] == [mine['id']]
-    assert call(api, 'hub_meeting_approve', {'id': other['id']}, token=attempt['token'])[0]
-    err, shared = call(api, 'hub_meeting_approve', {'id': mine['id']}, token=attempt['token'])
+    assert call(api, 'tico_meeting_approve', {'id': other['id']}, token=attempt['token'])[0]
+    err, shared = call(api, 'tico_meeting_approve', {'id': mine['id']}, token=attempt['token'])
     assert not err and shared['review_state'] == 'live'
     assert queue(api)['count'] == 1
 

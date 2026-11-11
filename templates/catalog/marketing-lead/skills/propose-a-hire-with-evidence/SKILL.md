@@ -10,7 +10,7 @@ owner" for two summaries running, and the task asks whether a hire is needed.
 Steps:
 1. Gather the evidence: the task id and date of each request of the same kind. Three in one month,
    or a workstream at "no owner" for two summaries, is the threshold this team uses.
-2. Check the team first. Read `hub team show` and the marketing templates (`hub template list`), and
+2. Check the team first. Read `tico team show` and the marketing templates (`tico template list`), and
    confirm the work is not already covered by a bot or a person.
 3. Pick the one template whose job matches the recurring work. Read its card for its first routine
    and what it owns.

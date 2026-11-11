@@ -1,144 +1,41 @@
-"""Letters through a fake HQ: the approval is the authority for one proof, and retries never print twice."""
+"""Letters through a fake HQ: the OK bound to one proof is the authority for it, and retries never print twice."""
 
-import hashlib
 import json
 
 import pytest
 
-from backend import hubdb as H, letters as L
-from backend.tests.test_api import api, get, post, put, headers  # noqa: F401
-from backend.tests.test_agents import hermes_bot, credential, bot_id
-from backend.tests.test_mcp import call
-from backend.tests.test_botops_parity import act
-from backend.tests.test_member_bots import botops, turn  # noqa: F401 (fixture)
+from backend import hubdb as H, letters as L, task_asks
+from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
+from backend.tests.helpers.agents import hermes_bot, credential, bot_id
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.member_bots import botops, turn  # noqa: F401 (fixture)
 from clients import gateway as G
-
-ADDRESS = {"name": "Acme", "line1": "1 Main St", "city": "Dover", "state": "DE", "postal_code": "19901"}
-RECIPIENT = {**ADDRESS, "name": "Recipient", "line1": "2 Main St"}
+from backend.tests.helpers.letters import HQ, RECIPIENT, fetch, grant, hq, quote, send
 
 
-class HQ:
-    def __init__(self):
-        self.total = 1500000
-        self.proof = L.render("Letter proof\n\nHello from Acme.")
-        self.quotes, self.jobs, self.calls = {}, {}, []
-        self.unconfigured = self.timeout = self.changed = self.no_cancel = False
-        self.provider_submits = 0
-        self.refusal = None
-        self.timeout_before_claim = False
-        self.resolve_supported = True
-        self.abandoned = set()
-
-    def __call__(self, key, base, path="", *, body=None, idempotency_key=None, pdf=False):
-        assert key == "tgw_letters_test" and base.endswith("/v1/gateway")
-        self.calls.append((path, idempotency_key))
-        if self.unconfigured:
-            raise G.LettersError(503, "unconfigured")
-        if path == "/quotes":
-            if self.changed and self.quotes:
-                self.total = 1800000
-            qid = "lq_" + str(len(self.quotes) + 1)
-            digest = hashlib.sha256(self.proof).hexdigest()
-            approval_hash = hashlib.sha256((L.dump(body) + digest + str(self.total)).encode()).hexdigest()
-            self.quotes[qid] = {
-                "quote_id": qid,
-                "proof_sha256": digest,
-                "approval_hash": approval_hash,
-                "page_count": 1,
-                "total_micros": self.total,
-                "currency": "USD",
-                "expires_at": L.later(900),
-            }
-            return self.quotes[qid]
-        if path.endswith("/proof"):
-            return self.proof
-        if path.startswith("/keys/") and path.endswith("/resolve"):
-            from urllib.parse import unquote
-
-            if not self.resolve_supported:
-                raise G.LettersError(404, "not_found")
-            send_key = unquote(path[len("/keys/") : -len("/resolve")])
-            if send_key in self.jobs:
-                return {"letter": dict(self.jobs[send_key]), "abandoned": False}
-            self.abandoned.add(send_key)
-            return {"letter": None, "abandoned": True}
-        if body is not None and not path:
-            if idempotency_key in self.abandoned:
-                raise G.LettersError(409, "idempotency_key_abandoned")
-            if self.refusal:
-                raise G.LettersError(429, self.refusal)
-            if self.timeout_before_claim:
-                self.timeout_before_claim = False
-                raise G.LettersError(502, "gateway_unavailable")
-            if idempotency_key not in self.jobs:
-                self.provider_submits += 1
-                self.jobs[idempotency_key] = {
-                    "letter_id": "lt_" + str(len(self.jobs) + 1),
-                    "status": "submitted",
-                    "tracking": [],
-                    "cancel_possible": False,
-                    "error": None,
-                    "accepted_at": H.now(),
-                    "billing": "billed",
-                    "charged_micros": self.total,
-                }
-            else:
-                assert self.jobs[idempotency_key]["quote_id"] == body["quote_id"]
-            self.jobs[idempotency_key]["quote_id"] = body["quote_id"]
-            if self.timeout:
-                self.timeout = False
-                raise G.LettersError(502, "gateway_unavailable")
-            return self.jobs[idempotency_key]
-        if path.endswith("/cancel") and self.no_cancel:
-            raise G.LettersError(409, "cannot_cancel")
-        job = next((row for row in self.jobs.values() if row["letter_id"] == path.split("/")[1]), {})
-        result = {
-            **job,
-            "letter_id": path.split("/")[1],
-            "status": "cancelled" if path.endswith("/cancel") else "mailed",
-            "tracking": [{"barcode": "1234", "status": "mailed"}],
-            "cancel_possible": False,
-        }
-        if path.endswith("/cancel"):
-            result.update(billing="void", charged_micros=0)
-        return result
+def _task(api, row):
+    with api.app.state.store.read() as c:
+        return task_asks.task_of(c, row["approval_id"])
 
 
-@pytest.fixture
-def hq(api, monkeypatch):
-    fake = HQ()
-    monkeypatch.setenv("TICO_GATEWAY_KEY", "tgw_letters_test")
-    monkeypatch.setattr(G, "letters", fake)
-    api.app.state.letters.engine = lambda *args: {
-        "answers": {"recipient_kind": {"type": "choice", "choice": "other", "confidence": 1.0}}
-    }
-    put(api, "letters/settings", {"return_address": ADDRESS})
-    return fake
+def approve(api, row, token="ana-test", expected=200, reader=None):
+    """The person opens the letter in Tico and clicks OK on it (backend/task_asks.py). `reader` opens it instead, for
+    a person who may not read the letter and still tries its OK."""
+    shown = get(api, "letters/" + row["id"], token=reader or token)["shown_hash"]
+    path = f"tasks/{_task(api, row)}/asks/{row['approval_id']}/ok"
+    return post(api, path, {"shown_hash": shown}, token=token, expected=expected)
 
 
-def quote(api, token="ana-test", **fields):
-    return post(api, "letters/quotes", {"text": "Hello from Acme.", "recipient": RECIPIENT, **fields}, token=token)
-
-
-def send(api, row, token="ana-test"):
-    return post(api, "letters/" + row["id"] + "/send", {}, token=token)
-
-
-def approve(api, row):
-    return post(api, "approvals/" + row["approval_id"], {"decision": "approved"})
-
-
-def fetch(api, row, token="ana-test"):
-    return get(api, "letters/" + row["id"], token=token)
+def asked(api, row):
+    """What the letter's OK is for, as it was asked."""
+    with api.app.state.store.read() as c:
+        return task_asks.grant(c, row["approval_id"])
 
 
 def bot(api):
     hermes_bot(api)
     return bot_id(api), credential(api)["token"]
-
-
-def grant(api, ident):
-    return put(api, "letters/outboxes/company/grants/bot/" + ident, {"level": "send"})
 
 
 def test_botops_policy_and_access_changes_wait_for_the_persons_tap(api, botops):
@@ -177,13 +74,13 @@ def test_quote_ask_approve_requotes_same_hash_and_submits_once(api, hq):
     assert row["page_count"] == 1 and row["total_micros"] == 1500000
     row = send(api, row)
     assert row["status"] == "waiting_for_ok" and not hq.jobs
-    approval = get(api, "approvals/" + row["approval_id"])
-    assert approval["payload"]["proof"] == row["proof"]
-    assert approval["payload"]["recipient"] == RECIPIENT | {"line2": ""}
+    approval = asked(api, row)
+    assert approval["content"]["approval_hash"] == row["approval_hash"]
+    assert approval["content"]["recipient"] == RECIPIENT | {"line2": ""}
     approve(api, row)
     after = fetch(api, row)
     assert after["status"] == "submitted" and len(hq.quotes) == 2 and hq.provider_submits == 1
-    assert get(api, "approvals/" + row["approval_id"])["consumed_at"]
+    assert asked(api, row)["used_at"]
     assert send(api, row)["hq_letter_id"] == after["hq_letter_id"] and hq.provider_submits == 1
 
 
@@ -199,6 +96,33 @@ def test_changed_hash_asks_again_and_keeps_the_older_proof(api, hq):
     assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
 
 
+def test_an_ok_of_a_letter_requoted_after_it_was_shown_is_refused_and_the_new_quote_is_shown(api, hq):
+    """The person opened the letter, then it was quoted again (a new total) and asked again before their click: the
+    click on what they saw gives no OK, on the old ask or the new one; the letter's preview then shows the new quote,
+    whose own OK mails it."""
+    row = send(api, quote(api))
+    seen = fetch(api, row)
+    old_hash, old_ask = seen["shown_hash"], seen["approval_id"]
+    hq.changed = True
+    service = api.app.state.letters
+    service.requote(row["id"])
+    with api.app.state.store.transaction() as c:
+        service.ask(c, dict(c.execute("SELECT * FROM letters WHERE id=?", (row["id"],)).fetchone()))
+    after = fetch(api, row)
+    assert after["approval_id"] != old_ask and after["total_micros"] == 1800000
+    assert after["shown_hash"] != old_hash
+    refused = post(api, f"tasks/{_task(api, seen)}/asks/{old_ask}/ok", {"shown_hash": old_hash}, expected=409)
+    assert refused["error"] == "task_requirement"
+    changed = post(
+        api, f"tasks/{_task(api, after)}/asks/{after['approval_id']}/ok", {"shown_hash": old_hash}, expected=409
+    )
+    assert changed["error"] == "task_changed"
+    assert asked(api, after)["ok_at"] is None and hq.provider_submits == 0
+    approve(api, after)
+    done = fetch(api, row)
+    assert done["status"] == "submitted" and hq.provider_submits == 1
+
+
 def test_bot_needs_send_access_and_grants_are_audited(api, hq):
     ident, token = bot(api)
     refused = post(api, "letters/quotes", {"text": "Hello", "recipient": RECIPIENT}, token=token, expected=403)
@@ -206,7 +130,7 @@ def test_bot_needs_send_access_and_grants_are_audited(api, hq):
     grant(api, ident)
     row = quote(api, token=token)
     assert row["acting_bot_id"] == ident
-    assert not call(api, "hub_letter_send", {"letter_id": row["id"]}, token=token)[0]
+    assert not call(api, "tico_letter_send", {"letter_id": row["id"]}, token=token)[0]
     approved = fetch(api, row)
     approve(api, approved)
     assert fetch(api, row)["status"] == "submitted"
@@ -234,12 +158,25 @@ def test_revoke_or_never_before_approval_prevents_submission(api, hq):
 
 
 def test_an_admin_can_approve_but_an_unrelated_person_cannot(api, hq):
+    """An OK's task is private to its parties, and an ask goes only to someone who can already read it (the engine
+    never adds a reader): cara, a plain member, cannot be given it, cannot open the letter and cannot OK it; ben, an
+    Admin, is given it once Ana shares the task with him, and OKs it."""
     ident, token = bot(api)
     grant(api, ident)
-    row = send(api, quote(api, token=token), token=token)
-    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="cara-test", expected=403)
-    post(api, "approvals/" + row["approval_id"], {"decision": "approved"}, token="ben-test")
-    assert fetch(api, row)["status"] == "submitted"
+    theirs, bens = (send(api, quote(api, token=token), token=token) for _ in range(2))
+    with pytest.raises(H.Refused, match="Cara cannot read this private task"):
+        with api.app.state.store.transaction() as c:
+            H.task_give(
+                c, "human:ana", task_asks.task_of(c, theirs["approval_id"]), theirs["approval_id"], "human:cara"
+            )
+    with api.app.state.store.transaction() as c:  # Ana, who can see it, shares it with Ben first
+        H.set_task_readers(c, "human:ana", task_asks.task_of(c, bens["approval_id"]), add=["human:ben"])
+        H.task_give(c, "human:ana", task_asks.task_of(c, bens["approval_id"]), bens["approval_id"], "human:ben")
+    get(api, "letters/" + theirs["id"], token="cara-test", expected=404)
+    refused = approve(api, theirs, token="cara-test", expected=404, reader="ana-test")  # not hers to read or OK
+    assert refused["error"]["code"] == "not_found" and fetch(api, theirs)["status"] != "submitted"
+    approve(api, bens, token="ben-test")
+    assert fetch(api, bens)["status"] == "submitted"
 
 
 def test_company_monthly_cap_counts_accepted_spend_and_approval_cannot_bypass_it(api, hq):
@@ -336,7 +273,7 @@ def test_bot_quotes_an_uploaded_pdf_through_the_existing_library_path(api, hq):
     grant(api, ident)
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {
             "name": "letter.pdf",
             "content_base64": base64.b64encode(L.render("A letter uploaded by a bot")).decode(),
@@ -518,6 +455,121 @@ def test_abandoned_key_is_definitively_not_sent(api, hq):
     assert hq.provider_submits == 0
 
 
+@pytest.mark.parametrize("left", ["approved", "submitting"])
+def test_older_letters_still_waiting_for_an_ok_never_starve_the_drain(api, hq, monkeypatch, left):
+    """A hundred older letters waiting for their OK, and a newer one the drain must reach: approved while the send
+    after the OK was lost (a restart), or claimed with HQ's answer lost."""
+    older = send(api, quote(api))
+    row = send(api, quote(api))
+    with api.app.state.store.transaction() as c:
+        names = [r[1] for r in c.execute("PRAGMA table_info(letters)") if r[1] not in ("id", "updated_at")]
+        for n in range(120):
+            c.execute(
+                f"INSERT INTO letters (id, updated_at, {','.join(names)}) "
+                f"SELECT ?, '2000-01-01T00:00:{n % 60:02d}Z', {','.join(names)} FROM letters WHERE id=?",
+                (f"waiting-{n}", older["id"]),
+            )
+    if left == "approved":
+        monkeypatch.setattr(api.app.state.letters, "decided", lambda rid: None)
+    else:
+        hq.timeout = True
+    approve(api, row)
+    assert fetch(api, row)["status"] == ("waiting_for_ok" if left == "approved" else "submitting")
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+
+
+def _ended(api, task_id):
+    """The status of the task an OK filed, and the words it ended with (its last history line), if it ended."""
+    with api.app.state.store.read() as c:
+        status = H.task(c, task_id)["status"]
+        note = c.execute(
+            "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND note IS NOT NULL AND note<>'' "
+            "ORDER BY rowid DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    return status, note[0] if note else ""
+
+
+def test_the_oks_task_ends_done_only_once_hq_has_the_letter(api, hq):
+    """Accepted: done, "Mailed the letter." Unknown (a timeout): the task stays open while the claim is reconciled,
+    and ends done when HQ says it has the letter."""
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.timeout = True
+    approve(api, row)
+    assert fetch(api, row)["status"] == "submitting" and _ended(api, task_id)[0] == "open"
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+    assert _ended(api, task_id) == ("done", "Mailed the letter.")
+
+
+@pytest.mark.parametrize("refusal", ["out_of_credit", "quote_changed"])
+def test_a_letter_hq_refused_is_never_recorded_as_mailed(api, hq, refusal):
+    """A definite refusal before HQ claimed the send: the OK's task ends closed, saying the letter was not mailed, and
+    the OK it used lets nothing else go. A new quote needs a new OK (quote_changed asks it at once)."""
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.refusal = refusal
+    approve(api, row)
+    after = fetch(api, row)
+    assert hq.provider_submits == 0 and after["status"] in ("quoted", "waiting_for_ok")
+    status, note = _ended(api, task_id)
+    assert status == "closed" and note.startswith("Not mailed: "), (status, note)
+    assert asked(api, row)["used_at"]
+    if refusal == "quote_changed":
+        assert after["status"] == "waiting_for_ok" and after["approval_id"] != row["approval_id"]
+        hq.refusal = None
+        approve(api, after)
+        assert fetch(api, row)["status"] == "submitted" and hq.provider_submits == 1
+        assert _ended(api, _task(api, after)) == ("done", "Mailed the letter.")
+
+
+@pytest.mark.parametrize(("later", "ends"), [("mailed", "done"), ("failed", "closed")])
+def test_a_letter_hq_takes_as_submitting_ends_its_task_on_hqs_first_decided_word(api, hq, monkeypatch, later, ends):
+    """HQ names the letter but says only `submitting`: undecided, the task stays open. Its next word decides it, though
+    the letter's HQ id is already recorded: done once mailed, closed "Not mailed" once failed."""
+
+    def answer(key, base, path="", **kwargs):
+        result = hq(key, base, path, **kwargs)
+        if isinstance(result, dict) and result.get("letter_id"):
+            result = {**result, "status": "submitting" if not path else later}
+        return result
+
+    monkeypatch.setattr(G, "letters", answer)
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    approve(api, row)
+    after = fetch(api, row)
+    assert after["status"] == "submitting" and after["hq_letter_id"] and _ended(api, task_id)[0] == "open"
+    due(api, row)
+    api.app.state.letters.drain()
+    assert fetch(api, row)["status"] == later and hq.provider_submits == 1
+    status, note = _ended(api, task_id)
+    if ends == "done":
+        assert (status, note) == ("done", "Mailed the letter.")
+    else:
+        assert (status, note) == (
+            "closed",
+            "Not mailed: Letters out could not mail it. Nothing else goes out under this OK.",
+        )
+    due(api, row)
+    api.app.state.letters.drain()
+    assert _ended(api, task_id) == (status, note)
+
+
+def test_an_abandoned_send_ends_the_oks_task_as_not_mailed(api, hq):
+    row = send(api, quote(api))
+    task_id = _task(api, row)
+    hq.abandoned.add("tico-letter:" + row["id"])
+    approve(api, row)
+    assert fetch(api, row)["status"] == "cancelled"
+    status, note = _ended(api, task_id)
+    assert status == "closed" and note.startswith("Not mailed: "), (status, note)
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_lost_acceptance_then_failed_keeps_company_and_bot_spend(api, hq, legacy):
     ident, token = bot(api)
@@ -587,7 +639,7 @@ def test_claim_and_approval_are_durable_before_approved_and_autonomous_post(api,
                 ).fetchone()
                 assert kwargs["idempotency_key"] == "tico-letter:" + row["id"]
                 if row["approved_hash"]:
-                    assert H.approval(c, row["approval_id"])["consumed_at"]
+                    assert task_asks.standing(c, row["approval_id"]) == task_asks.USED
                 sent.append(bool(row["approved_hash"]))
         return real_hq(key, base, path, **kwargs)
 
@@ -638,7 +690,7 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     assert not complete and "Court filing" not in sampled
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {"name": "letter.pdf", "content_base64": base64.b64encode(data).decode(), "scope": "bot"},
         token=token,
     )
@@ -646,7 +698,7 @@ def test_truncated_four_page_pdf_always_asks_even_for_a_known_address(api, hq):
     row = post(api, "letters/quotes", {"file_id": uploaded["file"]["id"], "recipient": RECIPIENT}, token=token)
     requested = send(api, row, token=token)
     assert requested["status"] == "waiting_for_ok" and requested["approval_reason"]
-    assert get(api, "approvals/" + requested["approval_id"])["payload"]["reason"] == requested["approval_reason"]
+    assert asked(api, requested)["content"]["reason"] == requested["approval_reason"]
     assert hq.provider_submits == 1
 
 
@@ -668,8 +720,8 @@ def test_sparse_or_failed_pdf_extraction_is_incomplete(monkeypatch):
 
 def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, hq):
     from backend import events, task_privacy
-    from backend.tests.test_api import setup_attempt
-    from backend.tests.test_assistant import assistant_turn
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.assistant import assistant_turn
 
     token = setup_attempt(api, "finance")[2]["token"]
     grant(api, "finance")
@@ -680,9 +732,8 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     assert get(api, "me", delegated)["actor"] == "human:ana"
     assert get(api, "letters", delegated)["items"] == []
     get(api, "letters/" + row["id"], delegated, expected=404)
-    get(api, "approvals/" + row["approval_id"], delegated, expected=403)
     get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
-    assert call(api, "hub_letter_list", {}, token=delegated)[1]["items"] == []
+    assert call(api, "tico_letter_list", {}, token=delegated)[1]["items"] == []
     with api.app.state.store.read() as c:
         source = c.execute("SELECT source_blob_id FROM letters WHERE id=?", (row["id"],)).fetchone()[0]
         who = api.app.state.auth.identity_for_actor(c, "human:ana")
@@ -693,6 +744,34 @@ def test_delegated_reader_needs_its_own_letter_permission_on_every_surface(api, 
     with api.app.state.store.read() as c:
         assert events.read(c, api.app.state.auth, who, 0, topics=("letters",))[0] == []
     get(api, "files/" + source, delegated, expected=403)
+
+
+def test_a_delegated_reader_reads_the_letters_ok_task_but_never_the_letter(api, hq):
+    """The Assistant reads a task that holds an OK asked of its person (task_asks.assistant_reads_own_ok), so it can
+    send it back on her word. With no letter permission of its own it reads only what the OK shows (the addresses,
+    the price, the settings and the hash it binds): never the letter's text, its proof or its source."""
+    from backend.tests.helpers.api import setup_attempt
+    from backend.tests.helpers.assistant import assistant_turn
+
+    token = setup_attempt(api, "finance")[2]["token"]
+    grant(api, "finance")
+    row = send(api, quote(api, token=token), token=token)
+    with api.app.state.store.read() as c:
+        letter = dict(c.execute("SELECT * FROM letters WHERE id=?", (row["id"],)).fetchone())
+        blobs = [letter[k] for k in ("source_blob_id", "proof_blob_id")]
+        digests = [c.execute("SELECT digest FROM blobs WHERE id=?", (b,)).fetchone()[0] for b in blobs]
+    _, attempt = assistant_turn(api, "ana-test")
+    delegated = attempt["token"]
+    task = json.dumps(get(api, "tasks/" + _task(api, row), delegated))
+    for secret in ["Hello from Acme", row["id"], RECIPIENT["name"], RECIPIENT["line1"], *blobs, *digests]:
+        assert secret not in task, secret
+    shown = get(api, "oks/" + row["approval_id"], delegated)
+    assert shown["content"] == L.content(letter)
+    assert "Hello from Acme" not in json.dumps(shown)
+    assert not any(b in json.dumps(shown) for b in blobs + digests)
+    get(api, "letters/" + row["id"], delegated, expected=404)
+    get(api, row["proof"].removeprefix("/api/v2/"), delegated, expected=403)
+    get(api, "files/" + letter["source_blob_id"], delegated, expected=403)
 
 
 def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq):
@@ -729,7 +808,6 @@ def test_private_source_keeps_only_admin_metadata_and_fences_both_copies(api, hq
         assert get(api, "letters/" + row["id"], token)["redacted"]
         get(api, "files/" + source, token, expected=403)
         get(api, row["proof"].removeprefix("/api/v2/"), token, expected=403)
-        get(api, "approvals/" + row["approval_id"], token, expected=403)
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_assets WHERE blob_id=?", (original["id"],))
     get(api, "files/" + source, expected=403)
@@ -758,7 +836,7 @@ def external_thread_letter(api, audience, *, explicit=False):
     )
     failed, uploaded = call(
         api,
-        "hub_file_publish",
+        "tico_file_publish",
         {
             "name": "letter.pdf",
             "scope": "bot",
@@ -901,7 +979,7 @@ def test_real_source_task_privacy_and_party_changes_patch_finished_letter_rows(a
     task = get(api, "tasks/" + task["id"], "cara-test")["task"]
     with api.app.state.store.read() as c:
         before = events.latest(c)
-    post(api, "tasks/" + task["id"], {"version": task["version"], "owner": "human:ben"}, token="cara-test")
+    post(api, "tasks/" + task["id"] + "/owner", {"version": task["version"], "owner": "human:ben"}, token="cara-test")
     with api.app.state.store.read() as c:
         ben = api.app.state.auth.settings.test_identities["ben-test"]
         restored = events.read(c, api.app.state.auth, ben, before, topics=("letters",))[0]
@@ -943,7 +1021,9 @@ def test_approved_proof_is_local_and_follows_the_record_permissions(api, hq):
 
 def test_decline_and_cancel_close_unsent_letters_and_provider_refusal_passes_through(api, hq):
     row = send(api, quote(api))
-    post(api, "approvals/" + row["approval_id"], {"decision": "declined"})
+    path = f"tasks/{_task(api, row)}/asks/{row['approval_id']}/answer"
+    post(api, path, {"value": "no", "note": "Wrong address."})
+    api.app.state.letters.drain()
     assert fetch(api, row)["status"] == "declined" and not hq.jobs
     pending = send(api, quote(api))
     assert post(api, "letters/" + pending["id"] + "/cancel", {})["status"] == "cancelled"

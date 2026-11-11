@@ -3,57 +3,9 @@
 import json
 
 from backend.store import H
-from backend.tests.test_api import api, assign, get, headers, post, runner  # noqa: F401
-from backend.tests.test_mcp import call, rpc
-
-
-def hermes_bot(api, slug="scout", status="active", token="ana-test", **overrides):
-    return post(
-        api,
-        "bots",
-        {
-            "slug": slug,
-            "display_name": "Scout",
-            "description": "A Hermes profile.",
-            "reports_to": None,
-            "status": status,
-            "repo": "emp-" + slug,
-            "thread_mode": "personal",
-            "model": "hermes-profile",
-            "effort": "as-configured",
-            "harness": "hermes",
-            "operator": "ana",
-            "owners": ["ana"],
-            "runner_id": None,
-            **overrides,
-        },
-        token=token,
-    )
-
-
-def credential(api, slug="scout"):
-    return post(api, "bots/" + slug + "/agent-credential", {})
-
-
-def bot_id(api, slug="scout"):
-    with api.app.state.store.read() as c:
-        return H.resolve_bot(c, slug)["id"]  # jobs, agents, health issues and actors are keyed by the id
-
-
-def beat(api, token, **fields):
-    return post(
-        api,
-        "agents/heartbeat",
-        {
-            "version": "0.19.0",
-            "platform": "darwin",
-            "model": "gpt-5.6-luna",
-            "provider": "openai-codex",
-            "profile": "scout",
-            **fields,
-        },
-        token=token,
-    )
+from backend.tests.helpers.api import assign, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.mcp import call, rpc
+from backend.tests.helpers.agents import beat, bot_id, credential, hermes_bot
 
 
 def issues(api, slug):
@@ -75,7 +27,7 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     snapshot = api.get("/api/v2/conversations/" + msg["conversation_id"] + "/snapshot", headers=headers()).json()
     assert snapshot["execution"] is None
     # The agent sees it in its inbox through the same tools every bot has.
-    failed, inbox = call(api, "hub_message_list", token=token)
+    failed, inbox = call(api, "tico_message_list", token=token)
     assert not failed and [m["body"] for m in inbox["messages"]] == ["What did you find today?"]
     assert beat(api, token)["waiting"]["messages"] == 1
     # It may read the conversation it is in, and answer in it.
@@ -83,14 +35,14 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     assert [m["body"] for m in page] == ["What did you find today?"]
     failed, sent = call(
         api,
-        "hub_message_send",
+        "tico_message_send",
         {"to": "ana", "text": "Three leads, all in Austin.", "conversation_id": msg["conversation_id"]},
         token=token,
     )
     assert not failed and sent["sender_id"] == H.bot_actor(scout)
-    failed, acked = call(api, "hub_message_mark_read", {"message_id": msg["id"]}, token=token)
+    failed, acked = call(api, "tico_message_mark_read", {"message_id": msg["id"]}, token=token)
     assert not failed and acked == {"read": True}
-    assert call(api, "hub_message_list", token=token)[1]["messages"] == []
+    assert call(api, "tico_message_list", token=token)[1]["messages"] == []
     assert [m["body"] for m in get(api, "conversations/" + msg["conversation_id"] + "/messages")] == [
         "What did you find today?",
         "Three leads, all in Austin.",
@@ -161,7 +113,7 @@ def test_the_mcp_door_lists_ack_and_the_agent_cannot_act_as_a_runner(api):
     hermes_bot(api)
     token = credential(api)["token"]
     tools = {t["name"] for t in rpc(api, "tools/list", token=token)["result"]["tools"]}
-    assert "hub_message_mark_read" in tools and "hub_message_list" in tools
+    assert "tico_message_mark_read" in tools and "tico_message_list" in tools
     # Runner-only doors stay shut to an agent credential.
     assert (
         api.post(

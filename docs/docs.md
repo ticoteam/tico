@@ -39,16 +39,16 @@ body. The page lists them grouped by folder.
   and bot administrators (`403 locked` for anyone else, restore included). Locking is not a version.
 - **Archive** removes a doc from the list and search and frees its path; its history is kept.
 
-Bots use the same docs through the `hub` CLI and the MCP tools:
+Bots use the same docs through the `tico` CLI and the MCP tools:
 
 | Command | Tool | |
 |---|---|---|
-| `hub doc list [--prefix sales/]` | `hub_doc_list` | paths, titles, who changed them last |
-| `hub doc read <id\|path>` | `hub_doc_read` | one doc in full, with its version |
-| `hub doc search "words" [--manual]` | `hub_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
-| `hub doc write <path> --title T (--body-file F \| stdin) [--note N]` | `hub_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
-| `hub doc history <id\|path>` | `hub_doc_history` | the versions |
-| `hub doc link-list` | `hub_doc_link_list` | the linked docs |
+| `tico doc list [--prefix sales/]` | `tico_doc_list` | paths, titles, who changed them last |
+| `tico doc read <id\|path>` | `tico_doc_read` | one doc in full, with its version |
+| `tico doc search "words" [--manual]` | `tico_doc_search` | internal and external content, linked metadata and the Tico manual (`--manual`: only it) |
+| `tico doc write <path> --title T (--body-file F \| stdin) [--note N]` | `tico_doc_write` | creates or replaces; on a version conflict it reads again and retries once |
+| `tico doc history <id\|path>` | `tico_doc_history` | the versions |
+| `tico doc link-list` | `tico_doc_link_list` | the linked docs |
 
 A bot's writes show in the history as its own ("by Ops"). A locked doc refuses a bot.
 
@@ -81,11 +81,11 @@ Existing `linked-docs` endpoints and IDs remain supported.
 
 Every install carries the manual for its own release: the `docs/*.md` its image ships, as a **read-only** collection kept
 apart from the team's docs. It is built in memory when the server starts and rebuilt when the release changes; it is never
-stored in the team's docs, so it cannot be edited (`405 read_only`), listed with `hub doc list`, synced or backed up as
+stored in the team's docs, so it cannot be edited (`405 read_only`), listed with `tico doc list`, synced or backed up as
 team content. `GET /api/v2/docs/search?collection=company|manual|all` (default `company`, which is what the Docs page uses)
-and `hub doc search` (all: matching team and manual sections ranked together) label each manual result `Tico manual` with its
+and `tico doc search` (all: matching team and manual sections ranked together) label each manual result `Tico manual` with its
 file (`docs/backups.md`), a link to that page (the GitHub file at the release tag, `main` on a build with no version) and the
-section's excerpt. `hub doc read manual:<name>` (`GET /api/v2/docs/manual/{name}`) reads one page; `GET /api/v2/docs/manual`
+section's excerpt. `tico doc read manual:<name>` (`GET /api/v2/docs/manual/{name}`) reads one page; `GET /api/v2/docs/manual`
 lists them.
 
 ## Search
@@ -98,14 +98,14 @@ column. Librarian maps and logs under `_librarian/` rank below source docs. Link
 External sections use SQLite FTS5 with database-side ranking and bounded passage results, rather than scoring
 full external bodies in Python. `source_id` filters to one source. Results are labelled **Internal**, **External**,
 **Linked**, or **Tico manual**. External results carry `external:<id>`, commit, freshness, `citation_url` and
-`trust: untrusted_external`. `hub doc read external:<id> --revision <commit>` returns reference text and provenance.
+`trust: untrusted_external`. `tico doc read external:<id> --revision <commit>` returns reference text and provenance.
 Markdown citations link to source lines at that commit; MDX/`.rst` cite the whole file without an invented anchor.
 External text never supplies instructions or action authorization. External search requires SQLite FTS5.
 
 ## Ask the Librarian
 
 **Ask the Librarian** is the rail on the right of Docs (a button and a full-screen sheet on a phone). It asks the Librarian, the
-built-in bot for the team's docs, which answers with citations (`docs/librarian.md`). Bots and the Assistant ask it with `hub doc ask`.
+built-in bot for the team's docs, which answers with citations (`docs/librarian.md`). Bots and the Assistant ask it with `tico doc ask`.
 
 ## Upgrading
 
@@ -117,7 +117,7 @@ reachable from the bot's page.
 
 ## API
 
-All of it is in the stable v2 contract ([openapi/v2.json](openapi/v2.json), tag **Docs**); every write needs an
+All of it is in the stable v2 contract ([v2 spec](api.md#the-contract), tag **Docs**); every write needs an
 `Idempotency-Key`. Reads are open to every signed-in human and bot.
 
 | | |
@@ -140,7 +140,7 @@ Writes are recorded in the activity log with the actor (`docs.created_at`, `docs
 covers internal, indexed external and linked docs too.
 
 The code is `backend/docs.py` (with `backend/docs_import.py` for file conversion) and `ui/docs-page.ts`,
-`ui/docs-editor.ts`, `ui/docs-search.ts`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cjs`.
+`ui/docs-editor.ts`, `ui/docs-search.ts`. Tests: `backend/tests/test_docs.py` and `ui/tests/docs.cts`.
 
 Archive removes a doc from the active list and search. **Undo** brings it back immediately.
 Choose **Archived** on Docs to browse archived docs, open one and choose **Restore**. Restore keeps its history;

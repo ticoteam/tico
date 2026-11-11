@@ -7,10 +7,10 @@ from contextlib import closing
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.finance import actions as FA
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     OWNER,
     FakeMercury,
@@ -94,6 +94,7 @@ def test_setup_is_idempotent_and_leaves_ai_services_without_an_amount(store):
         assert first.created and not again.created and first.accounts == again.accounts
         assert first.budgets == again.budgets and set(first.budgets) == {
             "AI services",
+            "CI",
             "Video production",
             "Other expenses",
         }
@@ -292,7 +293,7 @@ def test_usage_postings_are_posted_once_per_source(books):
 
 def test_a_fresh_database_gets_the_finance_tables(tmp_path):
     from backend.store import Store
-    from backend.tests.test_api import api_settings
+    from backend.tests.helpers.api import api_settings
 
     s = Store(api_settings(tmp_path))
     s.initialize(seed_market=False)
@@ -361,7 +362,7 @@ def test_migration_0037_adds_its_tables_and_columns_to_an_install_from_main(stor
     cancel ask, the card's merchant and the re-read mark. A second start changes nothing."""
     with store.transaction() as c:
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
+        forget_from(c, MIGRATION)
         c.execute("DROP INDEX fin_feed_txns_refund")
         c.execute("ALTER TABLE fin_feed_txns DROP COLUMN refund_of")
         c.execute("DROP TABLE fin_prepaid_postings")
@@ -408,7 +409,7 @@ def _rewind(c: sqlite3.Connection, version: int, *, refund_of: bool) -> None:
     for later in range(version + 1, 78):
         c.execute("DELETE FROM cloud_migrations WHERE version=?", (later,))
     restore_config(c)
-    c.execute("DELETE FROM schema_migrations WHERE version>=? AND version NOT LIKE 'legacy%'", (MIGRATION,))
+    forget_from(c, MIGRATION)
     c.execute("DROP TABLE IF EXISTS fin_prepaid_postings")
     c.execute("DROP TABLE IF EXISTS fin_invoice_reminders")
     c.execute("ALTER TABLE fin_bill_lines DROP COLUMN prepaid_start")

@@ -1,4 +1,7 @@
-"""Publication and requesters extend tasks; comments remain messages in their task thread."""
+"""Publication and requesters extend tasks; comments remain messages in their task thread.
+
+The public roadmap is off in this release: it was built on task types and steps, and comes back with the Product
+pipeline, on its stages. Its settings, a task's public fields and its requesters are kept."""
 
 import hashlib
 import json
@@ -17,6 +20,7 @@ from . import bot_settings as BS
 # addresses queue unbounded work for the bot that receives them (the same overall cap as waiting pairings).
 SUGGESTIONS_WAITING_MAX = 20
 VISIBILITY = "TEXT NOT NULL DEFAULT 'private' CHECK(visibility IN ('public','private'))"
+NOT_YET = 'The public roadmap is not available yet.'
 
 
 def migrate(c):
@@ -25,11 +29,6 @@ def migrate(c):
     H.add_column(c, 'tasks', 'public_title', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'public_summary', "TEXT NOT NULL DEFAULT ''")
     H.add_column(c, 'tasks', 'size', 'REAL')
-    steps_fresh = 'public_name' not in {r[1] for r in c.execute('PRAGMA table_info(task_steps)')}
-    H.add_column(c, 'task_steps', 'public_name', "TEXT NOT NULL DEFAULT ''")
-    if steps_fresh:
-        c.execute('UPDATE task_steps SET public_name=name')
-    H.add_column(c, 'task_types', 'default_visibility', "TEXT NOT NULL DEFAULT 'private'")
     H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
     H.add_column(c, 'messages', 'hidden_at', 'TEXT')
     c.execute(
@@ -43,7 +42,6 @@ def migrate(c):
     if c.execute(
         "INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')"
     ).rowcount:
-        c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute(
             "UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
             "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)"
@@ -158,7 +156,12 @@ def suggestions_receiver(c):
         if state == 'active':
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
-    for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
+    for template, states in (
+        ('product-manager', ('active', 'planned')),
+        ('product-lead', ('active',)),
+        ('product-team-manager', ('active',)),
+        ('segment-product-owner', ('active',)),
+    ):
         row = c.execute(
             f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
             f"WHERE s.template=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
@@ -208,25 +211,28 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
         # Publishing is the owner's at every level: the Strategy Bot publishes only what a person approved, whatever the
         # team's setting for other bots.
         strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
-    # From here the approval is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough.
+    # From here the OK is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough. The OK
+    # (backend/task_asks.py) is the one this actor asked on this task for exactly this publication, given from its
+    # preview by the person's own click, and it is used here, once.
+    from . import task_asks
+
     expected = publication_payload(task_id, operation, values)
-    row = H.approval(c, approval_id) if approval_id else None
-    if (
-        not row
-        or row['kind'] != 'publish'
-        or row['requested_by_id'] != actor
-        or row['task_id'] != task_id
-        or row['payload'] != expected
-        or row['decision'] != 'approved'
-        or row['consumed_at']
-    ):
+    subject = publication_subject(task_id)
+    if not approval_id or not task_asks.passes(c, approval_id, subject, expected, actor):
         H.refuse(
             c,
             actor,
             'approval',
-            'Public changes need an exact approved publish payload; use POST /api/v2/tasks/{id}/publication-preview',
+            'Public changes need an OK of exactly this publication. ' + NOT_YET,
         )
-    H.approval_consume(c, actor, approval_id)
+    task_asks.use(c, approval_id, subject, expected, actor)
+
+
+def publication_subject(task_id):
+    """The subject of an OK to publish a change to one task (backend/task_asks.py): asked with
+    task_asks.ask_ok(..., subject=publication_subject(id), content=publication_payload(id, operation, values),
+    task_id=id)."""
+    return f'publish:{task_id}'
 
 
 def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None, allowance=0):
@@ -519,16 +525,9 @@ def install_internal(app, store, auth, mutate, mover):
 
     @app.post('/api/v2/tasks/{tid}/publication-preview')
     def preview(request: Request, tid: str, body: PublicationInput):
-        with store.read() as c:
-            row = task(c, request.state.identity, tid)
-            if body.labels is not None:
-                if body.model_fields_set != {'labels'}:
-                    raise Problem('publication', 'Preview labels separately from public text', 422)
-                return {'payload': publication_payload(row['id'], 'labels', {'labels': H._labels(body.labels)})}
-            if body.comment is not None:
-                return {'payload': publication_payload(row['id'], 'comment', {'text': body.comment.strip()})}
-            values = {k: v for k, v in body.model_dump(exclude_none=True).items() if v != row.get(k)}
-            return {'payload': publication_payload(row['id'], 'text', values)}
+        """Not available yet, like the public routes: no route asks a publish OK (task_asks has no ask path for the
+        `publish:` subject, and the generic OK route refuses it), so a preview would lead nowhere."""
+        raise Problem('not_found', NOT_YET, 404)
 
     @app.post('/api/v2/tasks/{tid}/comments/{mid}/moderate')
     def moderate(request: Request, tid: str, mid: str, body: Moderate):
@@ -554,37 +553,5 @@ def install_internal(app, store, auth, mutate, mover):
         return mutate(request, body, work)
 
     @app.get('/api/v2/roadmap-tasks')
-    def ranked(
-        request: Request, sort: str = 'requester_count', direction: str = 'desc', limit: int = 100, offset: int = 0
-    ):
-        sorts = {
-            'requester_count': 'requester_count',
-            'external_requesters': 'external_requesters',
-            'important': 'important_requesters',
-            'organization': 'organization',
-            'size': 't.size',
-        }
-        if sort not in sorts or direction not in ('asc', 'desc'):
-            raise Problem('sort', 'Unknown roadmap sort', 422)
-        with store.read() as c:
-            who = request.state.identity
-            auth.domain(who)
-            visible = auth.task_sql(c, who)
-            limit, offset = max(1, min(limit, 100)), max(0, offset)
-            rows = c.execute(
-                'SELECT t.id,t.title,t.visibility,t.size,t.version,t.status,'
-                's.name step,coalesce(r.requester_count,0) requester_count,'
-                'coalesce(r.external_requesters,0) external_requesters,coalesce(r.internal_requesters,0) internal_requesters,'
-                'coalesce(r.important_requesters,0) important_requesters,r.organization '
-                'FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id LEFT JOIN '
-                '(SELECT task_id,count(*) requester_count,sum(actor IS NULL) external_requesters,'
-                'sum(actor IS NOT NULL) internal_requesters,sum(important) important_requesters,'
-                "min(nullif(organization,'')) organization FROM task_requesters GROUP BY task_id) r ON r.task_id=t.id "
-                "WHERE t.type_id IN (SELECT id FROM task_types WHERE role='product-roadmap') AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=t.id AND ("
-                + visible
-                + ')) '
-                'ORDER BY ' + sorts[sort] + ' ' + direction + ',t.id LIMIT ? OFFSET ?',
-                (limit + 1, offset),
-            )
-            items, after = page((dict(r) for r in rows), limit, offset)
-            return {'tasks': items, 'next_offset': after}
+    def ranked():
+        raise Problem('not_found', NOT_YET, 404)

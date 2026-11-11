@@ -4,7 +4,7 @@ This release gives each thing one name. Times end in `_at`, JSON fields and colu
 called a run (it was an attempt), and a bot has an id that never changes next to a slug that can. Clients written
 against the old names need the changes below. There are no aliases: the old names stop working in this release.
 
-Use this page with the spec (`docs/openapi/v2.json`), the [SQL guide](hub-sql.md) and the
+Use this page with the spec (`GET /api/v2/openapi.json`), the [SQL guide](hub-sql.md) and the
 [status and state columns](status-and-state.md). If a name here and the spec disagree, the spec is right.
 
 ## Before you upgrade
@@ -44,28 +44,6 @@ and a task's acceptance criteria are `acceptance_criteria`, a list.
 - The runner wire keeps its `attempt` keys, so runners on older releases keep working.
 - Event names in the audit log keep `attempt`, for example `attempt.input.moved`.
 
-## Holds
-
-A task no longer has `snoozed_until`, `snoozed_by` or `snoozed_note` fields. Its `holds` list carries those facts and
-the blocked ones. Each hold has `kind` (`blocked` or `snoozed`), `reason`, `since`, `until`, `by` and `cause`. The snooze
-and unsnooze endpoints keep working as before.
-
-```json
-{"id": "t_8f2", "title": "Send the Q4 invoice", "created_at": "2026-10-02T09:12:00Z",
- "holds": [{"kind": "snoozed", "reason": "waiting on the vendor", "since": "2026-10-02T09:12:00Z",
-            "until": "2026-10-09T09:00:00Z", "by": "human:sam"}]}
-```
-
-The example is abridged. The old response for the same task had `"created"`, `"snoozed_until"` and `"snoozed_by"`
-at the top level, and no `holds`.
-
-In hub SQL the holds are rows of `task_holds` (`kind`, `cause`, `reason`, `by_id`, `until_at`, `created_at`,
-`released_at`, ...), read with their task. The `tasks` columns `snoozed_until`, `snoozed_by_id`, `snoozed_note`,
-`blocked_since`, `blocked_reason`, `blocked_kind`, `blocked_from_step`, `blocked_from_status`, `blocked_gate` and
-`holds_cleared_at` are gone: a query that read `tasks.snoozed_until` reads
-`(SELECT until_at FROM task_holds h WHERE h.task_id=tasks.id AND h.kind='snoozed' AND h.released_at IS NULL)`.
-The runner wire is unchanged: a claimed task still carries those fields (`blocked_gate_json`, `snoozed_by`, ...).
-
 ## Needs you
 
 Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` and `actions`. It had `created`.
@@ -95,7 +73,7 @@ Each needs-you item has `id`, `kind`, `title`, `body`, `subject`, `created_at` a
   bot made in this release gets a UUID as its `id`.
 - Use the `id` for actor strings (`bot:<id>`), references and lookups. Use the `slug` to display a bot. A route, field
   or command that takes a bot accepts either.
-- Rename a bot with `hub bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `hub_bot_update`
+- Rename a bot with `tico bot update acme-ops --new-slug acme-support` (CLI), the `new_slug` argument of `tico_bot_update`
   (MCP), or the `slug` field of `POST /api/v2/bots/{bot}/definition`. The `id`, the history and the folder stay.
 - A bot's checkout folder is named when the bot is made: `bot-<slug>`, or `bot-<slug>-<part of its id>` when that name
   is taken. A rename does not change it. Clients find a bot's files by `folder` from `GET /api/v2/bots`, not by slug.
@@ -178,11 +156,11 @@ Some response fields were renamed in this release and the spec now says so:
 
 ## Check a bot's repository
 
-`hub bot check-names <slug>` lists the old column, field and command names a bot's checkout still uses, and runs on the
-computer without the server. It reads SQL in `hub sql`, SQL-looking strings, keys read from API answers, and `hub`
+`tico bot check-names <slug>` lists the old column, field and command names a bot's checkout still uses, and runs on the
+computer without the server. It reads SQL in `tico sql`, SQL-looking strings, keys read from API answers, and `hub`
 commands. A name renamed on some tables only is reported with those tables: `SELECT owner FROM tasks` is flagged and
 `SELECT owner FROM meetings` is not.
 
-`hub bot check-names <slug> --fix` rewrites a name only when it has one new spelling everywhere and no table keeps it.
+`tico bot check-names <slug> --fix` rewrites a name only when it has one new spelling everywhere and no table keeps it.
 It leaves everything else for you to change, including `owner`, `state`, `from_actor`, a bot's `memory/` and SQL outside
-a `hub sql` call, which may be the bot's own database.
+a `tico sql` call, which may be the bot's own database.

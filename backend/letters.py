@@ -1,7 +1,11 @@
 """Letters out: immutable proofs, sending grants, bounded spend and durable Gateway submission.
 
-The approval binds HQ's hash, including the rendered proof and total. A submission claim saves its quote before
-the network call; every retry uses that quote and the letter's idempotency key, including after a restart.
+A letter that needs an OK waits on one bound to it (backend/task_asks.py, subject `letter:<id>`): its content is HQ's
+hash, which covers the rendered proof and the total, with the recipient, return address and mail class. It is asked of
+the acting bot's manager or an admin, given by that person's own click on the preview, checked again when the letter
+is submitted, and used in the same write that claims the submission. A new quote with another hash needs a new OK. A
+submission claim saves its quote before the network call; every retry uses that quote and the letter's idempotency
+key, including after a restart.
 """
 
 import asyncio
@@ -16,7 +20,7 @@ import threading
 from dataclasses import replace
 from contextlib import suppress
 from types import SimpleNamespace
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import quote as quote_path
 from xml.sax.saxutils import escape
 
@@ -24,15 +28,23 @@ from fastapi import Query, Request
 from pydantic import Field
 
 from clients import gateway as G
-from . import blobs, gateway_connection, hubdb as H, lifecycle
+from . import blobs, gateway_connection, hubdb as H, lifecycle, task_asks
 from .auth import bot_identity, validate_identity
 from .models import Contract
 from .store import Problem
 
 LOG = logging.getLogger("tico.letters")
+SUBJECT = "letter:"  # an OK's subject for one letter: SUBJECT + its id
 MODES = {"on_their_own": 0, "ask_first": 1, "never": 2}
 FINAL = ("delivered", "returned", "failed", "cancelled", "declined")
 ACTIVE = ("submitting", "submitted", "printing", "mailed")
+ACCEPTED = ("submitted", "printing", "mailed", "delivered", "returned")  # HQ has it and it is (or was) on its way
+UNDECIDED = ("submitting", "needs_review")  # claimed, and HQ has not said yet whether it takes the letter
+NOT_MAILED = {
+    "failed": "Letters out could not mail it",
+    "cancelled": "it was cancelled before it was mailed",
+    "declined": "Letters out declined it",
+}
 MAX_PDF = 5 * 1024 * 1024
 BACKOFF = (60, 300, 900, 3600, 21600)
 
@@ -316,7 +328,7 @@ def freeze_sources(c, ident):
     )
 
 
-def get(c, auth, who, ident, *, metadata=False):
+def get(c, auth, who, ident, *, metadata=False) -> dict[str, Any]:
     row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
     level = record_access(c, auth, who, row) if row else None
     if level is None or (level != "full" and not metadata):
@@ -392,6 +404,45 @@ def public(row):
     for key in ("color", "duplex", "cancel_possible"):
         out[key] = bool(out[key])
     return out
+
+
+def content(row):
+    """What an OK of a letter is for, exactly: HQ's hash, which covers the rendered proof and the total, and what the
+    person reads beside the proof. The proof's file is not in it: a new quote stores the same proof again."""
+    return {
+        "letter_id": row["id"],
+        "approval_hash": row["approval_hash"],
+        "recipient": json.loads(row["recipient"]),
+        "return_address": json.loads(row["return_address"]),
+        "mail_class": row["mail_class"],
+        "total_micros": row["total_micros"],
+        "currency": "USD",
+        "color": bool(row["color"]),
+        "duplex": bool(row["duplex"]),
+        "page_count": row["page_count"],
+        "reason": row["approval_reason"],
+    }
+
+
+def ok_given(c, grant, ctx):
+    """In the transaction of an OK of a letter (task_asks.ON_OK): whoever gave it may approve it now (an admin, or a
+    manager of the acting bot, who can read it). The letter is sent once the transaction has committed."""
+    ident = str(grant["subject"]).removeprefix(SUBJECT)
+    row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
+    if not row or row["status"] != "waiting_for_ok":
+        raise Problem("state", "This letter is not waiting for an OK", 409)
+    app = getattr(ctx, "app", None)
+    service = getattr(getattr(app, "state", None), "letters", None)
+    if service is None or not service.may_ok(c, grant["ok_by_id"], row):
+        raise Problem("forbidden", "This letter is OK'd by an admin or a manager of its bot", 403)
+    ctx.after.append(lambda: service.decided(grant["requirement_id"]))
+
+
+def not_mailed(c, row, why):
+    """The OK this letter used did not mail it: its task ends closed saying so (task_asks.not_done), never done. The OK
+    stays used, so nothing else goes out under it. Nothing happens for an OK that was not used."""
+    if row["approval_id"]:
+        task_asks.not_done(c, row["approval_id"], "Not mailed: " + why + ". Nothing else goes out under this OK.")
 
 
 def cancellable(row):
@@ -717,29 +768,49 @@ class Letters:
         return owner_actor(c, self.auth)
 
     def ask(self, c, row):
-        payload = {
-            "letter_id": row["id"],
-            "approval_hash": row["approval_hash"],
-            "proof": "/api/v2/files/" + row["proof_blob_id"],
-            "recipient": json.loads(row["recipient"]),
-            "return_address": json.loads(row["return_address"]),
-            "mail_class": row["mail_class"],
-            "total_micros": row["total_micros"],
-            "currency": "USD",
-            "color": bool(row["color"]),
-            "duplex": bool(row["duplex"]),
-            "page_count": row["page_count"],
-            "reason": row["approval_reason"],
-        }
-        approval = H.approval_request(
-            c, row["requested_by"], "letter", payload, row["task_id"], to=self.approver(c, row)
+        """Ask for an OK of this letter as quoted now, on its task (or a task of its own)."""
+        if row["approval_id"]:
+            task_asks.withdraw(c, row["approval_id"], "Quoted again")
+        person = self.approver(c, row)
+        if not person:
+            raise Problem("no_approver", "Nobody can OK this letter: the company has no owner on the team", 409)
+        # The OK goes on the letter's task only when whoever asked works that task. A letter made from a file on
+        # someone else's task (its provenance) is the asker's own work: its OK gets a task of its own.
+        on = H.task(c, row["task_id"]) if row["task_id"] else None
+        from .task_calls import can_work
+
+        task_id = on["id"] if on and can_work(c, row["requested_by"], on) else None
+        asked = task_asks.ask_ok(
+            c,
+            row["requested_by"],
+            person,
+            "Mail this letter?",
+            shows=["letter:" + row["id"]],
+            subject=SUBJECT + row["id"],
+            content=content(row),
+            task_id=task_id,
+            title="Mail a letter to " + str(json.loads(row["recipient"]).get("name") or "a recipient"),
         )
         c.execute(
             "UPDATE letters SET approval_id=?,approved_hash=NULL,status='waiting_for_ok',error='',updated_at=? "
             "WHERE id=?",
-            (approval["id"], H.now(), row["id"]),
+            (asked["requirement_id"], H.now(), row["id"]),
         )
-        return approval
+        return asked
+
+    def may_ok(self, c, actor, row):
+        """Whether `actor` may OK this letter now: a person who is an admin or manages the acting bot, and can read the
+        letter."""
+        try:
+            who = self.auth.identity_for_actor(c, actor)
+        except Problem:
+            return False
+        if who.role not in ("owner", "human"):
+            return False
+        manages = admin(self.auth, who) or (
+            row["acting_bot_id"] and self.auth.bot_manager(c, who, row["acting_bot_id"])
+        )
+        return bool(manages) and readable(c, self.auth, who, row)
 
     def needs_approval(self, c, row, mode):
         known = c.execute(
@@ -776,6 +847,9 @@ class Letters:
                     raise Problem("forbidden", "Only the requester sends this letter", 403)
             if first["status"] == "quoted" and (first["error"] or first["quote_expires_at"] <= H.now()):
                 self.requote(ident)
+            with self.store.read() as c:
+                rules = self.rule_gate(who, get(c, self.auth, who, ident))
+            gate = None
             with self.store.transaction() as c:
                 company, own, mode = authorize(c, self.auth, who)
                 row = get(c, self.auth, who, ident)
@@ -787,18 +861,46 @@ class Letters:
 
                 task_privacy.guard_write(c, who, "/api/v2/letters/" + ident + "/send", self.auth)
                 if row["status"] == "quoted":
-                    self.cap(c, row, company, own)
-                    if self.needs_approval(c, row, mode):
-                        self.ask(c, row)
-                    else:
-                        c.execute("UPDATE letters SET status='ready',next_sync_at=? WHERE id=?", (H.now(), ident))
-            self.process(ident)
+                    gate = rules(c) if rules else None
+                    if not (gate and gate["outcome"] == "held"):  # held: it stays quoted; the hold says whom to ask
+                        self.cap(c, row, company, own)
+                        if self.needs_approval(c, row, mode):
+                            self.ask(c, row)
+                        else:
+                            c.execute("UPDATE letters SET status='ready',next_sync_at=? WHERE id=?", (H.now(), ident))
+            if not (gate and gate["outcome"] == "held"):
+                self.process(ident)
             with self.store.read() as c:
-                return public(get(c, self.auth, who, ident))
+                out = public(get(c, self.auth, who, ident))
+            return {**out, **{k: gate[k] for k in ("held", "rule_warning") if k in gate}} if gate else out
 
-    def decided(self, aid):
+    def rule_gate(self, who, row):
+        """The org rule check of a bot's letter, before its write: the in-write half, or None when the sender is not a
+        bot (a person's own letter is not checked), as a bot's email (email_sending.rule_gate). The Directory's
+        structured rules decide it and fail closed: a letter they hold, or cannot check, is not sent. A Warn sends it
+        and tells the bot. When the check cannot be prepared, the structured rules still decide it inside the write."""
+        from . import org_rule_check as rules
+
+        found = rules.checked_as(who, self.store.settings.assistant_bot)
+        if not found or not H.is_bot(found[1]):
+            return None
+        try:
+            prep = rules.letter_prepare(self.store, self.app.state.judge, found, row)
+        except Exception as exc:  # noqa: BLE001  (the write below still decides it, and fails closed)
+            LOG.warning("The org rule check of a letter failed: %s", type(exc).__name__)
+            prep = None
+
+        def gate(c):
+            if prep is None:
+                return rules.letter_unprepared(c, found, row)
+            return rules.mail_decide(c, prep)
+
+        return gate
+
+    def decided(self, rid):
+        """An OK of a letter was given: send it now, after that transaction committed."""
         with self.store.read() as c:
-            row = c.execute("SELECT id FROM letters WHERE approval_id=?", (aid,)).fetchone()
+            row = c.execute("SELECT id FROM letters WHERE approval_id=?", (rid,)).fetchone()
         if row:
             with self.lock:
                 self.process(row[0])
@@ -806,18 +908,20 @@ class Letters:
     def process(self, ident):
         with self.store.read() as c:
             row = dict(c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone())
-            approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
+            standing = task_asks.standing(c, row["approval_id"]) if row["approval_id"] else None
+        approval = standing is not None
         if (row["status"] in FINAL and not row["hq_letter_id"]) or row["status"] == "quoted":
             return
         if row["error"] == "cancel_requested" and not row["hq_letter_id"]:
             self.resolve_claim(ident)
             return
         if row["status"] == "waiting_for_ok":
-            if not approval or not approval["decision"]:
+            if standing in (None, task_asks.WAITING):
                 return
-            if approval["decision"] != "approved":
+            if standing != task_asks.OK:
                 with self.store.transaction() as c:
                     c.execute("UPDATE letters SET status='declined',updated_at=? WHERE id=?", (H.now(), ident))
+                    task_asks.settle(c, row["approval_id"], "The letter was not mailed.")
                 return
         had_claim = bool(row["submission_quote_id"])
         try:
@@ -834,21 +938,22 @@ class Letters:
                     row = dict(c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone())
                     mode = self.check_sender(c, row)
                     if approval:
-                        approval = H.approval(c, row["approval_id"])
-                        if not approval or approval["decision"] != "approved" or approval["consumed_at"]:
+                        rid = row["approval_id"]
+                        if task_asks.standing(c, rid) != task_asks.OK:
                             return
-                        approved = approval["payload"]
-                        if approved.get("approval_hash") != row["approval_hash"]:
-                            H.approval_consume(c, row["requested_by"], approval["id"])
+                        found = task_asks.grant(c, rid)
+                        if not task_asks.passes(c, rid, SUBJECT + ident, content(row), row["requested_by"]):
+                            # The new quote is not what was OK'd (another proof or total): it needs its own OK.
                             self.ask(c, row)
                             return
-                        decider = self.auth.identity_for_actor(c, approval["decided_by_id"])
-                        self.auth.approval(c, decider, approval["id"], decide=True)
+                        if not found or not self.may_ok(c, found["ok_by_id"], row):
+                            raise Problem("forbidden", "Whoever OK'd this letter may no longer approve it", 403)
                     elif self.needs_approval(c, row, mode):
                         self.ask(c, row)
                         return
                     if approval:
-                        H.approval_consume(c, row["requested_by"], approval["id"])
+                        # Claimed here, before HQ is called; its task ends with HQ's answer (`update`, `not_mailed`).
+                        task_asks.use(c, row["approval_id"], SUBJECT + ident, content(row), row["requested_by"])
                     c.execute(
                         "UPDATE letters SET status='submitting',submission_quote_id=quote_id,approved_hash=?,"
                         "billing='unknown',spend_released=0,charged_micros=NULL,accepted_at=NULL,"
@@ -862,11 +967,16 @@ class Letters:
                     if not row["approved_hash"] and self.needs_approval(c, row, mode):
                         raise Problem("approval_required", "The current policy requires an OK", 403)
                     if row["approved_hash"]:
-                        approval = H.approval(c, row["approval_id"])
-                        if not approval or approval["decision"] != "approved":
-                            raise Problem("approval_required", "The approval is no longer valid", 403)
-                        decider = self.auth.identity_for_actor(c, approval["decided_by_id"])
-                        self.auth.approval(c, decider, approval["id"], decide=True)
+                        # A retry of a claimed submission: the OK was used when it was claimed, for this hash.
+                        found = task_asks.grant(c, row["approval_id"]) if row["approval_id"] else None
+                        if (
+                            not found
+                            or task_asks.standing(c, row["approval_id"]) != task_asks.USED
+                            or found["content_hash"] != task_asks.content_hash(content(row))
+                        ):
+                            raise Problem("approval_required", "The OK is no longer valid", 403)
+                        if not self.may_ok(c, found["ok_by_id"], row):
+                            raise Problem("approval_required", "Whoever OK'd this letter may no longer approve it", 403)
             result = self.call(body={"quote_id": row["submission_quote_id"]}, idempotency_key="tico-letter:" + ident)
             self.update(ident, result)
         except Problem as exc:
@@ -953,9 +1063,9 @@ class Letters:
         """A definite first-attempt refusal releases the unsent claim; a new send gets a new quote and OK."""
         with self.store.transaction(durable=True) as c:
             row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
-            approval = H.approval(c, row["approval_id"]) if row["approval_id"] else None
-            if approval and approval["decision"] == "approved" and not approval["consumed_at"]:
-                H.approval_consume(c, row["requested_by"], approval["id"])
+            if row["approval_id"]:
+                not_mailed(c, row, "Letters out refused it (" + code.replace("_", " ") + ")")
+                task_asks.withdraw(c, row["approval_id"], "The letter's quote was refused: it is quoted again")
             c.execute(
                 "UPDATE letters SET submission_quote_id=NULL,approved_hash=NULL,submitted_at=NULL,approval_id=NULL,"
                 "status='quoted',billing='none',charged_micros=0,accepted_at=NULL,spend_released=1,"
@@ -965,6 +1075,8 @@ class Letters:
 
     def abandoned(self, ident):
         with self.store.transaction(durable=True) as c:
+            row = c.execute("SELECT * FROM letters WHERE id=?", (ident,)).fetchone()
+            not_mailed(c, row, "the send was given up before Letters out took it")
             c.execute(
                 "UPDATE letters SET status='cancelled',billing='none',charged_micros=0,spend_released=1,"
                 "next_sync_at=NULL,error='',updated_at=? WHERE id=?",
@@ -1045,6 +1157,13 @@ class Letters:
                     ident,
                 ),
             )
+            if previous["approval_id"] and previous["status"] in UNDECIDED and status not in UNDECIDED:
+                # The first decided word from HQ, whether or not it named the letter before: the OK's task ends with
+                # it, done only if the letter is on its way. Both leave a task that already ended as it is.
+                if status in ACCEPTED:
+                    task_asks.settle(c, previous["approval_id"], "Mailed the letter.")
+                else:
+                    not_mailed(c, previous, NOT_MAILED[status])
             H.event(c, H.KEEPER, "letter.updated", ident, {"status": status})
 
     def cancel(self, who, ident):
@@ -1077,7 +1196,7 @@ class Letters:
                     return public(row)
                 if not row["hq_letter_id"] and not row["submission_quote_id"]:
                     if row["approval_id"]:
-                        H.approval_withdraw(c, row["approval_id"], "Letter cancelled")
+                        task_asks.withdraw(c, row["approval_id"], "Letter cancelled")
                     c.execute(
                         "UPDATE letters SET status='cancelled',billing='none',charged_micros=0,spend_released=1,"
                         "updated_at=? WHERE id=?",
@@ -1098,18 +1217,31 @@ class Letters:
             return
         try:
             with self.store.read() as c:
+                now = H.now()
                 due = [
                     r[0]
                     for r in c.execute(
-                        "SELECT l.id FROM letters l LEFT JOIN approvals a ON a.id=l.approval_id "
-                        "WHERE ((l.status='waiting_for_ok' AND a.decision IS NOT NULL AND (l.error='' OR l.next_sync_at<=?)) OR "
-                        "(l.status IN ('ready','submitting','submitted','printing','mailed') AND l.next_sync_at<=?) OR "
-                        "(l.hq_letter_id IS NOT NULL AND l.spend_released=0 AND l.status IN ('failed','cancelled','returned','delivered') "
-                        "AND l.next_sync_at<=?)) "
-                        "ORDER BY l.updated_at LIMIT 10",
-                        (H.now(), H.now(), H.now()),
+                        "SELECT id FROM letters "
+                        "WHERE (status IN ('ready','submitting','submitted','printing','mailed') AND next_sync_at<=?) OR "
+                        "(hq_letter_id IS NOT NULL AND spend_released=0 AND status IN ('failed','cancelled','returned','delivered') "
+                        "AND next_sync_at<=?) "
+                        "ORDER BY updated_at LIMIT 10",
+                        (now, now),
                     )
                 ]
+                # A letter waiting for an OK is due once its OK stands any other way than waiting, which only the OK's
+                # own rows say. Every one is looked at until the pass is full, so the letters still waiting, however
+                # many, never hold back one whose OK was given (and whose send after it was lost) or sent back.
+                waiting = c.execute(
+                    "SELECT id, approval_id FROM letters WHERE status='waiting_for_ok' AND (error='' OR next_sync_at<=?) "
+                    "ORDER BY updated_at",
+                    (now,),
+                )
+                for ident, rid in waiting:
+                    if len(due) >= 10:
+                        break
+                    if rid and task_asks.standing(c, rid) != task_asks.WAITING:
+                        due.append(ident)
             for ident in due:
                 self.process(ident)
         finally:
@@ -1322,8 +1454,21 @@ def install(app, config, store, auth, mutate):
 
     @app.get("/api/v2/letters/{letter_id}")
     def detail(request: Request, letter_id: str):
+        """The letter. For the person it waits on, in their own session, it is the preview their OK is bound to:
+        `shown_hash` is what the OK sends back (POST /api/v2/tasks/{task}/asks/{approval_id}/ok)."""
+        who = request.state.identity
         with store.read() as c:
-            return public(get(c, auth, request.state.identity, letter_id, metadata=True))
+            row = get(c, auth, who, letter_id, metadata=True)
+            waiting = row["status"] == "waiting_for_ok" and not row["_redacted"] and row["approval_id"]
+        out = public(row)
+        if waiting and task_asks.own_click(who):
+            with store.transaction() as c:
+                current = get(c, auth, who, letter_id, metadata=True)
+                if current["approval_id"] == row["approval_id"]:
+                    out["shown_hash"] = task_asks.show(
+                        c, who.actor, row["approval_id"], content(current), own_click=True
+                    )
+        return out
 
     @app.post("/api/v2/letters/{letter_id}/send")
     def send(request: Request, letter_id: str):

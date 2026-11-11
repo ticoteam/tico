@@ -4,7 +4,7 @@ On v0.4.14 the write lock was held for up to a minute: renewals reached the serv
 90-second lease, and the expiry sweep ended 49 live turns "Computer lost or heartbeat stopped"."""
 
 from backend.store import H, Problem
-from backend.tests.test_api import api, claim, expire, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import claim, expire, headers, post, setup_attempt  # noqa: F401
 
 
 def lock_timeout(*args, **kwargs):

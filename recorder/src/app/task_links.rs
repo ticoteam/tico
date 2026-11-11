@@ -612,6 +612,13 @@ mod tests {
                     false,
                 ),
                 ("GET /api/v2/me ", 200, json!({"actor":"human:ana"}), false),
+                // Send with no audience keeps the live meeting's own choice (network.rs live_audience).
+                (
+                    "GET /api/v2/live-meetings/live ",
+                    200,
+                    json!({"id":"live","visibility":"private"}),
+                    false,
+                ),
                 ("POST /api/v2/meetings/saved/review ", 200, json!({}), false),
                 (
                     "POST /api/v2/meetings/saved/tasks ",

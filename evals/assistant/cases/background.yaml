@@ -1,5 +1,5 @@
 # Background runs the Assistant starts itself (the morning message). They act as the Assistant, not as the person: a write uses
-# only the Assistant's own rights. The morning message sends at most one `hub assistant morning` per person a day and closes,
+# only the Assistant's own rights. The morning message sends at most one `tico assistant morning` per person a day and closes,
 # declines and proposes nothing.
 
 - id: background-daily-sweep
@@ -48,32 +48,38 @@
     - match: '^task list'
       out:
         tasks:
-          - {id: 1a0c5e27-1000-4000-8000-000000000001, title: "Docs for v0.5.20 release notes", status: done, owner: "human:dana", requester: "bot:technical-writer", note: "Shipped.", created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
-          - {id: 4d3f8b5a-1000-4000-8000-000000000004, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
-          - {id: 5e4a9c6b-1000-4000-8000-000000000005, title: "[Check health] test ping: runner queue", status: open, owner: "human:dana", requester: "bot:botops", note: "", created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
-        next_offset: null
+          - {id: 1a0c5e27-1000-4000-8000-000000000001, number: 221, title: "Docs for v0.5.20 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester: "bot:technical-writer", turn: {state: person, who: "human:dana", line: "Dana: Done (the notes shipped)", since: "2026-11-03T08:02:00Z"}, created: "2026-11-02T23:10:00Z", updated: "2026-11-03T08:02:00Z"}
+          - {id: 4d3f8b5a-1000-4000-8000-000000000004, number: 301, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester: "bot:botops", turn: {state: person, who: "human:dana", line: "Dana: look at the test ping", since: "2026-11-02T06:00:00Z"}, created: "2026-11-02T06:00:00Z", updated: "2026-11-02T06:00:00Z"}
+          - {id: 5e4a9c6b-1000-4000-8000-000000000005, number: 302, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester: "bot:botops", turn: {state: person, who: "human:dana", line: "Dana: look at the test ping", since: "2026-11-02T12:00:00Z"}, created: "2026-11-02T12:00:00Z", updated: "2026-11-02T12:00:00Z"}
+        next: null
     - match: '^needs-you show'
       out:
-        board: "3 need you: 3 tasks"
-        counts: {tasks: 3, questions: 0, approvals: 0, held: 0}
-        by_bot: {"bot:technical-writer": 1, "bot:botops": 2}
+        actor: "human:dana"
+        count: 3
+        by_kind: {task: 3}
+        items:
+          - {kind: task, id: 1a0c5e27-1000-4000-8000-000000000001, task_id: 1a0c5e27-1000-4000-8000-000000000001, requirement_id: null, line: "Docs for v0.5.20 release notes", missing: ["Done"], since: "2026-11-02T23:10:00Z", task: {id: 1a0c5e27-1000-4000-8000-000000000001, number: 221, title: "Docs for v0.5.20 release notes", status: open, version: 3, pipeline_id: general, stage_id: general-todo, owner: "human:dana"}}
+          - {kind: task, id: 4d3f8b5a-1000-4000-8000-000000000004, task_id: 4d3f8b5a-1000-4000-8000-000000000004, requirement_id: null, line: "[Check health] test ping: runner queue", missing: ["Done"], since: "2026-11-02T06:00:00Z", task: {id: 4d3f8b5a-1000-4000-8000-000000000004, number: 301, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana"}}
+          - {kind: task, id: 5e4a9c6b-1000-4000-8000-000000000005, task_id: 5e4a9c6b-1000-4000-8000-000000000005, requirement_id: null, line: "[Check health] test ping: runner queue", missing: ["Done"], since: "2026-11-02T12:00:00Z", task: {id: 5e4a9c6b-1000-4000-8000-000000000005, number: 302, title: "[Check health] test ping: runner queue", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana"}}
+        version: "e5f6a7b8"
+        next: null
     - match: '^assistant morning'
       out: {message_id: msg_morning_1, conversation_id: conv_dana_assistant, day: "2026-11-05", next_at: "2026-11-06T00:00:00-08:00"}
     - match: '^assistant propose'
       out: {ok: true, proposal: {id: prop_sweep_1, status: waiting_for_confirm, actions: 4}}
-    - match: '^task (bulk close|close)'
-      out: {ok: true, closed: 0}
+    - match: '^task close'
+      out: {ok: true, task: {status: closed}}
   must:
     - '^assistant morning --for human:dana\b'
   must_not:
-    - '^task (bulk close|close)\b'
-    - '^approval (approve|decline)'
+    - '^task close\b'
+    - '^task answer\b'
     - '^automation update'
     - '^message send'
     - '^assistant (propose|send)\b'
   reply: |
-    Sends ONE morning message to Dana, with `hub assistant morning --for human:dana --body "<message>"`, short and
+    Sends ONE morning message to Dana, with `tico assistant morning --for human:dana --body "<message>"`, short and
     addressed to "you": at most three things only she can do, each with its goal linked, such as a check-in on the yellow
-    trials goal (318 against 400, last check-in Oct 6). The message does not list the done docs task, the two test pings or
+    trials goal (318 against 400, last check-in Oct 6). The message does not list the docs task for notes that already shipped, the two test pings or
     any queue clean-up, and it is not a tidy card. The run closes nothing, declines nothing, answers nothing, proposes no
     card and sends no other message. Its final reply is a short run record for her.

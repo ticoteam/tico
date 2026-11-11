@@ -81,6 +81,6 @@ def check(c, bot, runner_id, people):
         "inbox_isolation",
         f"This computer is kept for inbox bots, whose mail key can open every mailbox in "
         f"the team, so {bot} cannot go there. Pick another computer, or stop keeping this one for inbox bots: "
-        f"`hub api POST runners/{runner_id}/inbox-only '{{\"enabled\": false}}'`.",
+        f"`tico api POST runners/{runner_id}/inbox-only '{{\"enabled\": false}}'`.",
         409,
     )

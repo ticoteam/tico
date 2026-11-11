@@ -12,16 +12,7 @@ import pytest
 from backend.finance import reads as FR
 from backend.finance import tab_ap
 from backend.finance.core.errors import FinanceError
-from backend.tests.test_finance_fixtures import (  # noqa: F401
-    AT,
-    OWNER,
-    account,
-    act,
-    books,
-    finance_template,
-    spend,
-    store,
-)
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store
 
 CODER, SELLER = "bot:coder", "bot:seller"
 CARA, BEN = "human:cara", "human:ben"

@@ -2,13 +2,13 @@
 
 `populate` writes through the v2 API as a person and as a bot (a runner claims the bot's turn), so the rows are the
 ones a real install makes. `capture` reads the main v2 resources back as the owner. Both run against the `api`
-fixture from backend/tests/test_api.py: a fresh temporary database and a fictional company (Acme).
+fixture (conftest.py, backend/tests/helpers/api_app.py): a fresh temporary database and a fictional company (Acme).
 """
 
 import sqlite3
 import time
 
-from backend.tests.test_api import assign, claim, headers, ready, runner
+from backend.tests.helpers.api import assign, claim, headers, ready, runner
 
 OWNER, MEMBER = "ana-test", "cara-test"
 NOTE_STEP = {"id": "tell", "type": "action", "enabled": True, "do": "wake_bot", "args": {"bot": "ops", "text": "Look"}}
@@ -44,28 +44,20 @@ def populate(client):
     ids["reply_message"] = reply["message"]["id"]
     sent = api.call("post", "messages", json={"to": "bot:ops", "text": "Third note."})
     ids["direct_message"] = sent["id"]
-    # Tasks: created for a person, handed to a bot, moved through done, then closed by the owner.
+    # Tasks: created for a person in General, handed to a bot, and done (General's one stage: done is Done).
     made = api.call(
         "post", "tasks", json={"title": "Draft the launch plan", "body": "Please draft it.", "owner": "human:ana"}
     )["task"]
     ids["task"] = made["id"]
-    assigned = api.call("post", "tasks/%s" % made["id"], json={"version": made["version"], "owner": "bot:ops"})
-    doing = api.call("post", "tasks/%s" % made["id"], json={"version": assigned["task"]["version"], "status": "doing"})
-    done = api.call(
-        "post",
-        "tasks/%s" % made["id"],
-        json={"version": doing["task"]["version"], "status": "done", "note": "Drafted."},
+    assigned = api.call(
+        "post", "tasks/%s/owner" % made["id"], json={"version": made["version"], "owner": "bot:ops", "why": "Yours."}
     )
-    api.call(
-        "post",
-        "tasks/%s" % made["id"],
-        json={"version": done["task"]["version"], "status": "closed", "note": "Accepted."},
-    )
+    api.call("post", "tasks/%s/done" % made["id"], json={"version": assigned["task"]["version"], "note": "Drafted."})
     open_task = api.call(
         "post", "tasks", json={"title": "Check the vendor list", "body": "Compare the three.", "owner": "bot:ops"}
     )["task"]
     ids["open_task"] = open_task["id"]
-    # A bot's turn: a file, a page and a spend approval it asks a person to decide.
+    # A bot's turn: a file, a page and the spend it asks a person to OK.
     machine, attempt = bot_turn(client)
     bot = Api(client)
     bot_token = attempt["token"]
@@ -82,30 +74,36 @@ def populate(client):
     assert page.status_code == 200, page.text
     ids["page"] = page.json()["page"]["file_id"]
     settle_media(client)
+    # Held work is an ask on the task (docs/pipelines-v3.md C11): one OK the owner sends back, one still open.
+    seen = bot.call("get", "tasks/%s" % open_task["id"], token=bot_token)["task"]
     asked = bot.call(
         "post",
-        "approvals",
+        "tasks/%s/asks" % open_task["id"],
         token=bot_token,
         json={
-            "kind": "spend",
-            "payload": {"amount": 5, "account": "ads", "what": "Launch test"},
-            "task_id": open_task["id"],
+            "to": "human:ana",
+            "line": "Spend $5 on ads for the launch test?",
+            "kind": "ok",
+            "version": seen["version"],
         },
     )
-    ids["approval"] = asked["id"]
-    decided = api.call("post", "approvals/%s" % asked["id"], json={"decision": "declined", "note": "Not now."})
-    assert decided["decision"] == "declined", decided
+    ids["ask"] = asked["requirement_id"]
+    api.call(
+        "post", "tasks/%s/asks/%s/answer" % (open_task["id"], ids["ask"]), json={"value": "no", "note": "Not now."}
+    )
+    seen = bot.call("get", "tasks/%s" % open_task["id"], token=bot_token)["task"]
     waiting = bot.call(
         "post",
-        "approvals",
+        "tasks/%s/asks" % open_task["id"],
         token=bot_token,
         json={
-            "kind": "spend",
-            "payload": {"amount": 9, "account": "ads", "what": "Second test"},
-            "task_id": open_task["id"],
+            "to": "human:ana",
+            "line": "Spend $9 on ads for a second test?",
+            "kind": "ok",
+            "version": seen["version"],
         },
     )
-    ids["pending_approval"] = waiting["id"]  # still open: it shows in Needs you
+    ids["pending_ask"] = waiting["requirement_id"]  # still open: it shows in Needs you
     finish_turn(client, machine, attempt)
     # A goal with a measure, one reading, and a check-in.
     goal = api.call("post", "goals", json={"title": "Raise activation", "owner": "me"})["goal"]

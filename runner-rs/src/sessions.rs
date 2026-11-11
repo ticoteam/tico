@@ -33,11 +33,14 @@ pub const CLOSED: &[&str] = &["done", "closed", "declined"];
 pub const SESSION_SWEEP_S: u64 = 600;
 const RULES_CAP: usize = 16 * 1024;
 const MEMORY_FOLDERS: &[&str] = &["memory", "knowledge"];
-/// Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
-/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S). A private meeting's
-/// copy needs no upstream (ensure), and its turn never falls back to the checkout.
+/// Problems no wait clears: the bot has no checkout, or one Git confirms has no upstream for a worktree to share. A
+/// task's turn then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S). A
+/// private meeting's copy needs no upstream (ensure), and its turn never falls back to the checkout.
 pub const MISSING: &str = "the bot's checkout is missing";
 pub const NO_UPSTREAM: &str = "the bot's checkout has no upstream to share between tasks";
+/// The checkout's upstream could not be read: not proof that it has none, so a task's turn with no worktree of its own
+/// fails rather than run in the shared checkout once its wait is over.
+pub const UPSTREAM_LOOKUP_FAILED: &str = "the bot's checkout's upstream could not be read";
 /// How long a task turn that is not a person's waits for its worktree, retrying, before it runs in the bot's
 /// checkout: in the checkout it would hold every chat with the bot behind it for its whole turn.
 const WORKTREE_WAIT_S: u64 = 120;
@@ -259,7 +262,7 @@ pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
         lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string());
     }
     if !source.is_empty() {
-        lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in hub commands about your own work."));
+        lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in tico commands about your own work."));
     }
     if !stateless {
         lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());
@@ -446,6 +449,7 @@ fn fault_name(f: &Fault) -> String {
     match f {
         Fault::Timeout(_) => "TimeoutExpired".into(),
         Fault::Stopped => gitrun::STOPPED.into(),
+        Fault::Io(message) if message.starts_with(UPSTREAM_LOOKUP_FAILED) => message.clone(),
         Fault::Io(_) => "OSError".into(),
     }
 }
@@ -475,21 +479,63 @@ pub fn git_reason(out: &Out) -> String {
     crate::redact::scrub_credentials(&first.chars().take(160).collect::<String>(), &[])
 }
 
-/// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "".
+/// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "" when Git confirms it has none: HEAD is
+/// on no branch, or its branch names no upstream. Any other failure is an UPSTREAM_LOOKUP_FAILED fault, with Git's
+/// reason, since a lookup that failed says nothing about whether there is one.
 pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
+    let failed = |why: String| {
+        let why = crate::redact::scrub_credentials(&why, &[]);
+        Fault::Io(format!("{UPSTREAM_LOOKUP_FAILED} ({why})"))
+    };
+    let looked = |fault: Fault| match fault {
+        Fault::Stopped => Fault::Stopped,
+        other => failed(fault_name(&other)),
+    };
     let done = g(
         main,
         env,
         &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
         15,
     )
-    .await?;
-    let r = done.stdout.trim().to_string();
-    Ok(if done.ok() && r.contains('/') {
-        r
-    } else {
-        String::new()
-    })
+    .await
+    .map_err(looked)?;
+    if done.ok() {
+        // A branch that tracks another local branch has nothing to share between tasks either.
+        let r = done.stdout.trim().to_string();
+        return Ok(if r.contains('/') { r } else { String::new() });
+    }
+    // Read from the configuration, not from Git's (translated) message, whether there is an upstream to find.
+    let head = g(main, env, &["symbolic-ref", "--quiet", "HEAD"], 15)
+        .await
+        .map_err(looked)?;
+    if head.code == 1 {
+        return Ok(String::new()); // a detached HEAD tracks nothing
+    }
+    let branch = head.stdout.trim().trim_start_matches("refs/heads/");
+    if !head.ok() || branch.is_empty() {
+        return Err(failed(git_reason(&head)));
+    }
+    let merge = g(
+        main,
+        env,
+        &["config", "--get", &format!("branch.{branch}.merge")],
+        15,
+    )
+    .await
+    .map_err(looked)?;
+    if merge.code == 1 {
+        return Ok(String::new()); // the branch names no upstream
+    }
+    Err(failed(git_reason(&done)))
+}
+
+/// `upstream`, where a lookup that failed reads as no upstream: a task's own worktree, or a private meeting's copy, is
+/// never the shared checkout, so not knowing its upstream is no reason to stop its turn.
+async fn upstream_or_none(path: &Path, env: &Env) -> Result<String, Fault> {
+    match upstream(path, env).await {
+        Err(Fault::Io(why)) if why.starts_with(UPSTREAM_LOOKUP_FAILED) => Ok(String::new()),
+        other => other,
+    }
 }
 
 /// Make or reuse the task's worktree: (upstream ref, problem). A path refusal stops the turn; other problems
@@ -541,28 +587,25 @@ pub async fn ensure(
         // A previous supervisor turn may have left refs, indexes or worktree registrations behind.
         // Only this repository's real .git directory is adopted, never a mirror or an external gitdir.
         crate::isolation::adopt(&[main.join(".git")]);
-        let tracked = upstream(main, &env).await?;
-        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
-        // own HEAD (a repository made on this computer with no remote yet).
-        let base = if tracked.is_empty() && private {
-            "HEAD".to_string()
-        } else {
-            tracked.clone()
-        };
-        if base.is_empty() {
-            return Ok((String::new(), NO_UPSTREAM.into()));
-        }
+
+        // Reuse a task's existing worktree before consulting the bot checkout's upstream. The base checkout's
+        // current branch can change independently between turns; that must not strand a valid task worktree after a
+        // runner restart. Its own upstream is the authoritative target for subsequent task-lane syncs.
         if path.join(".git").exists() {
-            let mine = g(
+            let worktree = g(
                 path,
                 &env,
                 &["rev-parse", "--path-format=absolute", "--git-common-dir"],
                 15,
             )
-            .await?
-            .stdout
-            .trim()
-            .to_string();
+            .await?;
+            if !worktree.ok() {
+                return Ok((
+                    String::new(),
+                    format!("can't read the task's worktree: {}", git_reason(&worktree)),
+                ));
+            }
+            let mine = worktree.stdout.trim().to_string();
             let same = !common.is_empty()
                 && Path::new(&mine).canonicalize().ok() == Path::new(&common).canonicalize().ok();
             if !same {
@@ -575,7 +618,24 @@ pub async fn ensure(
                 ));
             }
             crate::isolation::adopt(&[path.to_path_buf()]);
+            let tracked = upstream_or_none(path, &env).await?;
             return Ok((tracked, String::new()));
+        }
+
+        let tracked = if private {
+            upstream_or_none(main, &env).await?
+        } else {
+            upstream(main, &env).await?
+        };
+        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
+        // own HEAD (a repository made on this computer with no remote yet).
+        let base = if tracked.is_empty() && private {
+            "HEAD".to_string()
+        } else {
+            tracked.clone()
+        };
+        if base.is_empty() {
+            return Ok((String::new(), NO_UPSTREAM.into()));
         }
         if path.exists()
             && std::fs::read_dir(path)
@@ -708,15 +768,17 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
                 reset.extend(held.iter().map(String::as_str));
                 g(path, &env, &reset, 15).await?;
             }
-            if !g(path, &env, &["diff", "--cached", "--quiet"], 15)
-                .await?
-                .ok()
-            {
+            // The memory commit takes only the memory folders, never what else the bot had staged (a deletion of
+            // AGENT.md, say): a pathspec limits both the check and the commit, and a held path stays out of it.
+            let mut scope: Vec<String> = folders.iter().map(|f| f.to_string()).collect();
+            scope.extend(held.iter().map(|h| format!(":(exclude,literal){h}")));
+            let mut staged: Vec<&str> = vec!["diff", "--cached", "--quiet", "--"];
+            staged.extend(scope.iter().map(String::as_str));
+            if !g(path, &env, &staged, 15).await?.ok() {
                 let message = format!("Memory from run {aid}\n\nTico-Run: {aid}");
-                if !g(path, &env, &["commit", "-q", "-m", &message], 15)
-                    .await?
-                    .ok()
-                {
+                let mut commit: Vec<&str> = vec!["commit", "-q", "-m", &message, "--"];
+                commit.extend(scope.iter().map(String::as_str));
+                if !g(path, &env, &commit, 15).await?.ok() {
                     return Ok("the memory commit failed".into());
                 }
             }
@@ -767,7 +829,10 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
             .map(|a| crate::gitcred::shell_quote(a))
             .collect::<Vec<_>>()
             .join(" ");
-        let stashed = !g(
+        // A rebase autostashes a dirty tree, and git restores that stash without its index: a staged version would
+        // come back as the working tree's. So with any change left in the tree, the commits wait for the next turn
+        // (or the push's catch-up merge), as they do for a merge.
+        if !g(
             path,
             &env,
             &["status", "--porcelain", "--untracked-files=no"],
@@ -776,12 +841,11 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
         .await?
         .stdout
         .trim()
-        .is_empty();
-        let mut rebase = vec!["rebase", "--quiet"];
-        if stashed {
-            rebase.push("--autostash");
+        .is_empty()
+        {
+            return Ok(String::new());
         }
-        rebase.extend(["--exec", &stamp, "@{u}"]);
+        let rebase = ["rebase", "--quiet", "--exec", &stamp, "@{u}"];
         if g(path, &env, &rebase, timeout).await?.ok() {
             return Ok(String::new());
         }
@@ -1062,13 +1126,25 @@ pub async fn catch_up(path: &Path, turn: &Env) -> String {
         let up = Some(g(path, &env, &["rev-parse", "--abbrev-ref", "@{u}"], 15).await?.stdout.trim().to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| "its upstream".into());
         let behind = Some(g(path, &env, &["rev-list", "--count", "HEAD..@{u}"], 15).await?.stdout.trim().to_string()).filter(|b| !b.is_empty()).unwrap_or_else(|| "some".into());
         let missing = format!("{up} has {behind} commits this checkout doesn't");
-        if !dirty.stdout.trim().is_empty() {
-            return Ok(format!("{missing}, and uncommitted changes kept the runner from rebasing; in {}, commit them, then `git pull --rebase` and push", path.display()));
+        // Staged leftovers outside the memory folders hold the push, on purpose: a staged change is how the bot's wipe
+        // got committed, so the runner never merges over one. The refusal names the paths, so the bot and its manager
+        // can see why the push waits.
+        let staged = g(path, &env, &["diff", "--cached", "--name-only", "--", ".", ":(exclude)memory", ":(exclude)knowledge"], 15).await?;
+        let staged: Vec<&str> = staged.stdout.lines().filter(|l| !l.is_empty()).collect();
+        if !staged.is_empty() {
+            let mut shown = staged.iter().take(3).copied().collect::<Vec<_>>().join(", ");
+            if staged.len() > 3 {
+                shown.push_str(&format!(" and {} more", staged.len() - 3));
+            }
+            return Ok(format!("{missing}, and staged changes ({shown}) hold the push; in {}, commit or unstage them, then push", path.display()));
         }
-        if !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
+        // A dirty tree gets a plain merge, never a rebase or an autostash (which git restores without its index).
+        // git refuses that merge only when it would overwrite a local change, and then nothing is touched; an ignored
+        // local file that the upstream now tracks is refused too, never replaced.
+        if !dirty.stdout.trim().is_empty() || !g(path, &env, &["rev-list", "--merges", "@{u}..HEAD"], 15).await?.stdout.trim().is_empty() {
             step = "merge";
         }
-        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
+        let args: &[&str] = if step == "merge" { &["merge", "--no-edit", "--quiet", "--no-overwrite-ignore", "@{u}"] } else { &["rebase", "--quiet", "@{u}"] };
         let done = g(path, &env, args, 45).await?;
         if done.ok() {
             return Ok(String::new());
@@ -1385,7 +1461,7 @@ impl Lanes {
     }
 
     /// The checkout if it is free and no person waits for it (a task turn's refresh).
-    fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
+    pub fn try_checkout(&self, bot: &str) -> Option<OwnedMutexGuard<()>> {
         if self.person_waiting(bot) {
             return None;
         }
@@ -1742,6 +1818,14 @@ impl Runner {
                     }
                     (tracked, problem) = self.task_worktree(place, &session, attempt, env).await?;
                 }
+            }
+            if problem.starts_with(UPSTREAM_LOOKUP_FAILED) {
+                // Never in the bot's checkout on a guess: with an upstream it can't read, the checkout is not known to
+                // be one a task may share.
+                return Err(format!(
+                    "{problem}, so task {} did not run in the bot's shared checkout",
+                    place.task
+                ));
             }
             if !problem.is_empty() && crate::continuity::memory_pass(&attempt["config"]) {
                 // A memory pass never runs in the bot's own checkout: its edits there would reach main (criterion 24).

@@ -28,7 +28,7 @@ never:
   - "Treat a comment about harassment, safety or discrimination as a theme; it goes to the named human the same day"
 prerequisites:
   - tool: hub
-    why: "Start dates from the roster (`hub team show`) make the milestones calendar; survey exports arrive as files on tasks."
+    why: "Start dates from the roster (`tico team show`) make the milestones calendar; survey exports arrive as files on tasks."
     required: true
   - tool: chat
     why: "Optional. A read-only culture or announcements channel shows what recognition already happens and what people talk about."

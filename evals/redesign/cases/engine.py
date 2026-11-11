@@ -365,7 +365,7 @@ def s24_steps(org, f):
         trigger=TO_DANA,
         steps=[
             {"id": "gate", "type": "filter", "enabled": True, "rules": []},
-            {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "level": "low", "out": "d1"},
+            {"id": "rank", "type": "decide", "enabled": False, "questions": BUCKET, "out": "d1"},
             {"id": "draft", "type": "llm", "enabled": False, "as": CLAUDE_REF, "prompt": "Draft a reply", "out": "txt"},
             note("note", "ran"),
         ],
@@ -620,7 +620,7 @@ def versions_recorded(f):
     setup(f, "auto", "edit", "versions")
     vs = [v for v in rows(body(f, "versions")) if v.get("n") in (1, 2)]
     ns = sorted(v["n"] for v in vs)
-    ok = ns == [1, 2] and all(v.get("actor") and v.get("at") for v in vs)
+    ok = ns == [1, 2] and all(v.get("actor") and v.get("created_at") for v in vs)
     return ok, f"versions {ns}, each with actor and time"
 
 

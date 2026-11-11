@@ -8,7 +8,7 @@ When to use: a talk track or objection answer is proposed as the team standard, 
 
 Steps:
 1. Name the talk track or answer, and the objection or moment it answers, in one line.
-2. Find the calls where it was used: `hub meeting search` on the objection's words, and the notes on those deals. List each call by date.
+2. Find the calls where it was used: `tico meeting search` on the objection's words, and the notes on those deals. List each call by date.
 3. For each call, record what the buyer said next: moved on, raised the objection again, or went quiet. Quote the buyer where the record has their words.
 4. Count the outcomes across the calls checked. Three calls is an anecdote; say so.
 5. Mark the answer "not yet confirmed by a call" until the team's own calls show a consistent buyer response. Do not state a success rate from fewer calls than you can list.

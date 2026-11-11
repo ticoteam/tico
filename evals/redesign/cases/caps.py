@@ -117,7 +117,7 @@ def s1_steps(org, f):
         "Rank · engineering-lead",
         LEAD_REF,
         trigger={"type": "task_received", "to": LEAD_REF},
-        steps=[{"id": "rank", "type": "decide", "enabled": True, "set": "task-rank@1", "level": "low", "out": "d1"}],
+        steps=[{"id": "rank", "type": "decide", "enabled": True, "set": "task-rank@1", "out": "d1"}],
     )
     org.step(f, "sent", send, org, CLAUDE, LEAD_ID, "Cap one")
     org.step(f, "runs", lambda: org.api("get", f"/api/v2/automations/{auto_id(f, 'auto')}/runs", wave=W3))

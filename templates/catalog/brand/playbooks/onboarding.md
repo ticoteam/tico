@@ -8,11 +8,11 @@ of answering plus 30 minutes for the look and real pieces; they can stop at any 
 
 ## 1. Read before you ask
 
-    hub task show <id>
-    hub brand show
-    hub strategy show
-    hub doc search "brand"
-    hub doc search "style guide"
+    tico task show <id>
+    tico brand show
+    tico strategy show
+    tico doc search "brand"
+    tico doc search "style guide"
 
 Read any guide you find, and the team's home page. Do not ask what these already say.
 
@@ -30,22 +30,22 @@ finished guide, the skill still runs, but Stage 0 pre-fills from it and the ques
 
 ## 4. Hand it over
 
-As in the skill's **In Tico** section: `reports/brand-book.md` published with `hub file publish`, the Brand card
-proposed with `hub proposal create --kind brand_draft`, a strategy change proposed if the book changed the
-positioning, and one `hub task question` per needs-teammate item. Tell the owner in three lines.
+As in the skill's **In Tico** section: `reports/brand-book.md` published with `tico file publish`, the Brand card
+proposed with `tico proposal create --kind brand_draft`, a strategy change proposed if the book changed the
+positioning, and one `tico task ask` per needs-teammate item. Tell the owner in three lines.
 
 ## 5. Check the routine
 
-Setting you up switched your monthly audit on. Check it with `hub automation list` (if it shows off,
-`hub automation update <id> --enable`) and tell the owner in one line: "I will audit what went public on the 1st of
+Setting you up switched your monthly audit on. Check it with `tico automation list` (if it shows off,
+`tico automation update <id> --enable`) and tell the owner in one line: "I will audit what went public on the 1st of
 each month, against the brand card." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule
-or to leave it off, adjust the routine to match (`hub automation update <id>`, with `--disable` to turn it off).
+or to leave it off, adjust the routine to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done and clears your "Needs setup" mark. Run it once the book is handed over,
 not before. If the owner stops partway and says to finish later, leave setup open: the mark reminds them.

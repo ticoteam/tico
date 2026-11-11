@@ -19,12 +19,12 @@ ORDER = ("founder", "support", "sales", "blank")
 # template's bots in chart order by id, the first template's before the next's. The work goes to the first of them that
 # can take it (_pick), so a bot that cannot is skipped, not failed.
 ROLES = {
-    "legal_lead": ("general-counsel",),
-    "engineering_manager": ("engineering-manager", "engineering-lead"),
-    "finance_lead": ("finance-lead",),
-    "marketing_lead": ("marketing-lead",),
-    "support_lead": ("support-lead",),
-    "sales_lead": ("sales-lead",),
+    "legal_lead": ("general-counsel", "legal-owner"),
+    "engineering_manager": ("engineering-manager", "engineering-lead", "engineering-team-manager"),
+    "finance_lead": ("finance-lead", "bookkeeper"),
+    "marketing_lead": ("marketing-lead", "growth-team-manager"),
+    "support_lead": ("support-lead", "support-owner", "success-team-manager"),
+    "sales_lead": ("sales-lead", "growth-team-manager"),
 }
 # The actions that act as someone: a task is opened as the owner's actor, a reply is drafted as it (automation_actions
 # _create_task and _actor). A group with no lead to act as cannot run them.
@@ -268,7 +268,6 @@ def _as_sort(step, tpl):
         {
             "id": step["id"],
             "type": "decide",
-            "level": "high",
             "out": out,
             "questions": {
                 "route": {

@@ -140,7 +140,6 @@
         "type": "decide",
         "enabled": true,
         "out": "d1",
-        "level": "medium",
         "questions": {
           "q1": {
             "type": "noul",
@@ -201,7 +200,6 @@
         "type": "decide",
         "enabled": true,
         "out": "d2",
-        "level": "high",
         "questions": {
           "to": {
             "type": "choice",
@@ -360,7 +358,6 @@
         "type": "decide",
         "enabled": true,
         "out": "d1",
-        "level": "high",
         "questions": {
           "to": {
             "type": "choice",

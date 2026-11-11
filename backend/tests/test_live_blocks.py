@@ -4,19 +4,20 @@ address names, from the same visibility as Needs you and the task page. Nothing 
 import pytest
 
 from backend import visuals as V
-from backend.tests.test_api import api, as_member, headers, post, restrict  # noqa: F401  (fixtures)
-from backend.tests.test_files import turn
+from backend.tests.helpers.api import as_member, headers, post, restrict  # noqa: F401  (fixtures)
+from backend.tests.helpers.files import turn
 
 VISUALS = "http://visuals.localhost:9001"
 ON_VISUALS = {"host": "visuals.localhost:9001"}
 
 
 def wait_on(api, tid, who):
-    """The task's bot waits on `who`: a question task of theirs under it (derived)."""
+    """The task's bot waits on `who`: it asks them a question on the task."""
     from backend.store import H
 
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:ops", tid, status="waiting", waiting_on=who, note="Renew it for a year? I'll pay after.")
+        seen = H.task(c, tid)["version"]
+        H.task_ask(c, "bot:ops", tid, who, "Renew it for a year? I'll pay after.", seen_version=seen)
 
 
 def page(api, attempt, task, name, data):

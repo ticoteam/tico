@@ -20,7 +20,7 @@ from backend.finance.store import ledger as SL
 from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     open_views,
     ACME_ADDRESS,
     AT,
@@ -36,9 +36,9 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-
-HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.finance_payments import HOURS, _checking, _debit, _lost_send, _payee, _reconcile
+from backend.tests.helpers.finance_oks import click, give, send_back, the_ok
 
 
 def _budget_and_card(store, amount=30_000, card=20_000, holder="human:eve"):
@@ -178,33 +178,6 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books, monkeyp
         assert _card(c, eve)["status"] == "frozen"  # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
-
-
-def _payee(store, fake, *, at=AT):
-    """Acme Supplies by ACH, synced to Mercury."""
-    with store.transaction() as c:
-        made = act(
-            c,
-            OWNER,
-            "recipient_add",
-            {
-                "name": "Acme Supplies",
-                "method": "ach",
-                "account_number": "000099998888",
-                "routing_number": "000000000",
-                "address": ACME_ADDRESS,
-            },
-        )
-        assert made.status == "committed", made
-    sync_once(store, fake, at)
-    with store.read() as c:
-        payload = c.execute("SELECT payload FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
-        assert "000099998888" not in payload  # erased once Mercury has it
-    return str(made.result["recipient_id"])
-
-
-def _checking(c):
-    return str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
 
 
 def _holds(c, source="payment"):
@@ -415,7 +388,7 @@ def _approved_payment(books, fake, who, obligation):
             },
         )
         assert asked.status == "needs_approval" and asked.approval_id, asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         return str(done.result["payment_id"])
@@ -546,7 +519,7 @@ def test_a_queued_payment_whose_recipient_changes_is_asked_again_not_canceled_qu
         ).fetchall()
         assert len(waiting) == 1 and waiting[0][0], "asked again for the new details, not left canceled"
         approval = str(waiting[0][0])
-        H.approval_decide(c, "human:ben", approval, "approved")
+        give(c, "human:ben", approval)
         decided = FA.approval_decided(c, approval, AT)
         assert decided.status == "committed", decided
         new_pid = str(decided.result["payment_id"])
@@ -626,7 +599,7 @@ def test_a_pending_approval_is_void_once_its_recipient_details_change(books):
         assert asked.status == "needs_approval" and asked.approval_id, asked
         first = str(asked.approval_id)
         _replace_payee(c, rid)
-        H.approval_decide(c, OWNER, first, "approved")
+        give(c, OWNER, first)
         again = FA.approval_decided(c, first, AT)
         assert again.status == "needs_approval" and again.approval_id and again.approval_id != first, again
         assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
@@ -664,7 +637,7 @@ def test_an_approval_that_fails_verification_for_another_reason_is_asked_again_n
         )
         assert asked.status == "needs_approval" and asked.approval_id, asked
         first = str(asked.approval_id)
-        H.approval_decide(c, OWNER, first, "approved")
+        give(c, OWNER, first)
         monkeypatch.setattr(
             FA, "verify", lambda row, appr: "it was decided by someone other than the person it was sent to"
         )
@@ -1589,7 +1562,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
     assert dry["status"] == asked["status"] == "needs_approval" and again["action_id"] == asked["action_id"]
     with store.transaction() as c:
         assert _sealed_rows(c) == 1
-        H.approval_decide(c, OWNER, asked["approval_id"], "approved")
+        give(c, OWNER, asked["approval_id"])
         assert FA.approval_decided(c, asked["approval_id"], AT).status == "committed"
     sync_once(store, fake)
     sent = fake.sent("create_recipient")[0]["electronicRoutingInfo"]
@@ -1599,7 +1572,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
         get(api, f"finance/actions/{asked['action_id']}", token="ben-test"),
         get(api, "finance/payments"),
         get(api, "finance/rules"),
-        get(api, f"approvals/{asked['approval_id']}"),
+        the_ok(api, asked["approval_id"]),
     ]
     with store.read() as c:
         assert _plaintext_anywhere(c) == [] and _sealed_rows(c) == 1
@@ -1639,7 +1612,7 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
     asked = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test")
     with store.transaction() as c:
         assert _sealed_rows(c) == 1
-        H.approval_decide(c, OWNER, asked["approval_id"], "declined")
+        send_back(c, OWNER, asked["approval_id"])
         assert FA.approval_decided(c, asked["approval_id"], AT).status == "denied"
         assert _sealed_rows(c) == 0 and _plaintext_anywhere(c) == []
     assert fake.sent("create_recipient") == []
@@ -1683,7 +1656,7 @@ def test_a_payment_past_an_ask_or_hold_payment_limit_asks_and_its_approval_pays_
         asked = act(c, "human:ben", "payment_create", body)
         assert (asked.status, asked.rule) == ("needs_approval", f"budget:{bid}") and asked.approval_id, asked
         assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
@@ -1733,7 +1706,7 @@ def test_a_payment_past_an_ask_limit_that_is_denied_is_never_placed_or_sent(book
         }
         asked = act(c, "human:ben", "payment_create", body)
         assert asked.status == "needs_approval", asked
-        H.approval_decide(c, OWNER, asked.approval_id, "declined")
+        send_back(c, OWNER, asked.approval_id)
         assert FA.approval_decided(c, asked.approval_id, AT).status == "denied"
         assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
         assert _holds(c) == []
@@ -1759,7 +1732,7 @@ def test_a_bot_payment_past_an_ask_limit_asks_a_finance_admin_and_pays_once_appr
         assert (dry.status, dry.rule, dry.approver) == ("needs_approval", f"budget:{bid}", OWNER), dry
         asked = act(c, "bot:seller", "payment_create", body)
         assert (asked.status, asked.rule) == ("needs_approval", f"budget:{bid}"), asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
@@ -1814,7 +1787,7 @@ def test_an_approval_of_changed_payee_details_covers_the_new_recipient_rule_for_
     assert fake.sent("request_send_money") == []
     with books.transaction() as c:
         approval = str(c.execute("SELECT approval_id FROM fin_actions WHERE status='needs_approval'").fetchone()[0])
-        H.approval_decide(c, "human:ben", approval, "approved")
+        give(c, "human:ben", approval)
         decided = FA.approval_decided(c, approval, AT)
         assert decided.status == "committed", decided
     sync_once(books, fake, HOURS[3])
@@ -1847,7 +1820,7 @@ def test_a_payment_past_a_budget_that_also_asks_for_its_new_recipient_names_both
         assert asked.status == "needs_approval", asked
         what = json.loads(c.execute("SELECT result FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0])
         assert "over the Software budget" in what["what"] and "New recipient" in what["what"], what
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
@@ -1873,13 +1846,13 @@ def test_a_payment_that_fits_when_asked_but_not_when_approved_is_asked_again_for
         asked = act(c, "human:ben", "payment_create", body)
         assert (asked.status, asked.rule) == ("needs_approval", "rule:new-recipient"), asked
         bid = _over_budget(c, "ask", new_recipient=True)
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         again = FA.approval_decided(c, asked.approval_id, AT)
         assert again.status == "needs_approval" and again.approval_id != asked.approval_id, again
         rule = c.execute("SELECT rule_id FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
         assert rule == f"budget:{bid}"
         assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
-        H.approval_decide(c, OWNER, again.approval_id, "approved")
+        give(c, OWNER, again.approval_id)
         done = FA.approval_decided(c, again.approval_id, AT)
         assert done.status == "committed", done
         assert _hold_of(c, done.result["payment_id"]) == (15_000, "held")
@@ -1913,7 +1886,7 @@ def test_a_payment_approved_for_its_recipient_whose_budget_goes_over_before_the_
         }
         asked = act(c, "human:ben", "payment_create", body)
         assert (asked.status, asked.rule) == ("needs_approval", "rule:new-recipient"), asked
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done.status == "committed", done
         pid = str(done.result["payment_id"])
@@ -2022,55 +1995,6 @@ def _lines(c, source="bank"):
     )
 
 
-def _lost_send(books, fake, at=HOURS[1]):
-    """A 500.00 payment on 6100 whose send Mercury accepted but whose answer never came back: unknown."""
-    rid = _payee(books, fake)
-    with books.transaction() as c:
-        made = act(
-            c,
-            OWNER,
-            "payment_create",
-            {
-                "recipient_id": rid,
-                "amount": 50_000,
-                "account_id": account(c, "6100"),
-                "tags": {"team": "eng"},
-                "money_account_id": _checking(c),
-            },
-        )
-        pid = str(made.result["payment_id"])
-    fake.queue["request_send_money"] = [Answer(None, {})]
-    sync_once(books, fake, at)
-    with books.read() as c:
-        key = c.execute("SELECT idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]
-    return pid, key
-
-
-def _debit(fake, txn_id, request_id, event_id, **extra):
-    fake.txns[txn_id] = {
-        **MERCURY["txn_bank_fee"],
-        "id": txn_id,
-        "amount": -500.0,
-        "kind": "outgoingPayment",
-        "counterpartyName": "Acme Supplies",
-        "requestId": request_id,
-        "postedAt": "2026-10-16T10:00:00Z",
-        **extra,
-    }
-    fake.events_list.append(
-        {
-            "id": event_id,
-            "resourceType": "transaction",
-            "resourceId": txn_id,
-            "operationType": "create",
-            "resourceVersion": 1,
-        }
-    )
-    # Mercury's balance moves with the debit it posts: the books carry the row, so the balance they reconcile to does too.
-    recorded = next(a["currentBalance"] for a in MERCURY["accounts"]["accounts"] if a["id"] == "acct-chk")
-    fake.balances["acct-chk"] = fake.balances.get("acct-chk", recorded) - 500.0
-
-
 def test_a_lost_send_whose_debit_posts_before_it_is_found_settles_on_its_line_once(books):
     """PR review P1-a: an accepted send whose answer was lost, its request approved and its debit posted before the
     recovery found it. The debit first posts as an unknown spend (6900); once found, it posts again as the payment
@@ -2160,18 +2084,6 @@ def test_a_debit_returned_before_its_lost_payment_is_found_ends_the_payment(book
         ) == ("returned", "req-9")
         assert _holds(c) == [(50_000, "released")]
         assert _net(c) == {}
-
-
-def _reconcile(c, provider_id):
-    """Reconcile checking through Oct 16 with this feed row cleared; its id."""
-    fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()[0])
-    args = {"money_account_id": _checking(c), "statement_end": "2026-10-16", "cleared": [fid]}
-    off = act(c, OWNER, "reconcile", {**args, "statement_balance": 0})
-    if off.result["status"] != "done":
-        c.execute("DELETE FROM fin_reconciliations")
-        done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
-        assert done.result["status"] == "done", done
-    return fid
 
 
 def test_a_reconciled_debit_on_the_payments_line_under_another_vendor_still_moves_to_its_vendor(books):
@@ -2750,7 +2662,7 @@ def test_approving_a_finance_action_commits_synced(api, monkeypatch):
         return real(c, *args, **kwargs)
 
     monkeypatch.setattr(FA, "approval_decided", watched)
-    post(api, f"approvals/{asked['approval_id']}", {"decision": "approved"}, key="approve-sync")
+    click(api, asked["approval_id"], key="approve-sync")
     assert seen == [2], seen
 
 

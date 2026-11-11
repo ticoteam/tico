@@ -6,10 +6,10 @@ import pytest
 
 from backend import task_privacy as privacy
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_task_readers import dry_run, refused, run_on, task
-from backend.tests.test_task_sealed_child import ROUTE, carry, run_for, sees
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.task_readers import dry_run, refused, run_on, task
+from backend.tests.helpers.task_sealed_child import ROUTE, carry, run_for, sees
+from backend.tests.helpers.tasks_board import bot_token
 
 REPAIR = {
     "title": "Check the chat setting before an upload is stored",
@@ -26,7 +26,7 @@ FILE = "file-" + "0a1b2c3d4e5f6a7b8c9d0e1f"
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -37,7 +37,7 @@ def filed(parent=None, owner="finance", **extra):
         "owner": owner,
         **REPAIR,
         "from_private": True,
-        **({"relations": [{"task": parent, "kind": "parent"}]} if parent else {}),
+        **({"parent": parent} if parent else {}),
         **extra,
     }
 
@@ -115,9 +115,11 @@ def test_a_reader_of_the_new_task_sees_its_parent_only_as_a_private_task(api):
                 "private": True,
             }
         ]
-        assert row["id"] not in json.dumps(shown["relations"])
+        # Nowhere in the task is the private task's id: not under relations, not as its parent_id.
+        assert shown["parent_id"] is None and row["id"] not in json.dumps(shown)
         listed = get(api, "tasks?owner=bot:finance", token)
         rows = listed.get("tasks") or listed.get("items") or []
+        assert row["id"] not in json.dumps(listed)
         assert rows and all(
             r["relations"].get("parent", [{}])[0].get("title") == "a private task"
             for r in rows
@@ -125,7 +127,7 @@ def test_a_reader_of_the_new_task_sees_its_parent_only_as_a_private_task(api):
         ), listed
     # The private task's own readers see the real parent.
     mine = get(api, "tasks/" + made["id"], attempt["token"])["task"]
-    assert mine["relations"]["parent"][0]["id"] == row["id"]
+    assert mine["relations"]["parent"][0]["id"] == row["id"] and mine["parent_id"] == row["id"]
 
 
 def test_history_says_on_both_tasks_what_was_filed_without_the_private_title(api):
@@ -146,29 +148,33 @@ def test_history_says_on_both_tasks_what_was_filed_without_the_private_title(api
 
 
 def test_done_tells_the_private_tasks_owner_and_its_wait_clears(api):
+    from backend.waiting_on import waiting_on
+
+    def turns(c):
+        return [
+            r
+            for r in (
+                json.loads(m[0] or "{}")
+                for m in c.execute(
+                    "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'"
+                )
+            )
+            if r.get("task") == row["id"] and r.get("wake") == "task_turn" and r.get("news") != "assignment"
+        ]
+
     row = private_work(api)
     attempt = run_on(api)
     made = post(api, "tasks", filed(row["id"]), attempt["token"])
     with api.app.state.store.read() as c:
-        assert (H.wait_detail(c, H.task(c, row["id"])) or {}).get("on") == "bot:finance"
+        assert [(w.state, w.who) for w in waiting_on(c, row["id"])][:1] == [("tasks", made["id"])]
+        before = len(turns(c))
     finance = bot_token(api, "finance")
     current = get(api, "tasks/" + made["id"], finance)["task"]
-    post(
-        api,
-        "tasks/" + made["id"],
-        {"version": current["version"], "status": "done", "note": "Fixed, test added."},
-        finance,
-    )
+    post(api, "tasks/" + made["id"] + "/done", {"version": current["version"], "note": "Fixed, test added."}, finance)
     with api.app.state.store.read() as c:
-        assert H.wait_detail(c, H.task(c, row["id"])) is None
-        jobs = [
-            json.loads(r[0] or "{}")
-            for r in c.execute("SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops'")
-        ]
-    # The company task's result reaches the private task's owner on it, as any awaited subtask's does.
-    assert any(
-        r.get("rule") == "awaited_subtask" and r["task"] == row["id"] and r.get("subtask") == made["id"] for r in jobs
-    ), jobs
+        assert made["id"] not in {w.who for w in waiting_on(c, row["id"])}
+        # The company task's end wakes the private task's owner on it (its turn again), as any sub-task's end does.
+        assert len(turns(c)) == before + 1, turns(c)
 
 
 @pytest.mark.parametrize(
@@ -287,7 +293,7 @@ def test_outside_a_private_run_the_route_is_refused(api):
     "change,status,words",
     [
         ({"private": True}, 422, "A task from private work is company-visible: leave out --private"),
-        ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `hub task question`"),
+        ({"owner": "human:cara"}, 403, "A task from private work is for a bot: ask a person with `tico task ask`"),
         (
             "company parent",
             403,
@@ -305,9 +311,7 @@ def test_the_route_refuses_a_private_task_a_person_a_company_parent_and_a_privat
             shared = H.task_create(c, "bot:cpo", "Upload fixes", "Company work.", "bot:ops", private=False, lint=False)
         body = filed(shared["id"])
     elif change == "related":
-        body = filed(
-            row["id"], relations=[{"task": row["id"], "kind": "parent"}, {"task": other["id"], "kind": "related"}]
-        )
+        body = filed(row["id"], relations=[{"task": other["id"], "kind": "related"}])
     else:
         body = filed(row["id"], **change)
     r = api.post("/api/v2/tasks", json=body, headers=headers(attempt["token"]))
@@ -327,8 +331,6 @@ EVERY_TEXT = [
     ({"acceptance_criteria": ["Done when " + COPIED]}, "copies 12 or more words"),
     ({"labels": [SECRET.lower()]}, "secret-shaped"),
     ({"links": ["https://ci.acme.example/run?token=" + SECRET]}, "secret-shaped"),
-    ({"change_paths": ["backend/" + COPIED.replace(" ", "_") + ".py"]}, "copies 12 or more words"),
-    ({"blocker": {"repo": "acme/web", "status": 403, "endpoint": SECRET}}, "secret-shaped"),
     ({"public_title": "Uploads: " + SECRET}, "secret-shaped"),
     ({"public_summary": "Background: " + COPIED}, "copies 12 or more words"),
 ]

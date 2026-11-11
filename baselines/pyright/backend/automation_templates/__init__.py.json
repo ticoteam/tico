@@ -1,0 +1,22 @@
+{
+    "files": {
+        "./backend/automation_templates/__init__.py": [
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 39,
+                    "endColumn": 42,
+                    "lineCount": 1
+                }
+            },
+            {
+                "code": "reportOptionalSubscript",
+                "range": {
+                    "startColumn": 94,
+                    "endColumn": 97,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

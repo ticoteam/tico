@@ -8,9 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       models:
-        description: Comma-separated models (haiku-5.5, jev, sonnet)
+        description: Comma-separated models (jev is the only judge model)
         type: string
-        default: haiku-5.5,jev
+        default: jev
 
 permissions:
   contents: read

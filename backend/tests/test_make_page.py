@@ -6,12 +6,13 @@ import pytest
 
 from backend import cards
 from backend.store import H, encode
-from backend.tests.test_api import api, as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
-from backend.tests.test_assistant import assistant_turn, say
-from backend.tests.test_files import turn
-from backend.tests.test_meeting_items import record
-from backend.tests.test_meeting_task_links import link, task
-from backend.tests.test_pages import HTML
+from backend.tests.helpers.api import as_member, assign, get, headers, post, ready, restrict, runner  # noqa: F401
+from backend.tests.helpers.assistant import assistant_turn, say
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.meeting_items import record
+from backend.tests.helpers.meeting_task_links import link, task
+from backend.tests.helpers.pages import HTML
+from backend.tests.helpers.make_page import start
 
 
 def page(api, turn, **fields):
@@ -22,20 +23,6 @@ def page(api, turn, **fields):
         content=data,
         headers={**headers(turn["token"]), "Content-Type": "text/html"},
     )
-
-
-def start(api, tid, person="ben-test", key=None, machine=None):
-    if machine is None:
-        machine = runner(api)
-        assign(api, machine, "coo")
-        ready(api, machine, ["coo"], capabilities=["make_page"])
-    sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
-    attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"], key="claim:" + sent["message"]["id"])[
-        "attempt"
-    ]
-    assert attempt["message"]["id"] == sent["message"]["id"]
-    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "make-page-test"}, machine["token"])
-    return machine, attempt, sent["message"]
 
 
 def status(api, tid, person="ben-test"):
@@ -185,7 +172,7 @@ def test_make_page_files_and_pins_clean_html_as_the_person_with_authenticated_at
 
 
 def test_make_page_output_uses_page_audience_and_restores_after_clearing_it(api):
-    from backend.tests.test_page_audience import edit
+    from backend.tests.helpers.page_audience import edit
 
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
@@ -290,7 +277,8 @@ def test_task_access_checks_apply_to_the_route_status_and_publishing(api):
     _, attempt, _ = start(api, t["id"], "ben-test")
     post(api, f"tasks/{t['id']}/make-page", {"text": "Again"}, attempt["token"], expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET private=1,requester_id='human:cara',owner_id='human:cara' WHERE id=?", (t["id"],))
+        H.task_reassign(c, "human:ana", t["id"], "human:cara", "Cara takes it.")
+        c.execute("UPDATE tasks SET private=1,requester_id='human:cara' WHERE id=?", (t["id"],))
     refused = page(api, attempt, task=t["id"])
     assert refused.status_code in (403, 404), refused.text
 
@@ -338,14 +326,17 @@ def test_make_page_is_queued_separately_from_an_already_running_assistant_turn(a
 
 
 def test_mcp_offers_page_publish_to_the_assistant_and_keeps_the_person_and_attempt(api):
-    from backend.tests.test_mcp import call, rpc
+    from backend.tests.helpers.mcp import call, rpc
 
     t = task(api, private=False)
     _, attempt, _ = start(api, t["id"])
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
-    assert "hub_page_publish" in {tool["name"] for tool in tools}
+    assert "tico_page_publish" in {tool["name"] for tool in tools}
     error, result = call(
-        api, "hub_page_publish", {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]}, token=attempt["token"]
+        api,
+        "tico_page_publish",
+        {"name": "alerts.html", "text": HTML.decode(), "task": t["id"]},
+        token=attempt["token"],
     )
     assert not error, result
     assert result["page"]["updated_by"] == "human:ben"
@@ -374,7 +365,7 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
             (H.new_id(), earlier["conversation_id"], H.now(), H.now()),
         )
         other = H.task_create(
-            c, "human:ana", "Private follow-up", "Private details", "bot:coo", next_run=True, private=True, lint=False
+            c, "human:ana", "Private follow-up", "Private details", "bot:coo", private=True, lint=False
         )
     machine, attempt, message = start(api, t["id"])
     assert [m["id"] for m in attempt["history"]] == [message["id"]]
@@ -387,7 +378,13 @@ def test_make_page_keeps_private_chat_history_and_other_queued_work_out_of_the_t
     say(api, "An unrelated private follow-up", "ben-test")
     assert post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"] == []
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT carried_by FROM tasks WHERE id=?", (other["id"],)).fetchone()[0] is None
+        # The private task's own turn stays queued for coo's next ordinary run, not in this one.
+        turns = c.execute(
+            "SELECT j.state, j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='coo' AND json_extract(m.refs,'$.task')=?",
+            (other["id"],),
+        ).fetchall()
+        assert turns and {tuple(r) for r in turns} == {("queued", None)}
         assert c.execute("SELECT settled_at FROM deferrals WHERE item=?", (earlier["id"],)).fetchone()[0] is None
 
 
@@ -417,7 +414,7 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
     # An unlinked source remains readable through ordinary tools, just like in any Assistant turn.
     get(api, "meetings/transcript?id=" + mid, token)
     assert api.get("/api/v2/files/" + fid, headers=headers(token)).status_code == 200
-    from backend.tests.test_page_audience import edit
+    from backend.tests.helpers.page_audience import edit
 
     edit(api, fid, {"people": ["ana"]}, token="ana-test")
     get(api, "pages/" + fid, token, expected=404)
@@ -430,8 +427,8 @@ def test_make_page_has_normal_reads_beyond_context_and_no_source_publish_recheck
 
 
 def test_make_page_keeps_normal_assistant_learning_and_tools(api):
-    from backend.tests.test_learned import learn
-    from backend.tests.test_mcp import rpc
+    from backend.tests.helpers.learned import learn
+    from backend.tests.helpers.mcp import rpc
 
     learn(api, "Use a calm page layout", token="ana-test")
     t = task(api, private=False)
@@ -439,7 +436,7 @@ def test_make_page_keeps_normal_assistant_learning_and_tools(api):
     assert "Use a calm page layout" in json.dumps(attempt["learned"])
     tools = rpc(api, "tools/list", token=attempt["token"])["result"]["tools"]
     names = {tool["name"] for tool in tools}
-    assert {"hub_page_publish", "hub_conversation_show", "hub_task_context"} <= names
+    assert {"tico_page_publish", "tico_conversation_show", "tico_task_context"} <= names
 
 
 def test_make_page_on_a_private_task_keeps_its_normal_task_audience(api):
@@ -587,7 +584,7 @@ def test_lost_private_make_page_claim_replays_the_lease_as_the_person_and_rechec
     refreshed = post(api, "jobs/claim", body, machine["token"], key)["attempt"]
     assert refreshed["id"] == claimed["id"] and refreshed["task_context"]["pages"] == []
     current = get(api, "tasks/" + t["id"])["task"]
-    post(api, "tasks/" + t["id"], {"version": current["version"], "owner": "human:cara"})
+    post(api, f"tasks/{t['id']}/owner", {"owner": "human:cara", "why": "Cara takes it.", "version": current["version"]})
     post(api, "jobs/claim", body, machine["token"], key, expected=403)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (claimed["job_id"],)).fetchone()[0] == 1

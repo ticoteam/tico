@@ -64,7 +64,7 @@ SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,59}$")
 VERB_RE = re.compile(r"^[a-z][a-z_-]{0,39}$")
 ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,99}$")
 # The names a bot's turn owns; a credential may not arrive under one (runner-rs/src/env.rs).
-# The HUB_ names the runner and the `hub` command set themselves. Other HUB_ names (a team's own HUB_BUCKET) are ordinary
+# The HUB_ names the runner and the `tico` command set themselves. Other HUB_ names (a team's own HUB_BUCKET) are ordinary
 # variables a bot may be granted.
 RUNNER_HUB_ENV = {
     "HUB_TOKEN",

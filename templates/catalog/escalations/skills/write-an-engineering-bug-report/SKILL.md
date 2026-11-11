@@ -8,7 +8,7 @@ When to use: when a case is a defect, or may be one, and engineering needs a rep
 
 Steps:
 1. Title: what breaks and where, in one line. "Waitlist emails do not send for one studio since 2026-09-24" beats "emails broken".
-2. Steps to reproduce from a known state: the account type, the screen, the exact action, in order. If you cannot reproduce it, say so, and ask the technical support engineer first with `hub task create --owner technical-support`.
+2. Steps to reproduce from a known state: the account type, the screen, the exact action, in order. If you cannot reproduce it, say so, and ask the technical support engineer first with `tico task create --owner technical-support`.
 3. Expected and actual result, one sentence each, with the exact message or code the customer saw.
 4. Environment: plan, app or browser version, region, and anything unusual about the account, with no personal details.
 5. Frequency and reach: how often it happens and how many customers or accounts it touches, from a count you can cite.

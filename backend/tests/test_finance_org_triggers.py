@@ -12,7 +12,7 @@ from backend.config import Settings
 from backend.finance.store import access as SA
 from backend.finance.store import tico
 from backend.store import Store
-from backend.tests.test_migrations import restore_config
+from backend.tests.helpers.migrations import restore_config, forget_from
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NAMES = {name for name, _, _ in tico.ORG_TRIGGERS}
@@ -57,7 +57,7 @@ def _upgraded_before_the_move(path):
             "INSERT INTO bot_config(bot,owner_id,config) VALUES('org-bot','ana',?)",
             (json.dumps({"model": "m", "team": "eng"}),),
         )
-        c.execute("DELETE FROM schema_migrations WHERE version >= '0070_bot_settings' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0070_bot_settings")
 
 
 def test_an_upgraded_install_gets_every_org_trigger_on_its_next_start(tmp_path):

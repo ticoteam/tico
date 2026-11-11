@@ -10,28 +10,10 @@ from datetime import datetime, timedelta, timezone
 
 from backend import blobs as B, file_library, market, pages as P
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (fixtures)
-from backend.tests.test_groups import send
-from backend.tests.test_files import publish, turn
-
-HTML = (
-    b"<html><head><title>Weekly</title><script>alert('x')</script></head><body><h1>Acme weekly review</h1>"
-    b"<p>Pipeline grew to <b>42 deals</b>.</p><img src='https://cdn.acme.example/x.png'></body></html>"
-)
-
-
-def page(api, attempt, name="weekly.html", data=HTML, **query):
-    r = api.post(
-        "/api/v2/pages",
-        params={"name": name, **query},
-        content=data,
-        headers={**headers(attempt["token"]), "Content-Type": "text/html"},
-    )
-    return r
-
-
-def read(api, fid, who):
-    return api.get("/api/v2/pages/" + fid, headers=headers(who))
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (fixtures)
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.pages import HTML, page, read
 
 
 def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_whoever_may_see_it(api):
@@ -291,7 +273,7 @@ ICON_SIZE = 16
 
 
 def icon_png(api):
-    from backend.tests.test_team_icon import image
+    from backend.tests.helpers.team_icon import image
 
     assert api.post("/api/v2/team/icon", content=image(), headers=headers()).status_code == 200
     return api.get("/api/v2/team/icon").content

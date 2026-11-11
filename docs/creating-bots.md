@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Brand Owner are Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Brand Owner are Built-in bots; they cannot be archived or deleted.
 
-The 104 role templates, in nine groups with a Leadership extra, are described in
+The 124 role templates, in eleven groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -64,11 +64,11 @@ Pause is a row at the bottom of the bot's **Settings** tab.
 1. Open the bot's page, then **Settings**, and click **Pause** in the **Pause this bot** row.
 2. To start the bot again, click **Unpause** in the same row.
 
-The control changes state after one click, without a confirmation, and the bot's header and its place in the team tree show a **Paused** badge until it is unpaused. There is no banner on the bot's page. For example, `hub bot pause support-helper` pauses Support helper; `hub bot resume support-helper` starts it again.
+The control changes state after one click, without a confirmation, and the bot's header and its place in the team tree show a **Paused** badge until it is unpaused. There is no banner on the bot's page. For example, `tico bot pause support-helper` pauses Support helper; `tico bot resume support-helper` starts it again.
 
 While paused, the bot will not start tasks, answer messages or run work from its Automations. A turn in progress is interrupted when the computer receives the pause. If the bot has open tasks assigned to it, the row links to them and says how many are waiting.
 
-When Tico has a pause record, the row shows who paused the bot and when, in UTC. If there is no record, it says **Paused**. The row uses the existing bot-management permissions: if you can see the bot but cannot manage it, you see the state without a button and a prompt to ask its operator to unpause it. The existing command-line controls remain available to people with their current permissions: `hub bot pause <bot>` and `hub bot resume <bot>`.
+When Tico has a pause record, the row shows who paused the bot and when, in UTC. If there is no record, it says **Paused**. The row uses the existing bot-management permissions: if you can see the bot but cannot manage it, you see the state without a button and a prompt to ask its operator to unpause it. The existing command-line controls remain available to people with their current permissions: `tico bot pause <bot>` and `tico bot resume <bot>`.
 
 A company pause for billing is separate from a bot pause. The row says so in one line that links to **Add credit** in **Settings > Billing**. While company billing is paused, bot-level controls are unavailable; the bot's own paused state remains separate.
 
@@ -110,8 +110,8 @@ has not picked up yet are canceled too, and unticking both stops all delivery. A
 everything it missed, once each and in order, over as many polls as it takes (up to 40 feed pages back; past that it
 starts from the newest 40 pages). Nothing is fetched while no bot subscribes; `TICO_UPDATE_CHECK=off`
 stops the fetching, and `TICO_TEMPLATE_FEED=off` leaves the template category without a feed (it then says so and
-sends nothing). From the command line: `hub bot update <slug> --subscribe-updates templates,tico` (or `none`), or
-`update_subscriptions` on `hub_bot_update`.
+sends nothing). From the command line: `tico bot update <slug> --subscribe-updates templates,tico` (or `none`), or
+`update_subscriptions` on `tico_bot_update`.
 
 ## Branches
 
@@ -120,11 +120,11 @@ and it runs on your computer and AI subscription. Lessons committed to the repos
 
 The original's owner turns on **Allow branches** in the bot editor, or asks BotOps to do it. It is off by default;
 new Software Architect and PR Reviewer templates allow branches. Existing bots keep their settings.
-BotOps uses `hub_bot_update(slug, shared=true)` (the current name of `hub_bot_set`), or `hub bot update <bot> --shared`.
+BotOps uses `tico_bot_update(slug, shared=true)`, or `tico bot update <bot> --shared`.
 `--no-shared` turns it off. This is separate from a **shared thread**, which is a thread everyone in it can read.
 
 On the original's page, choose **Make my branch** and one of your computers. Or use
-`hub bot branch <bot> [--computer <label-or-id>]` or the MCP tool `hub_bot_branch(bot, runner_id?)`.
+`tico bot branch <bot> [--computer <label-or-id>]` or the MCP tool `tico_bot_branch(bot, runner_id?)`.
 Without a computer the CLI and tool create a planned branch. The dialog offers **Create planned branch** when
 none of your computers can host it. It starts on the next computer you add; you can also repeat the CLI command
 with an existing eligible computer to activate it.
@@ -140,7 +140,7 @@ People without an active branch reach the original. Selecting another person's b
 Existing task threads keep their participants and history.
 
 A branch follows the original's model, harness, runtime, effort, Compact at, session mode and fallback. Its editor changes only its status and its **Profile**;
-change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`hub bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#subtasks-and-prs)).
+change the original to change its definition. Every task is its own provider session by default, and chat keeps its own; `session: task` also gives each chat conversation its own, and `session: bot` keeps one session for everything. A subtask someone else files under the bot's task continues that task's session (one the bot files for itself gets its own) unless `subtask_session: own` (`tico bot update <slug> --subtask-session own`) gives each its own ([Sessions](sessions.md), [Tasks](tasks.md#sub-tasks)).
 Routines run only on the original, including event routines. Archiving the original archives its branches, and restoring it restores
 those branches to their previous statuses with their work and computers preserved. Branches archived separately stay archived.
 Turning off **Allow branches** preserves existing branches but stops automatic routing; their pages say **branches off**.
@@ -149,12 +149,12 @@ Before each turn, the runner fetches and rebases the checkout onto its upstream.
 resolve it while keeping both sides' lessons. After the turn, a rejected push rebases and retries under the push lock. Keep private
 messages, attachments and personal preferences out of repository files.
 
-`hub bot copy` makes an independent bot in a new repository. Use a branch for the same instructions and shared lessons;
+`tico bot copy` makes an independent bot in a new repository. Use a branch for the same instructions and shared lessons;
 use a copy when the new bot should change independently.
 
 ## Copy a bot
 
-Ask BotOps to copy a bot ("make me a copy of the support bot"), or run `hub bot copy <bot> [--name "..."] [--with-memory]`
+Ask BotOps to copy a bot ("make me a copy of the support bot"), or run `tico bot copy <bot> [--name "..."] [--with-memory]`
 on the computer that holds its repository. Anyone who may read the bot can ask. The Librarian cannot be copied. The copy is an ordinary, independent bot: it belongs
 to the person who asked, reports to them, counts toward their limit of bots like any bot they add, and starts `planned`. It has the
 original's model where the person may use it (else the team's default), and a new repository `bot-<slug>` made from the original's
@@ -168,10 +168,10 @@ For anyone else, missing grants come back as "needs credential X" for BotOps to 
 after the copy the two bots change on their own, and the server keeps only `copied_from: {bot, sha}`, for two requests you make
 explicitly:
 
-- **Update my copy from the original** (`hub bot update-from-original <copy>`): the original's `AGENT.md`, `skills/` and `playbooks/`
+- **Update my copy from the original** (`tico bot update-from-original <copy>`): the original's `AGENT.md`, `skills/` and `playbooks/`
   since the copy was made are merged file by file with git into one commit on the copy; if a file changed on both sides nothing is
   changed and BotOps settles each conflict with you.
-- **Suggest this to the original** (`hub bot suggest-to-original <copy> [--paths ...]`): the copy's changed instructions become a pull
+- **Suggest this to the original** (`tico bot suggest-to-original <copy> [--paths ...]`): the copy's changed instructions become a pull
   request on the original's repository when you may write to it and GitHub is connected, else a task for the original's owner
   with the diff.
 
@@ -183,9 +183,9 @@ repository (BotOps gets a short-lived token for it only as a person who may read
 ## Copy a skill
 
 A skill is a folder, `skills/<name>/`, in a bot's repository, and each bot owns its own. BotOps copies one to other bots when you ask
-("give the support bot the triage skill the scribe has"), or run `hub skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
+("give the support bot the triage skill the scribe has"), or run `tico skill copy <skill> --from <bot> --to <bot> [<bot> ...]`: a commit in
 each target's repository, for bots whose source you may read and whose repositories you manage. To offer a skill to the whole company,
-`hub skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)). A target that already has a different
+`tico skill submit <skill>` proposes it to the Skills directory, where an admin approves it and installs say who has it ([Skills directory](skills.md)). A target that already has a different
 skill of that name is left alone unless you say to replace it. Nothing stays linked (`playbooks/copy-a-skill.md`).
 
 ## Message bots
@@ -221,7 +221,7 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
   slug is renamed (ids, slugs and folders: docs/how-it-works.md).
 - The runner on a registered computer claims the bot's work, does each run inside that checkout with a
   model CLI signed in on that computer, and streams the reply back. Subscriptions never leave the computer.
-- The server holds the record: tasks, threads, approvals, routines, runs and the bot's
+- The server holds the record: tasks and their asks, threads, routines, runs and the bot's
   settings. It is also the clock: it turns a due routine into a task.
 
 | The server owns (change it in **Settings → Bots**) | The repository owns (change it in git) |
@@ -231,7 +231,7 @@ A bot is **one durable git repository plus one row in the server**. Three parts:
 | Record status: `planned`, `active`, `paused`, `quarantined` | `knowledge/`, what is true in the domain |
 | Display name, reporting line, owner and primary human | `memory/`, dated learnings and decisions |
 | The repository link recorded on the bot | `state.md`, where the bot is right now |
-| Tasks, approvals, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
+| Tasks, asks, runs, routines, sending policy and their history | `bot.yaml`: `tools:` |
 
 A one-off request is a **task**, not an edit. Only change the repository when the change should
 hold next month too.
@@ -269,7 +269,7 @@ The runner checks these before it will run the bot, and the preflight script
 - **`runtime:` and `model:` in the file must match the server, or be left out.** A mismatch reads
   as "Configuration differs from server" and the bot does not run. The simplest repository omits
   both and lets Settings decide.
-- **`routines:` in a template is a seed.** `hub bot create` turns it into the new bot's
+- **`routines:` in a template is a seed.** `tico bot create` turns it into the new bot's
   first routines in Tico; after that Tico's rows are the routines (`docs/routines.md`).
   Preflight validates the block so a broken template is caught before a bot is made from it.
 - **`.env` is never committed.** Store Credentials in Tico and grant them to the bot. Declaring a credential in
@@ -277,13 +277,13 @@ The runner checks these before it will run the bot, and the preflight script
 - **The working tree should be clean and have a remote.** A dirty tree or no remote is flagged:
   the bot commits and pushes after each run, and it cannot push without a remote.
 
-`hub bot check <slug>` runs the repository half of those preflight rules from inside a run: the
+`tico bot check <slug>` runs the repository half of those preflight rules from inside a run: the
 manifest, the instructions, the routines and stale references, reported as `{"ready": ...,
 "problems": [...]}`. It is what BotOps runs before it hands a new bot over, and it needs no registry
 entry, so it works on a repository the server has never seen. `clients/preflight.py` is still the
 full check, including credentials, runtime and mail, and is what to run before flipping a bot to
-`active`. `hub bot check-names <slug>` lists the old column, field and command names a checkout still
-uses (SQL in `hub sql` and SQL-looking strings, keys read from the API, old `hub` commands). A column
+`active`. `tico bot check-names <slug>` lists the old column, field and command names a checkout still
+uses (SQL in `tico sql` and SQL-looking strings, keys read from the API, old `hub` commands). A column
 renamed on some tables only is reported with those tables: `SELECT owner FROM tasks` is flagged,
 `SELECT owner FROM meetings` is not. `--fix` rewrites a name only when it has one new spelling
 everywhere and no table keeps it, and leaves the rest for you. It runs on the computer, without the
@@ -319,19 +319,19 @@ Then, in this order:
 Every run is the same shape, and `AGENT.md` should say so plainly:
 
 1. **Read `state.md`** to find out where the last run stopped.
-2. **Read the task and its thread** through the run's `hub` CLI. The task is the instruction;
+2. **Read the task and its thread** through the run's `tico` CLI. The task is the instruction;
    the thread is the context.
 3. **Check `memory/learnings.md` and the playbook the task names** before touching anything.
 4. **Do the work**, updating `knowledge/` as it learns rather than at the end.
 5. **Report in the task thread.** The result goes in the task's completion note, first line
    first. A chart or a mockup can go with the comment as a titled [visual](visuals.md); every bot's instructions already say when to add one ([When a bot adds a visual](visuals.md#when-a-bot-adds-a-visual)), so `AGENT.md` needn't. Put the ask first and stay under 120 words. The lint checks that the first line is not empty; it does not judge its meaning.
-6. **When blocked, ask through the task**, having read the record first, since most questions a bot
-   wants to ask are already answered there. One open question per topic (`--topic`), phrased so the
-   question is the only thing the human has to read. Internal routing, reminders, task closure,
-   branches and draft pull requests are the bot's work, not questions for a human. An optional approval
-   request can clarify an uncertain action; granted Tools and the outbound send switch govern access.
-7. **Commit, then mark the task done with a result note.** The requester closes it; the bot never
-   closes a task it did not request.
+6. **When it needs a person, ask on the task** (`tico task ask`), having read the record first, since most
+   questions a bot wants to ask are already answered there. One sentence, readable on its own: it is the only thing
+   the person has to read. A bot has one open ask per task; asking again replaces it. Internal routing, task closure,
+   branches and draft pull requests are the bot's work, not questions for a person. An OK (`--kind ok`) can clarify
+   an uncertain action; granted Tools and the outbound send switch govern access.
+7. **Commit, then mark the stage's work done with a result note** (`tico task done <id> -m "..."`). A bot never
+   closes a task a person asked for: it asks that person.
 
 ### Where a line belongs
 
@@ -452,16 +452,16 @@ sideways, and notes it in `memory/learnings.md`. A playbook untouched for months
 that fires daily, is either perfect or unread.
 
 **Say what the bot may do.** A playbook carries out the authorized request with its granted Tools;
-spending, publishing, merging, record changes and deletion have no blanket approval step.
+spending, publishing, merging, record changes and deletion need no blanket OK.
 Sending is set in Tico, never in bot.yaml: a person who manages the bot picks **On their own**, **Ask first** or **Never** (Settings → Bots → <bot> → Email sending, or the company or inbox sending policy). Every email goes through Tico's send queue with an undo window; under Ask first a person approves it in Tico.
-An approval can still be requested for an uncertain action, with the exact action attached;
-it is optional, decided by a human and used once. See [Permissions](permissions.md).
+A bot can still ask a person to OK an uncertain action, with the exact action shown;
+it is optional, given by a person and used once. See [Permissions](permissions.md).
 
 ## 5. Routines
 
 A routine is an automation: a Schedule (a cron in a time zone) or an Event trigger, and a Bot turn step with the text
 the bot is told. Each run is a normal task for the bot ([Routines](routines.md)). Humans add one on the Automations page
-(**New automation**); a bot adds its own from a run with `hub automation create --file -` (`hub automation guide` shows
+(**New automation**); a bot adds its own from a run with `tico automation create --file -` (`tico automation guide` shows
 the flow format):
 
 ```json
@@ -473,7 +473,7 @@ the flow format):
 
 A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
-`enabled: false`); `hub bot create` seeds the new bot's automations from it once, and from then on
+`enabled: false`); `tico bot create` seeds the new bot's automations from it once, and from then on
 the automations are what run. The starter templates declare their first routine with `enabled: false`:
 it exists and is visible on the Automations page, and is switched on when the bot's setup starts (**Set up**, go-live),
 so nobody approves it separately. Quote `"on":` in the
@@ -482,7 +482,7 @@ YAML; an unquoted `on` is read as a boolean.
 - **`cron`** is five fields, in the time zone you give (`tz`), not the computer's.
 - **The text** points at the playbook: keep the method in `playbooks/`, so the repository still says how the bot works
   and Tico says when.
-- Change one with `hub automation update <id>`; each change is a new version (`hub automation versions <id>`).
+- Change one with `tico automation update <id>`; each change is a new version (`tico automation versions <id>`).
 - Give each occurrence its own title when two passes of the same playbook run in one day, so a run
   can never be mislabelled and one pass cannot hide behind another.
 
@@ -548,8 +548,8 @@ grant removes delivery even when an old file still exists. See [credential-vault
 
 Declaring access does not provision anything. A Credential administrator grants the value to the bot;
 preflight then reports whether every declared Credential actually
-resolves. Two things need no entry: Tico itself (`hub` and the `hub_*` MCP tools come with
-every run) and the decision model behind `hub_decision_ask` (`skills/decisions/SKILL.md`), whose credential
+resolves. Two things need no entry: Tico itself (`hub` and the `tico_*` MCP tools come with
+every run) and the decision model behind `tico_decision_ask` (`skills/decisions/SKILL.md`), whose credential
 Tico holds. A bot that needs a service it has not declared stops and says so on the task; it never
 borrows another bot's credential. To let it use one, the owner grants it (Tools > Credentials), or asks BotOps in a DM, which moves the value
 into the vault if needed and grants it as them ([credential-vault.md](credential-vault.md)).
@@ -600,9 +600,9 @@ team's own frontend.
 **Registering a tool.** Someone who manages a bot (the owner, a bot administrator who owns it,
 or a human above it on the team chart) can add or remove a tool without opening its repository:
 `POST /api/v2/bots/{bot}/tools`, `DELETE /api/v2/bots/{bot}/tools/{id}`, or the MCP tools
-`hub_tool_add`, `hub_tool_list`, `hub_tool_update` and `hub_tool_remove` (`hub tool add <bot> posthog --can read
+`tico_tool_add`, `tico_tool_list`, `tico_tool_update` and `tico_tool_remove` (`tico tool add <bot> posthog --can read
 --identity "PostHog project 340585 (US)" --scope project=340585 --env POSTHOG_KEY`; a remote MCP server adds
-`--mcp-url https://... --transport http --header 'Authorization: Bearer ${VAR}'`, and `hub tool update` takes the same flags). Tico holds no
+`--mcp-url https://... --transport http --header 'Authorization: Bearer ${VAR}'`, and `tico tool update` takes the same flags). Tico holds no
 bot repository, so it cannot write `bot.yaml` itself. It checks the entry against the same
 fields this section describes, keeps it as a pending request, and opens a task for BotOps titled
 "Add PostHog access to <bot>" with the exact YAML. BotOps adds it to `bot.yaml`, commits and
@@ -611,7 +611,7 @@ error and Tools shows it for that bot; other bots' valid tool reports continue t
 shows as **pending** in the row; then it is **ready**, or names its problem. Removing works the same
 way, as a task "Remove PostHog access from <bot>"; the tool keeps its icon, marked as being
 removed, until the computer stops reporting it. To change a tool that is already there (more verbs, another
-scope key, a new note) use `POST /api/v2/bots/{bot}/tools/{id}/update` or `hub tool update <id> --bot <bot> --can
+scope key, a new note) use `POST /api/v2/bots/{bot}/tools/{id}/update` or `tico tool update <id> --bot <bot> --can
 read,draft,send`: one task "Change Gmail access on <bot>" carries the whole changed entry, the tool is marked as
 being changed until the computer reports it, and nothing is removed.
 
@@ -654,16 +654,18 @@ Levers set in **Settings → Bots**, not in the repository:
   login for that tool, with no sign-in of its own. For a different account, move the bot to a computer signed in to it
   ([Computers](computers.md#which-connection-a-bot-runs-on)).
 - **Compact at**: how full the bot's conversation gets before it is compacted: 100k, 150k, 250k tokens (the default),
-  400k, 600k or 1M. Claude Code, Codex and pi only. Changing it keeps the session. A bot's tasks can use another length
-  (**Task model**, **Task context length**).
+  400k, 600k or 1M. Claude Code and Codex follow it. pi follows it only on a Tico AI Gateway model, and there 250k or more
+  compacts at about 184k, the Gateway's 200,000-token window less the 16,384 pi keeps. pi's other models keep pi's own
+  compaction ([pi](harnesses.md#why-pi-is-the-catch-all)). Changing it keeps the session. A bot's tasks can use another
+  length (**Task model**, **Task context length**).
 - **Profile**: what wakes the bot and which tasks it takes: **Doer** (the default for a new bot), **Reviewer**, **Lead**,
   **Responder**, **Monitor** or **Custom**; each choice has a line saying what it does ([Profiles](how-it-works.md#profiles)).
   A Doer holds nonblocking news (a request it asked for finished, a person's review comments) and
   sends it as one wake at most every 15 minutes, and runs an enabled routine at most every 15 minutes; a
   Lead hears the same news once a day, at the hour in **Digest at**. A bot that was on **Token saver** is a Doer with a 30-minute
-  window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a person's message, a question,
-  an approval and a gate verdict wake the bot at once, and only once when the same event repeats before its run is over.
-  Bots with sweeps on get their quiet tasks in one task roundup per run (three times a day by default, 6am, noon and 6pm company time), not one wake each.
+  window (2 hours between sweeps); **Performance** became the plain Doer. In every profile, a task that is the bot's turn, a person's message,
+  an ask, an answer and an OK asked or given wake the bot at once, and only once when the same event repeats before its
+  run is over.
   **Custom** adds **Pulls**, **Takes** and **Sweeps**, and copies the profile's rows into the bot's **What wakes**
   automation to edit; choosing a named profile again deletes them after a confirm that
   says how many. A profile turns on no routine, hook, subscription or permission, and leaves
@@ -697,7 +699,7 @@ Effort is where the budget goes. A useful split:
 Three habits save real money. Rules before models: if a deterministic filter handles most of the
 input, run the filter first and let the model see the remainder. The decision model before the bot's own model:
 when what is left is a decision (which bucket, is it covered, open this or not, which branch), one
-`hub decision ask` call answers it in two hundred milliseconds for a fraction of a cent, and the bot's
+`tico decision ask` call answers it in two hundred milliseconds for a fraction of a cent, and the bot's
 model reads only the rows the answers say to (`skills/decisions/SKILL.md`). And audit effort, because
 it ratchets up and never down: take the busiest routine, read what its last ten runs actually
 decided, and drop a level if nothing needed the extra thinking.
@@ -781,14 +783,14 @@ Two consequences when you run more than one environment:
   a Credential grant in one environment means nothing in another. Legacy files are migration sources only.
 
 Custom `can` verbs describe intent; they do not add enforcement. Standard verbs use each Tool's supported permission checks.
-Use `hub tool add <bot> <service> --can <verbs> --dry-run` to validate an entry without opening a BotOps task.
+Use `tico tool add <bot> <service> --can <verbs> --dry-run` to validate an entry without opening a BotOps task.
 `--title-prefix "<prefix>"` preserves the requested prefix on generated access tasks.
 
 ### Templates over MCP
 
-`hub_bot_create` with `template` uses the Team default model. Starter templates build directly on
+`tico_bot_create` with `template` uses the Team default model. Starter templates build directly on
 their assigned Computer, like Add from template in the app; other templates queue BotOps and return
-`setup_task_id` to watch with `hub_task_show`. Generated tasks carry the human requester's rights.
+`setup_task_id` to watch with `tico_task_show`. Generated tasks carry the human requester's rights.
 `description` preserves the requested scope and limits; `instructions` overrides the template Instructions,
 and `title_prefix` prefixes a generated setup task. New bots report to their requester unless `reports_to`
 is supplied. Leave `slug` out: Tico picks a free one from `name` (else the template's name), skipping archived and
@@ -796,9 +798,9 @@ reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
 An empty model in Add from template also inherits the Team default; choose one in Settings > Models
-if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
+if none is saved. `tico_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
-record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,
+record, update its `template` through the definition API or `tico_bot_update`; this changes metadata,
 without replacing the existing repository. Matching display names are allowed; responses include the
 other slugs, and the UI shows slugs beside matching names.
 
@@ -818,13 +820,13 @@ pending build; an External agent does not need a local repository.
 ## Let a bot maintain a shared checklist
 
 Make a tag or a template instance with that bot as its `owner`. It can read the tag with
-`hub_tag_show`, then edit metadata or Markdown with `hub_tag_update` and the current `version`.
+`tico_tag_show`, then edit metadata or Markdown with `tico_tag_update` and the current `version`.
 Task movers attach its key to existing tasks; owning a tag does not change task permissions.
 See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 
 ## Task pipelines
 
-A bot can keep using task statuses with any task type. Tico maps each status change to the type's
-matching step, or shows the plain status when no step matches. `hub task types` lists definitions;
-`hub task update <id> --step "Legal review"` chooses a named step explicitly. Types are optional,
-managed by movers in Settings → Tasks. See [Task types and steps](tasks.md).
+Every task sits in a pipeline, at one stage. In this release there is one pipeline, General, with one stage, To do: a
+bot's `tico task done` finishes it. A bot works a task with `tico task done`, `move`, `ask`, `file`, `snooze` and `close`,
+each with the version `tico task show` printed. See [Tasks](tasks.md#pipelines-and-stages) and
+[CLI and MCP](tasks.md#cli-and-mcp).

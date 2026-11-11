@@ -7,7 +7,7 @@ asked for, what is incomplete on the roadmap, what ships next, and who should be
 
 ## 1. Read where things stand
 
-    hub task show <id>
+    tico task show <id>
 
 Then `knowledge/requests.md`, `knowledge/betas.md`, `knowledge/release-calendar.md` and last week's
 review. Check whether last week's ship notices were sent (ask, do not assume).
@@ -15,7 +15,7 @@ review. Check whether last week's ship notices were sent (ask, do not assume).
 ## 2. Take in the week's requests
 
 New tasks tagged as requests, the Customer Insights Analyst's latest report, sales and customer calls
-(`hub meeting search "feature request" --since <last week>`). For each, follow
+(`tico meeting search "feature request" --since <last week>`). For each, follow
 `playbooks/log-a-feature-request.md`. Count new rows and merges.
 
 ## 3. Rank the most asked
@@ -44,5 +44,5 @@ task for the owner to review; nothing is sent.
 ## 7. Write and hand over
 
 Write `reports/YYYY-MM-DD-product-ops-review.md` in the shape of `knowledge/examples/product-ops-review.md`,
-`hub file publish` it, commit, and `hub task update <id> --status done --note`: the headline and what
+`tico file publish` it, commit, and `tico task done <id> -m "..." --version N`: the headline and what
 needs a human.

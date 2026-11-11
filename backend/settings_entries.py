@@ -18,6 +18,9 @@ SETTINGS_FILES = sorted(
         "settings-access.ts",
         "settings-bot-editor.ts",
         "settings-bots.ts",
+        "settings-bots-choice.ts",
+        "settings-bots-tasks.ts",
+        "settings-bots-bulk.ts",
         "settings-strategy-bot.ts",
         "settings-company.ts",
         "settings-devices.ts",
@@ -30,7 +33,7 @@ SETTINGS_FILES = sorted(
         "settings-release.ts",
         "settings-repositories.ts",
         "settings-storage.ts",
-        "settings-webhooks.js",
+        "settings-webhooks.ts",
         "subscriptions.ts",
         "bot-budget.ts",
         "bot-profile.ts",
@@ -52,7 +55,7 @@ def _card(tab, card=""):
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
 # Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
-# the Tico Gateway card on Models (ui/app/settings-webhooks.js).
+# the Tico Gateway card on Models (ui/app/settings-webhooks.ts).
 HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
     "Automations > Incoming webhooks",
     "Tools > Webhooks",
@@ -85,17 +88,15 @@ _RULE_NAMES = {
     "support_access": ("Owners and admins may let Tico support in", "confirm", ""),
     "health_monitor_reports": ("Health monitor reports", "direct", ""),
     "bot_reports_direct": ("Bots send reports to the Tico team without asking", "confirm", ""),
-    "stale_review": ("Review stale tasks", "direct", ""),
     "topic_fresh": ("Keep topics fresh", "direct", ""),
     "org_rule_checks": ("Check bot outputs against rules", "direct", ""),
 }
 _RULE_WHERE = {
     "health_monitor_reports": ("Settings > Health > Health monitor", _card("health")),
     "bot_reports_direct": (GENERAL + " > Team", _card("general", "settings-team")),
-    "stale_review": (RULES, SYSTEM_JOBS),
     "topic_fresh": (RULES, SYSTEM_JOBS),
 }
-_ADMIN_RULES = ("stale_review", "topic_fresh", "org_rule_checks")
+_ADMIN_RULES = ("topic_fresh", "org_rule_checks")
 
 TEAM_RULES = [
     S(
@@ -894,17 +895,6 @@ ENTRIES = TEAM_RULES + [
         words="manager report model task name description",
     ),
     S(
-        "bot.keep_tasks_going",
-        "Keep tasks going",
-        BOTS + " > Bot editor",
-        "bot",
-        "direct",
-        "POST",
-        "bots/{bot}/keep-tasks-going",
-        "keep_tasks_going",
-        card=_card("bots"),
-    ),
-    S(
         "bot.turns_at_once",
         "Turns at once",
         BOTS + " > Bot editor",
@@ -1444,40 +1434,6 @@ ENTRIES = TEAM_RULES + [
     ),
     # Tasks
     S(
-        "tasks.type",
-        "Task type",
-        TASKS + " > Task types",
-        "mover",
-        "direct",
-        "POST",
-        "task-types/{id}",
-        value="json",
-        card=_card("tasks", "settings-types"),
-        words="steps pipeline",
-    ),
-    S(
-        "tasks.type.create",
-        "New task type",
-        TASKS + " > Task types",
-        "mover",
-        "direct",
-        "POST",
-        "task-types",
-        value="json",
-        card=_card("tasks", "settings-types"),
-    ),
-    S(
-        "tasks.type.delete",
-        "Delete a task type",
-        TASKS + " > Task types",
-        "mover",
-        "confirm",
-        "POST",
-        "task-types/{id}/delete",
-        value="json",
-        card=_card("tasks", "settings-types"),
-    ),
-    S(
         "roadmap.public",
         "Public roadmap",
         TASKS + " > Public roadmap",
@@ -1757,7 +1713,6 @@ ALIASES = {
 
 # Writes on a Settings page that change no setting: one-off actions, and why each needs no entry.
 NOT_SETTINGS = {
-    ("POST", "approvals/{x}/undo"): "undoes one approval; nothing to set",
     ("POST", "jobs/{x}/reconcile"): "settles one stopped run; nothing to set",
     ("POST", "system/storage/tico/check"): "checks the storage connection",
     ("POST", "setup/company/people/{x}/invite"): "sends one invitation from setup",
@@ -1766,7 +1721,7 @@ NOT_SETTINGS = {
     ("POST", "settings/history/{x}/undo"): "undoes one past change; the owner does it from History",
     ("POST", "strategy-bot/log/{x}/undo"): "undoes one Strategy bot action",
     ("POST", "repositories/refresh"): "re-reads the repositories from GitHub",
-    ("POST", "release/now"): "starts one release (`hub release now`)",
+    ("POST", "release/now"): "starts one release (`tico release now`)",
     ("POST", "screening/test"): "runs screening's built-in samples; nothing is kept",
     ("POST", "{x}/deliveries/{x}/replay"): "replays one delivery",
     ("POST", "{x}/sends/{x}/retry"): "retries one send",

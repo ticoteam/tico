@@ -5,7 +5,7 @@ and each one shows up where the person already looks.
 
 ## Needs attention
 
-Threads that need the person sit in the same **Needs you** list as their tasks, questions and approvals:
+Threads that need the person sit in the same [Needs you](tasks.md#needs-you) list as their tasks and asks:
 
 | Item | Listed when | Cleared when |
 |---|---|---|
@@ -16,7 +16,7 @@ Threads that need the person sit in the same **Needs you** list as their tasks, 
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
 Bot posts that name nobody are activity, not attention. A paused thread is listed once, to the people who can manage
-it. Items the Needs you list already shows (a bot's question outside any task) are not listed twice.
+it. Items the Needs you list already shows are not listed twice.
 
 The thread items are not cut from the list: they page with the rest of Needs you, in the same order. A held item is
 listed to its reviewer and to the person its author bot reports up to. The reviewer sees the card with Send anyway and Keep
@@ -40,7 +40,7 @@ kept per person (their id). A live change and a refresh both check it, one after
 
 ## Unanswered questions and earlier messages
 
-Tico posts no nudge in a thread for an unanswered question. A question a bot is waiting on is listed on the bot's task roundup, and a question to a person that stays unanswered for two business days goes back to its bot ([Tasks](tasks.md)).
+Tico posts no nudge in a thread for an unanswered question.
 
 A bot's manager opens a Home's closed history from the Home's menu or its **Earlier messages** row.
 
@@ -63,12 +63,12 @@ Catch up summarizes what is new for the person in a thread, or in the thread and
   `left_out`, which is how that case differs from nothing new.
 
 ```
-hub thread catchup <thread-id>                 the thread and its sub-threads (the default)
-hub thread catchup <thread-id> --thread-only   this thread only
+tico thread catchup <thread-id>                 the thread and its sub-threads (the default)
+tico thread catchup <thread-id> --thread-only   this thread only
 ```
 
 REST: `POST /api/v2/threads/{thread_id}/catch-up` with `{"scope": "subtree"}` or `{"scope": "thread"}`. The response is
-`{"thread_id", "scope", "messages", "left_out", "posted", "words"}`. MCP: `hub_thread_catchup`, with the same arguments
+`{"thread_id", "scope", "messages", "left_out", "posted", "words"}`. MCP: `tico_thread_catchup`, with the same arguments
 as `thread_id` and `scope`.
 
 ## Update cards
@@ -76,9 +76,9 @@ as `thread_id` and `scope`.
 Each daily update and each week in review keeps its own structure and its own page, as before. It also posts one card
 in its author's Home: a single line (for example "Daily update, 2026-11-01") that links back to the update. The
 update's body is never copied into the thread. The card is one message in that Home thread, so the Home's audience
-reads it. The Home route (`GET /api/v2/threads/home/{actor}`, `hub_thread_home`) returns only the Home's header, with
+reads it. The Home route (`GET /api/v2/threads/home/{actor}`, `tico_thread_home`) returns only the Home's header, with
 no messages. The card comes from the Home thread's timeline (`GET /api/v2/threads/{thread_id}/timeline` with the Home's
-id, or `hub_thread_show` with that id). The app's Home does not draw these cards; the update is read on the Updates
+id, or `tico_thread_show` with that id). The app's Home does not draw these cards; the update is read on the Updates
 page.
 
 The card is posted as the author, so a bot's card in its own Home does not wake that bot.

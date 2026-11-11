@@ -6,7 +6,7 @@ import pytest
 
 from backend import hubdb as H
 from backend import task_relations as TR
-from backend.tests.test_tasks_board import api, bot_token, get, headers, post
+from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post
 from backend import bot_settings as BS
 
 
@@ -19,7 +19,6 @@ def test_private_two_party_matrix(api, requester, owner):
         **{'bot:' + slug: bot_token(api, slug) for slug in ('ops', 'cpo', 'cmo')},
     }
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(c, H.KEEPER, 'Private matrix work', [{'name': 'Open', 'status': 'open'}], bots='work')
         task = H.task_create(
             c,
             requester,
@@ -27,7 +26,6 @@ def test_private_two_party_matrix(api, requester, owner):
             'Sensitive packet.',
             owner,
             private=True,
-            type=typ['id'],
             lint=False,
         )
         c.execute(
@@ -61,30 +59,31 @@ def test_private_two_party_matrix(api, requester, owner):
     check(parties | {'bot:cmo'})
 
 
-def test_company_read_does_not_grant_work_but_dev_type_does(api):
+def test_company_read_does_not_grant_work(api):
+    """A bot reads a company task it is not on, and does not work it. (A pipeline has no setting that lets any bot work
+    its tasks, as the old task type's `bots: work` did: who works a task is task_calls.can_work.)"""
     token = bot_token(api, 'ops')
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build the board adapter', 'body': 'Implement the adapter.'})
     assert not task['private']
     assert get(api, 'tasks/' + task['id'], token=token)['task']['id'] == task['id']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'ops'}, token=token, expected=403)
-    typ = post(
+    assert task['id'] in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
+    post(
         api,
-        'task-types',
-        {
-            'name': 'Dev',
-            'bots': 'work',
-            'steps': [{'name': 'Todo', 'status': 'open'}, {'name': 'PR Review', 'status': 'review'}],
-        },
-    )['type']
-    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'type': typ['id']})
-    found = get(api, 'tasks?type=' + typ['id'], token=token)['tasks']
-    assert task['id'] in {row['id'] for row in found}
-    post(api, 'tasks/' + task['id'] + '/links', {'url': 'https://github.com/acme/example/pull/7'}, token=token)
-    task = get(api, 'tasks/' + task['id'], token=token)['task']
-    task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'step': 'PR Review'}, token=token)
-    assert task['status'] == 'review'
+        'tasks/' + task['id'] + '/owner',
+        {'version': task['version'], 'owner': 'ops', 'why': 'Mine now'},
+        token=token,
+        expected=403,
+    )
+    post(
+        api,
+        'tasks/' + task['id'] + '/move',
+        {'version': task['version'], 'to': 'done', 'why': 'Built'},
+        token=token,
+        expected=403,
+    )
     task = post(api, 'tasks/' + task['id'], {'version': task['version'], 'private': True})
     get(api, 'tasks/' + task['id'], token=token, expected=404)
+    assert task['id'] not in {row['id'] for row in get(api, 'tasks?pipeline=general', token=token)['tasks']}
 
 
 def test_private_defaults_reassignment_and_human_publication(api):
@@ -105,7 +104,11 @@ def test_private_defaults_reassignment_and_human_publication(api):
     )
     assert not explicit['private']
     post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'private': False}, token=ops, expected=422)
-    changed = post(api, 'tasks/' + assigned['id'], {'version': assigned['version'], 'owner': 'cpo'})
+    changed = post(
+        api,
+        'tasks/' + assigned['id'] + '/owner',
+        {'version': assigned['version'], 'owner': 'cpo', 'why': 'Cpo reviews'},
+    )
     assert changed['private']
     get(api, 'tasks/' + assigned['id'], token=ops, expected=404)
     assert get(api, 'tasks/' + assigned['id'], token=cpo)['task']['private']
@@ -115,33 +118,20 @@ def test_private_defaults_reassignment_and_human_publication(api):
     post(api, 'tasks/' + created['id'], {'version': created['version'], 'private': False}, token=cpo, expected=422)
 
 
-def test_private_parent_has_no_ancestry_bypass_and_requires_detachment(api):
+def test_a_private_parent_gives_no_ancestry_bypass_and_its_sub_task_stays_private(api):
     parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
     child = post(
         api,
         'tasks',
-        {
-            'owner': 'priya',
-            'title': 'Check the packet',
-            'body': 'Check it.',
-            'relations': [{'task': parent['id'], 'kind': 'parent'}],
-        },
+        {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.', 'parent': parent['id']},
         token='ben-test',
     )
     assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
+    # Its parent never changes, so a sub-task of a private task stays private.
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
-    detached = post(
-        api,
-        'tasks/' + child['id'] + '/relations',
-        {'task': parent['id'], 'kind': 'parent', 'remove': True},
-        token='ben-test',
-    )
-    assert 'parent' not in detached['relations']
-    published = post(api, 'tasks/' + child['id'], {'version': detached['version'], 'private': False}, token='ben-test')
-    assert not published['private']
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):
@@ -153,7 +143,7 @@ def test_cached_comment_response_cannot_bypass_reassignment(api):
     first = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert first.status_code == 200, first.text
     task = get(api, 'tasks/' + task['id'])['task']
-    post(api, 'tasks/' + task['id'], {'version': task['version'], 'owner': 'priya'})
+    post(api, 'tasks/' + task['id'] + '/owner', {'version': task['version'], 'owner': 'priya', 'why': 'Priya reviews'})
     response = api.post(url, json={'text': 'Sensitive response.'}, headers=replay_headers)
     assert response.status_code == 404 and 'Sensitive response.' not in response.text
 
@@ -168,7 +158,7 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
             'owner': 'ben',
             'title': 'Review related work',
             'body': 'Related content.',
-            'relations': [{'task': task['id'], 'kind': 'parent'}],
+            'parent': task['id'],
         },
     )
     routine = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review scheduled work', 'body': 'Scheduled content.'})
@@ -216,16 +206,11 @@ def test_private_dependency_and_refusal_audit_never_copy_sensitive_content(api):
         api, 'tasks', {'owner': 'cpo', 'title': 'Review sensitive evidence', 'body': 'Review it.', 'private': True}
     )
     public = post(api, 'tasks', {'owner': 'cmo', 'title': 'Review release timing', 'body': 'Review it.'})
+    # A task waits on no relation: blocked_by is no kind of one.
     post(api, 'tasks/' + public['id'] + '/relations', {'task': private['id'], 'kind': 'blocked_by'}, expected=422)
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_at) VALUES(?,?,?,'now')",
-            (private['id'], public['id'], 'blocks'),
-        )
-        H._unblock(c, H.task(c, private['id']))
-        assert TR.blocker_ids(c, public['id']) == [private['id']]
         with pytest.raises(H.Refused) as exc:
-            H.task_update(c, 'bot:cpo', private['id'], body='Read SECRET-PACKET', status='ready')
+            H.task_move(c, 'bot:cpo', private['id'], 'next', 'Read SECRET-PACKET', 0)
         assert exc.value.private
         audit = c.execute("SELECT detail FROM events WHERE action='refused'").fetchall()
         assert all('SECRET-PACKET' not in row[0] for row in audit)
@@ -327,3 +312,34 @@ def test_a_visuals_line_link_to_a_private_task_message_opens_only_for_its_reader
         response = api.get('/api/v2/tasks/' + query['task'][0], headers=headers(token))
         assert response.status_code == (200 if readable else 404), response.text
         assert ('revenue up' in response.text) == readable and (said['id'] in response.text) == readable
+
+
+def test_a_pipeline_cannot_be_made_private_so_none_promises_privacy_it_does_not_give(api):
+    """docs/pipelines-v3.md lists `pipelines.private` but defines no reader rule for it, and nothing reads it: who
+    reads a task is the task's own privacy. A private pipeline is refused, by the route and by the record's one writer,
+    on a new pipeline and on General; nothing is saved."""
+    from backend import pipeline_settings as PS
+
+    with api.app.state.store.transaction() as c:  # Ana owns General here, so she may change it
+        c.execute("UPDATE pipelines SET owner_id='human:ana' WHERE id='general'")
+    record = get(api, 'pipelines/general')['pipeline']
+    assert record['may_change']
+    legal = {
+        'name': 'Legal',
+        'goal': 'Contracts',
+        'private': True,
+        'stages': [{'name': 'Review', 'owner': 'assignee', 'requirements': [{'kind': 'owner_done'}]}],
+    }
+    # Without the switch the same new pipeline saves: the refusal is the switch's alone.
+    with api.app.state.store.read() as c:
+        assert PS.check(c, {**legal, 'private': False}) == []
+    r = api.post('/api/v2/pipelines/general', json={**record, 'private': True}, headers=headers())
+    assert r.status_code == 409 and "A pipeline can't be private yet" in r.text, r.text
+    with api.app.state.store.transaction() as c:
+        for body in ({**PS.read(c, 'general'), 'private': True}, {**legal, 'id': 'legal'}):
+            with pytest.raises(H.Refused) as refused:
+                PS.save(c, H.KEEPER, body)
+            assert "A pipeline can't be private yet" in str(refused.value)
+        assert not c.execute('SELECT 1 FROM pipelines WHERE private<>0').fetchone()
+        assert not c.execute("SELECT 1 FROM pipelines WHERE id='legal'").fetchone()
+    assert get(api, 'pipelines/general')['pipeline']['private'] is False

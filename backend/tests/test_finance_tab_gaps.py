@@ -11,8 +11,8 @@ from backend.finance import reads as FR
 from backend.finance import tab as FT
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
-from backend.tests.test_api import api, get, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import (
+from backend.tests.helpers.api import get, headers  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     open_views,
     AT,
     OWNER,
@@ -23,7 +23,7 @@ from backend.tests.test_finance_fixtures import (
     spend,
     store,
 )  # noqa: F401
-from backend.tests.test_finance_tab import _bank
+from backend.tests.helpers.finance_tab import _bank
 
 OCT = ("2026-10-01", "2026-10-31")
 
@@ -697,7 +697,7 @@ def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api)
     """Spec 7.5: a full read of a private line is written to events. Eve holds full detail of account 6900 (private), so
     her P&L, which shows the line, leaves a row naming it; the owner's own requests leave none."""
     from backend.finance import actions as FA
-    from backend.tests.test_finance_fixtures import _seed
+    from backend.tests.helpers.finance_fixtures import _seed
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -724,7 +724,7 @@ def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(ap
     row each; a metric and a contact search do not return it and leave none. Every other route follows the same rule: a
     row exactly when the answer carries the line. The owner's requests add none."""
     from backend.finance import actions as FA
-    from backend.tests.test_finance_fixtures import _seed
+    from backend.tests.helpers.finance_fixtures import _seed
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -788,7 +788,7 @@ def test_a_csv_export_is_recorded_for_whoever_it_was_made_for(api):
     """Spec 7.5: exports record who they were made for. The sales tax CSV the owner downloads leaves a row naming the
     owner and the export; nothing is stored, so there is no copy to expire."""
     from backend.finance import actions as FA
-    from backend.tests.test_finance_fixtures import _seed
+    from backend.tests.helpers.finance_fixtures import _seed
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -806,7 +806,7 @@ def test_a_person_who_leaves_on_the_people_route_leaves_their_team_grant_at_once
     roster save, so it runs Finance's revalidation too: the team grant forgets the leaver at once."""
     from backend.finance import actions as FA
     from backend.finance.store import access as SA
-    from backend.tests.test_finance_fixtures import _seed
+    from backend.tests.helpers.finance_fixtures import _seed
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -834,7 +834,7 @@ def test_a_fault_in_the_org_revalidation_leaves_the_person_update_and_no_partial
     from backend.finance import actions as FA
     from backend.finance import handlers
     from backend.finance.store import access as SA
-    from backend.tests.test_finance_fixtures import _seed
+    from backend.tests.helpers.finance_fixtures import _seed
 
     store = api.app.state.store
     with store.transaction() as c:

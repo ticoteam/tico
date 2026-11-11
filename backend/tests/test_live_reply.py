@@ -2,7 +2,7 @@
 
 import json
 
-from backend.tests.test_api import api, get, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, post, setup_attempt  # noqa: F401
 
 
 def start(api):
@@ -36,14 +36,14 @@ def test_a_tool_is_one_short_label_and_never_its_arguments(api):
             (
                 "tool",
                 {
-                    "tool": "mcp__hub__hub_task_create",
+                    "tool": "mcp__tico__tico_task_create",
                     "status": "started",
                     "item_id": "c1",
                     "input": {"title": "x", "api_key": secret},
                     "command": f"curl -H 'Authorization: {secret}'",
                 },
             ),
-            ("tool", {"tool": "mcp__hub__hub_task_create", "status": "completed", "item_id": "c1", "output": secret}),
+            ("tool", {"tool": "mcp__tico__tico_task_create", "status": "completed", "item_id": "c1", "output": secret}),
             ("message", {"text": "Filed.", "final": False}),
         ],
     )

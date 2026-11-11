@@ -50,8 +50,8 @@ State (visible in Gmail too)
 Writing (all go through the guardrails below)
   mail draft   --to --subject --body-file [--reply-to <thread>] [--attach <path>] --issue N
   mail draft discard <draft-id>                      an unsent draft this bot made, nothing else
-  mail send    --draft <id> --issue N [--approval <id>]    queue it with Tico, which decides
-  mail reply   --thread <id> --body-file --issue N [--approval <id>]   draft, then queue it
+  mail send    --draft <id> --issue N [--approval <msg>]   queue it with Tico, which decides
+  mail reply   --thread <id> --body-file --issue N [--approval <msg>]  draft, then queue it
 Calendar
   mail slots   --for ana@acme.example --n 2 --minutes 20      real free slots, buffer applied
   mail upcoming --for ana@acme.example --hours 24             recordable timed meetings, metadata only
@@ -104,27 +104,23 @@ draft with the reason attached; it never silently drops the work.
 `backend/email_sending.py` resolves company, inbox and bot sending policy for every email send path: **On their own**,
 **Ask first** or **Never**, set in Tico (Settings > Bots > <bot> > Email sending, or the company or inbox sending
 policy). Ask first and Replies only are the defaults; On their own requires a person's opt-in. Never blocks all sends,
-including approved ones. Company safeguards cannot be weakened by a bot override: always-ask rules (a new
+including ones already OK'd. Company safeguards cannot be weakened by a bot override: always-ask rules (a new
 correspondent, attachments, outside Cc, many outside recipients, legal or money matters), blocked recipients, the
 people the owner handles personally, daily caps per bot/inbox/company, pacing and the undo window. The queue rechecks
 access and policy immediately before dispatch. See [Turning sending on](mail.md#turning-sending-on) for the controls
 and API. The connector keeps one check of its own, access: a bot whose `bot.yaml` grants no `send` verb on the mailbox
 gets a draft.
 
-Attachments must still come from the bot's own folder, outside secret-looking paths. A queued approval binds
-content, recipients and attachment hashes; the server sends the frozen version, so edits need a new approval. A
-numbered GitHub issue does not count: its labels and closed state do not identify a Tico person allowed to approve
-this send.
+Attachments must still come from the bot's own folder, outside secret-looking paths. A held send is an OK on a task,
+"Send this email?", bound to the content, recipients and attachment hashes; the server sends the frozen version, so
+edits need a new OK. A numbered GitHub issue does not count: it does not identify a Tico person allowed to OK this send.
 
-**Per-message approval.** A Tico `send` approval binds `content_sha256`, attachment names/hashes and the queue id.
-`--approval <id>` on `send`, `reply` and `schedule` passes the id of the person's approval or message; Tico checks it.
-The configured Who can OK rule is bot managers by default, or inbox admins or named people. A person's in-chat
-“send it” must come from someone permitted under every applicable layer's rule, follow their authorized frozen
-preview, clearly approve, and name or reply to that exact pending send. Negation, older instructions and ambiguous
-prose need the content-bound approval card. The server checks this binding and the current rule again at dispatch.
-Approval does not override Never, mailbox access, company caps, reply-loop prevention or bounce suppression. Only the
-one-use durable dispatch permit can call the provider; uncertain delivery is recorded as Unknown and never
-automatically retried.
+**Per-message OK.** The configured Who can OK rule is bot managers by default, or inbox admins or named people. The
+person sees the frozen preview and OKs it with their own click; nothing a bot passes releases a send. `--approval
+<msg>` on `send`, `reply` and `schedule` names a person's message that the second reviewer reads beside the email; it
+OKs nothing. The server checks the OK and the current rule again at dispatch. An OK does not override Never, mailbox
+access, company caps, reply-loop prevention or bounce suppression. Only the one-use durable dispatch permit can call
+the provider; uncertain delivery is recorded as Unknown and never automatically retried.
 
 **2. Lint (deterministic, each rule has an id; `mail draft` and `mail lint` run it, and Tico runs it again on
 every send).**
@@ -137,7 +133,9 @@ every send).**
 - Scheduling: when times are offered there are at least two, in the future, chronological,
   weekdays in business hours, time zone spelled out, and each one is actually free on every
   calendar on ana@acme.example with a 30-minute buffer (checked live). `mail schedule` creates the
-  event silently, then freezes its invitation with the confirmation in the shared queue. Neither notification leaves before approval, undo and dispatch checks.
+  event silently, then freezes its invitation with the confirmation in the shared queue. Neither notification leaves
+  before the OK, undo and dispatch
+checks.
 
 **3. Reviewer (a second model, on the server).**
 Tico reviews a bot's own writing before it queues the send: the draft against the incoming thread and the team
@@ -147,7 +145,9 @@ connector runs no reviewer of its own.
 **4. Execution.**
 The durable queue records content-and-recipient duplicate protection and the operation identity before dispatch. Retries of one operation stay the same; a new intent may follow a definite non-send. Gmail receives frozen raw MIME in the send request, never a mutable draft ID. A provider attempt is never
 automatically repeated if delivery is uncertain. `mail schedule` deletes its newly created event if queueing the
-confirmation fails; a queued confirmation leaves a silent event in place while awaiting approval or after cancellation. Frozen body and attachment previews load through the viewer's authorization before approval.
+confirmation fails; a queued confirmation leaves a silent event in place while awaiting an OK or after cancellation.
+Frozen body and attachment
+previews load through the viewer's authorization before the OK.
 The sent-log row comes from the provider response.
 
 **5. Audit.**
@@ -239,7 +239,7 @@ access to `mail_*` is owner-only.
 
 ## Shared sending policy and queue
 
-The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, approval authority,
+The server's `backend/email_sending.py` owns the effective company/inbox/bot sending policy, who can OK,
 bot/inbox/company caps and the durable undo queue. `connectors/mail/actions.py` enqueues automation sends through the
 same API as bot sends; it sends provider mail only with a one-use server dispatch permit. Scheduling offer emails
 use that queue too. Pending work survives restarts, and an uncertain delivery never retries automatically. See
@@ -252,9 +252,9 @@ use that queue too. Pending work survives restarts, and an uncertain delivery ne
 - `mail doctor --e2e` uses a sandbox mailbox, `hub-test@acme.example`: draft, label, queue an email to itself,
   create and delete a throwaway event. Run by preflight before any message bot goes active.
 - Week one: all three bots read and draft only (sending Never). Ana reviews drafts in Gmail and on the tasks. Week
-  two, if the drafts are good: Influencer at Ask first, so Ana approves each send in Tico. A message bot sends on its
+  two, if the drafts are good: Influencer at Ask first, so Ana OKs each send in Tico. A message bot sends on its
   own only once a person who manages it sets On their own (Settings > Bots > <bot> > Email sending, or
-  `hub email policy --bot <slug>`; docs/mail.md); Ana can also just send the draft herself.
+  `tico email policy --bot <slug>`; docs/mail.md); Ana can also just send the draft herself.
 
 ## Build order (about three working days of bot time)
 

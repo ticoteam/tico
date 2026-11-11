@@ -1,10 +1,6 @@
-"""A paused task picks back up from its checkpoint. An idle task is a line on its bot's roundup, not a question to a
-person. A "Still wanted?" question put before that change is withdrawn by migration 0093, so nothing answers it now
-(its Keep / Close choice in backend/still_wanted.py is only read by the pure check below)."""
+"""A paused task picks back up from its checkpoint."""
 
-from backend import still_wanted, task_roundup
-from backend.store import H
-from backend.tests.test_api import api, post, get, runner, assign, ready, claim  # noqa: F401
+from backend.tests.helpers.api import post, get, runner, assign, ready, claim  # noqa: F401
 
 
 def test_a_completed_task_turn_leaves_its_checkpoint_on_the_task(api):
@@ -49,50 +45,3 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
     turn("Budget figures: 40k.")  # the session still holds the private task
     shown = get(api, "tasks/" + task["id"])["task"]
     assert shown["checkpoint"] == "Sections 1-2 done." and shown["checkpoint_blocked"] == 1
-
-
-def idle(api, title, days=8):
-    task = post(api, "tasks", {"owner": "ops", "title": title, "body": "Someday."})
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(H.now(), days=-days), task["id"]))
-    return task
-
-
-def asks(api, task_id):
-    """The question tasks put under a task (question tasks are its children now, not comments)."""
-    with api.app.state.store.read() as c:
-        return [
-            row[0]
-            for row in c.execute(
-                "SELECT t.id FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
-                "WHERE r.to_task=? AND t.questions IS NOT NULL",
-                (task_id,),
-            )
-        ]
-
-
-def test_an_idle_task_is_not_asked_about_and_its_bot_lists_it_on_the_roundup(api):
-    stale = idle(api, "Old idea")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")  # the creation wake ran: nothing is queued
-        conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (stale["id"],)).fetchone()[0]
-        eight = H.shift(H.now(), days=-8)  # its messages and history are as old as the idle date
-        c.execute("UPDATE messages SET created_at=? WHERE conversation_id=?", (eight, conv))
-        c.execute(
-            "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=?", (eight, stale["id"])
-        )
-    with api.app.state.store.read() as c:
-        text, _, _ = task_roundup._list(c, "ops", H.now(), {})
-    assert "Old idea" in text
-    assert asks(api, stale["id"]) == [], "no question goes to a person about an idle task"
-
-
-def test_only_the_person_asked_decides_still_wanted():
-    from types import SimpleNamespace
-
-    ask = {"sender_id": H.KEEPER, "recipient_id": "human:ana", "refs": {"still_wanted": True}}
-    close = SimpleNamespace(dismiss=False, answers={"still_wanted": ["Close"]})
-    assert still_wanted.choice(ask, close, "human:ana") == "Close"
-    # The bot on the task, or another person who may comment, answers without closing it.
-    assert still_wanted.choice(ask, close, "bot:ops") is None
-    assert still_wanted.choice(ask, close, "human:ben") is None

@@ -4,6 +4,7 @@ about it, and shows exactly what reading the whole room showed."""
 import json
 import random
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -16,13 +17,28 @@ READERS = ("human:ana", "human:ben")
 KINDS = ("refs", "reply", "answer", "input", "carried", "moved", "job", "read", "conversation")
 
 
-def store(tmp_path):
-    s = Store(Settings(db_path=tmp_path / "hub.sqlite"))
+@pytest.fixture(scope="module")
+def booted(tmp_path_factory):
+    """One new hub per worker, booted with its people, bot and runner; every test starts from its own copy."""
+    path = tmp_path_factory.mktemp("message-links") / "hub.sqlite"
+    s = Store(Settings(db_path=path))
     s.initialize(seed_market=False)
     with s.transaction() as c:
         c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('ana','Ana'),('ben','Ben')")
         c.execute("INSERT OR IGNORE INTO bots(id,slug,state) VALUES('ops','ops','active')")
         c.execute("INSERT INTO runners(id,label,owner_id,token_hash,created_at) VALUES('r1','r','ana','h','t')")
+    return path
+
+
+def store(tmp_path, booted):
+    """A copy of the booted hub at tmp_path/hub.sqlite, started the way a server restart starts it (a warm boot takes
+    a fraction of a second; a new one, seconds)."""
+    path = tmp_path / "hub.sqlite"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with closing(sqlite3.connect(booted)) as source, closing(sqlite3.connect(path)) as target:
+        source.backup(target)
+    s = Store(Settings(db_path=path))
+    s.initialize(seed_market=False)
     return s
 
 
@@ -39,7 +55,7 @@ class World:
                 requester, owner = self.rng.choice(READERS), self.rng.choice(READERS + ("bot:ops",))
                 c.execute(
                     "INSERT INTO tasks(id,title,requester_id,owner_id,status,private,created_at,updated_at) "
-                    "VALUES(?,?,?,?,'doing',?,'t','t')",
+                    "VALUES(?,?,?,?,'open',?,'t','t')",
                     (tid, tid, requester, owner, self.rng.random() < 0.5),
                 )
                 self.tasks.append(tid)
@@ -119,10 +135,10 @@ class World:
             mid = self.say(c, reply=self.rng.choice(earlier))
         elif kind in ("answer", "input"):
             mid = self.say(c, {kind + "s": self.rng.sample(earlier, min(2, len(earlier)))})
-        elif kind == "carried":
+        elif kind == "carried":  # a run on the task (attempts.task_id) carries its text
             aid = self.run(c, self.say(c))
             mid = self.say(c, report(aid))
-            c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, tid))
+            c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, aid))
         elif kind == "moved":
             aid = self.run(c, self.say(c))
             mid = self.say(c, report(aid))
@@ -184,8 +200,8 @@ class World:
             )
         elif what == "late-carry" and self.attempts:
             c.execute(
-                "UPDATE tasks SET carried_by=? WHERE id=?",
-                (self.rng.choice(self.attempts), self.rng.choice(self.tasks)),
+                "UPDATE attempts SET task_id=? WHERE id=?",
+                (self.rng.choice(self.tasks), self.rng.choice(self.attempts)),
             )
         elif what == "late-move" and self.attempts:
             H.event(
@@ -270,18 +286,18 @@ def build(s, seed, kinds=KINDS, steps=60, changes=25, unrefreshed=False):
 
 @pytest.mark.slow
 @pytest.mark.parametrize("seed", range(4))
-def test_indexed_task_pages_equal_whole_room_pages(tmp_path, monkeypatch, seed):
+def test_indexed_task_pages_equal_whole_room_pages(tmp_path, monkeypatch, seed, booted):
     """The acceptance gate: random rooms with every link kind, then edits, deletes, moves and re-links; every
     fourth seed's changes skip Store.transaction's refresh (seed 3 is the one that does)."""
-    s = store(tmp_path)
+    s = store(tmp_path, booted)
     world = build(s, seed, unrefreshed=seed % 4 == 3)
     compare(s, world, monkeypatch)
 
 
-def test_each_link_kind_with_a_fixed_seed(tmp_path, monkeypatch):
+def test_each_link_kind_with_a_fixed_seed(tmp_path, monkeypatch, booted):
     """One fixed case per kind: a message that does not name the task reaches its page only through that kind."""
     for kind in KINDS:
-        s = store(tmp_path / kind)
+        s = store(tmp_path / kind, booted)
         world = build(s, 7, kinds=("refs", kind), steps=30, changes=0)
         inherited = compare(s, world, monkeypatch)
         if kind == "refs":
@@ -292,8 +308,8 @@ def test_each_link_kind_with_a_fixed_seed(tmp_path, monkeypatch):
             assert inherited & set(world.made[kind]), kind
 
 
-def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, monkeypatch):
-    s = store(tmp_path)
+def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, monkeypatch, booted):
+    s = store(tmp_path, booted)
     world = World(s, 3, kinds=("refs",))
     first, second = world.tasks[:2]
     with s.transaction() as c:
@@ -333,8 +349,8 @@ def test_an_edit_and_a_delete_move_a_message_on_and_off_a_task_page(tmp_path, mo
     compare(s, world, monkeypatch)
 
 
-def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_tick(tmp_path, monkeypatch):
-    s = store(tmp_path)
+def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_tick(tmp_path, monkeypatch, booted):
+    s = store(tmp_path, booted)
     world = World(s, 4, kinds=("refs",))
     first, second = world.tasks[:2]
     with s.transaction() as c:
@@ -362,8 +378,8 @@ def test_a_write_outside_store_transaction_is_read_from_its_row_until_the_next_t
     compare(s, world, monkeypatch)
 
 
-def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(tmp_path, monkeypatch):
-    s = store(tmp_path)
+def test_backfill_is_batched_idempotent_and_catches_rows_an_older_server_wrote(tmp_path, monkeypatch, booted):
+    s = store(tmp_path, booted)
     world = build(s, 11, steps=50, changes=0)
     with s.transaction() as c:
         tail = [world.say(c) for _ in range(10)]

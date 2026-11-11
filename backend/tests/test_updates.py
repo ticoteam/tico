@@ -10,8 +10,7 @@ import pytest
 from backend import threads, updates
 from backend.auth import Identity
 from backend.store import H, Problem, digest
-from backend.tests.old_asks import old_answer, old_ask
-from backend.tests.test_api import api, get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
 
 MORNING = datetime(2026, 9, 29, 13, 0, tzinfo=timezone.utc)  # Tuesday 06:00 Pacific
 FRIDAY = datetime(2026, 10, 2, 13, 0, tzinfo=timezone.utc)
@@ -35,7 +34,7 @@ def bid(api, slug):
 
 @pytest.mark.parametrize("kind", ["daily", "weekly"])
 def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
-    from backend.tests.test_counsel import counsel_on
+    from backend.tests.helpers.counsel import counsel_on
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:
@@ -53,7 +52,7 @@ def test_update_requests_never_wake_counsel_which_cannot_publish(api, kind):
 
 
 def test_an_old_queued_counsel_update_is_skipped_without_sending_a_request(api):
-    from backend.tests.test_counsel import counsel_on
+    from backend.tests.helpers.counsel import counsel_on
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:
@@ -80,7 +79,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
         request = c.execute(
             "SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id WHERE q.state='sent'"
         ).fetchone()
-        assert "hub_update_create" in request["body"] and "Finished since your last update" in request["body"]
+        assert "tico_update_create" in request["body"] and "Finished since your last update" in request["body"]
         assert c.execute("SELECT 1 FROM jobs WHERE bot_id=?", (first,)).fetchone(), "the request wakes the bot"
         updates.post(c, first, "- Shipped the pricing page", day="2026-09-29")
         second = updates.dispatch(c, MORNING)
@@ -212,7 +211,7 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
     """A person posts in the same shape as a bot, as `human:<id>`, and everyone on the chart sees it;
     an Assistant draft stays labelled when its person edits it and goes when they replace it; the
     direct scope keeps one level of the chart, so a report's report never alerts."""
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "boss", "Manager", reports_to="human:ana")
@@ -254,7 +253,7 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
     outside = {u["bot"] for u in get(api, "updates", token="agent-test")["updates"]}
     assert analyst in outside and not any(updates.is_person(a) for a in outside)
     # The Assistant acting for ben in his chat posts no update for him: his update is his own.
-    from backend.tests.test_assistant import asked, assistant_turn
+    from backend.tests.helpers.assistant import asked, assistant_turn
 
     _, attempt = assistant_turn(api, "ben-test", "Post my update")
     asked(api, "updates", {"body": "- From my chat"}, attempt["token"], "turn", expected=403)
@@ -271,7 +270,7 @@ def test_people_post_their_own_update_and_alerts_come_only_from_direct_reports(a
 def test_updates_roll_up_the_org_chart_with_reports_updates_in_the_managers_request(api):
     """The deepest bots are asked first; a manager's request carries its reports' updates and names
     who had none, and its update links the ones it was written from."""
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     bot(api, "boss", "Manager", reports_to="human:ana")
     bot(api, "analyst", "Analyst", reports_to="boss")
@@ -300,7 +299,7 @@ def test_a_report_on_retry_and_a_stacked_manager_keep_the_90_minute_wait(api, mo
     """Through the scheduler's own steps: a report whose run ends without a post is asked again, and its
     manager waits 90 minutes from when it was first held, not from the day's first request; the
     manager above waits for that manager rather than starting its own clock."""
-    from backend.tests.test_api import assign, ready, runner
+    from backend.tests.helpers.api import assign, ready, runner
 
     chain = {"cpo": "human:ana", "ops": "cpo", "finance": "ops", "product-design": "ops"}
     r = runner(api)
@@ -374,8 +373,8 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     private, pending or deleted meeting, an approval and their private Assistant chat never reach it.
     The draft posts labelled, is tried once more on any failure, and never lands over or beside their
     own words; on Friday it is the week in review, which they edit or replace."""
-    from backend.tests.test_api import restrict
-    from backend.tests.test_assistant import say
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.assistant import say
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     post(api, "humans/ben", {"reports_to": "ana"})
@@ -389,39 +388,27 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     say(api, "My salary talks are next week")  # her private Assistant chat
     store = api.app.state.store
     with store.transaction() as c:
-        ask = old_ask(
+        # Her answers are the engine's: one on the shared budget, one on her private raise plan, which stays out.
+        ask = H.task_ask(
             c,
             "bot:ops",
+            budget["id"],
             "human:ana",
             "Search or social first?",
-            conversation_id=H.task(c, budget["id"])["conversation_id"],
-            refs={"task": budget["id"]},
+            seen_version=H.task(c, budget["id"])["version"],
         )
-        old_answer(c, "human:ana", ask, "Search ads first")
-        old_answer(c, "human:ana", old_ask(c, "bot:ops", "human:ana", "Lunch?"), "Chat answer, no task")
-        # Her answer names the shared budget but replies on the private raise plan: every task it names must be shared.
-        on_raise = old_ask(
-            c,
-            "bot:ops",
-            "human:ana",
-            "Can the raise wait?",
-            refs={"task": raise_plan["id"]},
-            conversation_id=H.task(c, raise_plan["id"])["conversation_id"],
-        )
-        old_answer(c, "human:ana", on_raise, "Mixed answer about the raise", refs={"task": budget["id"]})
+        H.task_answer(c, "human:ana", budget["id"], ask["requirement_id"], "Search ads first")
+        on_raise = H.task_ask(c, H.KEEPER, raise_plan["id"], "human:ana", "Can the raise wait?")
+        H.task_answer(c, "human:ana", raise_plan["id"], on_raise["requirement_id"], "Mixed answer about the raise")
     for task in (budget, raise_plan, audit):  # her decisions and comments, on each kind of task
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
-        post(
-            api,
-            f"tasks/{task['id']}",
-            {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"},
-        )
+        post(api, f"tasks/{task['id']}/done", {"version": get(api, f"tasks/{task['id']}")["task"]["version"]})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
         "INSERT INTO meetings(id,title,owner,metadata,notes,created_at,updated_at,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review),
     )
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done', updated_at=? WHERE id=?", (H.now(), done["id"]))
+        H.task_done(c, H.KEEPER, done["id"], "Finished")
         restrict(c, "finance", people=["ana"])
         H.task_create(c, "bot:finance", "Restricted request", "x", "human:ana")
         attended = {"calendar": {"attendees": ["ANA@acme.example"]}}
@@ -431,11 +418,6 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         meeting("Old sync", "Deleted meeting notes", **attended)
         c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('Old sync',?)", (H.now(),))
         meeting("Ben's one-to-one", "Not her meeting notes", participants=[{"email": "cara@acme.example"}])
-        c.execute(
-            "INSERT INTO approvals(id,kind,task_id,payload,requested_by_id,decided_by_id,decision,decided_at,created_at) "
-            "VALUES('ap1','send',?,?,'bot:ops','human:ana','approved',?,?)",
-            (budget["id"], json.dumps({"text": "Approval payload to the vendor"}), H.now(), H.now()),
-        )
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")
         updates.post(c, "ops", "- Ops shipped the runbook", day="2026-09-29")
         updates.post(c, "finance", "- Restricted numbers moved", day="2026-09-29")
@@ -458,7 +440,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
     assert draft["bot"] == "human:ana" and draft["drafted_by"] == "coo"
     assert "Ship the pricing page" in seen[0] and "Ops shipped" in seen[0] and "Met two customers" in seen[0]
     for shared in (
-        "Approve the ad budget: done",
+        "Approve the ad budget: Done",
         "Comment on Approve the ad budget",
         "Search ads first",
         "Launch sync: Agreed the launch date",
@@ -477,8 +459,6 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         "Pending import",
         "Deleted meeting",
         "Not her meeting",
-        "Approval payload",
-        "Chat answer",
         "Mixed answer",
     ):
         assert secret not in seen[0], secret + " reached a company-wide draft"
@@ -548,7 +528,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
 def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
     """BotOps, the Strategy Bot, the Librarian and the Task Manager get no node (so no empty "No update yet" row) in
     either kind or scope; a bot below one hangs from the next node up, and an update one posted stays in the feed."""
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     for slug, name in (
@@ -574,7 +554,7 @@ def test_the_tree_leaves_out_the_helpers_behind_the_assistant(api, monkeypatch):
 
 
 def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_alert(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "boss", "Manager", reports_to="human:ana")
@@ -600,7 +580,7 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
     analyst_id, writer_id = bid(api, "analyst"), bid(api, "writer")
     links = {i["author"]: i["id"] for i in boss["update"]["inputs"]}
     assert set(links) == {analyst_id, writer_id} and links[analyst_id] == analyst["update"]["id"]
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     with api.app.state.store.transaction() as c:
         restrict(c, "writer", people=["ana"])
@@ -626,7 +606,7 @@ def test_the_tree_nests_a_days_updates_by_the_org_chart_and_only_direct_reports_
 def test_the_feed_counts_replies_in_one_read_and_homes_card_shows_the_same_updates(api, monkeypatch):
     """Nov 4 web pass: the feed counted each update's replies with its own scan of every message (40 a page, ~500 ms on
     a busy hub), and Home's Updates card built the whole feed to show five headlines."""
-    from backend.tests.test_health_queries import counted
+    from backend.tests.helpers.health_queries import counted
 
     store = api.app.state.store
     with store.transaction() as c:
@@ -707,7 +687,7 @@ def test_a_bot_with_nothing_new_skips_and_its_request_is_neither_asked_again_nor
 
 
 def test_a_report_with_nothing_new_is_nothing_new_to_its_manager_not_missing(api, monkeypatch):
-    from backend.tests.test_bot_contact import bot
+    from backend.tests.helpers.bot_contact import bot
 
     monkeypatch.setattr(updates, "today", lambda at=None: "2026-09-29")
     bot(api, "boss", "Manager", reports_to="human:ana")

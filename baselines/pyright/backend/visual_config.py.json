@@ -1,0 +1,14 @@
+{
+    "files": {
+        "./backend/visual_config.py": [
+            {
+                "code": "reportAttributeAccessIssue",
+                "range": {
+                    "startColumn": 29,
+                    "endColumn": 37,
+                    "lineCount": 1
+                }
+            }
+        ]
+    }
+}

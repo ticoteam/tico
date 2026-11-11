@@ -2,7 +2,9 @@
 tasks, from the welcome's button or TICO_SAMPLE_COMPANY=on, on the shipped templates."""
 
 import re
+import shutil
 import uuid
+from pathlib import Path
 
 import pytest
 import yaml
@@ -17,94 +19,21 @@ from backend.config import Settings
 from backend.store import H, encode
 from backend import bot_settings as BS
 
-OWNER_EMAIL = "owner@sample.example"
-PEOPLE = {
-    "default_user": "owner",
-    "people": [
-        {"id": "owner", "name": "Owner Person", "email": OWNER_EMAIL, "primary_for": ["*"]},
-        {"id": "helper", "name": "Helper Person", "email": "helper@sample.example", "primary_for": []},
-    ],
-}
-# What a fresh environment seeds (templates/environment-registry/employees.yaml): the assistant and BotOps, planned.
-SEED = {"coo": {"name": "coo", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
-TOKEN = "local-owner-secret-token-0123456789"
-ROLE_BOTS = {"head-of-product": "claude", "builder": "codex", "support-agent": "codex", "content-marketer": "codex"}
-
-
-def settings_for(tmp_path, **overrides):
-    registry = tmp_path / "registry"
-    registry.mkdir(exist_ok=True)
-    (registry / "hub-access.yaml").write_text(yaml.safe_dump({"bot_admins": ["helper@sample.example"]}))
-    token = tmp_path / "token"
-    token.write_text(TOKEN)
-    token.chmod(0o600)
-    return Settings(
-        **{
-            "db_path": tmp_path / "hub.db",
-            "registry_dir": registry,
-            "local_owner_token_file": token,
-            "owner_email": OWNER_EMAIL,
-            "environment_id": "sample-1",
-            "company_name": "",
-            "app_name": "Tico",
-            "assistant_name": "Assistant",
-            "assistant_bot": "coo",
-            "enabled_providers": (),
-            **overrides,
-        }
-    )
-
-
-@pytest.fixture
-def environment(tmp_path):
-    """A signed-in loopback environment on the shipped catalog, seeded like a fresh install."""
-    clients = []
-
-    def build(seed_roster=True, **overrides):
-        client = TestClient(create_app(settings_for(tmp_path, **overrides)))
-        client.__enter__()
-        clients.append(client)
-        if seed_roster:
-            with client.app.state.store.transaction() as c:
-                H.sync_registry(c, SEED, PEOPLE)
-                c.execute(
-                    "INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO NOTHING", (encode(PEOPLE),)
-                )
-                for slug, config in SEED.items():
-                    c.execute('INSERT INTO bot_config(bot,owner_id,repo) VALUES(?,?,?)', (slug, 'owner', 'bot-' + slug))
-                    BS.write(c, slug, config)
-        return client
-
-    yield build
-    for client in clients:
-        client.__exit__(None, None, None)
-
-
-def signed_in():
-    return {"Authorization": "Bearer " + TOKEN, "Idempotency-Key": str(uuid.uuid4())}
-
-
-def start(api):
-    return api.post("/api/v2/setup/sample", json={}, headers=signed_in())
-
-
-def machine(api):
-    code = api.post("/api/v2/enrollments", json={"operator": "owner"}, headers=signed_in()).json()["code"]
-    return api.post(
-        "/api/v2/runners/enroll",
-        json={"code": code, "label": "Server", "platform": "test"},
-        headers={"Idempotency-Key": str(uuid.uuid4())},
-    ).json()
-
-
-def rows(api, sql, args=()):
-    with api.app.state.store.read() as c:
-        return [dict(row) for row in c.execute(sql, args)]
-
-
-def bot_ids(api):
-    """Bot slug to bot id: a bot the sample makes has a generated id, and the tables name bots by it."""
-    return {row["slug"]: row["id"] for row in rows(api, "SELECT id,slug FROM bots")}
+from backend.tests.helpers.sample_company import (
+    OWNER_EMAIL,
+    PEOPLE,
+    ROLE_BOTS,
+    SEED,
+    TOKEN,
+    booted,
+    environment,
+    machine,
+    rows,
+    settings_for,
+    signed_in,
+    start,
+    bot_ids,
+)  # noqa: F401
 
 
 # ---------------------------------------------------------------------------------------------- the file
@@ -127,7 +56,7 @@ def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_st
         for task in row["tasks"]:
             assert set(task) == {"title", "approve", "body"} and len(task["body"]) < 1200
             # Nothing leaves the company: no approval to send, spend or publish, no mail, no publishing.
-            assert not re.search(r"approval request|mail send|support send|file publish|hub message", task["body"])
+            assert not re.search(r"approval request|mail send|support send|file publish|tico message", task["body"])
     # A made-up company that names none of the test fixtures' people or companies.
     assert not re.search(r"\b(ana|ben|cara|acme|globex)\b", sample_company.FILE.read_text(), re.I)
 
@@ -190,8 +119,9 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     for task in tasks:
         assert task["requester_id"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner_id"]]["id"]
-        # Each ends by asking the owner one Yes/No question, the card in Needs you.
-        assert re.search(r'hub task question --on owner "Approve [^"]+\?"', task["body"]), task["body"]
+        # Each ends by asking the owner one Yes/No question on the task, which the owner sees in Needs you.
+        ask = r'tico task ask <id> --to owner "Approve [^"]+\?" --choices Yes,No --version N'
+        assert re.search(ask, task["body"]), task["body"]
 
 
 def test_the_sample_company_is_only_for_a_new_company_and_only_the_owner_starts_it(environment):

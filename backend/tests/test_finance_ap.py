@@ -7,14 +7,15 @@ import time
 
 import pytest
 
-from backend.tests.test_migrations import restore_config  # the column back for a rerun from before 0070
+from backend.tests.helpers.migrations import forget_from, restore_config  # the column back for a rerun from before 0070
 from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.finance import sync
 from backend.finance import reads as FR
 from backend.finance.core import feeds as F
+from backend.finance.store import ap as SAP
 from backend.finance.store import ledger as SL
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     ACME_ADDRESS,
     AT,
     MERCURY,
@@ -28,66 +29,11 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
-from backend.tests.test_finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_payments import HOURS, _checking, _payee
+from backend.tests.helpers.finance_ap import LATER, _balance, _bill, _events, _ingest, _pnl, _txn, _vendor
+from backend.tests.helpers.finance_oks import give, send_back, withdraw
 
 PLAIN = "human:eve"  # a web teammate with no grants or rights
-LATER = "2026-10-20T12:00:00.000000Z"
-
-
-def _vendor(c, name="Acme Supplies", **more) -> str:
-    made = act(c, OWNER, "contact_create", {"name": name, "kind": "vendor", **more})
-    assert made.status == "committed", made
-    return str(made.result["contact_id"])
-
-
-def _bill(c, vendor, lines, who=OWNER, day="2026-10-10", **more) -> str:
-    made = act(c, who, "bill_create", {"vendor_id": vendor, "bill_date": day, "lines": lines, **more})
-    assert made.status == "committed", made
-    return str(made.result["bill_id"])
-
-
-def _balance(c, code) -> int:
-    return int(
-        c.execute(
-            "SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id "
-            "WHERE a.code=?",
-            (code,),
-        ).fetchone()[0]
-    )
-
-
-def _pnl(c, basis, start="2026-10-01", end="2026-12-31") -> dict[str, int]:
-    found = FR.pnl(c, OWNER, start, end, "year", basis, AT)
-    return {str(r["code"]): int(r["total"]) for r in found["rows"] if r["total"]}
-
-
-def _events(c, name) -> list[tuple[str, str]]:
-    return [
-        tuple(r)
-        for r in c.execute("SELECT subject, period_key FROM fin_events WHERE name=? ORDER BY created_at", (name,))
-    ]
-
-
-def _ingest(c, raw, at=AT):
-    from backend.finance import banking
-    from backend.finance.context import load
-
-    cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
-    return banking.ingest(load(c, at), cid, F.mercury_txn(raw, 0))
-
-
-def _txn(raw_id, amount, who="Acme Supplies", day="2026-10-14", kind="outgoingPayment", **extra):
-    return {
-        **MERCURY["txn_bank_fee"],
-        "id": raw_id,
-        "accountId": "acct-chk",
-        "amount": amount,
-        "kind": kind,
-        "createdAt": f"{day}T10:00:00Z",
-        "postedAt": f"{day}T10:00:00Z",
-        "counterpartyName": who,
-        **extra,
-    }
 
 
 def test_every_new_read_answers_on_empty_books_and_refuses_what_the_viewer_cannot_see(books):  # noqa: F811
@@ -279,10 +225,9 @@ def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books)
         assert again.status == "committed", again
 
 
-def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_says_so(books):
-    """A payment a scheduled bill asked for that waits on approval and never runs leaves no "Scheduled" bill behind:
+def test_a_scheduled_payment_sent_back_or_withdrawn_reopens_the_bill_and_says_so(books):
+    """A payment a scheduled bill asked for that waits on an OK and never runs leaves no "Scheduled" bill behind:
     the bill is open with no schedule, its row says how the ask ended, and a new schedule asks again (fresh key)."""
-    from backend import hubdb as H
 
     def asked(c, bid):
         FA.watch_documents(c, AT)
@@ -311,29 +256,23 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
     with books.transaction() as c:
         bid = _scheduled_today(c, ask=True)
         first = asked(c, bid)
-        H.approval_decide(c, str(first.approver), str(first.approval_id), "declined")
+        send_back(c, str(first.approver), str(first.approval_id))
         assert FA.approval_decided(c, str(first.approval_id), AT).status == "denied"
         reopened(c, bid, "denied")
         reschedule(c, bid)
         assert FR.bill(c, OWNER, bid)["payment"] is None  # a new schedule clears how the last one ended
         second = asked(c, bid)
         assert second.action_id != first.action_id
-        H.approval_withdraw(c, str(second.approval_id), "Withdrawn.")
-        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["withdrawn"]
+        withdraw(c, second.approval_id)
+        assert [r.status for r in FA.ok_sweep(c, AT)] == ["withdrawn"]
         reopened(c, bid, "withdrawn")
-        reschedule(c, bid)
-        third = asked(c, bid)
-        c.execute("UPDATE approvals SET created_at='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
-        H.approval_withdraw(c, str(third.approval_id), "No decision in 14 days.")
-        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["expired"]
-        reopened(c, bid, "expired")
 
 
 def test_vendor_labels_are_contact_names_and_never_ids(books):
     """F: lines a bill, an invoice write-off or any document posts carry the contact's id as their vendor key; the
     drill-down, spend-by and transactions show the contact's name, a plain vendor name as the text it was posted under, and an id with no
     contact behind it as nothing."""
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     stray = "0b6a4a52-5d0e-4c1a-9a43-2f2f3f6d1e10"
     with books.transaction() as c:
@@ -699,9 +638,10 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
             **entry,
             "lines": [{**entry["lines"][0], "amount": 1_000_001}, {**entry["lines"][1], "amount": -1_000_001}],
         }
-        assert act(c, "bot:coder", "journal", big).status == "needs_approval"
+        result = act(c, "bot:coder", "journal", big)
+        assert result.status == "needs_approval", result
         assert (
-            act(c, "bot:coder", "account_create", {"code": "6150", "name": "Tools", "type": "expense"}).status
+            act(c, "bot:coder", "account_create", {"code": "6160", "name": "Tools", "type": "expense"}).status
             == "needs_approval"
         )
 
@@ -822,7 +762,7 @@ def test_marked_paid_from_checking_then_its_bank_row_arrives_posts_cash_once_and
 
 
 def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card_use_and_liability(books):
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_use, _card_holds
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve, _card_use, _card_holds
 
     fake = FakeMercury()
     fake.balances["credit-io"] = 0
@@ -851,7 +791,7 @@ def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card
         codes = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, code FROM fin_accounts")}
         lines = [(codes[x.account_id], dict(x.tags), x.amount) for _, x in SL.entry_lines(c, entry)]
         assert ("5100", {"teammate": "human:eve", "team": "web", "project": "site"}, 4_500) in lines
-        assert [a for code, _, a in lines if code == "2100"] == [-4_500]  # still on the card liability
+        assert [a for code, _, a in lines if code == "2101"] == [-4_500]  # still on the card liability
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
         assert not _events(c, "finance.feed.needs_category")
 
@@ -861,7 +801,7 @@ def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
     one vendor budget counts the vendor's bill line and card row once each, and spend-by vendor shows one row. The
     budget was made on the plain name before the contact existed; it matches once the contact does."""
     from backend.finance import budgeting
-    from backend.tests.test_finance_banking import _arrives, _card_for_eve
+    from backend.tests.helpers.finance_banking import _arrives, _card_for_eve
 
     fake = FakeMercury()
     fake.balances["credit-io"] = 0
@@ -916,7 +856,7 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
     stores its id; siblings on one vendor are refused, and so is a rename that would make two count the same spend;
     an inactive contact's name captures no new bank row; a merchant with no contact reads as its newest row's text."""
     from backend.finance import budgeting
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     connect(books, FakeMercury())
 
@@ -996,7 +936,7 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
     from backend.finance.core.ledger import name_key
     from backend.finance.store import budgets as SB
     from backend.finance.store import schema
-    from backend.tests.test_finance_fixtures import spend
+    from backend.tests.helpers.finance_fixtures import spend
 
     assert name_key("A" * 79 + "ß") != name_key("A" * 79 + "s")
     assert all(name_key(name_key(x)) == name_key(x) for x in (" ÉCOLE ", "A" * 79 + "ß", "ﬃ STRASSE "))
@@ -1036,10 +976,7 @@ def test_phase_two_keys_a_budget_vendor_name_and_never_takes_a_contact_id(books)
         assert (took.status, took.code) == ("failed", "invalid")
         book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
         other = _vendor(c, "Globex")
-        c.execute(
-            "INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?)",
-            (book, vendor, other, AT),
-        )  # as if it got in
+        SAP.alias_add(c, book, vendor, other, AT)  # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
 
 
@@ -1054,7 +991,7 @@ def test_the_upgrade_drops_fin_vendor_legacy_and_vendor_keys_still_follow_aliase
         vendor = _vendor(c, "Acme Supplies")
         SAP.alias_add(c, book, "acme supplies co", vendor, AT)
         restore_config(c)
-        c.execute("DELETE FROM schema_migrations WHERE version>='0005' AND version NOT LIKE 'legacy_%'")
+        forget_from(c, "0005")
         c.execute(
             "CREATE TABLE fin_vendor_legacy (book_id TEXT NOT NULL, raw TEXT NOT NULL, name_key TEXT NOT NULL, "
             "PRIMARY KEY (book_id, raw))"
@@ -1074,7 +1011,7 @@ def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settle
     after). A reconciled debit under that name, found as a lost payment, moves to the payment's line and settles:
     lines take back the stored folded key."""
     from backend.finance.core.ledger import name_key
-    from backend.tests.test_finance_payments import _debit, _lost_send, _reconcile
+    from backend.tests.helpers.finance_payments import _debit, _lost_send, _reconcile
     from backend.finance.core import ledger as L
     from backend.finance.core.errors import FinanceError
 
@@ -1380,6 +1317,7 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
     waiting payment_create is withdrawn with its approval, so approving it later runs nothing, the bill stays
     scheduled for its new day, and that day asks afresh. A live payment still refuses a reschedule."""
     from backend import hubdb as H
+    from backend import task_asks
 
     connect(books, FakeMercury())
     with books.transaction() as c:
@@ -1392,8 +1330,10 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
         )
         assert moved.status == "committed", moved
         assert FA.action(c, old.action_id).status == "withdrawn"
-        assert H.approval(c, str(old.approval_id))["decision"] == "withdrawn"
-        assert FA.approval_decided(c, str(old.approval_id), AT).status == "withdrawn"  # approving runs nothing
+        assert task_asks.standing(c, str(old.approval_id)) == task_asks.WITHDRAWN
+        with pytest.raises(H.Refused):  # an OK that was withdrawn cannot be given
+            give(c, str(old.approver), str(old.approval_id))
+        assert FA.approval_decided(c, str(old.approval_id), AT).status == "withdrawn"
         bill = FR.bill(c, OWNER, bid)
         assert (bill["status"], bill["pay_on"], bill["payment"]) == ("scheduled", "2026-11-15", None)
         FA.watch_documents(c, AT)
@@ -1401,7 +1341,7 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
         FA.watch_documents(c, "2026-11-15T12:00:00.000000Z")
         again = FA.action(c, str(FR.bill(c, OWNER, bid)["schedule"]["action_id"]))
         assert again.action_id != old.action_id and again.status == "needs_approval"
-        H.approval_decide(c, str(again.approver), str(again.approval_id), "approved")
+        give(c, str(again.approver), str(again.approval_id))
         assert FA.approval_decided(c, str(again.approval_id), "2026-11-15T12:00:00.000000Z").status == "committed"
         refused = act(
             c,

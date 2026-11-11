@@ -11,10 +11,10 @@ from backend import hubdb as H
 from backend import report_managers
 from backend.auth import Identity
 from backend.store import encode
-from backend.tests.test_api import api, claim, get, headers, post, put  # noqa: F401  (api is a fixture)
-from backend.tests.test_botops_parity import act
-from backend.tests.test_mcp import call
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (botops is a fixture)
+from backend.tests.helpers.api import claim, get, headers, post, put  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.botops_parity import act
+from backend.tests.helpers.mcp import call
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (botops is a fixture)
 
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 
@@ -193,7 +193,7 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
     bot(api, "counsel", reports_to="lead")
     err, out = call(
         api,
-        "hub_bot_update",
+        "tico_bot_update",
         {"slug": "counsel", "display_name": "Counsel Lead", "description": "Reviews contracts."},
         token=lead,
     )
@@ -211,18 +211,18 @@ def test_the_hub_tools_and_the_model_route_work_for_a_manager_bot(api):
         row["via"] == "report_manager" and row["after"]["model"] == "claude-haiku-5-5"
         for row in changes_to(api, "counsel", "model")
     )
-    err, out = call(api, "hub_bot_model", {"bot": "counsel", "model": "claude-sonnet-5-5"}, token=lead)
+    err, out = call(api, "tico_bot_model", {"bot": "counsel", "model": "claude-sonnet-5-5"}, token=lead)
     assert not err, out
     assert any(
         row["after"]["model"] == "claude-sonnet-5-5" and row["via"] == "report_manager"
         for row in changes_to(api, "counsel", "model")
     )
     # Its task model too, through the tool; a task's own model stays a person's, so the manager cannot set one.
-    err, out = call(api, "hub_bot_task_model", {"bot": "counsel", "model": "claude-haiku-5-5"}, token=lead)
+    err, out = call(api, "tico_bot_task_model", {"bot": "counsel", "model": "claude-haiku-5-5"}, token=lead)
     assert not err, out
     assert any(row["via"] == "report_manager" for row in changes_to(api, "counsel", "task_model"))
     task = post(api, "tasks", {"owner": "counsel", "title": "Review the lease", "body": "Check the break clause."})
-    err, out = call(api, "hub_task_model", {"id": task["id"], "model": "claude-haiku-5-5"}, token=lead)
+    err, out = call(api, "tico_task_model", {"id": task["id"], "model": "claude-haiku-5-5"}, token=lead)
     assert err, out
     assert get(api, "tasks/" + task["id"])["run_model"] is None
 
@@ -633,7 +633,7 @@ def test_botops_archives_a_report_and_the_change_is_recorded_and_restorable(api,
     assert get(api, "bots/counsel")["state"] == "archived"
 
 
-def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_report(api):
+def test_a_manager_bot_files_an_instruction_change_as_a_task_for_its_report_and_not_for_a_stranger(api):
     lead = bot(api, "lead", reports_to="human:cara")
     bot(api, "counsel", reports_to="lead")
     bot(api, "stranger", reports_to="human:cara")
@@ -645,16 +645,15 @@ def test_a_manager_bot_files_an_instruction_change_as_a_next_run_task_for_its_re
             "owner": "counsel",
             "title": "Change the NDA steps",
             "body": "Update your AGENT.md: ask for the counterparty's name first.",
-            "next_run": True,
         },
         token=lead,
     )
     row = get(api, f"tasks/{filed['id']}")["task"]
-    assert row["owner_id"] == "bot:" + bot_id(api, "counsel") and row["next_run"] is True
+    assert row["owner_id"] == "bot:" + bot_id(api, "counsel")
     post(
         api,
         "tasks",
-        {"owner": "stranger", "title": "Change the steps", "body": "Do it.", "next_run": True},
+        {"owner": "stranger", "title": "Change the steps", "body": "Do it."},
         token=lead,
         expected=403,
     )

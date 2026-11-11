@@ -163,7 +163,7 @@ class ReadIndex:
             for aid, mid in self.c.execute("SELECT attempt_id,message_id FROM attempt_inputs"):
                 if aid in rows:
                     rows[aid]["messages"].append(mid)
-            for tid, aid in self.c.execute("SELECT id,carried_by FROM tasks WHERE carried_by IS NOT NULL"):
+            for aid, tid in self.c.execute("SELECT id,task_id FROM attempts WHERE task_id IS NOT NULL"):
                 if aid in rows and tid in self.private:
                     rows[aid]["tasks"].add(tid)
             for aid, detail in self.c.execute(
@@ -182,7 +182,7 @@ class ReadIndex:
         ).fetchone()
         if not row:
             return set()
-        ids = {r[0] for r in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)) if r[0] in self.private}
+        ids = {r[0] for r in self.c.execute(privacy.RUN_TASK_SQL, (aid,)) if r[0] in self.private}
         for (detail,) in self.c.execute(
             "SELECT detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
         ):
@@ -232,8 +232,10 @@ class ReadIndex:
             direct = self._direct_attempt(aid)
             if direct is not None:
                 return direct
-            return self.meetings.attempt_readable(self.principals, aid) and not self.denied.intersection(
-                self.attempt_sources(aid)
+            return (
+                self.meetings.attempt_readable(self.principals, aid)
+                and not self.denied.intersection(self.attempt_sources(aid))
+                and self.attempt_pages(aid)
             )
         except ValueError:
             return False
@@ -260,7 +262,7 @@ class ReadIndex:
                 return False
         if not found:
             return None
-        if any(tid in self.denied for (tid,) in self.c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,))):
+        if any(tid in self.denied for (tid,) in self.c.execute(privacy.RUN_TASK_SQL, (aid,))):
             return False
         for action, detail in self.c.execute(
             "SELECT action,detail FROM events WHERE action IN (" + privacy.RUN_TASK_EVENTS_SQL + ") AND target=?",
@@ -321,6 +323,38 @@ class ReadIndex:
             ids.update(self.attempt_sources(run_id))
         return ids
 
+    def reply_pages(self, msg):
+        """A reply inherits the file refusal of each message it replies to, at any depth (task_privacy.reply_pages_readable)."""
+        return privacy.reply_pages_readable(self.c, self.principals, msg, self.target_message)
+
+    def attempt_pages(self, aid):
+        """Each message a run reads (its message and its inputs) passes its own file refusal and that of the messages it
+        replies to. A root's own refs were checked by _direct_attempt already; a reply reaches here without them."""
+        mids = [
+            row["message_id"]
+            for row in self.c.execute(
+                "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (aid,)
+            )
+        ]
+        mids.extend(r[0] for r in self.c.execute("SELECT message_id FROM attempt_inputs WHERE attempt_id=?", (aid,)))
+        for mid in mids:
+            msg = self.target_message(mid)
+            if msg and not (
+                privacy.page_message_readable(self.c, self.principals, H._json(msg.get("refs"), {}) or {})
+                and self.reply_pages(msg)
+            ):
+                return False
+        return True
+
+    def run_pages(self, refs):
+        """A message a run wrote inherits that run's file refusal (task_privacy.run_pages_readable)."""
+        data = H._json(refs, {}) if isinstance(refs, str) else refs
+        if not isinstance(data, dict):
+            return True
+        run = data.get("run")
+        aid = data.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+        return not isinstance(aid, str) or not aid or self.attempt_pages(aid)
+
     def _message_sources(self, mid, cid, refs, reply):
         return self.sources({"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
 
@@ -332,6 +366,8 @@ class ReadIndex:
             # room once per request, retaining unknown/deleted task denial.
             if refs in (None, "", "{}") and not reply:
                 return self.plain_room(cid)
+            if reply and not self.reply_pages({"in_reply_to": reply}):
+                return False
             # Do not retain large arbitrary reference payloads as cache keys.
             direct = self.direct_message(cid, refs) if len(refs or "") <= 4096 else self._direct_message(cid, refs)
             if direct is not None:
@@ -340,9 +376,13 @@ class ReadIndex:
                 parent = self.direct_parent(reply)
                 if parent is not None:
                     return parent
-            return self.meetings.message_readable(
-                self.principals, {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply}
-            ) and not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+            return (
+                self.meetings.message_readable(
+                    self.principals, {"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply}
+                )
+                and not self.denied.intersection(self.message_sources(mid, cid, refs, reply))
+                and self.run_pages(refs)
+            )
         except ValueError:
             return False
 
@@ -425,6 +465,11 @@ class ReadIndex:
     def event(self, target, actor, ts, detail):
         if not self.content(H._json(detail, {}) or {}) or not self.content(target):
             return False
+        from . import task_asks
+
+        # An event about a bound OK reads only to the OK's parties (task_asks.party), whoever reads its task.
+        if task_asks.event_hidden(self.c, self.principals, target):
+            return False
         if target in self.tags() and not self.tag(target, False):
             return False
         msg = self.target_message(target)
@@ -434,6 +479,8 @@ class ReadIndex:
                 or msg.get("deleted")
                 or self.denied.intersection(self.sources(msg))
                 or not self.meetings.message_readable(self.principals, msg)
+                or not self.reply_pages(msg)
+                or not self.run_pages(msg.get("refs"))
             ):
                 return False
         except ValueError:
@@ -496,6 +543,8 @@ class ReadIndex:
                     or msg.get("deleted")
                     or self.denied.intersection(self.sources(msg))
                     or not self.meetings.message_readable(self.principals, msg)
+                    or not self.reply_pages(msg)
+                    or not self.run_pages(msg.get("refs"))
                 ):
                     return False
             except ValueError:

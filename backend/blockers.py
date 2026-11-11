@@ -2,8 +2,8 @@
 
 GitHub refusing a reviewer's review (403), GitHub unreadable at a review move (sign-in or API down), a test runner
 dispatch refused: none needs a decision, only someone who can fix access or the service. Tico files one task for it to
-the company's DevOps bot, and to the type's manager (Head of Engineering on Dev tickets) only when there is no active
-DevOps bot. One open task per kind and place: the same blocker again reuses it."""
+the company's DevOps bot, and to the manager of the stopped task's pipeline only when there is no active DevOps
+bot. One open task per kind and place: the same blocker again reuses it."""
 
 import hashlib
 
@@ -12,21 +12,24 @@ from . import bot_settings as BS
 
 # The DevOps bot template (templates/); a team that renamed the bot still built it from that template.
 TEMPLATE = "devops"
+# The new org's DevOps bot (templates/catalog/infrastructure-owner) comes after the old ones.
+NEW_TEMPLATE = "infrastructure-owner"
 SLUGS = ("devops-engineer", "devops")
 GONE = ("paused", "planned", "archived", "quarantined")
 
 
+def _built(c, template):
+    """The ids of the bots made from `template`, in id order."""
+    if not H._has_table(c, "bot_config"):
+        return []
+    return [
+        r[0] for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? ORDER BY bot", (template,))
+    ]
+
+
 def devops(c):
     """The id of the active DevOps bot, or None."""
-    built = (
-        [
-            r[0]
-            for r in c.execute(f"SELECT bot FROM bot_config bc {BS.JOIN} WHERE s.template=? ORDER BY bot", (TEMPLATE,))
-        ]
-        if H._has_table(c, "bot_config")
-        else []
-    )
-    for ident in (*built, *SLUGS):
+    for ident in (*_built(c, TEMPLATE), *SLUGS, *_built(c, NEW_TEMPLATE)):
         row = H.resolve_bot(c, ident)
         if row and row.get("state") not in GONE:
             return row["id"]
@@ -34,7 +37,7 @@ def devops(c):
 
 
 def ticket_of_pr(c, repository, number):
-    """The open task a pull request is linked on, or None: whose type manager hears when there is no DevOps."""
+    """The open task a pull request is linked on, or None: whose pipeline's manager hears when there is no DevOps."""
     url = f"https://github.com/{repository}/pull/{int(number)}".lower()
     for (task_id,) in c.execute(
         "SELECT task_id FROM task_links WHERE kind='pr' AND lower(url)=? ORDER BY created_at DESC", (url,)
@@ -47,7 +50,7 @@ def ticket_of_pr(c, repository, number):
 
 def route(c, key, title, body, about=None):
     """File (or reuse) the task for a permission or outage blocker `key` and return it, or None when nobody can
-    take it. `about` is the task the blocker stopped, whose type manager is the fallback.
+    take it. `about` is the task the blocker stopped, whose pipeline's manager (a bot) is the fallback.
 
     A blocker that stopped a private task is itself private, read by its owner (DevOps) and Tico: its title and body
     name the repository and pull request, which would tell the company about the private task. Its audit key is a
@@ -64,8 +67,10 @@ def route(c, key, title, body, about=None):
     devops_id = devops(c)
     owner = H.bot_actor(devops_id) if devops_id else None
     if not owner and about:
-        manager = H.type_manager(c, about)
-        owner = H.bot_actor(manager) if manager else None
+        from . import task_engine
+
+        manager = (task_engine.pipeline(c, about.get("pipeline_id") or "") or {}).get("manager_id")
+        owner = manager if H.is_bot(manager) else None
     if not owner:
         return None
     stopped = (
@@ -81,7 +86,7 @@ def route(c, key, title, body, about=None):
         + "\n\nThis is a permission or outage blocker, not a decision: fix the access or the service, then mark this done."
     )
     if not devops_id:
-        text += " There is no active DevOps bot, so it came to the type's manager."
+        text += " There is no active DevOps bot, so it came to the pipeline's manager."
     made = H.task_create(
         c, H.KEEPER, title[:150], text, owner, deduplicate=False, lint=False, private=True if hidden else None
     )

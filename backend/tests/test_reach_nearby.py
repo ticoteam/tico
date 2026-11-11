@@ -7,13 +7,14 @@ with no manager counts as reporting to the owner, Ana: doc-updater and Scout, wh
 Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
 
 import json
+from datetime import datetime, timedelta, timezone
 
 from backend import bot_settings as BS
-from backend import reach, task_allocator
+from backend import reach
 from backend.auth import Identity
 from backend.store import H, encode
-from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
-from backend.tests.test_task_caps import as_bot
+from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.task_caps import as_bot
 import pytest
 
 
@@ -60,14 +61,14 @@ def task(api, token, owner, title="Draft the launch note", expected=200, **extra
 
 
 def wait_on_cara(c, task_id):
-    """The task's bot waits on Cara: a question task for her under it, so she is one it waits on (derived)."""
-    H.task_update(
+    """Ben, who handed the task over, asks Cara on it: she is one it waits on, and so one it is shared with."""
+    H.task_ask(
         c,
-        "bot:product-design",
+        "human:ben",
         task_id,
-        status="waiting",
-        waiting_on="human:cara",
-        note="Can you check the launch note? I'll send it after.",
+        "human:cara",
+        "Can you check the launch note before it goes out?",
+        seen_version=H.task(c, task_id)["version"],
     )
 
 
@@ -183,7 +184,7 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     message(api, "pd-test", "human:ben", "Status?", expected=409)
     asked = message(api, "ben-test", "product-design", "How is the launch note going?")
     message(api, "pd-test", "human:ben", "Draft is up.", in_reply_to=asked["id"])  # a direct reply to Ben's message
-    # Cara is on Ben's task as the one it waits on: product-design may hand it to her, and give her nothing else.
+    # Cara is on Ben's task as one it waits on; that does not open her to product-design off the task.
     shared = task(api, "ben-test", "bot:product-design", title="Launch note")
     with api.app.state.store.transaction() as c:
         wait_on_cara(c, shared["id"])
@@ -196,42 +197,42 @@ def test_a_solicited_reply_and_work_on_a_shared_task_pass(api):
     task(api, "pd-test", "human:cara", title="Something new for Cara", expected=409)
     # Waiting on Cara no longer opens her to a bot that is not next to her: it takes it to its manager.
     r = api.post(
-        f"/api/v2/tasks/{shared['id']}",
+        f"/api/v2/tasks/{shared['id']}/owner",
         json={"owner": "human:cara", "version": shared["version"]},
         headers=headers("pd-test"),
     )
     assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "reach_closed", r.text
     # Ben handed it the task, so a hand-back to Ben passes.
     r = api.post(
-        f"/api/v2/tasks/{shared['id']}",
+        f"/api/v2/tasks/{shared['id']}/owner",
         json={"owner": "human:ben", "version": shared["version"]},
         headers=headers("pd-test"),
     )
     assert r.status_code == 200, r.text
 
 
-def test_a_step_flow_hand_off_a_helper_and_a_person_are_never_refused(api):
+def test_a_stage_hand_off_a_helper_and_a_person_are_never_refused(api):
+    from backend.tests.helpers import engine as X
+
     chart(api)
     task(api, "pd-test", "bot:scout", title="To Scout", expected=409)
     with api.app.state.store.transaction() as c:
-        typ = H.type_create(
+        X.pipeline(
             c,
-            H.KEEPER,
+            "copy",
             "Copy",
-            [
-                {"name": "Draft", "status": "doing"},
-                {"name": "Edit", "status": "review", "flow": {"assign": {"pool": ["scout"]}}},
-                {"name": "Done", "status": "done"},
-            ],
+            (
+                {"name": "Draft", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
+                {"name": "Edit", "owner": "bot:scout", "requirements": [{"kind": "owner_done"}]},
+            ),
         )
-    ticket = task(api, "pd-test", "bot:product-design", title="Copy ticket", type=typ["id"], step="Draft")
-    r = api.post(
-        f"/api/v2/tasks/{ticket['id']}", json={"step": "Edit", "version": ticket["version"]}, headers=headers("pd-test")
-    )
+    copy = task(api, "pd-test", "bot:product-design", title="Copy task", pipeline="copy")
+    # The pipeline's next stage is Scout's: the engine hands it on, whoever moved it.
+    r = api.post(f"/api/v2/tasks/{copy['id']}/done", json={"version": copy["version"]}, headers=headers("pd-test"))
     assert r.status_code == 200, r.text
-    with api.app.state.store.transaction() as c:
-        assert ticket["id"] in [t for t, _ in task_allocator.allocate(c)]
-        assert H.task(c, ticket["id"])["owner_id"] == "bot:scout"
+    with api.app.state.store.read() as c:
+        assert (H.task(c, copy["id"])["stage_id"], H.task(c, copy["id"])["owner_id"]) == ("copy-edit", "bot:scout")
     # The Assistant (coo) and BotOps are off the chart: anyone reaches them.
     task(api, "pd-test", "bot:coo", title="For the Assistant")
     assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
@@ -252,10 +253,20 @@ def test_everyone_open_restores_reach_to_anyone(api):
     assert get(api, "reach")["defaults"] == {**reach.DEFAULTS, "person_mode": "open"}
 
 
-def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
+def dry_run(api, capsys):
+    """scripts/reach_dry_run.py over the last day of `api`'s database, as its JSON."""
     import importlib.util
     from pathlib import Path
 
+    path = Path(__file__).resolve().parents[2] / "scripts" / "reach_dry_run.py"
+    spec = importlib.util.spec_from_file_location("reach_dry_run", path)
+    dry = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dry)
+    assert dry.main(["--db", str(api.app.state.store.settings.db_path), "--days", "1", "--json"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     chart(api)
     r = api.put("/api/v2/reach/settings/*", json={"mode": "open"}, headers=headers())
     assert r.status_code == 200, r.text
@@ -264,12 +275,7 @@ def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     task(api, "pd-test", "bot:finance", title="Before nearby, to a peer")
     r = api.put("/api/v2/reach/settings/*", json={"mode": None}, headers=headers())
     assert r.status_code == 200, r.text
-    path = Path(__file__).resolve().parents[2] / "scripts" / "reach_dry_run.py"
-    spec = importlib.util.spec_from_file_location("reach_dry_run", path)
-    dry = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(dry)
-    assert dry.main(["--db", str(api.app.state.store.settings.db_path), "--days", "1", "--json"]) == 0
-    out = json.loads(capsys.readouterr().out)
+    out = dry_run(api, capsys)
     assert out["refused"] == 2 and out["refused_to_people"] == 2 and out["people_hit"] == 1
     assert out["pairs"] == [
         {
@@ -284,13 +290,41 @@ def test_the_dry_run_replays_history_through_the_same_decision(api, capsys):
     assert out["by_kind"] == {"task:made": 2}
 
 
+def test_a_task_made_in_a_slow_write_is_still_read_as_made(api, capsys, monkeypatch):
+    """A new task's send is logged in the write that makes it, after everything else that write does. On a loaded box
+    that took 2 s or more once, and the dry run, which matched the send to the task by the clock, read the task as
+    handed on (merge queue run 42484614049). The send carries the task's own creation time."""
+    import time_machine
+
+    chart(api)
+    r = api.put("/api/v2/reach/settings/*", json={"mode": "open"}, headers=headers())
+    assert r.status_code == 200, r.text
+    create = H.task_create
+    with time_machine.travel(datetime.now(timezone.utc), tick=True) as clock:
+
+        def slow(*args, **kwargs):
+            row = create(*args, **kwargs)
+            clock.shift(timedelta(seconds=3))  # the rest of the write takes 3 s
+            return row
+
+        monkeypatch.setattr(H, "task_create", slow)
+        made = task(api, "pd-test", "human:cara", title="Filed on a slow day")
+        monkeypatch.setattr(H, "task_create", create)
+    with api.app.state.store.read() as c:
+        sent = c.execute("SELECT sent_at FROM task_cap_log WHERE task_id=?", (made["id"],)).fetchone()[0]
+        assert sent == H.task(c, made["id"])["created_at"]
+    r = api.put("/api/v2/reach/settings/*", json={"mode": None}, headers=headers())
+    assert r.status_code == 200, r.text
+    assert dry_run(api, capsys)["by_kind"] == {"task:made": 1}
+
+
 def refused_code(r):
     assert r.status_code == 409, r.text
     return r.json()["error"]
 
 
 def test_a_refusal_never_names_a_teammate_the_bot_may_not_see(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     chart(api)
     with api.app.state.store.transaction() as c:
@@ -523,20 +557,23 @@ def test_a_bot_two_levels_down_is_refused_a_person_whatever_it_shares_with_them(
         headers=headers("ben-test"),
     )
     assert other.status_code == 200, other.text
-    with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:ops", child["id"], status="waiting", waiting_on="human:ben", note="Question for Ben?")
+    with pytest.raises(reach.Refused) as asked_ben:  # an ask of Ben on the task is a write to him, and refused
+        with api.app.state.store.transaction() as c:
+            H.task_ask(c, "bot:ops", child["id"], "human:ben", "Question for Ben?", seen_version=child["version"])
+    assert asked_ben.value.code == "reach_closed"
     for title in ("Straight to Ben",):
         task(api, "ops-test", "human:ben", title=title, expected=409)
     refused = message(api, "ops-test", "human:ben", "A question.", expected=409, refs={"task": [child["id"]]})
     assert refused["error"]["code"] == "reach_closed" and refused["error"]["via"] == "bot:product-design"
     assert "Send it to product-design, who can pass it on." in refused["error"]["detail"]
-    # An ask that becomes a question task owned by Ben is checked the same way.
+    # Handing Ben the task is checked the same way.
     r = api.post(
-        f"/api/v2/tasks/{child['id']}",
+        f"/api/v2/tasks/{child['id']}/owner",
         json={"owner": "human:ben", "version": child["version"]},
         headers=headers("ops-test"),
     )
     assert r.status_code == 409, r.text
+    assert r.json()["error"]["code"] == "reach_closed", r.text
     # Bot to bot is as before.
     task(api, "ops-test", "bot:product-design", title="To its manager")
     assert asked["id"]
@@ -551,7 +588,7 @@ def test_a_bot_two_levels_down_may_answer_a_person_who_came_to_it_or_handed_it_t
     message(api, "ops-test", "human:ben", "One more thing.", conversation_id=room)  # the conversation Ben opened
     handed = task(api, "ben-test", "bot:ops", title="Ben's own task for ops")
     message(api, "ops-test", "human:ben", "A question on it.", refs={"task": [handed["id"]]})
-    # Ben handed it the task, so a question task for Ben on it passes; a new task for Ben does not.
+    # Ben handed it the task, so a message to Ben on it passes; a new task for Ben does not.
     task(api, "ops-test", "human:ben", title="Unrelated", expected=409)
 
 

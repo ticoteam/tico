@@ -8,7 +8,7 @@ None yet. Record each setup answer here, one line each, dated. Record the reposi
 the branch each change merges into.
 
 ## Routine
-None. Builder works from the Dev tickets that reach its step.
+None. Builder works from the tasks it is given.
 
 ## Current focus
 None.

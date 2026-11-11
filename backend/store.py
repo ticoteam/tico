@@ -16,7 +16,6 @@ import orjson
 import yaml
 
 from . import bot_settings as BS
-from . import goals as G
 from . import hubdb as H
 from . import idempotency_messages
 from . import message_links
@@ -70,7 +69,7 @@ CREATE INDEX IF NOT EXISTS settings_changes_bot_id ON settings_changes(bot,creat
 CREATE TABLE IF NOT EXISTS session_epochs(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id), epoch INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 -- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
--- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
+-- (the sessions client), so one chat's Clear must reach the next turn of any of them.
 CREATE TABLE IF NOT EXISTS bot_session_epochs(
  bot TEXT PRIMARY KEY REFERENCES bots(id), epoch INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
@@ -86,7 +85,7 @@ CREATE TABLE IF NOT EXISTS agents(
  created_at TEXT NOT NULL, created_by TEXT NOT NULL, last_seen_at TEXT, version TEXT, platform TEXT,
  model TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '', revoked_at TEXT, revoked_by TEXT);
--- A Hermes profile asking to be connected to a bot (backend/agents.py): the code a person
+-- A Hermes profile asking to be connected to a bot (the agents module): the code a person
 -- reads out, the hash of the secret only the profile knows, the public key that secret derives
 -- (token_key), and, from approval until the profile collects it once, the minted credential
 -- sealed to that key: only the profile's secret opens it.
@@ -111,7 +110,7 @@ CREATE TABLE IF NOT EXISTS model_login_cleared(
  runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, profile TEXT NOT NULL DEFAULT '',
  cleared_at TEXT NOT NULL, cleared_by TEXT NOT NULL, clear_key INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(runner_id,runtime,profile));
--- A model key stored in the vault for one computer (backend/computer_keys.py): staged until the computer checks it.
+-- A model key stored in the vault for one computer (the computer keys module): staged until the computer checks it.
 CREATE TABLE IF NOT EXISTS computer_keys(
  credential_id TEXT PRIMARY KEY REFERENCES credentials(id), runner_id TEXT NOT NULL REFERENCES runners(id),
  runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
@@ -136,7 +135,7 @@ CREATE TABLE IF NOT EXISTS human_tokens(
  id TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), label TEXT NOT NULL,
  token_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
  last_used_at TEXT, expires_at TEXT, revoked_at TEXT);
--- OAuth sign-in for the MCP server (backend/mcp_oauth.py): registered agents, and each person's approval of one,
+-- OAuth sign-in for the MCP server (the MCP OAuth module): registered agents, and each person's approval of one,
 -- which ends in a human_tokens row whose secret a refresh rotates in place.
 CREATE TABLE IF NOT EXISTS oauth_clients(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -145,7 +144,7 @@ CREATE TABLE IF NOT EXISTS oauth_grants(
  redirect_uri TEXT NOT NULL, code_challenge TEXT NOT NULL, state TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
  code_hash TEXT UNIQUE, code_expires_at TEXT, token_id TEXT REFERENCES human_tokens(id),
  refresh_hash TEXT UNIQUE, refresh_expires_at TEXT, denied_at TEXT);
--- Service keys (backend/service_keys.py): another system's credential for a few routes (its scope), as a
+-- Service keys (the service keys module): another system's credential for a few routes (its scope), as a
 -- hash, and the task each (key, that system's own key for the work) pair names.
 CREATE TABLE IF NOT EXISTS service_keys(
  id TEXT PRIMARY KEY, label TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL,
@@ -209,9 +208,9 @@ CREATE TABLE IF NOT EXISTS attempt_conversations(
 CREATE TABLE IF NOT EXISTS attempt_inputs(
  attempt_id TEXT NOT NULL REFERENCES attempts(id), message_id TEXT PRIMARY KEY REFERENCES messages(id),
  acked_at TEXT);
--- A run's inputs by run (backend/task_privacy.py attempt_tasks): without it each lookup scanned every message.
+-- A run's inputs by run (task privacy: attempt_tasks): without it each lookup scanned every message.
 CREATE INDEX IF NOT EXISTS attempt_inputs_attempt ON attempt_inputs(attempt_id);
--- A run's raw provider stream for a bot with `capture_stream` on, kept a week (backend/stream_capture.py).
+-- A run's raw provider stream for a bot with `capture_stream` on, kept a week (the stream capture module).
 CREATE TABLE IF NOT EXISTS attempt_captures(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), bot TEXT NOT NULL, provider TEXT NOT NULL,
  frames TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, dropped_bytes INTEGER NOT NULL DEFAULT 0,
@@ -221,7 +220,7 @@ CREATE INDEX IF NOT EXISTS attempt_captures_created ON attempt_captures(created_
 CREATE TABLE IF NOT EXISTS attempt_capture_drops(attempt_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
 -- One table for the request cache (binding NULL: a saved answer, swept after IDEMPOTENCY_RETENTION_HOURS) and the
 -- retained operation bindings (binding names the operation; never swept). docs/status-and-state.md has the states.
--- Migration 0050_idempotency_one_table.py builds this same table, with its indexes, on every file (test_migrations
+-- Migration 0050 (idempotency, one table) builds this same table, with its indexes, on every file (test_migrations
 -- checks the two match), so this statement only declares it.
 CREATE TABLE IF NOT EXISTS idempotency(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
@@ -410,19 +409,6 @@ def refused(c, identity, exc, savepoint="domain_write"):
         # Not a mistake to count toward quarantine: what stays the owner's becomes their proposal instead.
         strategy_acts.settle(c, exc)
         return Problem(exc.rule, exc.detail, 409)
-    # Gate notifications survive the refused move, while its step and reviewer wake roll back.
-    if getattr(exc, "review_gate", None):
-        from . import review_gate
-
-        review_gate.notify(c, identity.actor, exc.review_gate)
-        # A refused review move is retried by Tico once what refused it clears (backend/move_retry.py).
-        from . import move_retry
-
-        move_retry.remember(c, identity.actor, exc.review_gate)
-    if notice := getattr(exc, "task_hold", None):
-        from .task_blocked import hold
-
-        hold(c, notice["task"], notice["reason"], notice["kind"])
     # Preserve refusal auditing, but never a partial domain operation.
     token = H.PRIVATE_WRITE.set(getattr(exc, 'private', False))
     try:
@@ -434,17 +420,49 @@ def refused(c, identity, exc, savepoint="domain_write"):
             exc.severity,
             task=getattr(exc, 'task', None),
             scope=getattr(exc, 'scope', None),
+            context=getattr(exc, 'context', None),
+            stored=getattr(exc, 'stored', None),
         )
     except H.Refused:
         pass
     finally:
         H.PRIVATE_WRITE.reset(token)
+    return refusal_problem(exc)
+
+
+def refusal_problem(exc):
+    """The Problem a refusal answers with, for a write that does not go through `mutate` (it has no savepoint to undo
+    and keeps no audit of its own): a refusal is always a clean 4xx, never an uncaught error."""
+    # The engine's refusals (a rule that starts with `task_`) are 409: the task is not where the caller thought, or
+    # the move is not allowed now. What is missing, the commands allowed next and the task's version ride in `extra`
+    # (docs/dev/pipelines-v3-cutover.md, "HTTP").
+    if str(exc.rule).startswith("task_"):
+        status = 409
+    elif exc.rule == "not-found":
+        status = 404
+    elif exc.rule in ("identity", "label", "escape", "quarantined", "close"):
+        status = 403
+    else:
+        status = 422
     return Problem(
-        exc.rule,
-        exc.detail,
-        403 if exc.rule in ("identity", "label", "escape", "quarantined", "close") else 422,
-        retryable=getattr(exc, "retryable", False),
+        exc.rule, exc.detail, status, retryable=getattr(exc, "retryable", False), extra=getattr(exc, "extra", None)
     )
+
+
+def replayed_refusal(c, principal, result):
+    """A replayed receipt. One of a refusal that kept less than its caller was told (a private task's words, the name
+    of a private sub-task) says what is missing and the commands allowed next again, from the task as it is now, when
+    `principal` may read it (task_engine.refusal_extra). Anything else is the receipt as kept."""
+    refusal = result.get("_refusal") if isinstance(result, dict) else None
+    again = refusal.get("again") if isinstance(refusal, dict) else None
+    if not again or not isinstance(refusal, dict):
+        return result
+    from . import task_engine
+
+    extra = task_engine.refusal_extra(c, principal, again)
+    if extra is None:
+        return result
+    return {**result, "_refusal": {**refusal, "extra": {**(refusal.get("extra") or {}), **extra}}}
 
 
 # A client retries a failed write with the same Idempotency-Key within seconds, so two
@@ -474,7 +492,7 @@ def is_poll(operation, result):
     return operation.endswith(("/renew", "/events"))
 
 
-def encode(value):
+def encode(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -657,9 +675,8 @@ EVENT_NOISE_ACTIONS = (
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
-# Thirty days: `message.notice` as before, and `github.pull_request`, which quiet_work.settle reads back to the start of
-# the run that carried a task (no run has a length cap, so a 30-day keep is the most it can rely on). Its own mark,
-# since the old one had walked past every github.pull_request row already on disk.
+# Thirty days: `message.notice` as before, and `github.pull_request`. Its own mark, since the old one had walked past
+# every github.pull_request row already on disk.
 EVENT_SWEEP_ACTIONS = ("message.notice", "github.pull_request")
 EVENT_RETENTION_DAYS = 30
 # Rows per write transaction. A delete costs about 2 ms a row on TIDY (six indexes on events, cold pages), so 5000
@@ -1177,6 +1194,10 @@ def _close_idle(conns):
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
+        # Whether this start made the database file: it then has nothing from an older release, so initialize's cutover
+        # sets up the built-ins and says nothing of moving them (backend/redesign_migration.py `_finish`).
+        path = getattr(settings, "db_path", None)
+        self.new_file = path is not None and (not path.exists() or not path.stat().st_size)
         # The server's file reader, set by the app once it has one (backend/media.py); None until then.
         self.blobs = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
@@ -1213,6 +1234,15 @@ class Store:
             factory=factory or self.factory,
             check_same_thread=check_same_thread,
         )
+        try:
+            self._configure(c)
+        except BaseException:
+            # The caller never receives the connection, so nothing else would close it.
+            c.close()
+            raise
+        return c
+
+    def _configure(self, c):
         H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
@@ -1230,7 +1260,6 @@ class Store:
         c.execute("PRAGMA mmap_size=268435456")
         # The WAL file is cut back to this size after a checkpoint; a large write (a migration) otherwise keeps its peak.
         c.execute(f"PRAGMA journal_size_limit={H.WAL_SIZE_LIMIT}")
-        return c
 
     @SRC.scoped("system:migration")
     def migrate(self):
@@ -1278,9 +1307,6 @@ class Store:
             from . import memory_history as _memory_history
 
             c.executescript(_memory_history.SCHEMA)
-            from . import stale_review as _stale_review
-
-            c.executescript(_stale_review.SCHEMA)
             from . import stall_triage as _stall_triage
 
             c.executescript(_stall_triage.SCHEMA)
@@ -1294,9 +1320,6 @@ class Store:
 
             c.executescript(_system_routines.SCHEMA)
             _system_routines.ensure(c)
-            from . import task_rules as _task_rules
-
-            c.executescript(_task_rules.SCHEMA)
             from . import teammate_access as _teammate_access
 
             _teammate_access.ensure(c)  # people's and groups' See/Read/Write (docs/permissions.md)
@@ -1304,19 +1327,6 @@ class Store:
 
             c.executescript(_rules.SCHEMA)
             _rules.ensure_schema(c)
-            _rules.seed_dev(c)
-            from . import check_pools as _check_pools
-
-            _check_pools.ensure(c)
-            _check_pools.seed(c)
-            from . import step_flow as _step_flow
-
-            _step_flow.ensure(c)
-            _step_flow.seed(c)
-            from . import pipeline_engine as _pipeline_engine
-
-            _pipeline_engine.boot(c)  # prefixes D and P, default Warn after, open stage visits
-            _rules.drop_step_noise(c)
             from . import owner_link as _owner_link
 
             c.executescript(_owner_link.SCHEMA)
@@ -1802,8 +1812,7 @@ class Store:
                     c.execute("CREATE INDEX IF NOT EXISTS tasks_lane_status_rank ON tasks(lane,status,rank,created_at)")
                     c.execute(
                         "CREATE INDEX IF NOT EXISTS tasks_active_lane_rank ON tasks("
-                        "lane,(rank IS NULL),rank,created_at,id) WHERE status IN "
-                        "('open','doing','waiting','review','ready','declined')"
+                        "lane,(rank IS NULL),rank,created_at,id) WHERE status='open'"
                     )
                     c.execute(
                         "CREATE INDEX IF NOT EXISTS tasks_finished_lane_time ON tasks("
@@ -1900,7 +1909,7 @@ class Store:
                     c.execute("INSERT INTO cloud_migrations VALUES(47,?)", (H.now(),))
 
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=48").fetchone():
-                    H._apply(c, H.PIPELINES_SCHEMA)
+                    # Task types and steps: gone with the Pipelines v3 cut-over. The marker stays.
                     c.execute("INSERT INTO cloud_migrations VALUES(48,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=49").fetchone():
                     H._apply(c, H.CHAT_GOALS_SCHEMA)
@@ -1923,9 +1932,6 @@ class Store:
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=54").fetchone():
                     H._apply(c, H.TASK_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(54,?)", (H.now(),))
-                # What every bot may do with a type's tasks (hubdb.TYPE_BOTS). Checked on every start
-                # rather than numbered, so no migration number collides with another branch's.
-                H.add_column(c, "task_types", "bots", "TEXT")
                 # Sign out / Switch account / Use the shared key ride the sign-in relay (backend/model_login.py).
                 H.add_column(c, "model_logins", "kind", "TEXT NOT NULL DEFAULT 'sign_in'")
                 # The owner's "Turns at once" for a computer (NULL: automatic, its own capacity).
@@ -1936,7 +1942,8 @@ class Store:
                     H._apply(c, H.MEETING_REVIEW_SCHEMA)
                     c.execute("INSERT INTO cloud_migrations VALUES(55,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=56").fetchone():
-                    H._apply(c, H.NUMBERS_SCHEMA)
+                    # tasks.number and its index are in the tasks table the Pipelines v3 cut-over makes; the numbered
+                    # types and a task's place in a step went with it. The marker stays.
                     c.execute("INSERT INTO cloud_migrations VALUES(56,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=57").fetchone():
                     H.migrate_task_privacy(c)
@@ -1948,17 +1955,14 @@ class Store:
                     # tasks.waiting_on, which 20261106112609_derived_waiting drops: it ran before this step.
                     c.execute("INSERT INTO cloud_migrations VALUES(59,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=60").fetchone():
-                    # Every task-to-task relationship in task_relations; tasks.parent_id and
-                    # tasks.blocked_by move into it and are dropped (hubdb migration 30 does the same).
+                    # Every task-to-task relationship in task_relations; the old tasks.parent_id and tasks.blocked_by
+                    # are dropped (hubdb migration 30 does the same).
                     from . import task_relations as _task_relations
 
                     _task_relations.migrate(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(60,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=61").fetchone():
-                    # The scheduler's due-date reminder pass and its quiet-task resume read these indexes, not
-                    # every task row (H.TASKS_DUE_SQL, quiet_work.due).
-                    c.execute(H.TASKS_DUE_INDEX)
-                    c.execute(H.TASKS_RESUME_INDEX)
+                    # It made the due-date reminder index; that pass is gone (hubdb drops the index at start-up).
                     c.execute("INSERT INTO cloud_migrations VALUES(61,?)", (H.now(),))
                 if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=62").fetchone():
                     # A day of history must not authorize every older attempt first.
@@ -2085,10 +2089,6 @@ class Store:
                 from .worktree_waits import ensure as ensure_worktree_waits
 
                 ensure_worktree_waits(c)
-                # Milestone waits (backend/milestone_waits.py). Unversioned like the trash.
-                from .milestone_waits import ensure as ensure_milestone_waits
-
-                ensure_milestone_waits(c)
                 # Failed-run back-off and run budgets (backend/run_backoff.py, backend/turn_budgets.py). Unversioned
                 # like the trash: an older release never reads the tables.
                 from .run_backoff import ensure as ensure_run_backoff
@@ -2118,10 +2118,6 @@ class Store:
                 from .strategy import ensure as ensure_strategy
 
                 ensure_strategy(c)
-                # The built-in Marketing task type marketing ideas are filed as (backend/marketing_tasks.py).
-                from .marketing_tasks import ensure as ensure_marketing
-
-                ensure_marketing(c)
                 # Org rules and their due dates (backend/org_rules.py, backend/rule_due.py): sources, rules, holds, due
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules
@@ -2243,13 +2239,6 @@ class Store:
                         "conversations(kind, COALESCE(last_message_at, created_at)) "
                         "WHERE closed_at IS NULL AND task_id IS NULL",
                     ),
-                    # Open approvals: a task's (auto_tasks.waiting on the claim path), a requester's
-                    # (status_counts, task_privacy), and the oldest first (expiry, Needs you).
-                    ("approvals_open", "approvals(task_id) WHERE decision IS NULL"),
-                    ("approvals_open_requester", "approvals(requested_by_id) WHERE decision IS NULL"),
-                    ("approvals_open_created", "approvals(created_at) WHERE decision IS NULL"),
-                    # A requester's consumed approvals, one lookup per stopped run (execution.retry_facts).
-                    ("approvals_requested_consumed", "approvals(requested_by_id, consumed_at)"),
                     # Live jobs (/api/status), an attempt's jobs (lease expiry, finish) and uncertain
                     # jobs (auto_reconcile). Partial, so the claim reads keep jobs_queue and jobs_queued.
                     ("jobs_live_created", "jobs(created_at) WHERE state IN ('queued','leased','running','input')"),
@@ -2263,9 +2252,15 @@ class Store:
                     # A message's runs: task_delete counts them on every delete, and topic_change
                     # and the run visibility (sql.py) look them up by message.
                     ("attempts_message", "attempts(message_id)"),
+                    # The messages that name a task in their refs: the runs on a task (task_wakes._runs_of), read
+                    # for every open task on each never-stuck pass. The query's expression word for word.
+                    (
+                        "messages_refs_task",
+                        "messages(json_extract(refs, '$.task')) WHERE json_extract(refs, '$.task') IS NOT NULL",
+                    ),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
-                    # A bot's last settled run (the team list's latest run, check_pools): one seek.
+                    # A bot's last settled run (the team list's latest run): one seek.
                     ("attempts_bot_settled", "attempts(bot_id, settled_at, id) WHERE settled_at IS NOT NULL"),
                     # A bot's runs newest first (the bot's Runs page, H.turns).
                     ("attempts_bot_created", "attempts(bot_id, created_at)"),
@@ -2309,7 +2304,6 @@ class Store:
                 # (backend/tests/test_events_indexes.py), and no read is target-only. 118 MB on TIDY. An older release
                 # recreates it when it starts; the next start drops it again.
                 c.execute("DROP INDEX IF EXISTS events_target_action")
-                R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
 
@@ -2338,8 +2332,6 @@ class Store:
                 from .entities import store as Directory
 
                 Directory.boot(c)
-                # Finished tasks still holding an earlier close time (H.clear_finished_close_times). Idempotent.
-                H.clear_finished_close_times(c)
                 # Teams, org groups and derived departments become groups, once (backend/groups.py). Idempotent,
                 # so no migration number to collide with another branch's.
                 from . import groups as Groups
@@ -2359,11 +2351,8 @@ class Store:
                 from . import profiles as Profiles
 
                 Profiles.migrate(c)
-                # Stale ticket review's converted automation (a no-op) is undone, once, and its team rule set from it
-                # (backend/redesign_migration.py repair_stale_review). Idempotent by its marker.
                 from . import redesign_migration as Redesign
 
-                Redesign.repair_stale_review(c)
                 # Inboxes the cutover moved with the Inbox Manager's whole instructions go to the short routing
                 # prompt, once (backend/redesign_migration.py repair_inbox_prompts). Idempotent by its marker. A
                 # failure here is logged, never raised: the repair is tried again at the next start.
@@ -2371,14 +2360,6 @@ class Store:
                     Redesign.repair_inbox_prompts(c)
                 except Exception:  # startup goes on
                     logging.getLogger(__name__).exception("inbox prompt repair failed; it is tried at the next start")
-                # The waits 20261106112609_derived_waiting staged become question tasks, blockers or note lines, once:
-                # a no-op when nothing is staged (backend/question_tasks.py move_waits).
-                # The open asks 20261106131713_asks_to_question_tasks staged become question tasks or DMs first, so a
-                # moved wait finds the question task its ask became (backend/question_tasks.py move_asks).
-                from . import question_tasks as QuestionTasks
-
-                QuestionTasks.move_asks(c)
-                QuestionTasks.move_waits(c)
                 from . import releases as Releases
 
                 Releases.record_start(c, H.now())
@@ -2442,7 +2423,7 @@ class Store:
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.
-        redesign_migration.cutover(self)
+        redesign_migration.cutover(self, new=self.new_file)
 
     def close(self):
         """Closes the store's idle read connections now, as the finalizer does once the store is freed. A connection
@@ -2602,6 +2583,8 @@ class Store:
             document = yaml.safe_load(path.read_text()) or {}
         except yaml.YAMLError:
             return []
+        from . import goals as G  # local: keeps goals out of the selector's fan-in
+
         added = G.seed(c, document, lambda owner: H.resolve_actor(c, owner))
         from . import market as Market
 
@@ -2752,6 +2735,7 @@ class Store:
                     from .meeting_items import redact
 
                     result = redact(c, replay_principal, replay_auth, result)
+                result = replayed_refusal(c, replay_principal, result)
                 from .files import readable_page_refs
 
                 return readable_page_refs(c, replay_auth, replay_principal, result)
@@ -2767,11 +2751,24 @@ class Store:
             except H.Refused as exc:
                 logged = None  # rolled back with the write
                 refusal = refused(c, identity, exc)
+                # What is missing and the commands allowed next ride with a refusal (Problem.extra). A private task's
+                # are its own words, so its receipt keeps only the version; any other keeps what may be kept on
+                # record (Refused.stored: a private sub-task it names is not named).
+                kept = getattr(exc, "stored", None) or {"detail": refusal.detail, "extra": refusal.extra}
+                private = getattr(exc, "private", False)
+                # What kept less than the caller was told also keeps how to say it again (replayed_refusal).
+                again = getattr(exc, "again", None) if private or getattr(exc, "stored", None) else None
                 result = {
                     "_refusal": {
                         "code": refusal.code,
-                        "detail": ("Private task write refused" if getattr(exc, "private", False) else refusal.detail),
+                        "detail": "Private task write refused" if private else kept["detail"],
                         "status": refusal.status,
+                        "extra": (
+                            {k: v for k, v in refusal.extra.items() if k == "version"}
+                            if private
+                            else dict(kept["extra"])
+                        ),
+                        **({"again": again} if again else {}),
                     }
                 }
             if not is_poll(operation, result):
@@ -2789,14 +2786,17 @@ class Store:
             raise refusal
         return result
 
-    def write(self, identity, fn):
+    def write(self, identity, fn, *, validate=True):
         """`mutate` without an idempotency record, for a route whose request is its own: the same
-        identity check under the write lock, and the same all-or-nothing refusal."""
+        identity check under the write lock, and the same all-or-nothing refusal. `validate=False` is for a write the
+        server makes for itself on a bot's behalf (backend/files.py, a review page): it has no credential to check, and
+        `fn` checks the records it writes."""
         refusal = logged = None
         with self.transaction() as c:
-            from .auth import validate_identity
+            if validate:
+                from .auth import validate_identity
 
-            validate_identity(c, identity)
+                validate_identity(c, identity)
             # Who made the changes this write logs (backend/events.py).
             from . import events as changes
 
@@ -2827,6 +2827,7 @@ class Store:
             c.execute(
                 "INSERT OR IGNORE INTO jobs(id,message_id,bot_id,created_at) "
                 "SELECT m.id,m.id,substr(m.recipient_id,5),m.created_at FROM messages m "
+                "LEFT JOIN conversations cv ON cv.id=m.conversation_id "
                 "WHERE m.recipient_id LIKE 'bot:%' AND m.delivered_at IS NULL AND m.deleted_at IS NULL AND NOT "
                 + external_bot_sql("m.recipient_id")
             )

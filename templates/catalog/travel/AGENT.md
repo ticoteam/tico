@@ -35,8 +35,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/policy.md`.
 4. Produce the first weekly trips page now, labelled "First draft, not yet reviewed". Book nothing.
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -65,20 +65,20 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   conflicts.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>`.
+1. Read `state.md`, then the task with `tico task show <id>`.
 2. Read `memory/learnings.md`, `knowledge/policy.md`, `knowledge/trips.md` and the playbook.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a fare that changed before booking, a
    hotel limit that no longer fits a city.
 2. Update `knowledge/trips.md`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: the trip, its status, what waits on whom.
+3. Finish with `tico task done <id> -m "..." --version N`: the trip, its status, what waits on whom.
 
 ## Talking to {{app_name}}
-Trip requests come as tasks. Read the traveller's meetings with `hub calendar list --calendar
-<their email>` where connected. Ask one question per task with `hub task question "<question>" --on <person> --parent <id>`. Ask the owner
-with `hub task create --owner <owner>` when a travel detail is missing. Send the finished
-itinerary to the traveller with `hub message send --fyi <human> "<one line and the link>"`.
+Trip requests come as tasks. Read the traveller's meetings with `tico calendar list --calendar
+<their email>` where connected. Ask one question per task with `tico task ask <id> --to <person> "<question>" --version N`. Ask the owner
+with `tico task create --owner <owner>` when a travel detail is missing. Send the finished
+itinerary to the traveller with `tico message send --fyi <human> "<one line and the link>"`.
 
 ## Quality standards
 - **Answer first.** A trip plan opens with the recommended option, its total and whether it is within
@@ -95,4 +95,4 @@ during a trip, a destination with a new official travel warning, or a trip start
 that is still unbooked. Send the ask first, in under 120 words.
 
 ## Publishing your work
-Trip plans and the weekly page go to `reports/` and are listed with `hub file publish`.
+Trip plans and the weekly page go to `reports/` and are listed with `tico file publish`.

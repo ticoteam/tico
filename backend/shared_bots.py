@@ -377,7 +377,6 @@ def retire_assignments(c):
     """Temporary task assignments are retired (#420); task sessions replaced them. Their actors are
     archived and taken off their computers, queued turns canceled, and open tasks go back to the role
     they came from. The rows and the assignment_branch* tables stay as history. Idempotent."""
-    marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     for row in c.execute(
         f"SELECT bc.bot,{BS.CONFIG} AS config,b.state FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
         f"WHERE s.extra LIKE '%assignment_branch%'"
@@ -407,21 +406,9 @@ def retire_assignments(c):
         if not source or source["state"] == "archived":
             continue
         owner = "bot:" + source["id"]
-        for task_id, title in c.execute(
-            f"SELECT id,title FROM tasks WHERE owner_id=? AND status IN ({marks})", ("bot:" + bot, *H.ACTIVE_STATUSES)
+        for (task_id,) in c.execute(
+            "SELECT id FROM tasks WHERE owner_id=? AND status='open'", ("bot:" + bot,)
         ).fetchall():
-            # The normal handoff queues the role's turn and notice, so a `doing` task does not sit idle.
-            # Only an active role can be handed a task; otherwise (or if refused) the owner is set
-            # directly and the role told the same way, to pick up when it runs again.
-            if source["state"] == "active":
-                try:
-                    H.task_update(c, H.KEEPER, task_id, owner=owner, note="Back from a retired temporary assignment.")
-                    continue
-                except H.Refused:
-                    pass
-            c.execute("UPDATE tasks SET owner_id=?,updated_at=? WHERE id=?", (owner, H.now(), task_id))
-            from . import task_followers, task_run_models
-
-            task_run_models.moved(c, H.KEEPER, task_id)
-            task_followers.owner_moved(c, H.task(c, task_id), "bot:" + bot, owner)
-            H._wake(c, H.task(c, task_id), owner, f"Open: {title}", {"news": "assignment"})
+            # The engine's reassign wakes the role and does what a hand-over does. One it refuses stays with the
+            # archived actor and says Paused in the list of whoever can fix it.
+            H.attempt(c, H.task_reassign, H.KEEPER, task_id, owner, "Back from a retired temporary assignment.")

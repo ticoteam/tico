@@ -4,6 +4,8 @@ llm step's `as` by owner kind and gives a group Sort; a group with no lead to ac
 would do can run; a person cannot fill one for an inbox they cannot read; and a fill saves nothing."""
 
 import json
+
+import pytest
 from urllib.parse import urlencode
 
 from backend import automation_actions as AA
@@ -12,8 +14,9 @@ from backend import automation_flow as F
 from backend import automation_templates as T
 from backend import bot_settings as BS
 from backend.tests.automation_fakes import Services
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_automation_cli import cli
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.automation_cli import cli
+from backend.tests.helpers.automation_templates import fill
 
 # The catalog role each bot is made from (the fixture's bots; `ben` operates the product bots, `ana` the rest).
 STAFF = {
@@ -52,11 +55,6 @@ def onboarding(api, bot):
     """A bot that is active on the chart but still onboarding (needs_setup): it learns and takes no task yet."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (bot,))
-
-
-def fill(api, tid, owner, inbox, token="ana-test", expected=200):
-    query = urlencode({"owner": owner, "inbox": inbox})
-    return get(api, f"automations/templates/{tid}?{query}", token=token, expected=expected)
 
 
 def by_id(items):
@@ -171,7 +169,7 @@ def test_a_group_owner_gets_sort_and_its_lead_runs_the_task_and_meeting_routes(a
     assert list(F.choosing(flow["steps"])) == []
     assert all("as" not in step for step in flow["steps"])
     sort = by_id(flow["steps"])["draft"]
-    assert sort["type"] == "decide" and sort["level"] == "high"
+    assert sort["type"] == "decide" and "level" not in sort
     assert set(sort["questions"]["route"]["criteria"]) == {
         "me",
         "legal",
@@ -210,7 +208,7 @@ def test_a_person_cannot_fill_a_template_for_an_inbox_they_cannot_read(api):
 
 
 def test_the_answers_match_the_published_contract(api):
-    from backend.tests.test_openapi_v2 import conforms
+    from backend.tests.helpers.openapi_v2 import conforms
 
     set_templates(api, STAFF)
     document = api.get("/api/v2/openapi.json", headers=headers()).json()
@@ -464,3 +462,20 @@ def test_a_person_owner_in_slack_keeps_its_drafts(api):
     flow = fill(api, "founder", "person:ana", "slack:#general")
     assert "draft_reply" in draft_actions(flow)
     assert by_id(flow["steps"])["draft"]["as"] == "assistant:ana"
+
+
+@pytest.mark.parametrize(
+    "role, old, new",
+    [
+        ("legal_lead", "general-counsel", "legal-owner"),
+        ("engineering_manager", "engineering-lead", "engineering-team-manager"),
+        ("finance_lead", "finance-lead", "bookkeeper"),
+        ("marketing_lead", "marketing-lead", "growth-team-manager"),
+        ("support_lead", "support-lead", "support-owner"),
+        ("sales_lead", "sales-lead", "growth-team-manager"),
+    ],
+)
+def test_a_role_held_only_by_a_new_org_template_is_filled_after_the_old_one(role, old, new):
+    """A new company's bots come from the new templates; an old company's bots still come from the old ones first."""
+    assert T._candidates({new: ["new-bot"]}, role) == ["new-bot"]
+    assert T._candidates({new: ["new-bot"], old: ["old-bot"]}, role) == ["old-bot", "new-bot"]

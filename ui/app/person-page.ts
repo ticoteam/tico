@@ -2,17 +2,30 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
+// The parts of GET /v2/humans/{id}/slack the page reads: the Tico DM threads a human has with bots in Slack.
+interface HumanSlackMessage {
+  sender_id?: string | null;
+  body?: string;
+  refs?: { read_back?: boolean } | null;
+}
+interface HumanSlackThread {
+  bot: string;
+  display_name?: string | null;
+  last_message_at?: string | null;
+  messages?: HumanSlackMessage[] | null;
+}
+
 // ----------------------------------------------------------------- human page (team tree)
 const PERSON_TABS = ['profile', 'slack'];
 // The Assistant tab is first, and only on your own page: it opens your private chat with the assistant, the
 // Assistant page (ui/app/assistant-page.ts), the owner's too. The old #/person/<you>/assistant link lands there too.
-const personTabs = p => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
-const PERSON_TAB_LABELS = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
+const personTabs = (p: RosterPerson) => S.me?.id === p.id ? ['assistant', ...PERSON_TABS] : PERSON_TABS;
+const PERSON_TAB_LABELS: Record<string, string> = {assistant: 'Assistant', profile: 'Profile', slack: 'Slack'};
 // Manage on them, as the server says it: yourself, the owner, an admin, or anyone they report up to.
-function personCanEdit(p) {
+function personCanEdit(p: Pick<RosterPerson, 'id' | 'my_access'>) {
   return p.my_access ? !!p.my_access.manage : S.me?.role === 'owner' || S.me?.id === p.id;
 }
-function fieldEditor(label, value, {placeholder, rows, save}) {
+function fieldEditor(label: string, value: string | null | undefined, {placeholder, rows, save}: {placeholder?: string; rows?: number; save: boolean}) {
   const current = String(value || '');
   return `<section class="card"><header><h2>${esc(label)}</h2>
       ${save ? `<button class="linkish" type="button" data-edit>Edit</button>` : ''}</header>
@@ -22,37 +35,41 @@ function fieldEditor(label, value, {placeholder, rows, save}) {
         <button class="ghost" type="button" data-cancel>Cancel</button>
         <span class="muted" data-status></span></div></form>` : ''}</section>`;
 }
-function bindFieldEditor(root, onSave) {
-  const view = root.querySelector('[data-view]');
-  const form = root.querySelector('[data-edit-form]');
+function bindFieldEditor(root: HTMLElement, onSave: (text: string) => Promise<unknown>) {
+  const view = root.querySelector<HTMLElement>('[data-view]');
+  const form = root.querySelector<HTMLFormElement>('[data-edit-form]');
   if (!form) return;
-  const area = form.querySelector('textarea');
-  root.querySelector('[data-edit]').onclick = () => { form.hidden = false; view.hidden = true; area.focus(); };
-  form.querySelector('[data-cancel]').onclick = () => { form.hidden = true; view.hidden = false; };
+  const area = form.querySelector<HTMLTextAreaElement>('textarea');
+  const edit = root.querySelector<HTMLButtonElement>('[data-edit]');
+  const cancel = form.querySelector<HTMLButtonElement>('[data-cancel]');
+  if (!view || !area || !edit || !cancel) return;
+  edit.onclick = () => { form.hidden = false; view.hidden = true; area.focus(); };
+  cancel.onclick = () => { form.hidden = true; view.hidden = false; };
   form.onsubmit = async ev => {
     ev.preventDefault();
-    const status = form.querySelector('[data-status]');
+    const status = form.querySelector<HTMLElement>('[data-status]');
     form.querySelectorAll('button').forEach(b => b.disabled = true);
+    if (!status) return;
     status.textContent = 'Saving…';
     try {
       await onSave(area.value);
       form.hidden = true; view.hidden = false;
-    } catch (e) { status.innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    } catch (e) { status.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; }
     finally { form.querySelectorAll('button').forEach(b => b.disabled = false); if (form.hidden) status.textContent = ''; }
   };
 }
-function pagePerson(id, tab) {
+function pagePerson(id: string | undefined, tab: string | undefined) {
   const p = (S.people || []).find(row => row.id === id && !row.hidden);
   if (!p) { $('#main').innerHTML = `<div class="empty">Unknown human.</div>`; return; }
   const tabs = personTabs(p);
   if (tab === 'assistant' && tabs.includes('assistant')) { location.replace(ASSISTANT); return; }
   orgHistoryVisit('p:' + p.id);
-  tab = tabs.includes(tab) ? tab : 'profile';
+  tab = tabs.includes(tab ?? '') ? tab : 'profile';
   // In the chart's order: the ones someone placed first (byReportOrder), then the chart's own order (chartFallback).
-  const placed = byReportOrder('p:' + p.id), inOrder = (a, b) => placed(a, b) || chartFallback(a, b);
+  const placed = byReportOrder('p:' + p.id), inOrder = (a: ChartNode, b: ChartNode) => placed(a, b) || chartFallback(a, b);
   const reports = (S.people || []).filter(row => row.reports_to === p.id && !row.hidden)
     .sort((a, b) => inOrder({kind: 'person', person: a}, {kind: 'person', person: b}));
-  const bots = (p.bots || []).map(slug => botRow(slug)).filter(e => e && !isHiddenBot(e.id));    // not the Assistant or its helpers (ui/app/sidebar.ts)
+  const bots = (p.bots || []).map(slug => botRow(slug)).filter((e): e is Employee => !!e && !isHiddenBot(e.id));    // not the Assistant or its helpers (ui/app/sidebar.ts)
   const under = shownEmps().filter(e => e.org_parent === 'p:' + p.id);
   const boss = (S.people || []).find(row => row.id === p.reports_to);
   const edit = personCanEdit(p);
@@ -120,8 +137,8 @@ function pagePerson(id, tab) {
   void personAccessLoad(p);
   const dmButton = $('#person-dm');
   if (dmButton) dmButton.onclick = () => threadNewOpen({dm: true, members: ['human:' + p.id]});
-  $('#ptabs').onclick = ev => {
-    const b = ev.target.closest('[data-pt]'); if (!b) return;
+  $('#ptabs').onclick = (ev: Event) => {
+    const b = eventElement(ev)?.closest<HTMLElement>('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;
   };
   const more = $('#goal-more');
@@ -129,7 +146,7 @@ function pagePerson(id, tab) {
     const rest = $('#goal-rest'), open = rest.hidden;
     rest.hidden = !open; more.textContent = open ? 'less' : 'more'; more.setAttribute('aria-expanded', String(open));
   };
-  const notifySwitch = (id, key) => {
+  const notifySwitch = (id: string, key: 'notify_slack_task_done' | 'notify_slack_bot_messages' | 'update_draft' | 'email_digest') => {
     const box = $(id);
     if (box) box.onchange = async () => {
       const value = box.checked, status = $('#person-notify-status');
@@ -140,7 +157,7 @@ function pagePerson(id, tab) {
         box.checked = row[key] !== false;
       } catch (e) {
         box.checked = !value;
-        status.textContent = e.message || 'Could not save.';
+        status.textContent = errorMessage(e, 'Could not save.');
       } finally { box.disabled = false; }
     };
   };
@@ -161,7 +178,7 @@ function pagePerson(id, tab) {
       const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {notify_browser: value});
       p.notify_browser = row.notify_browser === true; S.notifyBrowser = p.notify_browser; browser.checked = p.notify_browser;
     } catch (e) {
-      browser.checked = !value; status.textContent = e.message || 'Could not save.';
+      browser.checked = !value; status.textContent = errorMessage(e, 'Could not save.');
     } finally { browser.disabled = false; }
   };
   const botsSwitch = $('#person-notify-bots');
@@ -177,20 +194,20 @@ function pagePerson(id, tab) {
         return `<span class="chip">${avatar(slug, 18)}<span>${e ? shownName(e) : esc(slug)}</span><button type="button" class="people-chip-x" data-unmute="${esc(slug)}" aria-label="Unmute ${empName(slug)}">×</button></span>`; }).join('')}
       ${rest.length ? `<select id="person-mute-add" aria-label="Mute a bot in Slack"><option value="">${muted.length ? '+ Bot' : 'None · mute a bot'}</option>
         ${rest.map(e => `<option value="${esc(e.id)}">${shownName(e)}</option>`).join('')}</select>` : ''}`;
-    const save = async next => {
+    const save = async (next: string[]) => {
       const status = $('#person-notify-status');
-      box.querySelectorAll('button,select').forEach(el => el.disabled = true); status.textContent = '';
+      box.querySelectorAll('button,select').forEach((el: HTMLButtonElement | HTMLSelectElement) => el.disabled = true); status.textContent = '';
       try { p.slack_muted_bots = (await post(`/v2/humans/${encodeURIComponent(p.id)}`, {slack_muted_bots: next})).slack_muted_bots; }
-      catch (e) { status.textContent = e.message || 'Could not save.'; }
+      catch (e) { status.textContent = errorMessage(e, 'Could not save.'); }
       mutedPaint();
     };
-    box.querySelectorAll('[data-unmute]').forEach(b => b.onclick = () => save(muted.filter(x => x !== b.dataset.unmute)));
+    box.querySelectorAll('[data-unmute]').forEach((b: HTMLButtonElement) => b.onclick = () => save(muted.filter(x => x !== b.dataset.unmute)));
     const add = $('#person-mute-add');
     if (add) add.onchange = () => add.value && save([...muted, add.value]);
   };
   mutedPaint();
   // The GitHub login a review request names: it puts them on the task linked to that pull request.
-  const githubPaint = editing => {
+  const githubPaint = (editing: boolean) => {
     const box = $('#person-github');
     if (!box) return;
     if (!editing) {
@@ -209,17 +226,17 @@ function pagePerson(id, tab) {
     const form = box.querySelector('form');
     form.github.focus();
     form.querySelector('[data-cancel]').onclick = () => githubPaint(false);
-    form.onsubmit = async ev => {
+    form.onsubmit = async (ev: Event) => {
       ev.preventDefault();
       const status = form.querySelector('[data-status]');
-      form.querySelectorAll('button').forEach(b => b.disabled = true);
+      form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
       status.textContent = 'Saving…';
       try {
         p.github = (await post(`/v2/humans/${encodeURIComponent(p.id)}`, {github: form.github.value.trim()})).github;
         githubPaint(false);
       } catch (e) {
-        status.innerHTML = `<span class="err">${esc(e.message)}</span>`;
-        form.querySelectorAll('button').forEach(b => b.disabled = false);
+        status.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`;
+        form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false);
       }
     };
   };
@@ -252,17 +269,17 @@ function pagePerson(id, tab) {
     const form = host.querySelector('form');
     form.about.focus();
     form.querySelector('[data-cancel]').onclick = () => pagePerson(p.id, tab);
-    form.onsubmit = async ev => {
+    form.onsubmit = async (ev: Event) => {
       ev.preventDefault();
-      form.querySelectorAll('button').forEach(b => b.disabled = true);
+      form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = true);
       form.querySelector('[data-status]').textContent = 'Saving…';
       try {
         const row = await post(`/v2/humans/${encodeURIComponent(p.id)}`, {title: form.title.value, about: form.about.value});
         p.title = row.title; p.about = row.about;
         pagePerson(p.id, tab);
       } catch (e) {
-        form.querySelector('[data-status]').innerHTML = `<span class="err">${esc(e.message)}</span>`;
-        form.querySelectorAll('button').forEach(b => b.disabled = false);
+        form.querySelector('[data-status]').innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`;
+        form.querySelectorAll('button').forEach((b: HTMLButtonElement) => b.disabled = false);
       }
     };
   };
@@ -271,49 +288,102 @@ function pagePerson(id, tab) {
   if (tab === 'slack') personSlackLoad(p);
 }
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
-// the same as a keeper bot's (v2TaskRow), opening the shared task detail.
-/** @type {any} bridged: ui/app/refresh.ts reads it on every live change; typed when this file converts */ let PERSON_TASKS = null;
+// the shared task row (S1), opening the shared task detail.
+/** The person whose tasks the page shows: ui/app/refresh.ts reads it on every live change. */ let PERSON_TASKS: string | null = null;
 // Shown only to whoever manages this person: the read is refused to everyone else.
-async function personAccessLoad(p) {
+async function personAccessLoad(p: RosterPerson) {
   const data = await teammateAccessRead('human', p.id), card = $('#person-access');
   if (!data || !card || !$('#person-access-text')) return;
   $('#person-access-text').textContent = accessSummary(data);
   card.hidden = false;
   $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
 }
-async function personTasksLoad(p) {
+// The person's tasks as last read and mended since: their rows, where the catch-up resumes, and how far the pages go
+// (task-api.ts taskPageNext: More reads on).
+let PERSON_LIST: ({id: string; rows: TaskBriefV3[]; cursor: string; paging: Promise<unknown> | null} & TaskPaging<TaskBriefV3>) | null = null;
+// Its reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event.
+let PERSON_FEED = taskFeedNew();
+// What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
+const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
+async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;
   const owner = 'human:' + p.id;
-  const d = await v2Get(`/v2/tasks?owner=${encodeURIComponent(owner)}&status=all&brief=true`);
-  if (!$('#person-tasks') || PERSON_TASKS !== p.id) return;
-  const all = d?.tasks || [];
-  const active = all.filter(t => V2_ACTIVE.includes(String(t.status)));
-  const finished = all.filter(t => !V2_ACTIVE.includes(String(t.status)));
+  if (PERSON_LIST?.id !== p.id) { PERSON_LIST = null; PERSON_FEED = taskFeedNew(); }
+  const feed = PERSON_FEED, ticket = taskFeedRead(feed);
+  const read = await taskBriefsPage({owner, status: 'all'}).catch(() => null);
+  if (!$('#person-tasks') || PERSON_TASKS !== p.id || PERSON_FEED !== feed) return;
+  const held = read ? taskFeedLanded(feed, ticket, read.cursor) : (taskFeedFailed(feed, ticket), null);
+  if (read && !held) return;   // a newer read is out
+  PERSON_LIST = read ? {id: p.id, rows: read.tasks, cursor: read.cursor, more: read.more && !!read.tasks.length, edge: read.tasks.at(-1) ?? null, paging: null} : null;
+  // What came while the read was out goes over it: a task removed meanwhile stays removed.
+  const bulk = read && held ? taskRowsLive(read.tasks, held, personOwns(p.id)) === 'bulk' : false;
+  personTasksDraw(p, read?.tasks || []);
+  if (bulk) void personTasksReload();
+}
+function personTasksDraw(p: RosterPerson, all: TaskBriefV3[]) {
+  if (!$('#person-tasks')) return;
+  const active = all.filter(t => t.status === 'open');
+  const finished = all.filter(t => t.status !== 'open');
   const first = firstName(p.name) || p.id;
-  // A human's open task is to do, not "doing" the way a bot's is the moment it is assigned.
-  const groups = (list, kinds) => kinds.map(([k, label]) => {
-    const rows = list.filter(t => String(t.status) === k);
-    return rows.length ? `<div class="v2-group"><h3>${label} <span class="muted">${rows.length}</span></h3>${rows.map(t => v2TaskRow(t, '', false)).join('')}</div>` : '';
-  }).join('');
-  $('#person-tasks').innerHTML = (active.length ? groups(active, [['open', esc(needsWho({owner}))], ['doing', 'Doing'], ['waiting', 'Waiting']])
+  $('#person-tasks').innerHTML = (active.length ? `<div class="v2-group">${active.map(t => taskRowHTML(t)).join('')}</div>`
       : `<div class="empty">No active tasks. <a href="#" data-person-task-add>Give ${esc(first)} a task</a>.</div>`)
     + (finished.length ? `<details class="person-tasks-done"><summary class="muted">Finished <span class="cnt">${finished.length}</span></summary>${
-        groups(finished, [['done', 'Done'], ['declined', 'Declined'], ['closed', 'Closed']])}</details>` : '');
+        finished.map(t => taskRowHTML(t, {look: 'archive'})).join('')}</details>` : '');
+  const list = PERSON_LIST?.id === p.id ? PERSON_LIST : null;
+  if (list?.more) $('#person-tasks').insertAdjacentHTML('beforeend', `<div class="tl-more" id="person-task-more"><button type="button" class="ghost"${list.paging ? ' disabled' : ''}>More</button></div>`);
   const link = $('#person-tasks [data-person-task-add]');
-  if (link) link.onclick = ev => { ev.preventDefault(); personTaskModal(p); };
+  if (link) link.onclick = (ev: Event) => { ev.preventDefault(); personTaskModal(p); };
+  const more = $('#person-task-more button');
+  if (more && list) more.onclick = () => void personTasksMore(p, list);
 }
-function personTasksReload() {
+// More: the next page after the last row the server gave, in the list's own order; what came meanwhile goes over it.
+async function personTasksMore(p: RosterPerson, list: NonNullable<typeof PERSON_LIST>) {
+  if (list.paging) return;
+  const still = () => PERSON_LIST === list && PERSON_TASKS === list.id && !!$('#person-tasks');
+  list.paging = taskPageNext(list, list.rows, {owner: 'human:' + p.id, status: 'all', sort: 'queue'}, PERSON_FEED, personOwns(p.id), taskQueueOrder, still);
+  personTasksDraw(p, list.rows);
+  let held: Awaited<ReturnType<typeof taskPageNext>> = null;
+  try { held = await (list.paging as ReturnType<typeof taskPageNext>); }
+  catch (e) { toast(errorMessage(e, 'More did not load.'), true); }
+  finally { list.paging = null; }
+  if (!still()) return;
+  const bulk = Array.isArray(held) && taskRowsLive(list.rows, held, personOwns(p.id), taskQueueOrder) === 'bulk';
+  personTasksDraw(p, list.rows);
+  if (bulk) void personTasksReload();
+}
+// The live stream's task events, each in place by personOwns (refresh.ts liveTasksApply); nothing is read for one.
+function personTasksLive(events: LiveTaskEvent[]) {
+  events = taskFeedEvents(PERSON_FEED, events);
+  const list = PERSON_LIST, p = list && PERSON_TASKS === list.id && (S.people || []).find(row => row.id === list.id);
+  if (!list || !p || !$('#person-tasks')) return;
+  const moved = taskRowsLive(list.rows, events, personOwns(list.id));
+  if (moved === 'bulk') personTasksReload();
+  else if (moved) personTasksDraw(p, list.rows);
+}
+// The 2-minute refresh, a bulk change and this page's own writes: what changed since the list's cursor
+// (GET /v2/tasks?changed_after); a full read only without a cursor or when the server says it is too old.
+async function personTasksReload() {
   const p = PERSON_TASKS && (S.people || []).find(row => row.id === PERSON_TASKS);
-  if (p && $('#person-tasks')) void personTasksLoad(p);
+  if (!p || !$('#person-tasks')) return;
+  const list = PERSON_LIST;
+  if (!list || list.id !== p.id) { void personTasksLoad(p); return; }
+  try {
+    const out = await taskRowsCatchUp(list.rows, list.cursor, {owner: 'human:' + p.id, status: 'all'}, personOwns(p.id), () => PERSON_LIST === list, PERSON_FEED);
+    if (!out) return;
+    if (out === 'reset') { void personTasksLoad(p); return; }
+    list.cursor = out.cursor;
+    if (out.moved) personTasksDraw(p, list.rows);
+    if (out.again) void personTasksReload();
+  } catch { /* the next refresh tries again */ }
 }
 // "+ Add task" on a human's page: the give-a-task form in a modal, assigned to them, added by you.
-function personTaskModal(p) {
+function personTaskModal(p: RosterPerson) {
   let d = $('#person-task-modal');
   if (!d) {
     d = document.createElement('dialog'); d.id = 'person-task-modal'; d.className = 'tmodal';
     d.setAttribute('aria-labelledby', 'person-task-title');
-    d.addEventListener('click', ev => { if (ev.target === d) d.close(); });
+    d.addEventListener('click', (ev: Event) => { if (ev.target === d) d.close(); });
     document.body.appendChild(d);
   }
   d.innerHTML = `<div class="tmodal-head"><span class="who">Give a task</span><span class="spacer"></span>
@@ -326,9 +396,9 @@ function personTaskModal(p) {
         <div class="r3"><button class="primary" type="submit">Create task</button>
           <button class="ghost" type="button" data-modal-close>Cancel</button><span class="muted" id="person-task-msg"></span></div>
       </form></div>`;
-  d.querySelectorAll('[data-modal-close]').forEach(b => b.onclick = () => d.close());
+  d.querySelectorAll('[data-modal-close]').forEach((b: HTMLButtonElement) => b.onclick = () => d.close());
   const form = $('#person-task', d);
-  form.onsubmit = async ev => {
+  form.onsubmit = async (ev: Event) => {
     ev.preventDefault();
     const btn = form.querySelector('[type=submit]'), msg = $('#person-task-msg', d);
     const title = form.title.value.trim(), body = form.body.value.trim();
@@ -339,16 +409,16 @@ function personTaskModal(p) {
       toast(`Task for ${p.name || p.id} created`);
       d.close();
       await v2Refresh();
-      personTasksReload();
-    } catch (e) { msg.innerHTML = `<span class="err">${esc(e.message)}</span>`; btn.disabled = false; }
+      void personTasksReload();
+    } catch (e) { msg.innerHTML = `<span class="err">${esc(errorMessage(e, ''))}</span>`; btn.disabled = false; }
   };
   if (!d.open) d.showModal();
   form.title.focus();
 }
-async function personSlackLoad(p) {
+async function personSlackLoad(p: RosterPerson) {
   const el = $('#person-slack'); if (!el) return;
   try {
-    const d = await get(`/v2/humans/${encodeURIComponent(p.id)}/slack`);
+    const d = await get<{threads?: HumanSlackThread[] | null}>(`/v2/humans/${encodeURIComponent(p.id)}/slack`);
     const threads = d.threads || [];
     if (!threads.length) {
       el.innerHTML = '<div class="empty">No Tico Slack DMs yet. When a bot messages them in Slack (through Tico), the thread lands here, including their replies.</div>';
@@ -366,6 +436,6 @@ async function personSlackLoad(p) {
         </div>`;
     }).join('');
   } catch (e) {
-    el.innerHTML = `<div class="err">${esc(e.message)}</div>`;
+    el.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`;
   }
 }

@@ -820,11 +820,13 @@ def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
 
 
 def decided_by(ctx: Ctx, action: Any) -> str:
-    """Who approved the payment's action: the decider of its Tico approval when that was approved ("" when it had none).
-    The action's own `approval_by` is the requester, never the decider."""
+    """Who approved the payment's action: the person who gave its OK, when it stands given or used ("" when it had
+    none). The action's own `approval_by` is the requester, never the decider."""
     approval = str(action["approval_id"] or "") if action is not None else ""
-    appr = tico.approval(ctx.c, approval) if approval else None
-    return str(appr.get("decided_by_id") or "") if appr is not None and appr.get("decision") == "approved" else ""
+    found = tico.ok_grant(ctx.c, approval) if approval else None
+    if found is None or tico.ok_standing(ctx.c, approval) not in ("ok", "used"):
+        return ""
+    return str(found.get("ok_by_id") or "")
 
 
 def asked_rules(action: Any) -> set[str]:

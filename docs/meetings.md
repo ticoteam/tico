@@ -2,12 +2,12 @@
 
 ## Linked tasks
 
-`hub meeting link <meeting> <task>...` links existing tasks. `hub meeting unlink <meeting> <task>` removes a link;
-`hub task meetings <task>` lists the meetings you can open. Their MCP equivalents are `hub_meeting_link`,
-`hub_meeting_unlink` and `hub_task_meetings`. Links preserve each meeting and task's own access.
+`tico meeting link <meeting> <task>...` links existing tasks. `tico meeting unlink <meeting> <task>` removes a link;
+`tico task meetings <task>` lists the meetings you can open. Their MCP equivalents are `tico_meeting_link`,
+`tico_meeting_unlink` and `tico_task_meetings`. Links preserve each meeting and task's own access.
 
-`hub task context <task>` lists up to ten linked meetings and ten task pages the caller may read, as metadata only.
-`hub meeting read <id>` includes saved notes at transcript offset zero; `--notes` reads just the notes, paged with
+`tico task context <task>` lists up to ten linked meetings and ten task pages the caller may read, as metadata only.
+`tico meeting read <id>` includes saved notes at transcript offset zero; `--notes` reads just the notes, paged with
 `--offset`. A bot attached by a live meeting's owner may read its saved meeting while that attachment remains and
 the owner can still read it. The same read rule applies during task work.
 
@@ -22,7 +22,7 @@ and return no totals. Pending meetings cannot have links. Deleted meetings disap
 
 The web meeting's **Tasks** section shows linked tasks under pending items. A task's **Meetings** section shows
 its readable meetings and is hidden when empty. Search existing tasks with `GET /api/v2/tasks?q=<title words or #N>`
-(or `hub task list --q ...`), under the task list's existing filters and access checks.
+(or `tico task list --q ...`), under the task list's existing filters and access checks.
 
 Both sections apply link changes from task events without rereading the list or collapsing expanded pages.
 The meeting's task rows also follow title and status changes. Link events carry `kind: "meetings"` in `kind` or
@@ -44,8 +44,8 @@ in the tool that made it. Media files can be attached too.
 | Door | For | How |
 |---|---|---|
 | **Add notes** on the Meetings page | a human with notes to write, a transcript file or a paste | title, date and time (default now), participants from the roster plus emails or names, markdown notes, and an optional bot to send them to. **Upload a file** (or drop one on the dialog) or **Paste** adds a transcript: a `.txt`, `.vtt`, `.srt` or `.json` file, with its source (`upload` by default) and an optional recording link. Files through this same API: notes alone as source `manual`, a transcript as the source you chose |
-| `hub meeting import <file>` | a human or script on a computer | `hub meeting import call.vtt --title "Pricing call" --date 2026-09-28T16:00 --participant dana@example.com --source zoom --external-id 123` |
-| `hub_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
+| `tico meeting import <file>` | a human or script on a computer | `tico meeting import call.vtt --title "Pricing call" --date 2026-09-28T16:00 --participant dana@example.com --source zoom --external-id 123` |
+| `tico_meeting_import` (MCP) | a human's external agent | the same fields; the agent reads the file and sends the text |
 | `POST /api/v2/meetings/import` | anything else | one JSON body, below |
 | Close | Close calls and Notetaker meetings | the `close-calls` worker on a Mac or a Linux runner; see [Close](#close) |
 | Zoom, Google Meet, Granola | the team's meeting tools | the `importers` job on an enrolled computer, turned on in **Tools > Meeting importers**; see [Meeting importers](#meeting-importers) |
@@ -57,14 +57,16 @@ action items work identically whatever the source.
 ### Tico Recorder
 
 **Get Tico Recorder** on Meetings downloads the Mac app
-(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`); the app moves itself to Applications
-on first launch. The link hides once Tico has seen one of your copies in the last 30 days. The
-Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its calls; Tico keeps
-the last version and time per person and copy, writing at most every ten minutes unless the version changes. The newest
-version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
+(`https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg`). A copy that cannot update itself, outside
+an Applications folder (for example, opened from Downloads or the disk image), asks once per launch, before your first
+recording: **Move** copies it to Applications (or `~/Applications`) and relaunches it from there; **Not now** keeps it
+where it is, and a smaller banner offers the move later. The link hides once Tico has seen one of your copies in the
+last 30 days. The Recorder sends `X-Tico-Recorder-Version` and `X-Tico-Recorder-Install` (a random id per copy) on its
+calls; Tico keeps the last version and time per person and copy, writing at most every ten minutes unless the version
+changes. The newest version comes from the Recorder's own updater feed (`recorder-latest.json` on the latest release), read at most hourly;
 when the copy you used last is older, Meetings shows **Recorder update available**, and nothing else.
 `GET /api/v2/meetings/recorder` answers the same for your own copies; owners and admins see everyone's version in
-Settings > People. Neither link shows on a phone.
+Settings > People. Neither link shows in the phone layout, in a browser window 760 px wide or less.
 
 ## Review before sharing
 
@@ -133,11 +135,11 @@ the existing `{"value": true|false}` body. Only the owner can set the Team defau
 A person's choice wins. Turning auto-share on leaves their existing queue pending: tick the meetings shown
 and Share them, or the explicit whole-queue CLI/API action.
 
-CLI: `hub meeting pending`, `hub meeting approve <id>` or `hub meeting approve --all`,
-`hub meeting dismiss <id>`, and `hub meeting restore <id>`. MCP equivalents are
-`hub_meeting_pending`, `hub_meeting_approve` (`id` or `all: true`), `hub_meeting_dismiss`, and
-`hub_meeting_restore`. All use the caller's own meetings; BotOps uses the requesting person's
-rights. `hub meeting import ... --review live` shares immediately. `send_to` on a pending import
+CLI: `tico meeting pending`, `tico meeting approve <id>` or `tico meeting approve --all`,
+`tico meeting dismiss <id>`, and `tico meeting restore <id>`. MCP equivalents are
+`tico_meeting_pending`, `tico_meeting_approve` (`id` or `all: true`), `tico_meeting_dismiss`, and
+`tico_meeting_restore`. All use the caller's own meetings; BotOps uses the requesting person's
+rights. `tico meeting import ... --review live` shares immediately. `send_to` on a pending import
 is held until approval; direct Send and pushing items require a live meeting.
 
 
@@ -229,7 +231,7 @@ format is a `422` that names the problem.
 - **A computer** that runs an importer (a registered runner whose owner is in
   `TICO_PROCESSING_OPERATORS`, else the owner's) files meetings for a roster human it names in
   `owner_email`. It cannot file for someone who is not on the roster.
-- **A bot** cannot import. Bots read: `hub_meeting_search` and `hub_meeting_read` give them
+- **A bot** cannot import. Bots read: `tico_meeting_search` and `tico_meeting_read` give them
   Team meetings that are not private and filed meetings they were attached to, including Participants only.
   Personal notes remain unavailable.
 - **Reading**: a team meeting is readable by everyone signed in. A private one is readable by its
@@ -262,7 +264,9 @@ format is a `422` that names the problem.
   app and label
   are optional: use your team's names or leave them blank. Existing B/F and CA/PA codes still work.
   A near-identical open task returns a link only if the sender can read it.
-  Every sent task ends with a footer naming the meeting and quoting the line. Participants-only meetings send
+  A task made from a meeting by **Create**, or by a doc or feature push, ends with a footer that names the meeting,
+  links to it, and quotes the line when you gave one. A task shared to a bot has no footer and no quote.
+  Participants-only meetings send
   private tasks only when every reader (including a bot owner's managers) is already in the meeting.
   The Recorder applies that check before Save too, using `live_meeting_id` on task creation.
   Title, owner, due and details autosave after 700 ms or on blur, one write at a time. **Not saved · Retry** keeps
@@ -290,8 +294,8 @@ format is a `422` that names the problem.
   `recording.ready` is still emitted for routines written before the rename; new routines use
   `meeting.ready`. Close imports that arrive live do not fire the event; approving a pending
   Close meeting fires it under the same transcript and privacy rules.
-- **Search.** `hub meeting search "pricing" --person Dana --since 2026-09-01` and
-  `hub meeting read <id>` (the old `/api/v2/recordings/*` paths still answer for installed
+- **Search.** `tico meeting search "pricing" --person Dana --since 2026-09-01` and
+  `tico meeting read <id>` (the old `/api/v2/recordings/*` paths still answer for installed
   clients).
 
 ## Close
@@ -520,7 +524,7 @@ background when Granola advertises a trusted endpoint. Connections are removed w
 or loses sign-in. A pending reconnect retains the working token until success or expiry; a successful
 new sign-in starts a fresh 30-day backfill.
 
-`hub meeting granola status` shows your connection and `hub meeting granola sync` starts a background
+`tico meeting granola status` shows your connection and `tico meeting granola sync` starts a background
 sync. `POST /api/v2/meetings/granola/sync` returns `state: "syncing"` when a job is running
 (or `recent`, `off`, `needs_signin`). `GET /api/v2/meetings/granola` includes `syncing: bool`
 and `skipped` for the last attempt. The account email comes only from display claims supplied by
@@ -534,7 +538,7 @@ Status also includes `skip_reasons`, the last attempt's skipped count per code (
 `http_status`, the JSON-RPC `rpc_code`, `tool_error` (an MCP `isError` result), `retry_after` in seconds,
 the fixed `signal` that classified a throttle (`rate limit`, `slow down` or `too many requests`) and the
 `batch` size. It never holds Granola's text, note IDs or titles.
-The MCP tools `hub_meeting_granola_status` and `hub_meeting_granola_sync` use the caller's person
+The MCP tools `tico_meeting_granola_status` and `tico_meeting_granola_sync` use the caller's person
 rights; BotOps can give the Meetings link but cannot complete the browser sign-in.
 
 The account sync matches existing meetings by person and Granola ID, then by the Granola web URL
@@ -579,7 +583,7 @@ attendee, calendar-event and transcript shapes, and the `413` behaviour.
 
 ### Otter and others
 
-Otter has no importer here. Use `hub meeting import`, the API, or write one as below.
+Otter has no importer here. Use `tico meeting import`, the API, or write one as below.
 
 ## Writing an importer
 
@@ -659,8 +663,8 @@ stays is everything that was ever imported or recorded. An upgrading install kee
   finished with what it has, once, at startup. Stored audio stays in file storage and remains
   attached to its meeting.
 - Routes moved from `/api/recordings/...` to `/api/meetings/...` and the page from `#/recordings`
-  to `#/meetings` (old links redirect). `hub recordings ...` became `hub meeting ...` and the
-  `hub_recordings_*` tools `hub_meeting_*`; `hub_recordings_submit` and `POST /api/v2/recordings`
+  to `#/meetings` (old links redirect). `hub recordings ...` became `tico meeting ...` and the
+  recordings tools the meeting tools; the recording submit tool and `POST /api/v2/recordings`
   are replaced by the import API. `/api/v2/recordings/search` and `/transcript` still answer.
 - `recording.ready` is still emitted beside `meeting.ready`.
 - A Mac set up earlier has a processing job (`team.tico.tico-processing`); `scripts/tico-computer install`,

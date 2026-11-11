@@ -3,28 +3,15 @@
 import json
 from backend import shared_bots
 from backend.store import H
-from backend.tests.test_api import api, get, post, runner, restrict, ready, claim  # noqa: F401
+from backend.tests.helpers.api import get, post, runner, restrict, ready, claim  # noqa: F401
 from backend import bot_settings as BS
-
-
-def revision(api, bot):
-    return get(api, 'bots/' + bot)['revision']
+from backend.tests.helpers.shared_bots import branch, revision, share
 
 
 def bot_id(api, slug):
     """The id a bot is stored under: actors, readiness reports, claims and most tables use it, not the slug."""
     with api.app.state.store.read() as c:
         return H.resolve_bot(c, slug)['id']
-
-
-def share(api, enabled=True):
-    post(api, 'bots/cpo/definition', {'shared': enabled, 'expected_revision': revision(api, 'cpo')})
-
-
-def branch(api, computer=None, token='cara-test', bot='cpo', expected=200):
-    return post(
-        api, f'bots/{bot}/copies', {'runner_id': computer['runner_id']} if computer else {}, token, expected=expected
-    )
 
 
 def test_creation_is_personal_idempotent_and_requires_read_and_own_computer(api):
@@ -220,7 +207,10 @@ def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'
-        assert 'was archived' in H.task(c, reminder['id'])['note']
+        notes = c.execute(
+            'SELECT a.notes FROM answers a JOIN visits v ON v.id=a.visit_id WHERE v.task_id=?', (reminder['id'],)
+        ).fetchall()
+        assert any('was archived' in (n[0] or '') for n in notes), notes
 
 
 def test_name_only_roster_marks_branches_without_exposing_the_original(api):

@@ -107,9 +107,9 @@ stays, and the Strategy Bot only suggests a different one. Turning the regular c
 
 ### A human can override
 
-A colour a human sets (`hub goal status`, or the colour control on the Goals page) is theirs. It carries their name and
+A colour a human sets (`tico goal status`, or the colour control on the Goals page) is theirs. It carries their name and
 their one-sentence note ("set by Ana"), and it **stays until a human hands it back**: **Let Strategy Bot set it**
-(`hub goal status <id> auto`, `POST /api/v2/goals/{id}/status/auto`) ends the override and the colour is worked out at once.
+(`tico goal status <id> auto`, `POST /api/v2/goals/{id}/status/auto`) ends the override and the colour is worked out at once.
 
 While a goal is overridden the Strategy Bot may *suggest* a different colour. The suggestion is shown on the goal and never
 applied. Done and dropped are always set by a human.
@@ -126,14 +126,14 @@ computer and a model exist. Its template is `templates/catalog/goal-manager/`; i
 
 There is no On/Off switch. How much it does is the [level](strategy-bot.md) the owner picks, and a new install starts at
 **Suggests actions**. Its first job is the team's [strategy](strategy.md): it proposes the Strategy page to the owner and, when a
-bet's wrong-if trips, puts one Decide card in front of them; the owner writes and publishes, never the bot.
+bet's wrong-if trips, puts one proposal in front of them; the owner writes and publishes, never the bot.
 On goals and KPIs it does five things:
 
 1. **Goals make sense.** It flags vague or duplicate goals and may suggest a measure once or clearer wording, as proposals on
    the goal. At Passive it does this when you ask it. It prefers goals that serve a strategy bet and have a KPI, and
    suggests one or two per active bet that no KPI-backed goal serves.
 2. **KPIs.** It is the steward of every KPI. Each has a folder in its repository, `kpis/<slug>/`, with `definition.md`,
-   `sources.md`, the query or script (`hub sql`, PostHog or another API through a tool the team declared), a
+   `sources.md`, the query or script (`tico sql`, PostHog or another API through a tool the team declared), a
    known-values check it runs before trusting a number, and a changelog. It computes each KPI on its cadence in one routine
    pass with a time budget per KPI, posts readings with evidence, marks stale or missing data, and skips a failing KPI and
    reports it.
@@ -185,7 +185,7 @@ recovery, and posts a comment on the goal saying what it did and why; you undo a
 you undid is never made alone again: tried again, it becomes an item in your Needs you.
 
 When several bots ask you the same thing, the Strategy Bot can make them **one item** (`POST /api/v2/strategy-bot/merge`), a
-question task for you. Their tasks leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
+task for you in General with one question on it. Their questions leave your Needs you while it is open, and your one answer goes to every bot that asked. If the item ends
 without an answer, they come back as they were. A merged item counts toward the 5 a day.
 
 After 10 recoveries in a row approved with its pick unchanged, the Monday note offers **Acts on its own** once, and at most once
@@ -236,8 +236,11 @@ a Why line", never one per goal. It closes by itself once every one is settled.
 
 ### Proposals
 
-A proposal is what a caller makes when they may not make the change themselves. The owner confirms it (and only a human, on
-their own click) or rejects it; confirming makes the change as that human.
+A proposal is what a caller makes when they may not make the change themselves. The owner confirms it or rejects it on
+its card. For a goal's wording, a KPI added to a goal, a KPI's definition or target, a flag or a Why line, the owner can
+also agree it in their [Assistant](assistant.md#goals-agreed-in-words) chat: a yes confirms it, and a no turns it down,
+except for a Why line, whose no stays a click on its card. A recovery or a strategy draft is decided only on its card.
+Only a human can; confirming makes the change as that human.
 
 | Kind | Payload | Confirmed by |
 |---|---|---|
@@ -301,13 +304,12 @@ edited or logged to.
 The goals tree is the main column; the Strategy Bot has the right rail (below the tree on narrow windows): one line on what it does (keeps KPIs current and each goal green, yellow or
 red; humans set the goals), its routines as the server has them (when each runs and when it next does, or paused), and its
 last run with the first line of its result. Nobody chats with the Strategy Bot directly, the owner included. To change one of your goals, ask your
-[Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your
-plain yes. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Bot's own
-suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card, or agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your plain yes confirms it, and it leaves **Needs you**. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
+[Assistant](assistant.md#goals-agreed-in-words): it writes the change back to you in your chat and saves only on your yes, plain or by number. Colour, done or dropped and archive stay clicks on this page, not agreed in chat. The Strategy Bot's own
+suggestions come to you as proposals under **Needs you**. You confirm or reject each one on its card. For a wording, KPI, KPI definition, target, flag or Why suggestion, you can also agree it in your [Assistant](assistant.md#goals-agreed-in-words) chat: your yes confirms it, and it leaves **Needs you**. A no in that chat turns it down, unless it is a Why line. The tree is drawn again when a change is saved. **Open bot** goes to its page. If it is paused or not set up, the owner gets **Turn on** (`POST
 /api/v2/goal-manager/turn-on`, the same steps as on update); with no computer or model yet, the panel says so.
 
-One tree, built like the team chart: the team on top, then every human and every bot that is not archived, indented
-under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
+One tree, built like the team chart: the team on top, then each group and every human and every bot that is not archived.
+A group sits under whoever runs it, and each person or bot under whoever they report to, whether or not they have a goal. Each is one line: the avatar and name, then the goal's
 colour dot and its title (cut short; the whole title is in the tooltip) and its KPIs as small chips, a dot and the latest
 value each (a count when there is no room). More goals follow on lines of their own under the first. The built-in bots (the
 Assistant, BotOps and the Librarian) stay out of this tree and its goal owner choices; the Strategy Bot is in the tree, under the owner.
@@ -329,9 +331,9 @@ and a colour, and the update is kept as your words. Tapping a KPI shows its hist
 evidence), its definition and version, its owner, its targets and the Strategy Bot's latest check-in, with a way back.
 **Add goal** and **Add KPI** (a KPI no goal uses yet) are at the bottom, owned by whoever was tapped, and the KPIs no goal uses are listed there too.
 Someone with no goal opens on a new one; the team line opens the team goal. Each goal in a panel shows its
-[Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is a short strip at the
-top, shown only when something waits: red KPIs on goals you own, stale data on KPIs you own, and definitions and targets
-waiting for your confirmation. Each line links to its task. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
+[Why](#a-goals-why), and the goal editor's **Bet** picker links it to a strategy bet. **Needs you** is one quiet line at the
+top, shown only when something waits. Its items include Strategy Bot suggestions and recoveries, waiting Why lines, red KPIs,
+stale KPI readings, and definitions and targets awaiting confirmation. **Review** opens them in a sheet, where each is answered as it would be in the Ask panel or the Needs you queue. Initial page load makes two requests, the tree and Needs you; the Strategy Bot panel and
 the historical KPI view load only when opened.
 People who may edit an owner's KPIs can open **Archived KPIs** in that owner's panel. The historical list is separate
 from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to active lists and freshness checks.
@@ -352,27 +354,27 @@ from active KPIs; a KPI's detail panel offers **Restore KPI** to return it to ac
 - The Strategy Bot reads every goal and KPI, writes readings and the automatic colours, records check-ins, and proposes. It
   cannot set a colour by hand, edit a goal, create or link a KPI, change a definition or a target, or archive a KPI.
 
-## `hub` and the API
+## `tico` and the API
 
 ```
-hub goal list [--owner X] [--all]              hub kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]
-hub goal show <id>                         hub kpi show <id>
-                                             hub kpi archive <id> | restore <id>
-hub goal create / update [--bet ID]        hub kpi create "<name>" [--goal ID] [--definition ..] [--unit ..]
-hub goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
-hub goal status <id> auto                         hub kpi update <id> [fields]
-hub goal refresh                           hub kpi link <goal> <kpi> [target flags]  |  hub kpi unlink <goal> <kpi>
-hub kpi update <id> --parent P --role R --stage S --loop NAME:STEP   sets the KPI view fields: tree, loops and journey
-hub goal checkin <id> "<words>"            hub kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
-hub goal checkin-list <id>                         [--quality ..] [--supersedes READING]
-hub goal needs-you                         hub kpi show <kpi> [--effective]
-hub proposal create | list | decide
+tico goal list [--owner X] [--all]              tico kpi list [--goal ID] [--owner X] [--unlinked] [--bot SLUG] [--archived]
+tico goal show <id>                         tico kpi show <id>
+                                             tico kpi archive <id> | restore <id>
+tico goal create / update [--bet ID]        tico kpi create "<name>" [--goal ID] [--definition ..] [--unit ..]
+tico goal status <id> <colour> "<why>"          [--direction ..] [--cadence ..] [--owner ..] [target flags]
+tico goal status <id> auto                         tico kpi update <id> [fields]
+tico goal refresh                           tico kpi link <goal> <kpi> [target flags]  |  tico kpi unlink <goal> <kpi>
+tico kpi update <id> --parent P --role R --stage S --loop NAME:STEP   sets the KPI view fields: tree, loops and journey
+tico goal checkin <id> "<words>"            tico kpi log <kpi> <value> ["<note>"] [--period-end D] [--evidence ..]
+tico goal checkin-list <id>                         [--quality ..] [--supersedes READING]
+tico goal needs-you                         tico kpi show <kpi> [--effective]
+tico proposal create | list | decide
 ```
 
 Target flags: `--baseline N --target N --deadline YYYY-MM-DD` (an improvement) or `--min N --max N` (a range). Every command
-has an MCP tool of the same meaning (`hub_goal_*`, `hub_kpi_*`, `hub_proposal_*`).
+has an MCP tool of the same meaning (`tico_goal_*`, `tico_kpi_*`, `tico_proposal_*`).
 
-Archived KPIs stay available in `hub kpi show <id>`, `hub kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
+Archived KPIs stay available in `tico kpi show <id>`, `tico kpi list --archived`, and the owner's **Archived KPIs** view. The active list,
 Strategy Bot freshness checks and Needs you omit them. A goal panel keeps each archived KPI that the goal links to as one muted
 line, **Archived <date>, not counting**, with no colour. It shows at most three such lines, then **+N archived**. The goal
 tree's chips leave them out. Archive asks first and names each goal you can see that the KPI stops counting toward, done
@@ -383,7 +385,7 @@ puts the KPI back on every goal it was linked to, with its target, and recompute
 require the KPI's owner or someone above them; each transition is audited, and neither changes its definition history,
 goal links, readings, privacy or owner. The Strategy Bot cannot archive a KPI.
 
-The stable v2 routes are in [openapi/v2.json](openapi/v2.json):
+The stable v2 routes are in [the v2 spec](api.md#the-contract):
 
 | Route | What it does |
 |---|---|

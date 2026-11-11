@@ -140,7 +140,8 @@ class Materialize(unittest.TestCase):
         first = self.make()
         (first / "state.md").write_text("# State\n\nThe renamed bot's memory.\n")
         second = self.make(folder="bot-coo-0a1b2c3d")
-        self.assertEqual(second, self.workspace / "bot-coo-0a1b2c3d")
+        # macOS gives tmp as /var, a link to /private/var: the bot folder comes back resolved.
+        self.assertEqual(second, (self.workspace / "bot-coo-0a1b2c3d").resolve())
         self.assertTrue((second / "AGENT.md").is_file())
         self.assertIn("The renamed bot's memory.", (first / "state.md").read_text())
         # A recorded value that is not one plain folder name is never a path.
@@ -285,7 +286,7 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
             "then end the run",
             "Never hand-edit a computer",
             "remove or change a git remote",
-            "hub support file",
+            "tico support file",
             "operation_id",
             "Blocked on a Tico bug, reported as",
         ):
@@ -294,7 +295,7 @@ class BotOpsStopsOnARefusal(unittest.TestCase):
     def test_build_checks_create_names_the_refusal_and_waits_without_copying(self):
         build = self.text("playbooks/build-me-a-bot.md")
         for rule in (
-            "`hub bot create`'s exit status",
+            "`tico bot create`'s exit status",
             "`github_permission_missing`",
             "ask the person once",
             "waiting for a computer to get the repository is not a failure",

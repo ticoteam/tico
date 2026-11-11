@@ -10,8 +10,8 @@ import time
 import httpx
 import pytest
 
-from backend.tests.test_screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
-from backend.tests.test_api import headers
+from backend.tests.helpers.screen_relay_contract import Service, gateway_origin, relay_binary, service  # noqa: F401
+from backend.tests.helpers.api import headers
 
 pytestmark = pytest.mark.slow
 
@@ -124,7 +124,9 @@ def standard_startup(root, port):
 
 def test_standard_startup_owns_rust_and_shutdown_releases_the_public_port(tmp_path):
     # backend.server takes its public port from --port, so the port is reserved and then released for its relay to
-    # bind. Another test can take it in that gap; the start is then tried again on a fresh port.
+    # bind. Another test can take it in that gap; the start is then tried again on a fresh port. The relay is built
+    # first (relay_binary), so backend.server's own prepare finds it instead of compiling inside the health deadline.
+    relay_binary()
     for attempt in range(5):
         reserved = Service.bind()
         port = reserved.getsockname()[1]

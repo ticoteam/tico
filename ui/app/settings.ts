@@ -5,23 +5,35 @@
 // What this file reads from the server and keeps in SETTINGS_DATA. The other settings files read these through the
 // globals declared here, so each type names the fields its readers use; a field nobody reads is left out.
 type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?: boolean; role?: string};
-type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: boolean};
+type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
-type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean};
+type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
+  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
-type SettingsHistory = {changes: Record<string, unknown>[]; transitions: Record<string, unknown>[]; transitions_truncated?: boolean; next_before?: string | null};
+type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
 // clients/harness_manifests.py: the sign-in commands are strings (empty when there is no sign-in), the rest flags.
-type HarnessCaps = {api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string};
-type HarnessRow = {id: string; name?: string; external?: boolean; capabilities?: HarnessCaps};
+type HarnessCaps = {account?: string; api_keys?: string; api_key_login?: boolean; api_key_check?: boolean; browser_sign_in?: boolean; compaction?: boolean; container_login?: string; resume_command?: string; sign_out?: boolean; switch_unavailable_on?: string[]; terminal_login?: string; weekly_usage?: string};
+// GET /v2/operations `agents`: an external agent (a Hermes or OpenClaw profile) and what it last reported (settings-devices.ts).
+type SettingsAgentRow = {bot: string; display_name?: string; harness?: string; profile?: string; version?: string; platform?: string; model?: string; provider?: string; online?: boolean; revoked_at?: string | null; last_seen_at?: string | null};
+type HarnessRow = {id: string; name?: string; label?: string; runtime?: string; external?: boolean; capabilities?: HarnessCaps};
+// What a bot's computer cannot run, per bot and harness (backend/readiness.py `can_run`, /v2/operations `runnable`).
+type SettingsRunAnswer = {can_run?: boolean; problem?: string; short?: string; computer?: {id?: string} | null;
+  sign_in?: {runner_id?: string; computer?: string} | null; move?: {id: string; label: string} | null};
+type SettingsRunnable = Record<string, Record<string, SettingsRunAnswer> | undefined>;
+// GET /v2/models `gateway` (backend/gateway_tiers.py): the Tico AI Gateway's levels and its tiers by id (tico-{level}[-fast]).
+type SettingsTierVersion = {version: string; model: string; context?: number | null; price: {input: number; output: number}};
+type SettingsTier = {name: string; level: string; fast: boolean; current: string; versions: SettingsTierVersion[]};
+type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: string; name: string}[]};
+// GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
+type SettingsLimits = {bots?: Record<string, UseLimit>; default?: UseDefault};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
-type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: unknown; agents?: unknown; scheduler_enabled?: boolean};
+type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
-type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: unknown; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: unknown; agents?: unknown; harnesses?: HarnessRow[]; gateway?: unknown; enabledProviders?: string[]; defaultModel?: string; limits?: unknown};
+type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
-type SettingsAssistantDecision = {id: string; decision: string; what: string; decided_at: string; decided_for?: {words?: string} | null; consumed_at?: string | null; can_undo?: boolean};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
 type StoppedKind = 'read' | 'restarted' | 'timeout' | 'changed' | 'twice' | 'unknown';
 type StoppedDecision = 'resume' | 'dismiss';
@@ -110,7 +122,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'security', 'history',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'security', 'history',
   'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
@@ -260,6 +272,7 @@ function pageSettings() {
   const built = $('#settings-tabs');
   if (built && built.dataset.role === (S.me?.role || '') && built.dataset.admin === String(settingsIsAdmin())) { settingsShow(SETTINGS_TAB); loadSettings(); return; }
   $('#main').innerHTML = `<div class="meeting-head"><div><h1>Settings</h1>${settingsVersionHTML()}</div>${settingsThemeHTML()}</div>
+    ${settingsSearchHTML()}
     <div class="tabs settings-tabs" id="settings-tabs" data-role="${esc(S.me?.role || '')}" data-admin="${settingsIsAdmin()}" role="tablist" aria-label="Settings">
       <button type="button" data-settings-tab="general" role="tab">General</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
@@ -267,6 +280,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
+      <button type="button" data-settings-tab="directory" role="tab">Directory</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -291,7 +305,7 @@ function pageSettings() {
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
-      </div></header><div id="settings-assistant-approvals"></div></section>
+      </div></header></section>
       <div id="settings-assistant"></div>
       <div id="settings-notifications"></div>
       ${S.me?.role === 'owner' ? `<section class="card" id="settings-privacy"><header><h2>Privacy</h2></header><div id="set-privacy">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -323,9 +337,9 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
+    <div class="settings-pane" id="settings-directory" role="tabpanel" hidden><div id="set-directory"></div></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
-      <div id="settings-types"></div>
       <section class="card" id="settings-roadmaps"></section>
       <section class="card"><header><h2>Task tags</h2></header><div id="settings-tags"></div></section>
     </div>
@@ -338,10 +352,10 @@ function pageSettings() {
     <dialog class="owner-picker" id="owner-picker" aria-labelledby="owner-picker-title"></dialog>
     <dialog class="bot-editor" id="bot-editor" aria-labelledby="bot-editor-title"></dialog>
     <dialog class="bot-editor catalog-picker" id="catalog-picker" aria-labelledby="catalog-picker-title"></dialog>`;
-  taskTypesSettingsMount();
   $('#settings-app-log')?.addEventListener('click', () => nativeHandler('showLog')?.postMessage(null));
   pageSettingsThemeBind();
   settingsTeamIconBind();
+  settingsSearchBind();
   $('#settings-history-view')?.addEventListener('click', (event: Event) => {
     const button = eventElement(event)?.closest<HTMLElement>('[data-history-view]');
     if (button) settingsHistoryShow(button.dataset.historyView);
@@ -434,7 +448,6 @@ function settingsShow(tab: string) {
   });
   settingsTabIntoView();
   settingsTags();
-  taskTypesSettingsShow(SETTINGS_TAB);
   if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
   const devices = $('#settings-devices'), models = $('#settings-models'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
@@ -459,7 +472,7 @@ function settingsShow(tab: string) {
     if (privacy) privacy.hidden = storage.hidden = !owner;
     if (SETTINGS_TAB === 'general') {
       window.hlSummaryDraw?.();
-      void Promise.all([renderSettingsAssistantApprovals(),
+      void Promise.all([
         // The owner's one click when the team has no Assistant (ui/assistant.ts): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
@@ -477,6 +490,8 @@ function settingsShow(tab: string) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
+  const directoryPane = document.getElementById('settings-directory'), directoryBody = document.getElementById('set-directory');
+  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'directory'; if (SETTINGS_TAB === 'directory') void directorySettingsShow(directoryBody); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
   // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.
@@ -526,42 +541,6 @@ function settingsTeamIconBind() {
     } catch (error) { status.textContent = errorMessage(error, 'Could not save the icon.'); status.classList.add('err'); }
     finally { button.disabled = input.disabled = false; input.value = ''; }
   };
-}
-// Settings > General > Assistant: the person's own switch for their Assistant deciding approvals addressed to them, and what it
-// decided, each undoable until it has run (backend/assistant.py decides, approval_undo). Only they see or change it.
-async function renderSettingsAssistantApprovals() {
-  const host = $('#settings-assistant-approvals');
-  if (!host || formBusy(host)) return;
-  let v, list;
-  try { [v, list] = await Promise.all([get('/v2/assistant/settings'), get('/v2/assistant/decisions')]); }
-  catch (e) { host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
-  if (!host.isConnected) return;   // Settings redrew while this loaded; the new page draws its own
-  const name = esc(assistantName());
-  const rows = (list.decisions || []).map((d: SettingsAssistantDecision) => {
-    const words = d.decided_for?.words ? `“${esc(d.decided_for.words)}”` : '';
-    return `<li class="people-line"><span><strong>${d.decision === 'approved' ? 'Approved' : 'Declined'}</strong> ${esc(d.what)}
-      <span class="settings-cell-note">${esc(ago(d.decided_at))}${words ? ` · you said ${words}` : ''}${d.consumed_at ? ' · already ran' : ''}</span></span>
-      ${d.can_undo ? `<button type="button" class="ghost" data-undo-approval="${esc(d.id)}">Undo</button>` : ''}</li>`;
-  }).join('');
-  host.innerHTML = `<h3 id="settings-assistant-approvals-h">Approvals</h3>
-    <label class="people-line"><input type="checkbox" role="switch" class="people-switch" id="assistant-decides"${v.decides_approvals ? ' checked' : ''}${v.team_allows ? '' : ' disabled'} aria-label="My assistant can decide approvals for me">
-      <span>My assistant can decide approvals for me</span></label>
-    <p class="settings-cell-note">${v.team_allows
-      ? `When you ask in its chat, your ${name} approves or declines your approvals. It reads the list back first, and only your own words count.`
-      : 'Your team’s owner has turned this off for everyone (Settings > People).'}</p>
-    ${rows ? `<h3>Decided by ${name} for you</h3><ul class="assistant-decisions">${rows}</ul>` : ''}`;
-  host.querySelector('#assistant-decides').onchange = async (ev: Event) => {
-    const box = ev.target;
-    if (!(box instanceof HTMLInputElement)) return;
-    try { await post('/v2/assistant/settings', {decides_approvals: box.checked}); toast('Saved'); void renderSettingsAssistantApprovals(); }
-    catch (e) { box.checked = !box.checked; settingsFieldError(box, errorMessage(e, 'Something went wrong.')); }
-  };
-  host.querySelectorAll('[data-undo-approval]').forEach((button: HTMLButtonElement) => button.onclick = async () => {
-    button.disabled = true;
-    try { await post(`/v2/approvals/${encodeURIComponent(String(button.dataset.undoApproval))}/undo`); toast('Undone: it is waiting for you again'); }
-    catch (e) { toast(errorMessage(e, 'Something went wrong.'), true); }
-    void renderSettingsAssistantApprovals();
-  });
 }
 // Settings > General > Team: whether a bot's report to the Tico team goes without a card (team rule bot_reports_direct,
 // backend/support.py send_by_rule). Owner only. Off, every bot report waits for a person's yes in Needs you.

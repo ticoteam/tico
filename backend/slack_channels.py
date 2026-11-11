@@ -1,6 +1,6 @@
 """Which Slack channels bots may read and post in: a list kept in the database and managed in the app.
 
-Settings > Tools > Slack (an owner or an admin), `hub slack channel`, the MCP tools and BotOps all change this one
+Settings > Tools > Slack (an owner or an admin), `tico slack channel`, the MCP tools and BotOps all change this one
 list. An entry names the channel (its name, its id, or both), the bots that read it, whether bots may post there
 (on by default, like every internal channel) and a note. The Slack gateway's readers' pass and the `connectors/slack.py`
 connector read it; nobody edits a file.
@@ -336,7 +336,7 @@ def remove(c, settings, who, ref, reader=""):
         raise Problem(
             "slack_file",
             "That channel is only in registry/slack-channels.yaml. Import the file first "
-            "(Settings > Tools > Slack, or `hub slack channel import`), then change it here.",
+            "(Settings > Tools > Slack, or `tico slack channel import`), then change it here.",
             409,
         )
     if reader:

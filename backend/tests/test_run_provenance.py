@@ -1,8 +1,7 @@
 """Which model actually worked a task (GET /api/v2/tasks/{id} `runs[].ran_on`, Runs `ran_on`): a fallback turn names
 the model that ran it, never the bot's configured one, and a maker Tico cannot know stays unknown."""
 
-from backend.tests.test_api import assign, claim, get, post, ready, runner  # noqa: F401
-from backend.tests.test_api import api  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 
 CLAUDE = {"model": "claude-sonnet-5-5", "runtime": "claude", "harness": "claude", "billing": "subscription"}
 CODEX = {"model": "gpt-6.1-sol", "runtime": "codex", "harness": "codex", "billing": "subscription"}
@@ -91,7 +90,11 @@ def test_a_run_that_also_worked_a_private_task_is_left_out_for_whoever_cannot_re
     assert [r["run"] for r in get(api, f"tasks/{tid}", token="cara-test")["runs"]] == [aid]
     hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
+        # The run read a message of the private task too: it was folded into the run's input.
+        mid = c.execute(
+            "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (hidden["conversation_id"],)
+        ).fetchone()[0]
+        c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, mid))
         assert H.task_private(c, H.task(c, hidden["id"]))
     assert get(api, f"tasks/{tid}", token="cara-test")["runs"] == []
     assert [r["run"] for r in get(api, f"tasks/{tid}")["runs"]] == [aid]

@@ -10,11 +10,11 @@ and what is blocked, with the evidence. Nothing is sent to anyone else, and noth
 
 - `knowledge/areas.md`, `knowledge/measures.md`, and last week's summary, so you report movement, not what merely exists.
 - The repositories in scope, as listed in `state.md`, read through `gh`.
-- The engineering bots' latest reports, and the open tasks on them: `hub task list --status open --status doing --status waiting`.
+- The engineering bots' latest reports, and the open tasks on them: `tico task list`.
 
 ## Steps
 
-1. **Read where things stand.** `hub task show <id>`, then the inputs above.
+1. **Read where things stand.** `tico task show <id>`, then the inputs above.
 2. **Read GitHub, per repository in scope.**
 
        gh pr list -R <repo> --state merged --search "merged:>YYYY-MM-DD" --json number,title,mergedAt,url
@@ -29,11 +29,11 @@ and what is blocked, with the evidence. Nothing is sent to anyone else, and noth
 4. **Compute only the measures the human chose.** Follow `skills/measure-delivery-without-ranking-people/SKILL.md`.
    A measure you cannot compute is "not measurable from the sources I have".
 5. **Write the summary** in the shape of `knowledge/examples/engineering-summary.md`, to `reports/`. Then run
-   `hub file publish reports/YYYY-MM-DD-engineering-summary.md`.
+   `tico file publish reports/YYYY-MM-DD-engineering-summary.md`.
 6. **Propose routing, do not act.** For any unowned request or stuck item, write a routing proposal using
    `playbooks/route-a-request.md`. Nothing is assigned. Share only as the task and Tools allow. Messages to
    outsiders stay drafts until a person turns mail sending on in Tico.
-7. **Finish.** Commit, then `hub task update <id> --status done --note`: the headline, the path, and which sources
+7. **Finish.** Commit, then `tico task done <id> -m "..." --version N`: the headline, the path, and which sources
    you could not read. Always finish it: an open scheduled task absorbs the next one.
 
 ## Output

@@ -2,7 +2,7 @@
 slug, and keeps working after it is renamed (backend/hubdb.py resolve_bot, rename_bot; docs/how-it-works.md).
 
 Every surface that names a bot is driven through the API the way its client drives it: the web app's routes, the
-runner's claim, the MCP tool table and the `hub` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
+runner's claim, the MCP tool table and the `tico` CLI (clients/hubtools.py, clients/remotecli.py). Stored references
 must hold the id; reads give both the id and the slug.
 """
 
@@ -13,29 +13,11 @@ import uuid
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner, setup_attempt  # noqa: F401  (fixture)
-from backend.tests.test_automation_cli import Client
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner, setup_attempt  # noqa: F401  (fixture)
+from backend.tests.helpers.automation_cli import Client
 from clients import hubcli, hubtools, remotecli
 from backend import bot_settings as BS
-
-
-def create_bot(api, slug, token="ana-test", **fields):
-    body = {
-        "slug": slug,
-        "display_name": slug.replace("-", " ").title(),
-        "description": "Answers sales questions",
-        "status": "active",
-        **fields,
-    }
-    r = api.post("/api/v2/bots", json=body, headers=headers(token))
-    assert r.status_code == 200, r.text
-    with api.app.state.store.transaction() as c:
-        bot_id = H.resolve_bot(c, slug)["id"]
-        # It runs on the test runtime the fixture's bots run on, so the test computer can claim its work.
-        config = BS.read(c, bot_id)
-        config.update({"runtime": "fake", "harness": None, "model": "", "model_managed_by": None})
-        BS.write(c, bot_id, config)
-    return bot_id
+from backend.tests.helpers.new_bot_flows import create_bot
 
 
 def bot_token(api, bot_id):
@@ -155,7 +137,7 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
 
 
 def test_mcp_and_cli_chat_name_the_bot_by_slug(api, sales):
-    sent = tool(api, "ana-test", "hub_chat_send", {"to": "sales-helper", "text": "Hello"})
+    sent = tool(api, "ana-test", "tico_chat_send", {"to": "sales-helper", "text": "Hello"})
     assert json.dumps(sent).count("bot:" + sales) >= 1
     assert column(api, "SELECT recipient_id FROM messages WHERE body='Hello'") == ["bot:" + sales]
 
@@ -167,8 +149,8 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
     by_id = post(api, "tasks", {"owner": sales, "title": "Send the deck", "body": "To Acme."})
     assert {by_slug["owner_id"], by_actor["owner_id"], by_id["owner_id"]} == {"bot:" + sales}
     # handed to another bot and back, by slug
-    moved = post(api, "tasks/" + by_slug["id"], {"owner": "ops", "version": by_slug["version"]})
-    back = post(api, "tasks/" + by_slug["id"], {"owner": "sales-helper", "version": moved["version"]})
+    moved = post(api, f"tasks/{by_slug['id']}/owner", {"owner": "ops", "version": by_slug["version"]})
+    back = post(api, f"tasks/{by_slug['id']}/owner", {"owner": "sales-helper", "version": moved["version"]})
     assert back["owner_id"] == "bot:" + sales
     # the list filters by either
     for owner in ("sales-helper", "bot:sales-helper", sales, "bot:" + sales):
@@ -176,14 +158,15 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
         assert {by_slug["id"], by_actor["id"], by_id["id"]} <= ids, owner
     # the bot takes and closes its own task through the MCP tools
     token = bot_token(api, sales)
-    made = tool(api, token, "hub_task_create", {"owner": "me", "title": "Follow up with Acme", "body": "Next week."})
+    made = tool(api, token, "tico_task_create", {"owner": "me", "title": "Follow up with Acme", "body": "Next week."})
     assert column(api, "SELECT owner_id FROM tasks WHERE title='Follow up with Acme'") == ["bot:" + sales], made
     own = column(api, "SELECT id FROM tasks WHERE title='Follow up with Acme'")[0]
-    tool(api, token, "hub_task_close", {"id": own, "note": "Sent"})
+    version = column(api, "SELECT version FROM tasks WHERE id=?", own)[0]
+    tool(api, token, "tico_task_close", {"id": own, "why": "Sent", "version": version})
     assert column(api, "SELECT status FROM tasks WHERE id=?", own) == ["closed"]
-    tool(api, "ana-test", "hub_task_close", {"id": by_id["id"], "note": "Sent"})
+    tool(api, "ana-test", "tico_task_close", {"id": by_id["id"], "why": "Sent", "version": by_id["version"]})
     assert column(api, "SELECT status FROM tasks WHERE id=?", by_id["id"]) == ["closed"]
-    listed = tool(api, "ana-test", "hub_task_list", {"owner": "sales-helper"})
+    listed = tool(api, "ana-test", "tico_task_list", {"owner": "sales-helper"})
     rows = listed["tasks"] if isinstance(listed, dict) else listed
     assert by_slug["id"] in {t["id"] for t in rows}
 
@@ -208,9 +191,9 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
         "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"},
         "steps": [{"id": "s1", "type": "bot_turn", "bot": "sales-helper", "prompt": "Check the pipeline"}],
     }
-    made = tool(api, "ana-test", "hub_automation_create", flow)
+    made = tool(api, "ana-test", "tico_automation_create", flow)
     aid = made["id"]
-    shown = tool(api, "ana-test", "hub_automation_get", {"id": aid})
+    shown = tool(api, "ana-test", "tico_automation_get", {"id": aid})
     assert shown["owner_id"] == "bot:" + sales
     stored = json.dumps(shown.get("steps") or [])
     assert "sales-helper" not in stored and sales in stored
@@ -218,37 +201,37 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
     updated = tool(
         api,
         "ana-test",
-        "hub_automation_update",
+        "tico_automation_update",
         {"id": aid, "steps": [{"id": "s1", "type": "bot_turn", "bot": "bot:sales-helper", "prompt": "Check again"}]},
     )
-    stored = json.dumps(tool(api, "ana-test", "hub_automation_get", {"id": aid}).get("steps") or [])
+    stored = json.dumps(tool(api, "ana-test", "tico_automation_get", {"id": aid}).get("steps") or [])
     assert "sales-helper" not in stored and sales in stored, updated
 
 
 def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, sales):
-    goal = tool(api, "ana-test", "hub_goal_create", {"owner": "sales-helper", "title": "Close ten deals this month"})
+    goal = tool(api, "ana-test", "tico_goal_create", {"owner": "sales-helper", "title": "Close ten deals this month"})
     assert goal.get("owner_id") in ("bot:" + sales, sales), goal
     lead = create_bot(api, "sales-lead")
-    tool(api, "ana-test", "hub_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "sales-lead"})
+    tool(api, "ana-test", "tico_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "sales-lead"})
     assert column(api, "SELECT reports_to FROM bot_config WHERE bot=?", sales) == [lead]
     org = {b["id"]: b for b in get(api, "org")["bots"]}
     assert org[sales]["reports_to"] == lead and org[sales]["org_parent"] == "b:" + lead
-    group = tool(api, "ana-test", "hub_group_update", {"name": "Sales", "add_bots": ["sales-helper", sales]})
+    group = tool(api, "ana-test", "tico_group_update", {"name": "Sales", "add_bots": ["sales-helper", sales]})
     gid = group.get("id") or group.get("group", {}).get("id")
     listed = next(g for g in get(api, "groups") if g["id"] == gid)
     assert listed["bots"] == [sales] and listed["bot_slugs"] == ["sales-helper"]
     tool(
-        api, "ana-test", "hub_task_cap_set", {"sender": "bot:sales-helper", "receiver": "bot:sales-lead", "per_day": 5}
+        api, "ana-test", "tico_task_cap_set", {"sender": "bot:sales-helper", "receiver": "bot:sales-lead", "per_day": 5}
     )
-    caps = json.dumps(tool(api, "ana-test", "hub_task_caps", {}))
+    caps = json.dumps(tool(api, "ana-test", "tico_task_caps", {}))
     assert "bot:" + sales in caps and "bot:sales-helper" not in caps
 
 
 def test_files_and_status_by_slug(api, sales):
     assert api.get("/api/v2/bots/sales-helper/files", headers=headers()).status_code == 200
-    listed = tool(api, "ana-test", "hub_file_list", {"bot": "sales-helper"})
+    listed = tool(api, "ana-test", "tico_file_list", {"bot": "sales-helper"})
     assert listed is not None
-    tool(api, "ana-test", "hub_bot_pause", {"bot": "sales-helper"})
+    tool(api, "ana-test", "tico_bot_pause", {"bot": "sales-helper"})
     assert column(api, "SELECT draining FROM bot_control WHERE bot=?", sales) in ([1], [True])
 
 
@@ -278,8 +261,8 @@ def test_after_a_rename_everything_follows_the_id_and_the_old_slug_is_free(api, 
     )
     lost = api.post("/api/v2/tasks", json={"owner": "sales-helper", "title": "Lost", "body": "x"}, headers=headers())
     assert lost.status_code in (404, 422), lost.text  # the old slug takes no task
-    tool(api, "ana-test", "hub_task_create", {"owner": sales, "title": "By id", "body": "x"})
-    tool(api, "ana-test", "hub_task_create", {"owner": "revenue-helper", "title": "By new slug", "body": "x"})
+    tool(api, "ana-test", "tico_task_create", {"owner": sales, "title": "By id", "body": "x"})
+    tool(api, "ana-test", "tico_task_create", {"owner": "revenue-helper", "title": "By new slug", "body": "x"})
     assert column(api, "SELECT DISTINCT owner_id FROM tasks WHERE title IN ('By id','By new slug')") == ["bot:" + sales]
     # the roster shows the new label on the same id
     employee = next(e for e in api.get("/api/employees", headers=headers()).json() if e["id"] == sales)
@@ -305,7 +288,7 @@ def test_a_built_in_bot_keeps_its_slug(api):
 
 
 def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch):
-    tool(api, "ana-test", "hub_bot_update", {"slug": sales, "new_slug": "revenue-helper"})
+    tool(api, "ana-test", "tico_bot_update", {"slug": sales, "new_slug": "revenue-helper"})
     assert get(api, "bots/" + sales)["slug"] == "revenue-helper"
     monkeypatch.setenv("HUB_API_URL", "http://test")
     monkeypatch.setattr(remotecli, "Client", lambda *a, **k: Client(api, "ana-test"))

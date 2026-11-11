@@ -38,10 +38,12 @@ interface FinDocPage {
   kind: FinDocKind; rows: FinDocRow[]; next: string | null; sel: string; load: number; one: FinDocAny | null; oneLoad: number;
   email: string; paid?: FinDocRow[];
 }
+// FIN.chart: the lines read per form use (finChart); FIN.payFrom: the accounts a bill may be paid from.
+interface FinPage { doc?: FinDocPage; chart?: Record<string, FinChartAccount[] | undefined>; payFrom?: FinPick[] }
 type FinContact = import('../types/api').FinanceContacts['contacts'][number];
 // What a decision dialog's build returns: the action's kind and its payload.
 type FinDecision = [string, object];
-interface FinImpactBudget { name: string; remaining: number | null; remaining_after: number; excluded?: boolean }
+type FinImpactBudget = { name: string; remaining: number | null; remaining_after: number; excluded?: boolean };
 // A bill form's named controls (an invoice form has the same, bar the one-line pair).
 interface FinDocFormControls {
   contact: HTMLSelectElement; name: HTMLInputElement; number: HTMLInputElement; date: HTMLInputElement; due: HTMLInputElement;
@@ -102,10 +104,12 @@ const finCentsValue = (c: number | null | undefined) => c == null ? '' : (c / 10
 
 // A decision, dry run first: one the rules would commit goes straight through; one that needs approval comes back as
 // {ask: approver, sig} and is sent only when called again with that sig. A denial throws its reason.
-async function finDecide(kind: string, payload: object, sig = '') {
+type FinDecided = {ask: string; sig: string; impact: FinDryImpact | undefined; status?: undefined; result?: undefined}
+  | (FinActResult & {ask?: undefined; sig?: undefined; impact?: undefined});
+async function finDecide(kind: string, payload: object, sig = ''): Promise<FinDecided> {
   const now = JSON.stringify([kind, payload]);
   if (sig !== now) {
-    const dry = await post('/v2/finance/actions', {kind, payload, dry_run: true});
+    const dry: FinDryRun | null = await post('/v2/finance/actions', {kind, payload, dry_run: true});
     if (dry?.status === 'needs_approval') return {ask: dry.approver || '', sig: now, impact: dry.impact};
     if (dry?.status !== 'committed') throw new Error(dry?.reason || 'Not done');
   }
@@ -179,7 +183,7 @@ function finDocEmailDraw() {
 }
 // One input: an address sets it, empty clears it. An address no Tico address has is kept but named here.
 function finDocEmailSet() {
-  const state: FinDocPage = FIN.doc;
+  const state: FinDocPage = finNeed(FIN?.doc, 'the documents');
   finDialog('Bills address', `<label>Address<input type="email" name="address" maxlength="254" autocomplete="off" value="${esc(state.email || '')}"></label>`, 'Save', async (form: FinFormOf<{address: HTMLInputElement}>) => {
     const address = form.elements.address.value.trim();
     const r = await put('/v2/finance/bills-address', {address: address || null}).catch(e => {
@@ -193,7 +197,7 @@ function finDocEmailSet() {
 // ----------------------------------------------------------------- the page
 function finDocPage(kind: FinDocKind) {
   const k = FIN_DOC[kind], f = FIN_DOC_F[kind], caps = finNeed(finCaps(), 'the finance caps');
-  FIN.doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
+  finNeed(FIN, 'the Finance page').doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
       ${finSeg('status', 'Status', k.filters, f.status)}<span class="spacer"></span><span id="fin-doc-email" class="fin-doc-email"></span>
       ${kind === 'bill' && caps.owner && !caps.viewing ? '<label class="fin-inline" data-fin-direct-box hidden><input type="checkbox" role="switch" class="people-switch" data-fin-direct aria-label="Direct send"><span>Direct send</span></label>' : ''}
@@ -214,7 +218,7 @@ function finDocPage(kind: FinDocKind) {
     const copy = t.closest<HTMLElement>('[data-fin-copy]');
     if (copy) { void copyText(copy.dataset.finCopy!).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
     const tr = t.closest<HTMLElement>('tr[data-fin-doc]');
-    if (tr && tr.dataset.finDoc !== FIN.doc.sel) { FIN.doc.sel = tr.dataset.finDoc; finDocDraw(); void finDocOne(); }
+    if (tr && FIN?.doc && tr.dataset.finDoc !== FIN.doc.sel) { FIN.doc.sel = tr.dataset.finDoc!; finDocDraw(); void finDocOne(); }
   };
   void finDocLoad(false);
   void finDirectSend();
@@ -237,7 +241,7 @@ async function finDirectSend() {
   };
 }
 async function finDocLoad(more: boolean) {
-  const state: FinDocPage = FIN.doc, k = FIN_DOC[state.kind], f = FIN_DOC_F[state.kind], load = ++state.load;
+  const state: FinDocPage = finNeed(FIN?.doc, 'the documents'), k = FIN_DOC[state.kind], f = FIN_DOC_F[state.kind], load = ++state.load;
   const qs = new URLSearchParams({limit: '50'});
   if (f.q) qs.set('q', f.q.slice(0, 100));
   // Late: open invoices past due (the read's `late`).
@@ -267,7 +271,7 @@ async function finDocPaidLoad(state: FinDocPage) {
   finDocDraw();
 }
 function finDocDraw() {
-  const state: FinDocPage = FIN.doc, box = $('#fin-docs'); if (!box) return;
+  const state = FIN?.doc, box = $('#fin-docs'); if (!box || !state) return;
   const k = FIN_DOC[state.kind], bill = state.kind === 'bill';
   const paid = bill ? state.paid || [] : [];
   const tr = (r: FinDocRow, cells: string) => `<tr data-fin-doc="${esc(r.id)}"${state.sel === r.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(r[k.contact]?.name || '—')}</button></td>${cells}</tr>`;
@@ -288,7 +292,7 @@ function finDocDraw() {
 }
 // The selected document: drawn from its row at once, then whole (lines, files, payments, approvals, decisions).
 async function finDocOne() {
-  const state: FinDocPage = FIN.doc, id = state.sel, load = ++state.oneLoad;
+  const state: FinDocPage = finNeed(FIN?.doc, 'the documents'), id = state.sel, load = ++state.oneLoad;
   state.one = null;
   const row = state.rows.find(r => r.id === id) || (state.paid || []).find(r => r.id === id);
   if (!row) { finRail(''); return; }
@@ -301,7 +305,7 @@ async function finDocOne() {
   finDocRail(d, true);
 }
 function finDocRail(d: FinDocAny, full: boolean) {
-  const state: FinDocPage = FIN.doc, k = FIN_DOC[state.kind], bill = state.kind === 'bill';
+  const state: FinDocPage = finNeed(FIN?.doc, 'the documents'), k = FIN_DOC[state.kind], bill = state.kind === 'bill';
   const day = (s: string | null | undefined) => s ? esc(finDayLabel(s)) : '—';
   const rows = [finKv(k.label, esc(d.number || '—')), finKv('Date', day(d.date))];
   if (!bill && d.sent_at) rows.push(finKv('Sent', day(d.sent_at)));
@@ -334,8 +338,8 @@ function finDocRail(d: FinDocAny, full: boolean) {
   if (rail) rail.onclick = full ? (ev: Event) => { const b = eventElement(ev)?.closest<HTMLButtonElement>('[data-fin-do]'); if (b) finDocDo(b.dataset.finDo, d, b); } : null;
 }
 // Only the decisions the viewer may take on this document now.
-function finDocActs(d: FinDocAny): FinPair[] {
-  const kind: FinDocKind = FIN.doc.kind, caps = finCaps();
+function finDocActs(d: Partial<FinDocAny>): FinPair[] {
+  const kind: FinDocKind = finNeed(FIN?.doc, 'the documents').kind, caps = finCaps();
   if (!caps?.may(FIN_DOC[kind].right)) return [];
   // Scheduling sends money, so it also needs finance.pay. A scheduled bill moves to another day until its payment is live.
   const may = caps.may('finance.pay'), pay: FinPair[] = may ? [['schedule', 'Schedule']] : [];
@@ -344,15 +348,15 @@ function finDocActs(d: FinDocAny): FinPair[] {
     ? {draft: [['void', 'Void'], ['approve', 'Approve']], open: [['void', 'Void'], ['paid', 'Mark paid'], ...pay],
       scheduled: [['void', 'Void'], ['paid', 'Mark paid'], ...again]}
     : {draft: [['send', 'Send']], sent: [['writeoff', 'Write off'], ['paid', 'Mark paid']], partial: [['writeoff', 'Write off'], ['paid', 'Mark paid']]};
-  return acts[d.status] || [];
+  return acts[d.status ?? ''] || [];
 }
-const finDocActsHtml = (d: FinDocAny) => {
+const finDocActsHtml = (d: Partial<FinDocAny>) => {
   const acts = finDocActs(d);
   return acts.length ? `<div class="fin-acts" id="fin-doc-acts">${acts.map(([v, l], i) =>
     `<button type="button" class="${i === acts.length - 1 ? 'primary' : 'ghost'}" data-fin-do="${v}">${l}</button>`).join('')}</div>` : '';
 };
 function finDocDo(what: string | undefined, d: FinDocAny, btn: HTMLButtonElement) {
-  const bill = FIN.doc.kind === 'bill', id = bill ? {bill_id: d.id} : {invoice_id: d.id};
+  const bill = finNeed(FIN?.doc, 'the documents').kind === 'bill', id = bill ? {bill_id: d.id} : {invoice_id: d.id};
   if (what === 'approve') void finDocRun('bill_approve', id, 'Approved', btn);
   else if (what === 'send') void finDocRun('invoice_send', id, 'Sent', btn);
   else if (what === 'schedule') void finBillSchedule(d);
@@ -380,7 +384,7 @@ async function finDocRun(kind: string, payload: object, done: string, btn: HTMLB
   box.onclick = async (ev: Event) => {
     ev.stopPropagation();
     const t = eventElement(ev);
-    if (t?.closest('[data-fin-ask-no]')) { box.outerHTML = finDocActsHtml(FIN.doc.one || {}); return; }
+    if (t?.closest('[data-fin-ask-no]')) { box.outerHTML = finDocActsHtml(finNeed(FIN?.doc, 'the documents').one || {}); return; }
     const yes = t?.closest<HTMLButtonElement>('[data-fin-ask-yes]'); if (!yes) return;
     yes.disabled = true;
     try { await finDecide(kind, payload, r.sig); finDocsReload(); }
@@ -391,16 +395,18 @@ async function finDocRun(kind: string, payload: object, done: string, btn: HTMLB
 // ----------------------------------------------------------------- what the forms pick from
 // The lines the viewer may post to for a bill, an invoice or a journal entry. Read once per page per form.
 async function finChart(use: string): Promise<FinChartAccount[]> {
-  FIN.chart ||= {};
-  if (FIN.chart[use]) return FIN.chart[use];
+  const fin = finNeed(FIN, 'the Finance page');
+  fin.chart ||= {};
+  if (fin.chart[use]) return fin.chart[use];
   const r = await get<import('../types/api').FinanceChart>(`/v2/finance/chart?for=${use}${finAs()}`, {fresh: true});
-  return FIN.chart[use] = r?.accounts || [];
+  return finNeed(FIN?.chart, 'the chart')[use] = r?.accounts || [];
 }
 // The bank accounts the viewer may pay a bill from (finance.pay).
 async function finPayFrom(): Promise<FinPick[]> {
-  if (FIN.payFrom) return FIN.payFrom;
+  const fin = finNeed(FIN, 'the Finance page');
+  if (fin.payFrom) return fin.payFrom;
   const r = await get<import('../types/api').FinancePayFrom>('/v2/finance/pay-from' + finAs('?'), {fresh: true});
-  return FIN.payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
+  return finNeed(FIN, 'the Finance page').payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
 }
 const finOpts = (rows: FinPick[], val = '') => rows.map(r => `<option value="${esc(r.id)}"${r.id === val ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
 // Whom a viewer without company-wide view of a line may attribute it to: the chart read's `attributable` tags (the
@@ -432,7 +438,7 @@ async function finBillSchedule(d: FinDocAny) {
 // Marked paid from (or to) a connected bank account, whose bank row links when it arrives, or "Elsewhere": no account,
 // so the payment waits in clearing. Viewers without finance.pay see only "Elsewhere".
 async function finDocMarkPaid(d: FinDocAny) {
-  const bill = FIN.doc.kind === 'bill';
+  const bill = finNeed(FIN?.doc, 'the documents').kind === 'bill';
   const banks = finNeed(finCaps(), 'the finance caps').may('finance.pay') ? await finPayFrom().catch(() => []) : [];
   finDecideDialog('Mark paid', `<label>Amount<input name="amount" inputmode="decimal" required autocomplete="off" value="${finCentsValue(d.remaining)}"></label>
     <label>Date<input type="date" name="date" required value="${finToday()}"></label>
@@ -648,7 +654,8 @@ async function finNewLineAdd(kind: 'loan' | 'asset') {
       if (r.status !== 'committed' || !r.result?.account_id) throw new Error('The new line waits for approval');
       made = {name, id: String(r.result.account_id)};
       chart.push({id: made.id, number: code, name, type: k.type, subtype: k.subtype});
-      if (FIN.chart) delete FIN.chart.journal;
+      const charts = finNeed(FIN, 'the Finance page').chart;
+      if (charts) delete charts.journal;
     }
     const lines = kind === 'loan' ? [{account_id: el.other.value, amount}, {account_id: made.id, amount: -amount}]
       : [{account_id: made.id, amount}, {account_id: el.other.value, amount: -amount}];

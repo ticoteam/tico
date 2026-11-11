@@ -7,9 +7,9 @@ draft update on the task with any missing figure marked, and the first routine c
 
 ## 1. Read before you ask
 
-    hub goal list --all
-    hub update list --kind weekly --limit 6
-    hub meeting search --since <first of last month>
+    tico goal list --all
+    tico update list --kind weekly --limit 6
+    tico meeting search --since <first of last month>
 
 Do not ask what these already say. If last month's update is in Docs or the mailbox, read it and copy its metrics and order.
 
@@ -41,15 +41,15 @@ Follow `playbooks/monthly-investor-update.md` on the real record for the month j
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off, `hub automation update <id> --enable`) and tell the human in one line:
+Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off, `tico automation update <id> --enable`) and tell the human in one line:
 "I will have a draft ready on the 3rd of every month at 09:00 for you to review and send." They can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a different schedule or to leave it off, adjust `knowledge/` and the routine
-to match (`hub automation update <id>`, with `--disable` to turn it off).
+to match (`tico automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 
-    hub bot setup-done
+    tico bot setup-done
 
 It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the routine run; until then nothing you have runs on its own. Run it once the
 answers and the first result are recorded, not before.

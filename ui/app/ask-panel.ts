@@ -12,8 +12,58 @@
 // What waits on the person from anyone else sits in the thread by when it was asked, like every other line: a Confirm
 // card a bot such as BotOps left in its own chat (GET /v2/assistant `pending`), and bots' questions (Needs you),
 // answered here or by telling the Assistant.
+
+// The state of the panel's conversation (ASK), its thread and composer, as the functions below read and write them.
+interface AskChat {
+  open?: boolean;
+  mounted?: boolean;
+  dotState?: string;
+  draw?: () => void;
+  refresh?: () => Promise<void>;
+  send?: (text: string) => Promise<void>;
+  stop?: () => void;
+  draft?: string;
+  composer?: Pill;
+  live?: boolean;
+  drawn?: boolean;
+}
+// What GET /v2/assistant answers for the panel: the conversation, its run and the Confirm cards waiting elsewhere.
+interface AskPending {
+  id: string;
+  created_at?: string | null;
+}
+interface AskInfo {
+  room_id?: string | null;
+  bot?: string;
+  name?: string;
+  available?: boolean;
+  can_turn_on?: boolean;
+  messages?: ChatMessage[];
+  execution?: AskExecution | null;
+  pending?: AskPending[];
+}
+// A turn's run as the panel reads it: `text` is the reply so far, while it streams.
+interface AskExecution {
+  text?: string;
+}
+// The reply forms: a choice of options has a named select, a free answer a named text box.
+interface AskChoiceForm extends HTMLFormElement {
+  readonly elements: HTMLFormControlsCollection & { pick: HTMLSelectElement };
+}
+interface AskReplyForm extends HTMLFormElement {
+  readonly elements: HTMLFormControlsCollection & { text: HTMLInputElement };
+}
+// One line of the thread: when it was asked (or sent), and its markup.
+interface AskRow {
+  at?: string | null | undefined;
+  html: string;
+}
+interface Element {
+  _ldotFly?: { cancel(): void };
+}
+
 const ASK_MANAGE = "We'd like Tico to fully manage our company.";
-let ASK = null;
+let ASK: AskChat | null = null;
 const ASK_CARDS_MAX = 3;
 // The panel's name: "Tico Assistant", or the name a team gave its assistant.
 const askName = () => myChatName() === CONFIG_DEFAULTS.assistant_name ? 'Tico Assistant' : myChatName();
@@ -32,8 +82,8 @@ const askAway = () => !S.me || S.route === ASSISTANT || document.documentElement
 // (ask.css). Nothing else on the way in or out writes a `hidden` (or text) it does not change (askSet); what shows
 // and goes with it (the page it sees) does so by a class, `ask-on` (askOn).
 const askShown = () => !!$('#ask-panel')?.classList.contains('ask-shown');
-const askSet = (el, key, value) => { if (el && el[key] !== value) el[key] = value; };
-const askOn = (el, on) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', on); };
+const askSet = <T extends object, K extends keyof T>(el: T | null | undefined, key: K, value: T[K]) => { if (el && el[key] !== value) el[key] = value; };
+const askOn = (el: Element | null | undefined, on: unknown) => { on = !!on; if (el && el.classList.contains('ask-on') !== on) el.classList.toggle('ask-on', !!on); };
 // The row is there from the first paint (index.html); a click before /me answers opens Ask once the first page is
 // drawn (router.js calls askSync), and boot that never gets a person hides the row (boot.js).
 let ASK_EARLY = false;
@@ -73,11 +123,11 @@ function askDot() {
   askSet($('#ask-row [data-ask-word]'), 'textContent', open ? '' : ldotWord(state));
 }
 // Where the dot is now: the open panel's, else the button's (the row on a computer, the tab on a phone).
-const askHomeDot = () => [...document.querySelectorAll('#ask-row [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
-const askLiveDot = () => askShown() ? $('#ask-panel [data-ask-dot]') : askHomeDot();
+const askHomeDot = (): Element | null => [...document.querySelectorAll('#ask-row [data-ask-dot], #mobile-ask [data-ask-dot]')].find(el => el.getClientRects().length) || null;
+const askLiveDot = (): Element | null => askShown() ? $('#ask-panel [data-ask-dot]') : askHomeDot();
 // Where `el` rests once the panel has finished sliding in: its box less the panel's translate right now (read in the
 // same style pass as the box, so a slide just begun, or one reversed mid-close, cancels out).
-function askSettled(el) {
+function askSettled(el: Element) {
   const t = getComputedStyle($('#ask-panel')).translate, r = el.getBoundingClientRect();
   const [, y = '0'] = t && t !== 'none' ? t.split(' ') : [];
   const dy = parseFloat(y) || 0;
@@ -105,103 +155,103 @@ function askToggle(open = !ASK?.open, focus = true) {
 }
 // Where the panel's foot goes on a computer: just over the Ask row (ask.css --ask-foot). Read with the other boxes before
 // anything moves, then written; a phone's sheet has its own place.
-const askFootNow = () => { const r = askPhone() ? null : $('#ask-row')?.getBoundingClientRect(); return r?.height ? Math.round(innerHeight - r.top + 6) : null; };
-const askFoot = px => { if (px != null) $('#ask-panel')?.style.setProperty('--ask-foot', px + 'px'); };
+const askFootNow = (): number | null => { const r = askPhone() ? null : $('#ask-row')?.getBoundingClientRect(); return r?.height ? Math.round(innerHeight - r.top + 6) : null; };
+const askFoot = (px: number | null) => { if (px != null) $('#ask-panel')?.style.setProperty('--ask-foot', px + 'px'); };
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
-function askDraft(text) {
+function askDraft(text: string) {
   ASK ||= {open: false, mounted: false};
   ASK.draft = text;
   askToggle(true);
   askFillDraft(ASK);
 }
-function askFillDraft(chat) {
+function askFillDraft(chat: AskChat) {
   const box = chat.draft && chat.composer ? pq(chat.composer, '.p-text') : null;
   if (!box) return;
   if (!box.value.trim()) { box.value = chat.draft; box.dispatchEvent(new Event('input', {bubbles: true})); }
   chat.draft = '';
 }
 
-function askClick(ev) {
+function askClick(ev: MouseEvent) {
+  if (!(ev.target instanceof Element)) return;   // a click always lands on an element
   const t = ev.target;
   if (t.closest('[data-ask-close]')) { askToggle(false); return; }
-  const pick = t.closest('[data-ask-pick]');
-  if (pick) { void askAnswer(pick.closest('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
-  const more = t.closest('[data-ask-more]');
+  const pick = t.closest<HTMLElement>('[data-ask-pick]');
+  if (pick) { void askAnswer(pick.closest<HTMLElement>('[data-ask-q]'), {pick: Number(pick.dataset.askPick)}); return; }
+  const opens = t.closest<HTMLElement>('[data-ask-open]');
+  if (opens) { const id = opens.closest<HTMLElement>('[data-ask-q]')?.dataset.askQ || ''; if (!decideOpen(id)) void decideWanted(id); return; }
+  const more = t.closest<HTMLElement>('[data-ask-more]');
   if (more) { more.setAttribute('aria-expanded', String(more.getAttribute('aria-expanded') !== 'true')); return; }
-  const hint = t.closest('[data-ask-hint]');
-  if (hint) { ev.preventDefault(); void ASK?.send?.(hint.dataset.askHint); return; }
+  const hint = t.closest<HTMLElement>('[data-ask-hint]');
+  if (hint) { ev.preventDefault(); void ASK?.send?.(hint.dataset.askHint || ''); return; }
   // A link followed from the panel: on a phone the sheet gets out of the way of the page it opens.
-  const a = t.closest('a[href^="#/"]');
-  if (a && askPhone() && !a.getAttribute('href').startsWith('#/support')) askToggle(false, false);
+  const a = t.closest<HTMLAnchorElement>('a[href^="#/"]');
+  if (a && askPhone() && !a.getAttribute('href')?.startsWith('#/support')) askToggle(false, false);
 }
 
-// ---- Bots' questions
-// Bots' questions to this person (Needs you), the first few: one pick of two to six answered with a tap, any other
-// question with a line of words; several picks at once, or several questions, open the task.
-function askQuestions() {
+// ---- Bots' asks
+// The asks to this person in Needs you (docs/pipelines-v3.md S3), the first few: a choice of two answered with a tap,
+// more in a list and Send, a question with a line of words. An OK, or an ask this person only opens, opens the ask
+// screen (decide.ts), where what is asked about is shown in full.
+function askQuestions(): NeedsEntry[] {
   const me = myActor();
-  return (S.v2?.needs || []).filter(it => it.kind === 'question' && it.ask?.recipient_id === me
-    && it.ask.sender_id !== me).slice(0, ASK_CARDS_MAX);
+  return needsAsEntries(S.v2?.needs).filter(it => it.kind === 'ask' && it.ask && it.ask.who === me && it.ask.asked_by !== me)
+    .slice(0, ASK_CARDS_MAX);
 }
-// Who asks: the panel's own bot by the panel's name, anyone else as the question card names them.
-const askAsker = actor => actor === 'bot:' + assistantBot() ? askName() : qcardAsker(actor);
+// Who asks: the panel's own bot by the panel's name, anyone else by their name.
+const askAsker = (actor: string | null | undefined): string => actor === 'bot:' + assistantBot() ? askName() : actor ? actorLabel(actor) : '';
+// Answered here: a question (the ask's own `answer`), not an OK, which needs its content shown.
+const askAnswerable = (it: NeedsEntry) => !!it.ask && it.ask.kind !== 'ok' && it.ask.may.includes('answer');
 // A card is who asks, the question and at most two buttons. A long question shows three lines until it is tapped; three
-// or more picks are one list and Send.
+// or more choices are one list and Send.
 const ASK_Q_LONG = 160;
-// A pick chosen in a list and not yet sent, by the question's wording ("task:question id", a reworded ask gets a new
-// id) and kept as its label: the thread is drawn again whenever the chat changes. Questions no longer shown drop out.
-const askPicks = new Map(), askPickKey = (it, q) => `${it.id}:${q.id}`;
-function askQuestionHTML(it) {
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
-  const text = plainActors(q ? q.question : it.ask.body);
-  const body = `<div class="ask-card-who">${esc(who)} asks</div>${text.length > ASK_Q_LONG
+// A choice picked in a list and not yet sent, by the ask's id: the thread is drawn again whenever the chat changes.
+// Asks no longer shown drop out.
+const askPicks = new Map<string, string>();
+function askQuestionHTML(it: NeedsEntry) {
+  const ask = it.ask!, who = askAsker(ask.asked_by), choices = ask.choices || [], id = String(it.id);
+  const text = plainActors(ask.line || it.line || '');
+  const body = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}${text.length > ASK_Q_LONG
     ? `<button type="button" class="ask-card-q" data-ask-more aria-expanded="false">${esc(text)}</button>` : `<div class="ask-card-q">${esc(text)}</div>`}`;
-  const structured = it.kind === 'question' && (it.ask.refs?.questions || []).length;
-  const answer = q?.multi || (structured && !q) ? `<a href="#/task/${encodeURIComponent(it.id)}">Answer</a>`
-    : q && q.options.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(askPickKey(it, q))}"><select name="pick" aria-label="Answer ${esc(who)}">${q.options.map((o, i, all) => {
-      const kept = askPicks.get(askPickKey(it, q)), on = all.some(x => x.label === kept) ? o.label === kept : o.recommended;
-      return `<option value="${i}"${on ? ' selected' : ''}>${esc(o.label)}</option>`;
-    }).join('')}</select><button type="submit" class="ghost">Send</button></form>`
-    : q ? `<div class="ask-picks">${q.options.map((o, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(o.label)}</button>`).join('')}</div>`
-    : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer ${esc(who)}" aria-label="Answer ${esc(who)}"><button type="submit" class="ghost">Send</button></form>`;
-  return `<div class="ask-card" data-ask-q="${esc(it.id)}" data-ask-row="q:${esc(it.id)}">${body}${answer}</div>`;
+  const answer = !askAnswerable(it) ? `<button type="button" class="ghost" data-ask-open>Open</button>`
+    : choices.length > 2 ? `<form class="ask-reply" data-ask-choose="${esc(id)}"><select name="pick" aria-label="Answer">${choices.map((c, i) =>
+      `<option value="${i}"${askPicks.get(id) === c ? ' selected' : ''}>${esc(c)}</option>`).join('')}</select><button type="submit" class="ghost">Send</button></form>`
+    : choices.length ? `<div class="ask-picks">${choices.map((c, i) => `<button type="button" class="ghost" data-ask-pick="${i}">${esc(c)}</button>`).join('')}</div>`
+    : `<form class="ask-reply" data-ask-reply><input name="text" maxlength="4000" autocomplete="off" placeholder="Answer" aria-label="Answer"><button type="submit" class="ghost">Send</button></form>`;
+  return `<div class="ask-card" data-ask-q="${esc(id)}" data-ask-row="q:${esc(id)}">${body}${answer}</div>`;
 }
-// The answer goes where Decide sends it (decide.js): a pick to the task's answers, words to a loose question's answer
-// or as a comment on the task, which wakes its bot.
-async function askAnswer(card, {pick, text}) {
-  const it = (S.v2?.needs || []).find(x => String(x.id) === card?.dataset.askQ);
-  if (!it || card.dataset.busy) return;
-  const q = it.kind === 'question' ? qcardQuestion(it) : null, who = askAsker(it.ask.sender_id);
-  const writes = pick !== undefined && q ? qcardWrites(it, q, [q.options[pick].label])
-    : [{path: `/v2/tasks/${encodeURIComponent(it.id)}/comments`, body: {text}}];
+// The answer goes on the ask (POST /v2/tasks/{id}/asks/{rid}/answer): a choice by its words, or the line typed.
+async function askAnswer(card: HTMLElement | null, {pick, text}: {pick?: number; text?: string}) {
+  const it = askQuestions().find(x => String(x.id) === card?.dataset.askQ);
+  if (!it?.ask || !it.task_id || !card || card.dataset.busy) return;
+  const value = pick !== undefined ? it.ask.choices?.[pick] : text;
+  if (!value) return;
+  const who = askAsker(it.ask.asked_by);
   card.dataset.busy = '1';
-  card.querySelectorAll('button, input, select').forEach(el => { el.disabled = true; });
+  card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = true; });
   try {
-    for (const w of writes) await post(w.path, w.body);
-    card.innerHTML = `<div class="ask-card-who">${esc(who)}</div><div class="muted">Answered</div>`;
-    toast('Sent to ' + who);
+    await taskAnswer(it.task_id, it.ask.requirement_id, value, null);
+    card.innerHTML = `${who ? `<div class="ask-card-who">${esc(who)}</div>` : ''}<div class="muted">Answered</div>`;
     await v2Refresh();                              // Needs you without it: the card leaves the chat
     ASK?.draw?.();
   } catch (e) {
-    toast(e.message, true);
+    toast(errorMessage(e, ''), true);
     delete card.dataset.busy;
-    card.querySelectorAll('button, input, select').forEach(el => { el.disabled = false; });
+    card.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select').forEach(el => { el.disabled = false; });
   }
 }
-
-async function askLoad(chat) {
+async function askLoad(chat: AskChat) {
   const el = $('#ask-panel'), thread = el.querySelector('[data-ask-thread]'), error = el.querySelector('[data-ask-error]');
   const current = () => ASK === chat && chat.mounted;
-  const fail = text => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
-  let info = null, messages = [], execution = null, rendered = '', es = null, poll = null, tick = null;
-  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; clearInterval(poll); poll = null; };
-  chat.stop = () => { stopStream(); clearInterval(tick); tick = null; };
-  const isReply = m => m.sender_id === 'bot:' + info?.bot;
-  let pending = [];
-  const seenRows = new Set();
+  const fail = (text: string) => { if (!current()) return; askSet(error, 'textContent', text || ''); askSet(error, 'hidden', !text); };
+  let info: AskInfo | null = null, messages: ChatMessage[] = [], execution: AskExecution | null = null, rendered = '', es: (() => void) | null = null, poll: ReturnType<typeof setInterval> | null = null, tick: ReturnType<typeof setInterval> | null = null;
+  const stopStream = () => { try { es?.(); } catch { /* released */ } es = null; if (poll) clearInterval(poll); poll = null; };
+  chat.stop = () => { stopStream(); if (tick) clearInterval(tick); tick = null; };
+  const isReply = (m: ChatMessage | undefined) => m?.sender_id === 'bot:' + info?.bot;
+  let pending: AskPending[] = [];
+  const seenRows = new Set<string>();
   const draw = () => {
-    if (!current() || !info?.available) { clearInterval(tick); tick = null; return; }
-    const at = x => Date.parse(x || '') || 0;
+    if (!current() || !info?.available) { if (tick) clearInterval(tick); tick = null; return; }
+    const at = (x: string | null | undefined) => Date.parse(x || '') || 0;
     // While the Assistant is replying, Ask's dot works, then talks as the words stream in, the panel open or not.
     const streaming = !!(execution && execution.state !== 'completed' && execution.text);
     const replying = streaming || (messages.length > 0 && !isReply(messages.at(-1)));
@@ -210,18 +260,18 @@ async function askLoad(chat) {
     // What waits on the person sits where it was asked, among the rest: Confirm cards left in other chats (BotOps'),
     // and bots' questions. One with no time comes last.
     const here = new Set(messages.map(m => m.refs?.action).filter(Boolean)), late = new Date().toISOString(), asks = askQuestions();
-    const cards = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
+    const cards: AskRow[] = pending.filter(a => !here.has(a.id)).map(a => ({at: a.created_at || late,
       html: `<div class="conv-run chat"><div data-action-host="${esc(a.id)}"><div class="asst-state">Loading the card…</div></div></div>`}))
-      .concat(asks.map(it => ({at: it.ask?.created_at || it.created_at || late, html: askQuestionHTML(it)})));
-    const listed = new Set(asks.map(it => { const q = it.kind === 'question' && qcardQuestion(it); return q ? askPickKey(it, q) : ''; }));
+      .concat(asks.map(it => ({at: it.since || late, html: askQuestionHTML(it)})));
+    const listed = new Set(asks.map(it => String(it.id)));
     for (const k of askPicks.keys()) if (!listed.has(k)) askPicks.delete(k);
-    const rows = messages.slice(-30).map(m => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
+    const rows: string[] = messages.slice(-30).map((m): AskRow => ({at: m.created_at, html: v2MessageHTML({...m, run: null})}))
       .concat(cards)
       .map((r, i) => ({...r, i})).sort((a, b) => at(a.at) - at(b.at) || a.i - b.i).map(r => r.html);
     const live = execution && execution.state !== 'completed' ? execution.text : '';
     // No words yet: what the turn is doing and for how long (ui/app/ask-rules.ts), its time kept current by a tick.
     const working = !live && messages.length && !isReply(messages.at(-1)) ? askWorkingLine(execution) : '';
-    if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info.bot, body: live})}</div>`);
+    if (live) rows.push(`<div data-ask-live>${v2MessageHTML({from_actor: 'bot:' + info?.bot, body: live} as ChatMessage)}</div>`);
     // The thread holds only the line's label (its time and step are set after the draw), so a redraw of the same chat leaves the thread (and typed replies) be.
     else if (messages.length && !isReply(messages.at(-1))) rows.push(`<p class="muted" role="status" data-ask-working>${esc(execution?.label || (working ? 'Working' : 'Thinking…'))}</p>`);
     // The tick moves only the line's time, never the thread (its cards would load again).
@@ -250,10 +300,10 @@ async function askLoad(chat) {
   const snapshot = async () => {
     if (!info?.room_id || !current()) return;
     try {
-      const d = await get('/v2/assistant');
+      const d = await get<AskInfo>('/v2/assistant');
       if (!current()) return;
       messages = d.messages || []; execution = d.execution || null; pending = d.pending || []; draw(); fail('');
-    } catch (e) { fail(e.message); }
+    } catch (e) { fail(errorMessage(e, '')); }
   };
   chat.refresh = snapshot;
   const watch = () => {
@@ -261,13 +311,13 @@ async function askLoad(chat) {
     if (!info?.room_id || !current()) return;
     const fallback = liveFallback(snapshot, 5000);
     if (fallback) { poll = fallback; return; }
-    const cid = info.room_id, mine = d => d.conversation_id === cid && current();
+    const cid = info.room_id, mine = (d: {conversation_id?: string}) => d.conversation_id === cid && current();
     const soon = () => liveSoon('ask:' + cid, () => void snapshot(), 150);
-    const offs = [liveFollow(cid), liveOn('messages', d => { if (mine(d)) soon(); }),
-                  liveOn('runs', d => { if (mine(d)) soon(); }), liveOn('reset', () => { if (current()) soon(); })];
+    const offs = [liveFollow(cid), liveOn('messages', (d: {conversation_id?: string}) => { if (mine(d)) soon(); }),
+                  liveOn('runs', (d: {conversation_id?: string}) => { if (mine(d)) soon(); }), liveOn('reset', () => { if (current()) soon(); })];
     es = () => offs.forEach(off => off());
   };
-  const send = async text => {
+  const send = async (text: string) => {
     text = String(text || '').trim();
     const P = chat.composer, files = P?.files.slice() || [];
     if ((!text && !files.length) || !P || P.sending) return;
@@ -277,19 +327,19 @@ async function askLoad(chat) {
       // An org rule held it: nothing was written, so the box keeps the text and there is no message to show.
       if (r?.held) { if (current()) fail('An org rule held this message. Nothing was sent.'); return; }
       if (!r?.message) throw new Error('Not sent. Try again.');
-      CHAT_CACHE.delete(info.bot);                    // the Assistant page reads the conversation again when it opens
+      CHAT_CACHE.delete(info?.bot || '');                    // the Assistant page reads the conversation again when it opens
       if (!current()) return;
       if (!messages.some(x => x.id === r.message.id)) messages.push(r.message);
-      if (r.message?.conversation_id && r.message.conversation_id !== info.room_id) { info.room_id = r.message.conversation_id; watch(); }
-      pillAcknowledge(P, text, files); stickScroll(thread).toBottom(); draw();
+      if (r.message?.conversation_id && r.message.conversation_id !== info?.room_id) { if (info) info.room_id = r.message.conversation_id; watch(); }
+      pillAcknowledge(P, text, files, undefined); stickScroll(thread).toBottom(); draw();
       if (!es && !poll) watch();
       await snapshot();
-    } catch (e) { fail(e.message); }
+    } catch (e) { fail(errorMessage(e, '')); }
     finally { P.sending = false; if (current()) pillButtons(P); }
   };
   chat.send = send;
-  try { info = await get('/v2/assistant'); }
-  catch (e) { chat.mounted = false; if (ASK === chat) thread.innerHTML = `<div class="err">${esc(e.message)}</div>`; return; }
+  try { info = await get<AskInfo>('/v2/assistant'); }
+  catch (e) { chat.mounted = false; if (ASK === chat) thread.innerHTML = `<div class="err">${esc(errorMessage(e, ''))}</div>`; return; }
   if (!current()) return;
   info.name ||= myChatName();
   thread.setAttribute('aria-label', askName() + ' conversation');
@@ -301,7 +351,7 @@ async function askLoad(chat) {
   messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];
   if (!el._dropZone) { el._dropZone = true; chatDropZone(el, () => ASK?.live ? ASK.composer : null); }   // a dropped file attaches
   chat.composer = makePill({mode: 'chat', label: 'Message ' + askName(), placeholder: 'Message ' + askName(),
-                            send: (P, text) => send(text)});
+                            send: (P: unknown, text: string) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
   el.querySelector('.ask-form').replaceChildren(chat.composer.el);
   chat.live = true;
@@ -312,8 +362,8 @@ async function askLoad(chat) {
 }
 // Lines new since the thread last drew come in: the person's and a new card rise. Tico's own turns arrive by the
 // streaming words instead. Transform and opacity only.
-function askRowsIn(thread, seen, animate) {
-  const rows = thread.querySelectorAll(':scope > [data-ask-row], :scope > .conv-run.from-me[data-message]');
+function askRowsIn(thread: Element, seen: Set<string>, animate: boolean) {
+  const rows = thread.querySelectorAll<HTMLElement>(':scope > [data-ask-row], :scope > .conv-run.from-me[data-message]');
   for (const row of rows) {
     const key = row.dataset.askRow || 'm:' + row.dataset.message;
     if (seen.has(key)) continue;
@@ -326,18 +376,20 @@ function askRowsIn(thread, seen, animate) {
 $('#ask-row')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#mobile-ask')?.addEventListener('click', () => { if (S.me) askToggle(); else ASK_EARLY = true; });
 $('#ask-panel')?.addEventListener('click', askClick);
-$('#ask-panel')?.addEventListener('change', ev => {
-  const choose = ev.target.closest('[data-ask-choose]');
-  if (choose) askPicks.set(choose.dataset.askChoose, choose.elements.pick.selectedOptions[0]?.textContent || '');
+$('#ask-panel')?.addEventListener('change', (ev: Event) => {
+  if (!(ev.target instanceof Element)) return;
+  const choose = ev.target.closest<AskChoiceForm>('[data-ask-choose]');
+  if (choose) askPicks.set(choose.dataset.askChoose || '', choose.elements.pick.selectedOptions[0]?.textContent || '');
 });
-$('#ask-panel')?.addEventListener('submit', ev => {
-  const choose = ev.target.closest('[data-ask-choose]');
-  if (choose) { ev.preventDefault(); void askAnswer(choose.closest('[data-ask-q]'), {pick: Number(choose.elements.pick.value)}); return; }
-  const form = ev.target.closest('[data-ask-reply]');
+$('#ask-panel')?.addEventListener('submit', (ev: Event) => {
+  if (!(ev.target instanceof Element)) return;
+  const choose = ev.target.closest<AskChoiceForm>('[data-ask-choose]');
+  if (choose) { ev.preventDefault(); void askAnswer(choose.closest<HTMLElement>('[data-ask-q]'), {pick: Number(choose.elements.pick.value)}); return; }
+  const form = ev.target.closest<AskReplyForm>('[data-ask-reply]');
   if (!form) return;
   ev.preventDefault();
   const text = form.elements.text.value.trim();
-  if (text) void askAnswer(form.closest('[data-ask-q]'), {text});
+  if (text) void askAnswer(form.closest<HTMLElement>('[data-ask-q]'), {text});
 });
 document.addEventListener('keydown', ev => {
   if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'j' && !askAway()) { ev.preventDefault(); askToggle(); return; }
@@ -346,21 +398,23 @@ document.addEventListener('keydown', ev => {
 });
 // "Ask to add or edit your bots" (getting started) and any other [data-ask-open] opens the panel.
 document.addEventListener('click', ev => {
-  if (!ev.target.closest?.('[data-ask-open]') || askAway()) return;
+  if (!(ev.target instanceof Element) || !ev.target.closest('[data-ask-open]') || askAway()) return;
   ev.preventDefault(); askToggle(true);
 });
 // Any link to #/support (a reply's "Talk to the Tico team") opens the Tico team chat over the page; #/support/manage
 // opens it with words asking for full management in the box.
 document.addEventListener('click', ev => {
-  const a = ev.target.closest?.('a[href^="#/support"]');
+  if (!(ev.target instanceof Element)) return;
+  const a = ev.target.closest<HTMLAnchorElement>('a[href^="#/support"]');
   if (!a) return;
   ev.preventDefault();
-  if (a.getAttribute('href').includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
+  if (a.getAttribute('href')?.includes('manage')) window.supportStart?.(ASK_MANAGE); else window.supportOpen?.();
 }, true);
 liveOn('needs-list', () => { ASK?.draw?.(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
 // On a phone Ask is a page of its own: another tab, even the one already under it, leaves it.
 document.addEventListener('click', ev => {
-  if (ASK?.open && askPhone() && ev.target.closest?.('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
+  if (!(ev.target instanceof Element)) return;
+  if (ASK?.open && askPhone() && ev.target.closest('#mobile-nav .mobile-nav-item:not(#mobile-ask)')) askToggle(false, false);
 }, true);
 addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });

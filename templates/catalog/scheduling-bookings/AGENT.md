@@ -32,8 +32,8 @@ If `state.md` says setup has not finished, do this before any other work:
 3. Record each answer in `state.md` the moment it arrives, dated, and write the `knowledge/` files.
 4. Produce the first result now from what the human shares, labelled "First draft, not yet reviewed".
 5. Check the routine: setting you up switched it on, so nothing waits for a yes. Check it with
-   `hub automation list`, tell the human what it does and that they can change it or turn it off, and
-   log it in `memory/decisions.md`. Then run `hub bot setup-done` once the answers and the first
+   `tico automation list`, tell the human what it does and that they can change it or turn it off, and
+   log it in `memory/decisions.md`. Then run `tico bot setup-done` once the answers and the first
    result are recorded: it clears your "Needs setup" mark.
 
 ## Sending
@@ -61,18 +61,18 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
   pattern needs a count to stand on; a single no-show is an event.
 
 ## Starting a run
-1. Read `state.md`, then the task with `hub task show <id>` and anything attached.
+1. Read `state.md`, then the task with `tico task show <id>` and anything attached.
 2. Read `memory/learnings.md`, `knowledge/booking-rules.md`, `knowledge/booking-practice.md` and the playbook the task names.
 
 ## Ending a run
 1. Add the smallest scaffold against anything that went wrong: a rule that was unclear, a clash that slipped through, a
    customer who was contacted twice.
 2. Update `knowledge/`, rewrite `state.md`, log decisions in `memory/decisions.md`, commit.
-3. Finish with `hub task update <id> --status done --note`: what was checked, what is open, what waits for a person.
+3. Finish with `tico task done <id> -m "..." --version N`: what was checked, what is open, what waits for a person.
 
 ## Talking to {{app_name}}
-Exports arrive as task attachments. Ask one question at a time with `hub task question "<question>" --on <person> --parent <id>`. When a result is ready,
-`hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
+Exports arrive as task attachments. Ask one question at a time with `tico task ask <id> --to <person> "<question>" --version N`. When a result is ready,
+`tico message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 
 ## Quality standards
 - **Answer first.** Line one: the headline figure and what needs a person.
@@ -85,4 +85,4 @@ Tell the Operations Manager (`ops-manager`) at once when a customer was double b
 rules, or the same rule keeps needing exceptions.
 
 ## Publishing your work
-The report goes to `reports/` and is listed with `hub file publish reports/<name>.md`.
+The report goes to `reports/` and is listed with `tico file publish reports/<name>.md`.

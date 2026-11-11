@@ -1,5 +1,5 @@
 """Decide on Jev for the team: each call's cost in the audit, the monthly spend cap, and one engine for every server
-caller (Jev's one short try, the company's model behind it, and "carry on as if Decide were off" at the cap)."""
+caller (Jev's one short try, no other model behind it, and "carry on as if Decide were off" at the cap)."""
 
 import json
 
@@ -10,24 +10,11 @@ from backend import judge as B
 from backend import providers
 from backend.config import Settings
 from backend.store import Store
-from backend.tests.test_api import api, get, headers, post  # noqa: F401
-from backend.tests.test_judge import QUESTIONS, FakeJudge, events, fake
-from backend.tests.test_slack_gateway import gateway, hub  # noqa: F401
+from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.judge import QUESTIONS, FakeJudge, events, fake
+from backend.tests.helpers.slack_gateway import gateway, hub  # noqa: F401
 from clients import judge as J
-
-DOWN = J.JudgeError("unavailable", "TypeSafe did not answer: TimeoutError", retryable=True)
-
-
-def spend(api, usd, ts=None, actor="bot:ops"):
-    """A past decision call that cost `usd`, this month unless `ts` says otherwise."""
-    with api.app.state.store.transaction() as c:
-        H.event(c, actor, "judge.spend", "mail-triage@1", {"cost_usd": usd})
-        if ts:
-            c.execute(
-                "UPDATE events SET created_at=? WHERE id=(SELECT id FROM events WHERE action='judge.spend' "
-                "ORDER BY rowid DESC LIMIT 1)",
-                (ts,),
-            )
+from backend.tests.helpers.judge_spend import DOWN, spend
 
 
 def priced(settings, rate_in=0.5, rate_out=2.0):
@@ -70,60 +57,22 @@ def test_a_terra_call_at_272000_prompt_tokens_is_priced_at_the_long_tier_as_one_
     ) == round((200_000 * 2.5 + 72_000 * 0.125 + 1_000 * 9.375) / 1_000_000, 6)
 
 
-def test_a_haiku_judge_call_over_100k_prompt_tokens_is_priced_at_the_long_tier(tmp_path):
-    """Claude Haiku 5.5's long-prompt rate on judge calls (Chris Hawkins, 2026-11-06, decision 2c1be08a)."""
-    settings = Settings(db_path=tmp_path / "hub.db")
-    long = lambda inp, read, out: round((inp * 0.50 + read * 0.05 + out * 2.50) / 1_000_000, 6)
-    standard = lambda inp, read, out: round((inp * 0.10 + read * 0.01 + out * 0.50) / 1_000_000, 6)
-    # 100,001 prompt tokens: over; 100,000 exactly: at the standard rate.
-    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == long(
-        100_001, 0, 1_000
-    )
-    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_000, "output_tokens": 1_000}) == standard(
-        100_000, 0, 1_000
-    )
-    # Cache reads count toward the threshold and are billed at the cache-read rate.
-    usage = {"input_tokens": 1_000, "cache_read_input_tokens": 99_001, "output_tokens": 10}
-    assert B.cost_usd(settings, "claude-haiku-5-5", usage) == long(1_000, 99_001, 10)
-    assert B.cost_usd(settings, "claude-haiku-5-5", {**usage, "cache_read_input_tokens": 99_000}) == standard(
-        1_000, 99_000, 10
-    )
-    # Cache writes count toward it too, as input: 1,000 uncached plus 99,001 written is over; 50,000 written is not.
-    written = {"input_tokens": 1_000, "cache_creation_input_tokens": 99_001, "output_tokens": 10}
-    assert B.cost_usd(settings, "claude-haiku-5-5", written) == round((100_001 * 0.50 + 10 * 2.50) / 1_000_000, 6)
-    assert B.cost_usd(settings, "claude-haiku-5-5", {**written, "cache_creation_input_tokens": 50_000}) == round(
-        (51_000 * 0.10 + 10 * 0.50) / 1_000_000, 6
-    )
-    # Over only with cache tokens: 60,001 written plus 40,001 read is 100,002 prompt tokens, billed at the long rate.
-    both = {
-        "input_tokens": 1,
-        "cache_creation_input_tokens": 60_000,
-        "cache_read_input_tokens": 40_001,
-        "output_tokens": 0,
-    }
-    assert B.cost_usd(settings, "claude-haiku-5-5", both) == round((60_001 * 0.50 + 40_001 * 0.05) / 1_000_000, 6)
-
-
-def test_only_the_judge_path_takes_haiku_s_per_request_long_tier(tmp_path):
-    """The call-type selection: the judge path asks `per_request_long_tier`; every other Haiku call keeps its price."""
-    assert providers.per_request_long_tier("claude-haiku-5-5")
+def test_a_metered_haiku_call_keeps_the_standard_rate_over_100k_prompt_tokens(tmp_path):
+    """Claude Haiku 5.5's long-prompt rate was for judge calls only (decision 2c1be08a); decisions are Jev's alone now,
+    so a metered Haiku call (a person's update draft on the company's model) is priced at the standard rate."""
+    assert not providers.per_request_long_tier("claude-haiku-5-5")
     assert providers.per_request_long_tier("gpt-6.1-terra")
     assert not providers.per_request_long_tier("claude-sonnet-5-5")
-    assert not providers.per_request_long_tier("claude-fable-5-1")
-    # Off the judge path, Haiku is priced from its totals as before: 100,001 prompt tokens at the standard rate, and
-    # with no per-request counts the estimate may be low.
-    assert providers.estimate("claude-haiku-5-5", 100_001, 0, 1_000) == (
-        pytest.approx((100_001 * 0.10 + 1_000 * 0.50) / 1_000_000),
-        True,
-    )
-    # A non-Haiku judge call over 100,000 is unchanged too.
     settings = Settings(db_path=tmp_path / "hub.db")
+    assert B.cost_usd(settings, "claude-haiku-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == round(
+        (100_001 * 0.10 + 1_000 * 0.50) / 1_000_000, 6
+    )
     assert B.cost_usd(settings, "claude-sonnet-5-5", {"input_tokens": 100_001, "output_tokens": 1_000}) == round(
         (100_001 * 2.0 + 1_000 * 10.0) / 1_000_000, 6
     )
 
 
-def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallback_answered(api, monkeypatch):
+def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_jev_failed(api, monkeypatch):
     priced(api.app.state.store.settings)
     jev = fake(api)
     jev_result = jev.__call__
@@ -149,20 +98,22 @@ def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_the_fallbac
     )
     assert "fallback" not in detail
 
-    backup = FakeJudge()
     jev.fail = DOWN
     api.app.state.judge = jev
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
-    post(api, "decisions", {"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"})
+    result = api.post(
+        "/api/v2/decisions",
+        json={"state": {"subject": "Invoice"}, "questions": QUESTIONS, "label": "mail-triage@1"},
+        headers=headers(),
+    )
+    assert result.status_code == 503, "no other model answers in Jev's place"
     detail = events(api, "human:ana")[-1][1]
-    assert detail["fallback"] == "unavailable" and detail["model"] == "judge-1.13.0" and "cost_usd" in detail
+    assert detail["error"] == "unavailable" and "answers" not in detail and "fallback" not in detail
 
 
 # ----------------------------------------------------------------------------- the monthly cap
 def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, monkeypatch):
     engine = fake(api)
-    backup = FakeJudge()
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    priced(api.app.state.store.settings, 0, 0)  # Jev unpriced: each call holds the dearest list price
     api.app.state.store.settings.decisions_monthly_usd = 50.0
     spend(api, 60.0, ts="2000-01-15T00:00:00Z")  # an older month never counts
     spend(api, 30.0)
@@ -175,7 +126,7 @@ def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, mon
     spend(api, 0.2)  # under the cap, but a call's most no longer fits
     result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
     assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap"
-    assert len(engine.calls) == 1 and backup.calls == [], "neither Jev nor the fallback is asked at the cap"
+    assert len(engine.calls) == 1, "Jev is not asked at the cap"
 
     # The callers that ask through the hub (mail triage, "already covered?") carry on as if Decide were off.
     from connectors.mail import judge as MJ
@@ -236,13 +187,12 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
     from backend import learnings as L
     from backend.listening import judge_pending
-    from backend.tests.test_listening import FakeJudge as Listener, _bots, _post, _token
+    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
 
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
     spend(api, 0.5)
     jev = Paid(0.6)  # the first answer takes the month past $1
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     with store.read() as c:
         engine = B.server_engine(store, c, jev)
     engine({"team": "Acme"}, QUESTIONS)
@@ -295,7 +245,7 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
             "answers": {qid: {"type": "noul", "noul": 0.9} for qid in questions},
         },
     )
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: night)
+    monkeypatch.setattr(L, "primary_engine", lambda *args, **kwargs: night)
     monkeypatch.setattr(L, "WORKERS", 1)
     monkeypatch.setattr(L, "roster", lambda *args, **kwargs: team)
     monkeypatch.setattr(L, "collect", lambda *args, **kwargs: (items, 0))
@@ -342,7 +292,6 @@ def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request
             return super().__call__(state, questions, label)
 
     slow = Slow(0.05)
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     with store.read() as c:
         first, second = B.server_engine(store, c, slow), B.server_engine(store, c, Paid(0.05))
     held = B.reservation(store.settings, [J.MODEL], {"team": "Acme"}, QUESTIONS)
@@ -378,12 +327,11 @@ def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reser
     Gateway.ask in the gateway's own process (its own meter) both checked before either answer is written; each
     answers 1000 tokens in, 0 out, on Jev. Each admits a call only if it fits with its own most, so the month ends
     at most the larger reservation over the cap. Before the fix both were let in at $0.009999: $0.010083 written."""
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     hub.settings.decisions_monthly_usd = 0.01
     with hub.transaction() as c:
         H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": written})
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
     jev_usage = {"input_tokens": 1000, "output_tokens": 0}
     state, held, slack_answered = {"team": "Acme"}, [], []
     reserve = B.reservation
@@ -434,38 +382,6 @@ def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reser
     assert B._RESERVED[0] == 0
 
 
-def test_slack_without_a_jev_key_holds_each_call_at_the_company_models_price(gateway, hub, monkeypatch):
-    """No TypeSafe key: the company's own model answers Slack, so a call is held at its price, not Jev's."""
-    from backend.tests import test_slack_gateway as S
-
-    class Company(S.CappedJudge):
-        model = "a-model-with-no-list-price"  # held at the ceiling, about $0.21 a call
-
-    company = Company({"asks": 0.9, "bot:legal": 0.9})
-    gateway._judge = None
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: company)
-    hub.settings.decisions_monthly_usd = 1.0
-    with hub.transaction() as c:
-        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": 0.9})
-    result = S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message")
-    assert company.calls == [], "at Jev's price the call would have fit; at the company model's it does not"
-    assert result["decision"]["routed_by"] == "spend_cap"
-    with hub.transaction() as c:
-        c.execute("DELETE FROM events WHERE action='judge.spend'")
-    assert S.send(gateway, "and the NDA", channel=S.DM, kind="message")["state"] == "routed"
-    assert len(company.calls) == 1
-
-
-# The company's own model on each transport: (transport, a model with a list price), as the fallback asks it.
-COMPANY_MODELS = [
-    ("anthropic", "claude-opus-5-5"),
-    ("openai", "gpt-6-sol"),
-    ("google", "gemini-3.8-flash"),
-    ("xai", "grok-4.6"),
-    ("openrouter", "moonshotai/kimi-k3"),
-]
-
-
 class WholeAllowance:
     """A provider that answers with the longest answer the request allows, and bills all of it."""
 
@@ -483,7 +399,7 @@ class WholeAllowance:
         )
         self.limits.append(limit)
         billed_in, billed_out = len(request.data) // 3, limit or 64_000  # no limit: a long reasoning answer
-        text = json.dumps({"bucket": {"probabilities": {"archive": 0.2, "reply": 0.8}}, "is_ask": {"noul": 0.9}})
+        text = json.dumps({"body": "- shipped"})
         if self.provider == "anthropic":
             payload = {
                 "content": [{"type": "text", "text": text}],
@@ -502,29 +418,20 @@ class WholeAllowance:
         return io.BytesIO(json.dumps(payload).encode())
 
 
-@pytest.mark.parametrize("provider,model", COMPANY_MODELS)
-def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provider, model):
-    """Review 1 on #864: only Anthropic carried an output limit, so a Google or OpenAI-style answer could be billed
-    far past the call's reservation. Each now asks for at most MAX_OUTPUT_TOKENS, in that API's own field."""
+@pytest.mark.parametrize(
+    "provider,model",
+    [
+        ("anthropic", "claude-opus-5-5"),
+        ("openai", "gpt-6-sol"),
+        ("google", "gemini-3.8-flash"),
+        ("xai", "grok-4.6"),
+        ("openrouter", "moonshotai/kimi-k3"),
+    ],
+)
+def test_every_transport_caps_a_metered_drafts_answer_at_what_the_cap_reserves(provider, model):
+    """Review 1 on #864: an update draft on the company's model is metered, so on every transport it asks for at most
+    MAX_OUTPUT_TOKENS, in that API's own field, and is never billed past its reservation."""
     seen = []
-    J.llm(
-        provider,
-        "synthetic",
-        model,
-        opener=lambda request, timeout=None: seen.append(json.loads(request.data)) or WholeAllowance(provider)(request),
-    )({"team": "Acme"}, QUESTIONS)
-    body = seen[-1]
-    field = {
-        "anthropic": body.get("max_tokens"),
-        "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
-        "openai": body.get("max_completion_tokens"),
-        "xai": body.get("max_tokens"),
-        "openrouter": body.get("max_tokens"),
-    }[provider]
-    assert field == J.MAX_OUTPUT_TOKENS == B.MAX_OUTPUT_TOKENS
-    if provider == "openai":
-        assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
-    # The draft writer is metered too, so it carries the same cap in the same field.
     J.llm_writer(
         provider,
         "synthetic",
@@ -532,77 +439,47 @@ def test_every_transport_caps_a_decisions_answer_at_what_the_cap_reserves(provid
         opener=lambda request, timeout=None: seen.append(json.loads(request.data)) or WholeAllowance(provider)(request),
     )("Draft it.", "Ana's facts")
     body = seen[-1]
-    assert {
-        "anthropic": body.get("max_tokens"),
-        "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
-        "openai": body.get("max_completion_tokens"),
-        "xai": body.get("max_tokens"),
-        "openrouter": body.get("max_tokens"),
-    }[provider] == J.MAX_OUTPUT_TOKENS
-
-
-def test_a_company_model_call_billed_its_whole_allowance_stays_within_its_reservation(api, monkeypatch):
-    """The bound holds only if no call costs more than was held for it. Through the meter, on the company's model,
-    with the provider billing the longest answer the request allows: the recorded cost is at most the reservation."""
-    store = api.app.state.store
-    store.settings.decisions_monthly_usd = 50.0
-    reserve = B.reservation
-    for provider, model in COMPANY_MODELS:
-        provider_api = WholeAllowance(provider)
-        monkeypatch.setattr(
-            B,
-            "fallback_engine",
-            lambda *args, provider=provider, model=model, provider_api=provider_api, **kwargs: J.llm(
-                provider, "synthetic", model, opener=provider_api
-            ),
-        )
-        held = []
-        monkeypatch.setattr(B, "reservation", lambda *args, held=held: held.append(reserve(*args)) or held[-1])
-        with store.read() as c:
-            engine = B.server_engine(store, c, None)
-        result = engine({"team": "Acme"}, QUESTIONS, "company")
-        assert provider_api.limits == [J.MAX_OUTPUT_TOKENS]
-        with store.read() as c:
-            recorded = json.loads(
-                c.execute(
-                    "SELECT detail FROM events WHERE action='judge.spend' ORDER BY rowid DESC LIMIT 1"
-                ).fetchone()[0]
-            )
-        assert recorded["model"] == model and recorded["cost_usd"] == result["cost_usd"] > 0
-        assert recorded["cost_usd"] <= held[0], f"{provider}: billed ${recorded['cost_usd']}, held ${held[0]}"
+    assert (
+        {
+            "anthropic": body.get("max_tokens"),
+            "google": (body.get("generationConfig") or {}).get("maxOutputTokens"),
+            "openai": body.get("max_completion_tokens"),
+            "xai": body.get("max_tokens"),
+            "openrouter": body.get("max_tokens"),
+        }[provider]
+        == J.MAX_OUTPUT_TOKENS
+        == B.MAX_OUTPUT_TOKENS
+    )
+    if provider == "openai":
+        assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
 
 
 # ----------------------------------------------------------------------------- one engine for every caller
-def test_the_server_engine_falls_back_when_jev_is_down_and_is_off_at_the_cap(api, monkeypatch):
+def test_the_server_engine_asks_jev_alone_and_is_off_at_the_cap(api, monkeypatch):
     store = api.app.state.store
-    jev, backup = FakeJudge(), FakeJudge()
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
+    jev = FakeJudge()
     with store.read() as c:
         engine = B.server_engine(store, c, jev)
     assert engine.model == J.MODEL
-    assert "cost_usd" in engine({"team": "Acme"}, QUESTIONS) and len(jev.calls) == 1 and backup.calls == []
-    jev.fail = DOWN
-    assert engine({"team": "Acme"}, QUESTIONS)["fallback"] == "unavailable" and len(backup.calls) == 1
-    # A provider's own 422 is its problem, once the request passed the contract here: the next one answers.
-    jev.fail = J.JudgeError("invalid", "TypeSafe refused the request", 422)
-    assert engine({"team": "Acme"}, QUESTIONS)["fallback"] == "invalid" and len(backup.calls) == 2
-    with pytest.raises(J.JudgeError) as refused:
-        engine({"team": "Acme"}, {"bucket": {"type": "choice"}})  # the contract refuses it: no provider is asked
-    assert refused.value.code == "invalid" and len(jev.calls) == 3 and len(backup.calls) == 2
-    # No key: the company's model alone. Neither: off.
-    with store.read() as c:
-        assert B.server_engine(store, c, None)({"team": "Acme"}, QUESTIONS)["model"] == "judge-1.13.0"
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: None)
+    assert "cost_usd" in engine({"team": "Acme"}, QUESTIONS) and len(jev.calls) == 1
+    # Jev down or refusing: the caller gets the error, and no other model is asked.
+    for failure in (DOWN, J.JudgeError("invalid", "TypeSafe refused the request", 422)):
+        jev.fail = failure
+        with pytest.raises(J.JudgeError) as failed:
+            engine({"team": "Acme"}, QUESTIONS)
+        assert failed.value.code == failure.code
+    assert len(jev.calls) == 3
+    # No Jev: off, even with a company model's key on the server.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic")
     with store.read() as c:
         assert B.server_engine(store, c, None) is None
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     store.settings.decisions_monthly_usd = 1.0
     spend(api, 1.0)
     with store.read() as c:
         assert B.server_engine(store, c, jev) is None
 
 
-def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind_and_tally_the_cost(api, monkeypatch):
+def test_the_nightly_learnings_ask_jev_once_and_briefly_and_tally_the_cost(api, monkeypatch):
     from backend import learnings as L
 
     store = api.app.state.store
@@ -645,15 +522,14 @@ def test_the_nightly_learnings_ask_jev_once_and_briefly_with_the_fallback_behind
         assert L.engine_for(store, c) is None
 
 
-def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the_cap(api, monkeypatch):
-    from backend.tests.test_listening import FakeJudge as Listener, _bots, _post, _token
+def test_the_listening_judge_leaves_a_post_unjudged_when_jev_is_down_and_waits_at_the_cap(api):
+    from backend.tests.helpers.listening import _bots, _post, _token
 
     _bots(api)
     listening = _token(api, "listening")
-    jev, backup = FakeJudge(), Listener()
+    jev = FakeJudge()
     jev.fail = DOWN
     api.app.state.judge = jev
-    monkeypatch.setattr(B, "fallback_engine", lambda *args, **kwargs: backup)
     post(
         api,
         "listening/runs",
@@ -666,9 +542,7 @@ def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the
         token=listening,
     )
     out = post(api, "listening/judge", {}, token=listening)
-    assert out["judged"] == 1 and out["errors"] == [] and len(jev.calls) == 1
-    detail = events(api, "bot:listening")[-1][1]
-    assert detail["fallback"] == "unavailable" and "cost_usd" in detail
+    assert out["judged"] == 0 and [e["error"] for e in out["errors"]] == ["unavailable"] and len(jev.calls) == 1
 
     api.app.state.store.settings.decisions_monthly_usd = 1.0
     spend(api, 1.0)
@@ -683,7 +557,7 @@ def test_the_listening_judge_gets_the_fallback_when_jev_is_down_and_waits_at_the
 
 
 def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cost(gateway, hub):
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     first = S.send(
         gateway,
@@ -709,7 +583,7 @@ def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cos
 def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gateway, hub):
     """A big fleet is asked in several calls. Each answered call is counted as it returns (a `judge.spend` row, not
     one of the sender's daily calls), so a later failure, its retries and the final failure lose none and add none."""
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     S.add_bots(hub, 50)  # 56 bots: two calls a message
     down = J.JudgeError("unavailable", "the decision model answered 503", 503, retryable=True)
@@ -755,7 +629,7 @@ def test_slack_keeps_the_cost_of_answered_batches_when_a_later_batch_fails(gatew
 
 
 def test_slack_stops_a_big_fleet_at_the_cap_partway_and_routes_to_the_assistant(gateway, hub):
-    from backend.tests import test_slack_gateway as S
+    from backend.tests.helpers import slack_gateway as S
 
     S.add_bots(hub, 50)  # 56 bots: two calls a message
     hub.settings.decisions_monthly_usd = 1.0
@@ -859,3 +733,43 @@ def test_the_month_total_is_a_running_sum_that_stays_exact_per_database_and_mont
     record(a, 0.4, "2026-11-02T09:00:00.000000Z")
     assert running(a, nov) == full(a, "2026-11") == 0.4
     assert running(b, oct_) == full(b, "2026-10") == 2.0  # the other database keeps its own
+
+
+# ----------------------------------------------------------------------------- what the cost is counted as
+def test_a_gateway_calls_cached_input_is_billed_at_the_cached_rate_not_the_input_rate(tmp_path):
+    # Tico Decide Medium is Claude Sonnet 5.5: $2.50 input, $0.25 cached input, $12.50 output per 1M tokens (the catalog).
+    settings = Settings(db_path=tmp_path / "hub.db")
+    medium = "tico-decide-medium-1.0"
+    cached = {"input_tokens": 0, "cache_read_input_tokens": 1_000_000, "output_tokens": 0}
+    assert B.cost_usd(settings, medium, cached) == 0.25
+    both = {"input_tokens": 1_000_000, "cache_read_input_tokens": 1_000_000, "output_tokens": 100_000}
+    assert B.cost_usd(settings, medium, both) == 4.0  # 2.50 + 0.25 + 1.25
+
+
+def test_an_old_rules_spend_row_still_counts_under_its_set_in_the_readout(api):
+    # Org rule checks once metered under a budget of their own and wrote `rules.spend` rows; they write `judge.spend`
+    # now. The rows already written stay, and the readout's cost per set still counts them as past spend.
+    with api.app.state.store.transaction() as c:
+        H.event(
+            c,
+            H.KEEPER,
+            "judge.call",
+            "rule-check@1",
+            {
+                "label": "rule-check@1",
+                "model": "tico-decide-medium-1.0",
+                "provider": "Tico AI Gateway",
+                "cost_usd": 0.00875,
+                "usage": {},
+                "answers": {},
+            },
+        )
+        H.event(
+            c,
+            H.KEEPER,
+            "rules.spend",
+            "rule-check@1",
+            {"label": "rule-check@1", "model": "tico-decide-medium-1.0", "cost_usd": 0.00875},
+        )
+    sets = {row["set"]: row for row in get(api, "decisions/readout")["sets"]}
+    assert sets["rule-check"]["cost_usd"] == 0.00875

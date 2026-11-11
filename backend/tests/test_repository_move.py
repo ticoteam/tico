@@ -1,9 +1,9 @@
 """Placing or moving a bot brings its repository: the server names it on the assignment, refuses a move that
-would strand the only copy, forgets the old computer's report, and Health and `hub health check` say why a
+would strand the only copy, forgets the old computer's report, and Health and `tico health check` say why a
 bot has no repository on its computer."""
 
-from backend.tests.test_api import api, assign, get, post, runner
-from backend.tests.test_settings_transitions import _company_default
+from backend.tests.helpers.api import assign, get, post, runner
+from backend.tests.helpers.settings_transitions import _company_default
 
 REPO = "Acme/emp-ops"
 GENERIC = "Missing bot repository or AGENT.md"

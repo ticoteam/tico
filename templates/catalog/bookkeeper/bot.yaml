@@ -1,5 +1,5 @@
 name: bookkeeper                 # the slug: it matches the repository bot-bookkeeper and the label owner:bookkeeper
-display_name: "Bookkeeper"
+display_name: "Finance Owner"
 labels: [owner:bookkeeper]
 reads: []                        # other bot repositories this one may clone read-only
 
@@ -12,7 +12,7 @@ max_run_minutes: 60
 # the server's hourly Books check (backend/bookkeeper.py): plain code reads its Finance work queue and opens a task only
 # when the queue has something new, so a quiet month wakes no model. The monthly report is real work every month.
 # The server's daily Books watch and weekly rules digest are checks of the same kind: a task only when one finds
-# something new (playbooks/books-watch.md, playbooks/rules-digest.md).
+# something new (playbooks/books-watch.md, playbooks/rules-digest.md). The weekly cash summary is real work every Monday.
 # server seeds these once, when the Bookkeeper is built in; from then on Tico's rows are the routines
 # (docs/routines.md). Set the timezone to the team's own.
 routines:
@@ -21,6 +21,12 @@ routines:
     cron: "0 9 3 * *"
     timezone: America/Los_Angeles
     template: playbooks/monthly-report.md
+    labels: [priority:p2]
+  - id: weekly-cash-summary
+    title: Weekly cash summary
+    cron: "30 8 * * 1"
+    timezone: America/Los_Angeles
+    template: playbooks/weekly-cash-summary.md
     labels: [priority:p2]
   - id: bill-due
     title: Bill due soon
@@ -41,5 +47,5 @@ routines:
     template: playbooks/close-month.md
     labels: [priority:p2]
 
-# It needs no tool or credential of its own: Finance's books, banks and cards are reached through the hub_finance tools.
+# It needs no tool or credential of its own: Finance's books, banks and cards are reached through the tico_finance tools.
 tools: []

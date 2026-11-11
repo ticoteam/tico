@@ -426,12 +426,12 @@ def update(c, who, settings, vault, trigger_id, body):
         else:
             # The signing secret stays; it must suit the new preset (a Standard Webhooks one is whsec_ and base64).
             if not found["signing_secret"]:
-                raise Problem("trigger", "Set a signing secret first (hub trigger sign)", 422)
+                raise Problem("trigger", "Set a signing secret first (tico trigger sign)", 422)
             if vault is None:
                 raise Problem("vault_unavailable", "This trigger's signing secret cannot be read here", 503)
             key = vault.cipher.unseal(c, sealed_as(trigger_id), found["signing_secret"])
             if why := P.secret_problem(body.preset, key):
-                raise Problem("trigger", why + "; set a new one with hub trigger sign", 422)
+                raise Problem("trigger", why + "; set a new one with tico trigger sign", 422)
             sets["preset"], sets["consumer"] = body.preset, _consumer_for(body.preset)
         _leave_finance(c, found, body.preset)
     if sets:
@@ -656,7 +656,7 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     trigger_id = found["id"]
     content = content_of(body, headers.get("content-type"))
     cut = len(_text_of(body, headers.get("content-type"))) > MAX_CONTENT
-    shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
+    shown = content + (f"\nThe rest: tico trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
     if effective_preset(found) == "stripe_finance":
@@ -874,7 +874,7 @@ def replay(c, who, auth, trigger_id, delivery):
     if stored and stored["outcome"] == "refused":
         raise Problem(
             "refused",
-            "This call was refused when it came. Recover it (hub trigger recover) to check it again "
+            "This call was refused when it came. Recover it (tico trigger recover) to check it again "
             "under the current secret",
             409,
         )

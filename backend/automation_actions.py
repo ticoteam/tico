@@ -77,7 +77,8 @@ def run(c, auto, run_id, do, args, values, step=None):
     """Carry out one action for the automation `auto` ({id, flow}). Wrapped in a savepoint: a refused action writes
     nothing but its refusal. `step` is what the action is keyed by: a create_task's producer (automation_engine._filter
     gives each of a filter's actions its own), one occurrence task per producer; a mail action's is the step's own id,
-    which orders the step's mail actions on one message into one chain (`_queue_mail`)."""
+    which orders the step's mail actions on one message into one chain (`_queue_mail`). A task call that is refused
+    is undone with the rest of the action."""
     c.execute("SAVEPOINT automation_action")
     try:
         if do == "create_task":
@@ -398,9 +399,12 @@ def _on_task(name):
         if not task:
             return _fail(f"{name} needs a task")
         actor = _actor(c, auto)
+        # The automation acts as its owner, a bot or a person, on the row it just read: a bot's call carries that
+        # version, as any bot's command must.
+        seen = task["version"]
         said = _text(args, "text", "note") or f"Automation {auto['flow'].get('name') or auto['id']}"
         if name == "note":
-            H.task_update(c, actor, task["id"], note=said)
+            H.task_update(c, actor, task["id"], note=said, seen_version=seen)
             return {"ok": True, "detail": "noted"}
         if name == "assign":
             owner = str(args.get("owner") or "").replace("person:", "human:")
@@ -410,14 +414,14 @@ def _on_task(name):
             owner = owner if ":" in owner else ("bot:" + found["id"] if found else "human:" + owner)
             if H.task_private(c, task) and not H.task_private_readable(c, owner, task):
                 return _fail("the new owner cannot read this private task")
-            H.task_update(c, actor, task["id"], owner=owner, note=said)
+            H.task_reassign(c, actor, task["id"], owner, said, seen)
             return {"ok": True, "detail": f"assigned to {owner}"}
         tags = args.get("tag") or args.get("name")
         have = H.task_labels(task)
         keys = have + [k for k in (tags if isinstance(tags, list) else [tags]) if k not in have]
         if keys == have:
             return {"ok": True, "detail": "already labelled"}
-        H.task_update(c, actor, task["id"], labels=keys, note=said)
+        H.task_update(c, actor, task["id"], labels=keys, note=said, seen_version=seen)
         return {"ok": True, "detail": "labelled"}
 
     return act

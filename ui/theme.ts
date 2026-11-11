@@ -4,17 +4,45 @@
 'use strict';
 // The first boot timing mark (ui/app/boot-timing.js): the page's HTML has arrived and its head is running.
 try { performance.mark('tico:head'); } catch { /* no User Timing */ }
+// Until every stylesheet and the app have loaded, the page's own recovery card covers the unfinished shell.
+// This script is outside the app bundle: a failed bundle still leaves a working Reload and support link.
+(() => {
+  let appLoaded = false, failed = false;
+  const check = (): void => {
+    const styles = [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')];
+    const ready = appLoaded && !failed && styles.length > 0 && styles.every(link => link.sheet !== null);
+    const card = document.getElementById('asset-recovery');
+    if (card) card.hidden = ready;
+    if (!ready && document.readyState === 'complete') {
+      const title = document.getElementById('asset-recovery-h');
+      if (title) title.textContent = 'Tico couldn’t finish loading';
+    }
+  };
+  // Only Tico's own files count. A script the network adds (Cloudflare's analytics beacon, which the page's
+  // script-src 'self' blocks) or an extension's script failing says nothing about whether Tico loaded.
+  const own = (url: string): boolean => { try { return new URL(url, location.href).origin === location.origin; } catch { return false; } };
+  addEventListener('error', event => {
+    const target = event.target;
+    if (target instanceof HTMLScriptElement && own(target.src)
+        || target instanceof HTMLLinkElement && target.rel === 'stylesheet' && own(target.href)
+        || !appLoaded && event instanceof ErrorEvent && /\/tico\/ui\//.test(event.filename)) {
+      failed = true; check();
+    }
+  }, true);
+  addEventListener('tico:app-loaded', () => { appLoaded = true; check(); });
+  addEventListener('load', check, {once: true});
+})();
 (() => {
   const KEY = 'tico.theme', CHOICES = ['dark', 'light', 'system'];
-  const saved = () => { try { const v = localStorage.getItem(KEY); return CHOICES.includes(v) ? v : 'dark'; } catch { return 'dark'; } };
-  const apply = v => { document.documentElement.dataset.theme = v; };
+  const saved = () => { try { const v = localStorage.getItem(KEY) ?? 'dark'; return CHOICES.includes(v) ? v : 'dark'; } catch { return 'dark'; } };
+  const apply = (v: string) => { document.documentElement.dataset.theme = v; };
   apply(saved());
   // Another tab of the same browser changed it: follow.
   addEventListener('storage', ev => { if (ev.key === KEY) apply(saved()); });
   window.ticoTheme = {
     choices: CHOICES,
     get: saved,
-    set(v) {
+    set(v: string) {
       if (!CHOICES.includes(v)) return;
       try { localStorage.setItem(KEY, v); } catch { /* private window: it holds until the tab closes */ }
       apply(v);
@@ -43,9 +71,9 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
 // (redesign.js rdNavShow, which corrects them once this visit's answer is in, and forgets them for anyone else and on
 // sign-out). The app's code keeps each mark with its row from then on.
 (() => {
-  const root = document.documentElement, hash = location.hash.split('?')[0];
-  const read = key => { try { return localStorage.getItem(key); } catch { return null; } };
-  const under = base => hash === base || hash.startsWith(base + '/');
+  const root = document.documentElement, hash = location.hash.split('?')[0] ?? '';
+  const read = (key: string) => { try { return localStorage.getItem(key); } catch { return null; } };
+  const under = (base: string) => hash === base || hash.startsWith(base + '/');
   root.classList.toggle('nav-co-shut', read('tico.nav.company') === 'closed' && !['#/strategy', '#/growth', '#/finance'].some(under));
   root.classList.toggle('nav-lib-shut', read('tico.nav.library') === 'closed' && !['#/docs', '#/meetings', '#/library'].some(under));
   root.classList.toggle('nav-rules-open', read('tico.nav.rules') === 'open' || under('#/rules'));

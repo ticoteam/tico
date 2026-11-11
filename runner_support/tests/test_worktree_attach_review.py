@@ -3,7 +3,7 @@
 import json
 
 from runner_support import worktrees as W
-from runner_support.tests.test_worktrees import git, trees  # noqa: F401
+from runner_support.tests.helpers.worktrees import git, trees  # noqa: F401
 
 
 def _api_attached(row):

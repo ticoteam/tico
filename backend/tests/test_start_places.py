@@ -4,57 +4,17 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from backend import task_engine
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_attempt_contention import fleet
-from backend.tests.test_runner_load import point
-
-
-def waiters(api, n=37, running=3):
-    computer = fleet(api, attempts=n + running, trees=0)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runner_states SET capacity=? WHERE runner_id=?", (n + running, computer['runner_id']))
-        for i in range(n):
-            c.execute("UPDATE attempts SET state='leased' WHERE id=?", (f'attempt-{i}',))
-            c.execute("UPDATE jobs SET state='leased' WHERE attempt_id=?", (f'attempt-{i}',))
-            from backend import start_places
-
-            start_places.claim(c, f'attempt-{i}')
-    for i in range(n):
-        post(api, f'attempts/attempt-{i}/start-place', {'waiting': 'shared login'}, computer['token'])
-        post(
-            api,
-            f'attempts/attempt-{i}/events',
-            {
-                'events': [
-                    {
-                        'seq': 1,
-                        'kind': 'status',
-                        'payload': {'waiting': 'Waiting for the shared ChatGPT login', 'login': 'ChatGPT'},
-                    }
-                ]
-            },
-            computer['token'],
-        )
-    return computer
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.attempt_contention import fleet
+from backend.tests.helpers.runner_load import point
+from backend.tests.helpers.start_places import memory, overload, waiters
 
 
 def sent_by(api, message_id, actor):
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE messages SET sender_id=? WHERE id=?', (actor, message_id))
-
-
-def overload(api, computer, cpu=95, mem=0.5):
-    """Six one-minute samples over 90%: performance.load_status calls the computer overloaded."""
-    import time
-
-    now = int(time.time()) // 60 * 60
-    post(
-        api,
-        'runners/performance',
-        {'samples': [point(now - 300 + i * 60, cpu=cpu, mem=mem) for i in range(6)]},
-        computer['token'],
-    )
 
 
 def test_four_counts_separate_37_login_waiters(api):
@@ -150,7 +110,7 @@ def test_two_ready_waiters_claim_last_start_place_atomically(api):
 
 def test_start_reservation_expires_despite_renewals_and_leaves_task_untouched(api, monkeypatch):
     """Spec 4: three minutes is a hard preparation deadline, not another renewable lease."""
-    from backend.tests.test_task_lanes import task_bot, new_task
+    from backend.tests.helpers.task_lanes import task_bot, new_task
 
     computer = task_bot(api, lanes=True)
     task = new_task(api, "Work whose preparation times out")
@@ -245,7 +205,7 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
 
 def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypatch):
     from backend import execution
-    from backend.tests.test_api import setup_attempt
+    from backend.tests.helpers.api import setup_attempt
 
     monkeypatch.setattr(execution, 'PRE_START_TRIES', 2)
     machine, message, first = setup_attempt(api)
@@ -275,7 +235,7 @@ def test_repeated_overdue_starts_stop_at_the_pre_start_retry_limit(api, monkeypa
 
 def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monkeypatch):
     from backend import start_places
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     computer = runner(api)
     assign(api, computer, 'ops')
@@ -296,7 +256,7 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
     post(api, f"attempts/{old['id']}/complete", {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])
     post(api, 'chat/ops', {'text': 'The upgraded worker now opts in'})
     ready(api, computer, ['ops'])
-    from backend.tests.test_api import settled
+    from backend.tests.helpers.api import settled
 
     settled(api, computer)  # The worker kept heartbeating throughout the simulated preparation.
     fresh = claim(api, computer)
@@ -308,7 +268,7 @@ def test_legacy_runner_preparation_survives_upgrade_and_three_minutes(api, monke
 def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unchecked_start_finishes(api):
     """A worker without start-place support keeps its claim while it waits. Claims go on to twice the limit (2 here),
     so the wait leaves one claim for another bot and the start it has not confirmed releases nothing early."""
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     computer = runner(api)
     assign(api, computer, 'ops')
@@ -333,7 +293,7 @@ def test_legacy_wait_takes_one_of_the_two_claims_the_limit_allows_until_its_unch
 def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
     """A Gateway turn whose turn users are all busy waits like one at a busy login rather than failing at the server."""
     from backend import start_places
-    from backend.tests.test_task_lanes import task_bot, new_task
+    from backend.tests.helpers.task_lanes import task_bot, new_task
 
     computer = task_bot(api, lanes=True)
     new_task(api, 'Work that waits for a turn user')
@@ -345,7 +305,7 @@ def test_a_turn_waiting_for_a_docker_turn_user_gives_its_place_back(api):
 
 
 def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
-    from backend.tests.test_task_lanes import task_bot, new_task
+    from backend.tests.helpers.task_lanes import task_bot, new_task
 
     computer = task_bot(api, lanes=True)
     task = new_task(api, 'Work finished while its turn waits')
@@ -353,7 +313,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
     aid = attempt['id']
     post(api, f'attempts/{aid}/start-place', {'waiting': 'pre-start requirements'}, computer['token'])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
     assert post(api, f'attempts/{aid}/renew', {}, computer['token'])['stop'] is True
     # The grant and started endpoints must fence the race even without another renewal.
     assert post(api, f'attempts/{aid}/start-place', {}, computer['token']) == {'reserved': False, 'stop': True}
@@ -369,7 +329,7 @@ def test_finished_task_stops_a_new_pre_start_wait_before_capacity_returns(api):
 
 
 def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api):
-    from backend.tests.test_api import restrict
+    from backend.tests.helpers.api import restrict
 
     computer = waiters(api)
     with api.app.state.store.transaction() as c:
@@ -385,7 +345,7 @@ def test_shared_computer_counts_are_neutral_when_a_members_bot_list_is_empty(api
 
 def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, monkeypatch):
     from backend import login_waits, start_places
-    from backend.tests.test_task_lanes import task_bot, new_task
+    from backend.tests.helpers.task_lanes import task_bot, new_task
 
     caps = {'one_turn_per_login': True}
     monkeypatch.setattr(login_waits, 'harness_caps', lambda _: caps)
@@ -409,7 +369,7 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
     with api.app.state.store.transaction() as c:
         assert not start_places.is_waiting(c, aid)
         assert c.execute('SELECT waiting_since FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0] is None
-        c.execute("UPDATE tasks SET status='done',done_at=? WHERE id=?", (H.now(), task['id']))
+        task_engine.move(c, task['id'], task_engine.DONE, 'human:ana', 'Finished by hand')
     assert not post(api, f'attempts/{aid}/renew', {}, computer['token']).get('stop')
     # An obsolete login-queue report cannot reintroduce a wait after this capability opts out.
     caps['one_turn_per_login'] = False
@@ -421,7 +381,9 @@ def test_live_legacy_login_clear_preserves_preparation_after_task_finishes(api, 
         c.execute('DELETE FROM start_places WHERE attempt_id=?', (aid,))
         start_places.restore_waits(c)
         assert not start_places.is_waiting(c, aid)
-    assert post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'])['started']
+    # The task finished before the run started: the engine no longer wants it (execution.held_before_start).
+    refused = post(api, f'attempts/{aid}/started', {'thread_id': 'legacy-preparation'}, computer['token'], expected=409)
+    assert refused['error']['code'] == 'start_wait'
 
 
 def test_delayed_managed_login_events_cannot_release_a_new_start_grant(api, monkeypatch):
@@ -539,7 +501,7 @@ def test_a_persons_thread_message_to_a_bot_starts_before_the_bots_older_queued_w
 def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):
     """Each computer's summary used to rebuild company pools/groups; one Default memo covers the listing."""
     from backend import usage_limits
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     first = waiters(api, n=0, running=0)
     second = runner(api, label='Other synthetic computer')
@@ -570,7 +532,7 @@ def test_operations_and_computers_share_one_company_default_across_runners(api, 
 def test_live_totals_match_each_computers_live_counts(api):
     """Health's capacity fence used one live() query per computer; the fleet pass must agree."""
     from backend import start_places
-    from backend.tests.test_api import runner
+    from backend.tests.helpers.api import runner
 
     first = waiters(api, n=2, running=1)
     second = runner(api, label='Other capacity computer')
@@ -580,14 +542,6 @@ def test_live_totals_match_each_computers_live_counts(api):
         totals = start_places.live_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
             assert totals.get(rid, 0) == sum(start_places.live(c, rid).values())
-
-
-def memory(api, computer, mem, at=None):
-    """One synthetic sample at this minute (or at `at`), memory at `mem` of the computer's total."""
-    import time
-
-    at = at or int(time.time()) // 60 * 60
-    post(api, 'runners/performance', {'samples': [point(at, cpu=20, mem=mem)]}, computer['token'])
 
 
 def waits_of(api, computer):
@@ -658,6 +612,14 @@ def test_memory_pressure_revokes_only_a_persons_unallocated_start_place(api, all
             assert c.execute('SELECT start_until FROM start_places WHERE attempt_id=?', (aid,)).fetchone()[0]
         return
     assert response.status_code == 409 and response.json()['error']['code'] == 'start_wait'
+    # The refusal's own write is kept, before any start-place: the grant let go and the wait on record, and it is a
+    # wait, not a refusal of this turn for good.
+    from backend import execution
+
+    with api.app.state.store.read() as c:
+        kept = c.execute('SELECT start_until, wait_reason FROM start_places WHERE attempt_id=?', (aid,)).fetchone()
+        assert kept[0] is None and kept[1] == 'computer busy: memory'
+        assert not execution.start_refused(c, aid)
     place = post(api, f'attempts/{aid}/start-place', {}, computer['token'])
     assert not place['reserved'] and place['waiting'].startswith('computer busy: memory')
     with api.app.state.store.read() as c:
@@ -884,7 +846,7 @@ def build_computer(api, disk=51 * 10**9):
     """A task-lane computer with 8 turns and a reported disk, so the build limit is 3 for a 51 GB disk."""
     from backend import runner_states
     from backend.store import encode, readiness_document
-    from backend.tests.test_task_lanes import task_bot
+    from backend.tests.helpers.task_lanes import task_bot
 
     computer = task_bot(api, lanes=True)
     with api.app.state.store.transaction() as c:
@@ -900,7 +862,7 @@ def build_computer(api, disk=51 * 10**9):
 
 def build_task(api, computer, title):
     """A task on this computer with a worktree link that is present: the signal that its turns are builds."""
-    from backend.tests.test_task_lanes import new_task
+    from backend.tests.helpers.task_lanes import new_task
 
     task = new_task(api, title)
     with api.app.state.store.transaction() as c:
@@ -919,7 +881,11 @@ def build_task(api, computer, title):
     return task
 
 
-def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts(api):
+def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn_starts_and_starts_once_a_build_ends(
+    api,
+):
+    """The fourth build waits on a three-build computer while a turn with no repo work takes a place beside the builds;
+    once a running build ends, the waiting build's next ask gets the slot and it runs."""
     from backend import start_places
 
     computer = build_computer(api)
@@ -947,19 +913,7 @@ def test_the_fourth_build_waits_on_a_three_build_computer_while_a_repo_free_turn
     chat = claim(api, computer)
     assert chat is not None and not chat.get('task')
     assert post(api, f"attempts/{chat['id']}/start-place", {}, computer['token'])['reserved'] is True
-
-
-def test_a_build_waiting_for_a_slot_starts_once_a_running_build_ends(api):
-    computer = build_computer(api)
-    for i in range(4):
-        build_task(api, computer, f'Build {i}')
-    builds = [claim(api, computer) for _ in range(4)]
-    assert all(builds)
-    fourth = builds[3]['id']
-    assert post(api, f'attempts/{fourth}/start-place', {}, computer['token']) == {
-        'reserved': False,
-        'waiting': 'builds at once',
-    }
+    # A build waiting for a slot starts once a running build ends.
     first = builds[0]['id']
     post(api, f'attempts/{first}/started', {'thread_id': 'build-1'}, computer['token'])
     post(api, f'attempts/{first}/complete', {'outcome': 'completed', 'text': '', 'last_seq': 0}, computer['token'])

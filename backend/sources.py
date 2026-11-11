@@ -28,8 +28,11 @@ BUILTINS = {
     "stuck-check": "Stuck check",
     "rule-check": "Rule check",
     "check-health": "Health check",
+    "postal-mail": "Postal mail",
     "maintenance": "Maintenance",
 }
+# A task.create event's `via` that says a bot filed the task on a person's rights: that bot (hubdb.FLEET_MAINTAINER).
+FILED_VIA = {"botops": "bot:botops"}
 
 KINDS = ("person", "bot", "assistant_for", "task_update", "builtin", "automation", "system")
 
@@ -217,3 +220,26 @@ def attach(c, rows):
     for row in rows:
         row["source"] = source_of(names, row)
     return rows
+
+
+def filers(c, ids):
+    """{task id: who really filed it} where that is not who the task says asked: BotOps working on a person's rights
+    (the task.create event's `via`, a bot id) or the built-in that made a task the server filed (its `source`, a BUILTINS
+    key: Health check, Postal mail). Tasks with neither are left out. What people see only: the task's requester still
+    decides who reads it, who is told and whose rights it carries."""
+    ids = sorted({str(i) for i in ids if i})
+    found = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start : start + 500]
+        for row in c.execute(
+            "SELECT target, actor, detail FROM events WHERE action='task.create' AND target IN (%s)"
+            % ",".join("?" * len(part)),
+            part,
+        ):
+            detail = _dict(row[2])
+            via, key = detail.get("via"), detail.get("source")
+            if isinstance(via, str) and via in FILED_VIA:
+                found[row[0]] = FILED_VIA[via]
+            elif row[1] == KEEPER and isinstance(key, str) and key in BUILTINS:
+                found[row[0]] = key
+    return found

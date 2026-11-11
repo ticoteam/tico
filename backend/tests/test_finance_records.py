@@ -8,7 +8,7 @@ import pytest
 
 from backend.finance.store import schema as FS
 from backend.records import store as RS
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.helpers.finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 # The line tags and dimensions tables as migration 75 left them: kinds without location, class, or item.
 OLD_LINE_TAGS = """CREATE TABLE fin_line_tags (

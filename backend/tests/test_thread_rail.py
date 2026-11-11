@@ -11,8 +11,8 @@ import sqlite3
 import pytest
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
-from backend.tests.test_api import api, headers  # noqa: F401  (the fixture and its helper)
-from backend.tests.test_thread_events import cursor, read_as, who
+from backend.tests.helpers.api import headers  # noqa: F401  (the fixture and its helper)
+from backend.tests.helpers.thread_events import cursor, read_as, who
 from backend import thread_rail, threads
 from backend.config import Settings
 from backend.store import H, Problem, Store
@@ -259,7 +259,7 @@ def test_a_group_chat_needs_a_name_and_a_bot_is_told_how_to_give_one(api):
     with api.app.state.store.transaction() as c:
         with pytest.raises(Problem) as caught:
             threads.dm(c, "bot:ops", ["human:ben", "human:cara"])
-    assert caught.value.code == "name_required" and "hub_thread_dm_group" in caught.value.detail
+    assert caught.value.code == "name_required" and "tico_thread_dm_group" in caught.value.detail
     with api.app.state.store.read() as c:
         assert (
             c.execute("SELECT COUNT(*) FROM conversations WHERE audience='personal' AND owner_id='bot:ops'").fetchone()[
@@ -502,7 +502,7 @@ def test_catch_up_cuts_a_long_text_and_keeps_each_card_to_the_page_budget(api, m
 
 def private_ref(api):
     """A private task of cara's that ben may not read: a person's post that names it is hidden from ben."""
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -561,7 +561,7 @@ def test_an_activity_event_counts_every_unread_message_it_stands_for(api):
 
 def test_held_writes_are_read_from_the_readers_own_candidates_through_an_index(api):
     from backend import org_rule_check
-    from backend.tests.test_thread_attention import hold
+    from backend.tests.helpers.thread_attention import hold
 
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='finance'")

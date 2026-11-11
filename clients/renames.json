@@ -272,17 +272,6 @@
       ]
     },
     {
-      "fixable": false,
-      "new": [
-        "task",
-        "list"
-      ],
-      "old": [
-        "task",
-        "stuck"
-      ]
-    },
-    {
       "fixable": true,
       "new": [
         "goal",

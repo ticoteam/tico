@@ -11,11 +11,11 @@ from datetime import datetime, timedelta, timezone
 import httpx
 import pytest
 
-from backend import support, support_access
+from backend import support, support_access, task_asks
 from backend.auth import Identity
 from backend.store import H, Problem, digest
-from backend.tests.test_onboarding import as_person, environment, machine, signed_in  # noqa: F401
-from backend.tests.test_support import TICKET_ID, ContractHQ, FakeHQ, documented
+from backend.tests.helpers.onboarding import as_person, environment, machine, signed_in  # noqa: F401
+from backend.tests.helpers.support import TICKET_ID, ContractHQ, FakeHQ, documented
 
 
 class FakeAccessHQ(FakeHQ):
@@ -375,6 +375,19 @@ def test_the_gate_reads_only_the_plain_path_form(path):
     assert refused.value.status == 403 and refused.value.code == "support_access"
     support_access.gate(who, "/api/v2/health", "GET")
     support_access.gate(who, "/api/v2/health/", "GET")
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/v2/tasks/t1/asks/r1/ok", "/api/v2/tasks/t1/asks/r1/answer", "/api/v2/oks/r1/use"]
+)
+def test_support_never_gives_an_ok_or_answers_for_a_person(path):
+    """Money, mail and access OKs are a person's own click: even full support access is refused, and an OK given in
+    a support session would not count (task_asks.own_click)."""
+    who = Identity(support_access.SUPPORT_ACTOR, "owner", support="full")
+    with pytest.raises(Problem) as refused:
+        support_access.gate(who, path, "POST")
+    assert refused.value.status == 403 and refused.value.code == "support_access"
+    assert not task_asks.own_click(Identity("human:ana", "owner", support="full"))
 
 
 def test_the_worker_runs_what_hq_carries_as_the_session_and_logs_it(environment, hq):

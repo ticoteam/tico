@@ -1,19 +1,8 @@
 """Docs: internal docs (versions, locks, import, search) and linked docs (docs/docs.md)."""
 
-from backend.tests.test_api import api, assign, claim, headers, ready, runner  # noqa: F401  (the api fixture)
+from backend.tests.helpers.api import assign, claim, ready, runner
 from backend import bot_settings as BS
-
-ANA, BEN, CARA = "ana-test", "ben-test", "cara-test"  # owner, bot administrator, everyone else
-
-
-def call(api, method, path, body=None, who=ANA, expected=200, **kw):
-    r = api.request(method, "/api/v2/" + path, json=body, headers=headers(who), **kw)
-    assert r.status_code == expected, (path, r.status_code, r.text)
-    return r.json()
-
-
-def make(api, title="Refund policy", body="Refund within 30 days.", who=ANA, **fields):
-    return call(api, "POST", "docs", {"title": title, "body": body, **fields}, who)["doc"]
+from backend.tests.helpers.docs import ANA, BEN, CARA, call, make
 
 
 def edit(api, doc, who=ANA, expected=200, **fields):
@@ -118,7 +107,7 @@ def test_search_ranks_internal_docs_and_lists_linked_docs_beside_them(api):
 
 
 def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
-    from backend.tests.test_mcp import call as tool
+    from backend.tests.helpers.mcp import call as tool
 
     machine = runner(api)
     assign(api, machine, "ops")
@@ -126,10 +115,10 @@ def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
     call(api, "POST", "chat/ops", {"text": "go"}, BEN)
     token = claim(api, machine, "ops")["token"]
     err, made = tool(
-        api, "hub_doc_write", {"path": "ops/runbook", "body": "# On-call runbook\n\nPage Ben."}, token=token
+        api, "tico_doc_write", {"path": "ops/runbook", "body": "# On-call runbook\n\nPage Ben."}, token=token
     )
     assert not err and made["doc"]["path"] == "ops/runbook.md" and made["doc"]["title"] == "On-call runbook"
-    err, read = tool(api, "hub_doc_read", {"ref": "ops/runbook"}, token=token)
+    err, read = tool(api, "tico_doc_read", {"ref": "ops/runbook"}, token=token)
     assert not err and read["doc"]["body"].endswith("Page Ben.")
     # Someone edits between the bot's read and its write: the tool re-reads and retries once.
     real = api.app.state.docs.edit
@@ -143,26 +132,26 @@ def test_a_bots_docs_tools_read_write_and_survive_a_concurrent_edit(api):
 
     api.app.state.docs.edit = racing
     err, again = tool(
-        api, "hub_doc_write", {"path": "ops/runbook.md", "body": "Bot rewrite", "note": "cleanup"}, token=token
+        api, "tico_doc_write", {"path": "ops/runbook.md", "body": "Bot rewrite", "note": "cleanup"}, token=token
     )
     api.app.state.docs.edit = real
     assert not err and again["doc"]["version"] == 3 and again["doc"]["body"] == "Bot rewrite"
-    err, history = tool(api, "hub_doc_history", {"ref": made["doc"]["id"]}, token=token)
+    err, history = tool(api, "tico_doc_history", {"ref": made["doc"]["id"]}, token=token)
     assert [(v["actor"], v["note"]) for v in history["versions"]] == [
         ("bot:ops", "cleanup"),
         ("human:cara", ""),
         ("bot:ops", "Created"),
     ]
-    err, listing = tool(api, "hub_doc_list", {"prefix": "ops/"}, token=token)
+    err, listing = tool(api, "tico_doc_list", {"prefix": "ops/"}, token=token)
     assert [d["path"] for d in listing["docs"]] == ["ops/runbook.md"]
-    err, missing = tool(api, "hub_doc_read", {"ref": "nope"}, token=token)
+    err, missing = tool(api, "tico_doc_read", {"ref": "nope"}, token=token)
     assert missing["refused"] == "docs"
     edit(api, call(api, "GET", "docs/" + made["doc"]["id"])["doc"], who=ANA, locked=True)
-    err, refused = tool(api, "hub_doc_write", {"path": "ops/runbook.md", "body": "no"}, token=token)
+    err, refused = tool(api, "tico_doc_write", {"path": "ops/runbook.md", "body": "no"}, token=token)
     assert err and refused["error"] == "locked"
 
 
-def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
+def test_upgrade_repairs_generated_docs_once_and_queues_a_map_refresh(api):
     from backend.store import H
 
     source = make(api, "Refund policy", path="finance/refunds.md")
@@ -206,5 +195,5 @@ def test_upgrade_repairs_generated_docs_once_and_queues_next_run_refresh(api):
     assert call(api, "GET", "docs/" + idx["id"])["doc"]["version"] == fresh["version"]
     with api.app.state.store.read() as c:
         tasks = c.execute("SELECT * FROM tasks WHERE owner_id='bot:librarian' AND title='Refresh the map'").fetchall()
-        assert len(tasks) == 1 and tasks[0]["next_run"] == 1
+        assert len(tasks) == 1 and tasks[0]["status"] == "open"
         assert "unreadable" in tasks[0]["body"] and "archived" in tasks[0]["body"]

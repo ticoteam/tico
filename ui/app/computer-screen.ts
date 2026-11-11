@@ -7,15 +7,57 @@
 
 const SCREEN_RFB = '/vendor/novnc/core/rfb.js', SCREEN_KEYSYMDEF = '/vendor/novnc/core/input/keysymdef.js';
 const SCREEN_ZOOM_MAX = 5;
-let SCREEN = null;
+// The parts of a computer the screen reads: its Settings row (GET /v2/operations) or a bot row's computer (BotMachine).
+interface ScreenMachine {
+  id: string;
+  label?: string | undefined;
+  owner_id?: string | null | undefined;
+  revoked_at?: string | null | undefined;
+  runner_id?: string | undefined;
+  screen?: string | null | undefined;
+  screen_available?: boolean | undefined;
+  online?: boolean | undefined;
+}
+// A bot's Screen row and header button: its state, and for a computer the screen's id, machine and who may open it.
+interface ScreenRow {
+  state: 'hidden' | 'none' | 'external' | 'offline' | 'not_offered' | 'off' | 'ready' | 'not_allowed';
+  id?: string | undefined;
+  machine?: ScreenMachine | undefined;
+  owner_id?: string | undefined;
+  may?: boolean | undefined;
+}
+/** The answer of a saved mode (POST .../screen) and of a session (POST .../screen/sessions): the parts this page reads. */
+interface ScreenSaved { screen: string | null; screen_available?: boolean; }
+interface ScreenSession { ws_path?: string; control?: boolean; }
+/** The noVNC viewer (ui/vendor/novnc/core/rfb.js, an ES module loaded by import()): the parts this page sets, calls and hears. */
+interface ScreenViewer {
+  viewOnly: boolean;
+  scaleViewport: boolean;
+  resizeSession: boolean;
+  background: string;
+  focusOnClick: boolean;
+  disconnect(): void;
+  focus(): void;
+  sendKey(keysym: number | undefined, code: string | null): void;
+  addEventListener(type: 'connect' | 'disconnect', listener: () => void): void;
+}
+type ScreenViewerClass = new (target: Element, socket: WebSocket, options: {shared: boolean}) => ScreenViewer;
+/** noVNC's keysym table (keysymdef.js): a character's code point to its X keysym. */
+interface ScreenKeysyms { lookup(codepoint: number | undefined): number | undefined; }
+/** The page's state while a computer's screen is open (SCREEN). */
+interface ScreenPage { id: string; from?: string | undefined; gen: number; rfb: ScreenViewer | null; control: boolean; mode: string; zoom: number; onResize: () => void; }
+/** A noVNC gesture event's detail. */
+interface ScreenGesture { type: string; clientX: number; clientY: number; magnitudeX: number; magnitudeY: number; }
+interface ScreenDrag { x: number; y: number; left: number; top: number; mx: number; my: number; }
+let SCREEN: ScreenPage | null = null;
 
 // ----------------------------------------------------------------- who sees it
 // The server's rule (the sessions route): the computer's operator or a bot admin.
-const screenMayOpen = machine => !!machine && !machine.revoked_at && (settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id));
-const screenOn = machine => !!machine && machine.screen && machine.screen !== 'off' && machine.screen_available !== false;
+const screenMayOpen = (machine: ScreenMachine | null | undefined): boolean => !!machine && !machine.revoked_at && (settingsIsAdmin() || (!!S.me?.id && machine.owner_id === S.me.id));
+const screenOn = (machine: ScreenMachine | null | undefined) => !!machine && machine.screen && machine.screen !== 'off' && machine.screen_available !== false;
 // A computer's row from what is already loaded: the bot rows' own computer first (every refresh reloads them), then
 // Settings' operations listing, which is read only when Settings opens, for a computer with no bots and for revoked_at.
-function screenMachine(id) {
+function screenMachine(id: string | null | undefined): ScreenMachine | null {
   if (!id) return null;
   const row = (SETTINGS_DATA.machines || []).find(m => m.id === id);
   const bot = (S.emps || []).find(e => e.machine?.runner_id === id)?.machine;
@@ -24,24 +66,24 @@ function screenMachine(id) {
           screen: bot?.screen ?? row?.screen, screen_available: bot?.screen_available ?? row?.screen_available};
 }
 // A mode just saved, written into both loaded copies so neither shows the old one until the next refresh.
-function screenSaved(id, saved) {
+function screenSaved(id: string, saved: ScreenSaved) {
   for (const m of [(SETTINGS_DATA.machines || []).find(x => x.id === id), ...(S.emps || []).filter(x => x.machine?.runner_id === id).map(x => x.machine)])
     if (m) Object.assign(m, {screen: saved.screen}, 'screen_available' in saved ? {screen_available: saved.screen_available} : {});
 }
 // The bot's computer when its screen is on and this person may open it; '' otherwise.
-function botScreenComputer(slug) {
+function botScreenComputer(slug: string): string | undefined {
   const id = botRow(slug)?.machine?.runner_id;
   const machine = screenMachine(id);
   return screenOn(machine) && screenMayOpen(machine) ? id : '';
 }
-const screenHref = id => `#/computers/${encodeURIComponent(id)}/screen`;
+const screenHref = (id: string) => `#/computers/${encodeURIComponent(id)}/screen`;
 // The bot header's button: only when its Screen row in More says ready (so not while the computer is offline).
-const botScreenLinkHTML = slug => {
+const botScreenLinkHTML = (slug: string) => {
   const s = botScreenState(slug), id = s.state === 'ready' ? s.id : '';
   return id ? `<a class="bot-learn bot-screen" id="bot-screen" href="${screenHref(id)}" aria-label="Screen" title="Screen"><span class="nav-icon" aria-hidden="true">computer</span><span class="bl-label">Screen</span></a>` : '';
 };
 // A task's owner bot's screen, in the task's header: a monitor icon, as quiet as the header's other icon buttons.
-const taskScreenLinkHTML = owner => {
+const taskScreenLinkHTML = (owner: string | null | undefined) => {
   const id = botScreenComputer(actorSlug(owner));
   return id ? `<a class="ghost peek-btn" href="${screenHref(id)}" aria-label="Screen" title="Screen">${TL_ICON.screen}</a>` : '';
 };
@@ -49,14 +91,14 @@ const taskScreenLinkHTML = owner => {
 // ----------------------------------------------------------------- the Screen row in a bot's More
 // Always there, so the feature stays findable when it is not working: the status, and when it is not ready, why and
 // what to do. Read from the bot row (online, its computer's platform) and the computer's row; no extra request.
-function botScreenState(slug) {
+function botScreenState(slug: string): ScreenRow {
   const e = botRow(slug);
   // Someone who may see the bot but not read it gets a row without its computer (backend/views.py): say so, name nobody.
   if (e && !('machine' in e)) return {state: 'hidden'};
   const id = e?.machine?.runner_id, machine = screenMachine(id);
   if (!machine) return {state: e?.agent ? 'external' : 'none'};
   const base = {id, machine, owner_id: machine.owner_id ? botPersonName(machine.owner_id) : '', may: screenMayOpen(machine)};
-  if (!e.online) return {...base, state: 'offline'};
+  if (!e?.online) return {...base, state: 'offline'};
   if (!machine.screen_available) return {...base, state: 'not_offered'};
   if (!machine.screen || machine.screen === 'off') return {...base, state: 'off'};
   return {...base, state: base.may ? 'ready' : 'not_allowed'};
@@ -67,13 +109,13 @@ const SCREEN_DOCS = `${GH}/blob/main/docs/install.md#screen`;
 // A named or --server-network runner has runner.override.yaml beside the stock file, used on every compose call
 // (install.sh, the updater); without it the command reaches the default runner's project.
 const SCREEN_DOCKER_CMD = 'sudo docker compose -f runner.compose.yaml $([ -f runner.override.yaml ] && echo -f runner.override.yaml) exec runner tico-runner --config /home/runner/runner.json screen on';
-const SCREEN_CHECKOUT_CMD = 'scripts/tico screen on';
-const screenCmdHTML = (cmd, label) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
-function botScreenRowHTML(slug) {
+const SCREEN_CHECKOUT_CMD = 'scripts/tico-computer screen on';
+const screenCmdHTML = (cmd: string, label: string) => `<div class="bot-screen-cmd"><code>${esc(cmd)}</code><button class="ghost" type="button" data-screen-copy="${esc(cmd)}" aria-label="Copy the ${label} command">Copy</button></div>`;
+function botScreenRowHTML(slug: string) {
   const s = botScreenState(slug);
-  const status = text => `<span class="bot-screen-status">${text}</span>`;
+  const status = (text: string) => `<span class="bot-screen-status">${text}</span>`;
   const body = {
-    ready: () => `<a class="bot-screen-open" href="${screenHref(s.id)}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine.screen === 'control' ? 'Control' : 'View'}`)}`,
+    ready: () => `<a class="bot-screen-open" href="${screenHref(s.id ?? '')}"><span class="nav-icon" aria-hidden="true">computer</span>Open</a>${status(` · ${s.machine?.screen === 'control' ? 'Control' : 'View'}`)}`,
     off: () => status('Off'),
     not_offered: () => status('Off'),
     offline: () => status("This computer is offline. Screen works when it's back."),
@@ -85,16 +127,16 @@ function botScreenRowHTML(slug) {
   return `<dt>Screen${betaPill('computer_screen')}</dt><dd class="bot-screen-row" id="bot-screen-row" data-screen-state="${s.state}" data-screen-key="${esc(botScreenKey(s))}">${body}</dd>`;
 }
 // What the row and the header button are drawn from; a refresh redraws them only when it changes.
-const botScreenKey = s => [s.state, s.id, s.machine?.screen, s.may, s.owner_id].map(v => v ?? '').join('|');
-function botScreenRefresh(slug) {
+const botScreenKey = (s: ScreenRow): string => [s.state, s.id, s.machine?.screen, s.may, s.owner_id].map(v => v ?? '').join('|');
+function botScreenRefresh(slug: string) {
   const row = $('#bot-screen-row');
   if (row && row.dataset.screenKey !== botScreenKey(botScreenState(slug))) botScreenPaint(slug);
   botScreenSettingsPaint(slug);
-  const state = botScreenState(slug);
-  if (state.machine?.screen_available && SCREEN_SETUP_PENDING.has(state.id) && !SCREEN_SAVING.has(state.id)) void screenSetMode(state.id, 'control');
+  const state = botScreenState(slug), id = state.id ?? '';
+  if (state.machine?.screen_available && SCREEN_SETUP_PENDING.has(id) && !SCREEN_SAVING.has(id)) void screenSetMode(id, 'control');
 }
 // Draws the row again, and the header's Screen button, which shows only when the row is ready.
-function botScreenPaint(slug) {
+function botScreenPaint(slug: string) {
   const row = $('#bot-screen-row');
   if (row) {
     row.previousElementSibling?.remove();
@@ -108,11 +150,11 @@ function botScreenPaint(slug) {
   }
   botScreenWire(slug);
 }
-const SCREEN_SETUP_PENDING = new Set(), SCREEN_SAVING = new Set();
-function screenControlHTML(machine, online = true) {
+const SCREEN_SETUP_PENDING = new Set<string>(), SCREEN_SAVING = new Set<string>();
+function screenControlHTML(machine: ScreenMachine | null | undefined, online = true): string {
   if (!machine) return '<span class="muted">No computer assigned.</span>';
   if (!screenMayOpen(machine)) return '<span class="muted">Only the computer’s operator and admins can change its screen.</span>';
-  const id = machine.id || machine.runner_id;
+  const id = machine.id || machine.runner_id || '';
   const on = !!machine.screen_available && machine.screen !== 'off' && !!machine.screen;
   const pending = SCREEN_SETUP_PENDING.has(id) && !on;
   const key = [id, machine.screen, machine.screen_available, online, pending, SCREEN_SAVING.has(id)].join('|');
@@ -124,39 +166,40 @@ function screenControlHTML(machine, online = true) {
       <p>The screen becomes available when the computer reports it is ready. <a href="${SCREEN_DOCS}" target="_blank" rel="noopener noreferrer">Setup help</a></p></div>` : ''}
   </div>`;
 }
-function botScreenSettingsPaint(slug) {
+function botScreenSettingsPaint(slug: string) {
   const host = $('#bot-screen-settings'); if (!host || BOT?.slug !== slug) return;
   const state = botScreenState(slug);
   const html = `<dt>Screen</dt><dd>${screenControlHTML(state.machine, !!botRow(slug)?.online)}</dd>`;
   const box = document.createElement('div'); box.innerHTML = html;
-  const key = box.querySelector('[data-screen-control]')?.dataset.screenControlKey;
+  const key = box.querySelector<HTMLElement>('[data-screen-control]')?.dataset.screenControlKey;
   if (key && host.querySelector('[data-screen-control]')?.dataset.screenControlKey === key) return;
   if (host.innerHTML !== html) host.innerHTML = html;
 }
-function botScreenWire(slug) { botScreenSettingsPaint(slug); }
-function screenControlsPaint(id) {
+function botScreenWire(slug: string) { botScreenSettingsPaint(slug); }
+function screenControlsPaint(id: string) {
   if (BOT) botScreenPaint(BOT.slug);
   const machine = (SETTINGS_DATA.machines || []).find(m => m.id === id);
-  for (const box of document.querySelectorAll('[data-screen-control]')) {
+  for (const box of document.querySelectorAll<HTMLElement>('[data-screen-control]')) {
     if (box.dataset.screenControl === id && !box.closest('#bot-screen-settings') && machine)
       box.outerHTML = screenControlHTML(machine, machine.online !== false);
   }
 }
-async function screenSetMode(id, mode) {
+async function screenSetMode(id: string, mode: string) {
   if (SCREEN_SAVING.has(id)) return;
   SCREEN_SAVING.add(id); screenControlsPaint(id);
   try {
-    const saved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode});
+    const saved: ScreenSaved = await post(`/v2/computers/${encodeURIComponent(id)}/screen`, {mode});
     screenSaved(id, saved); SCREEN_SETUP_PENDING.delete(id);
   } catch (error) {
-    SCREEN_SETUP_PENDING.delete(id); toast(error.message, true);
+    SCREEN_SETUP_PENDING.delete(id); toast(errorMessage(error, ''), true);
   } finally { SCREEN_SAVING.delete(id); screenControlsPaint(id); }
 }
 document.addEventListener('change', event => {
-  const toggle = event.target.closest('[data-screen-toggle]'), mode = event.target.closest('[data-screen-mode]');
-  if (mode) { void screenSetMode(mode.dataset.screenMode, mode.value); return; }
+  const target = eventElement(event);
+  const toggle = target?.closest<HTMLInputElement>('[data-screen-toggle]'), mode = target?.closest<HTMLSelectElement>('[data-screen-mode]');
+  if (mode) { void screenSetMode(mode.dataset.screenMode ?? '', mode.value); return; }
   if (!toggle) return;
-  const id = toggle.dataset.screenToggle, machine = screenMachine(id);
+  const id = toggle.dataset.screenToggle ?? '', machine = screenMachine(id);
   if (!machine || !screenMayOpen(machine)) return;
   if (toggle.checked && !machine.screen_available) {
     SCREEN_SETUP_PENDING.add(id); screenControlsPaint(id);
@@ -165,8 +208,8 @@ document.addEventListener('change', event => {
   } else void screenSetMode(id, toggle.checked ? 'control' : 'off');
 });
 document.addEventListener('click', event => {
-  const copy = event.target.closest('[data-screen-copy]');
-  if (copy) void copyText(copy.dataset.screenCopy).then(() => toast('Copied'), () => toast('Could not copy', true));
+  const copy = eventElement(event)?.closest<HTMLElement>('[data-screen-copy]');
+  if (copy) void copyText(copy.dataset.screenCopy ?? '').then(() => toast('Copied'), () => toast('Could not copy', true));
 });
 
 // ----------------------------------------------------------------- the page
@@ -178,9 +221,9 @@ function screenStop() {
   removeEventListener('resize', state.onResize);
   document.body.classList.remove('screen-open');
 }
-async function pageComputerScreen(id, from) {
+async function pageComputerScreen(id: string, from?: string) {
   screenStop();
-  const state = SCREEN = {id, from, gen: 0, rfb: null, control: false, mode: '', zoom: 1, onResize: () => screenFit(state)};
+  const state: ScreenPage = SCREEN = {id, from, gen: 0, rfb: null, control: false, mode: '', zoom: 1, onResize: () => screenFit(state)};
   document.body.classList.add('screen-open');
   $('#main').innerHTML = `<div class="scr" id="scr">
     <div class="scr-bar">
@@ -200,8 +243,8 @@ async function pageComputerScreen(id, from) {
   $('#scr-back').onclick = () => { location.hash = state.from && !state.from.startsWith('#/computers/') ? state.from : SETTINGS; };
   $('#scr-retry').onclick = () => void screenConnect(state, state.control);
   $('#scr-fit').onclick = () => screenZoom(state, 1);
-  $('#scr-mode').onclick = event => {
-    const button = event.target.closest('[data-scr-control]'); if (!button) return;
+  $('#scr-mode').onclick = (event: MouseEvent) => {
+    const button = eventElement(event)?.closest<HTMLElement>('[data-scr-control]'); if (!button) return;
     const control = button.dataset.scrControl === '1';
     if (control !== state.control) void screenConnect(state, control);
   };
@@ -221,16 +264,16 @@ async function pageComputerScreen(id, from) {
   state.mode = machine?.screen || '';
   await screenConnect(state, state.mode === 'control');
 }
-function screenShow(state, text, retry) {
+function screenShow(state: ScreenPage, text: string, retry?: boolean) {
   if (SCREEN !== state) return;
   $('#scr-msg').hidden = !text;
   $('#scr-msg-text').textContent = text || '';
   $('#scr-retry').hidden = !retry;
 }
-function screenBar(state, live) {
+function screenBar(state: ScreenPage, live: boolean) {
   if (SCREEN !== state) return;
   $('#scr-mode').hidden = state.mode !== 'control';
-  $('#scr-mode').querySelectorAll('[data-scr-control]').forEach(b => b.setAttribute('aria-checked', String((b.dataset.scrControl === '1') === state.control)));
+  $('#scr-mode').querySelectorAll('[data-scr-control]').forEach((b: HTMLElement) => b.setAttribute('aria-checked', String((b.dataset.scrControl === '1') === state.control)));
   $('#scr-keys-btn').hidden = !(live && state.control);
   $('#scr-state').textContent = live ? (state.control ? 'Control' : 'View') : '';
   $('#scr-state').classList.toggle('scr-hide', state.mode === 'control');   // the switch says it already
@@ -238,22 +281,22 @@ function screenBar(state, live) {
 }
 // Why the hub closed the socket: 4404 no runner, 4403 screen off, view only now, or computer removed; anything else
 // (4401 a used ticket, 4408 the hour's limit, 1000 the other side closed) ends the session. Reconnect opens a new one.
-const SCREEN_CLOSED = {4404: 'Computer did not answer', 4403: 'Screen not available'};
-async function screenConnect(state, control) {
+const SCREEN_CLOSED: Record<number, string> = {4404: 'Computer did not answer', 4403: 'Screen not available'};
+async function screenConnect(state: ScreenPage, control: boolean) {
   if (SCREEN !== state) return;
   const gen = ++state.gen;
   try { state.rfb?.disconnect(); } catch {}
   state.rfb = null; state.control = control;
   screenShow(state, 'Connecting…'); screenBar(state, false);
-  let session, RFB;
+  let session: ScreenSession, RFB: ScreenViewerClass;
   try {
-    let keysyms;
+    let keysyms: ScreenKeysyms;
     [session, {default: RFB}, {default: keysyms}] = await Promise.all([
       post(`/v2/computers/${encodeURIComponent(state.id)}/screen/sessions`, {control}),
       import(SCREEN_RFB), import(SCREEN_KEYSYMDEF)]);
     SCREEN_KEYSYMS = keysyms;
   } catch (error) {
-    if (gen === state.gen) screenShow(state, error.message || 'Could not open the screen', true);
+    if (gen === state.gen) screenShow(state, errorMessage(error, 'Could not open the screen'), true);
     return;
   }
   if (gen !== state.gen || SCREEN !== state) return;
@@ -288,8 +331,8 @@ async function screenConnect(state, control) {
 // noVNC scales the picture to its box (scaleViewport), so zooming makes the box bigger than the stage and the stage
 // scrolls: noVNC's own pointer mapping stays right at every zoom. Pinch and two-finger drag (noVNC's gesture events,
 // taken before the viewer gets them), Ctrl + wheel and trackpad pinch on a desktop; one finger pans while viewing.
-function screenFit(state) { screenZoom(state, state.zoom); }
-function screenZoom(state, zoom, cx, cy) {
+function screenFit(state: ScreenPage) { screenZoom(state, state.zoom); }
+function screenZoom(state: ScreenPage, zoom: number, cx?: number, cy?: number) {
   if (SCREEN !== state) return;
   const stage = $('#scr-stage'), target = $('#scr-target'); if (!stage || !target) return;
   const z = Math.max(1, Math.min(SCREEN_ZOOM_MAX, zoom));
@@ -303,12 +346,12 @@ function screenZoom(state, zoom, cx, cy) {
   stage.scrollTop = fy * target.offsetHeight - oy;
   $('#scr-fit').hidden = z <= 1;
 }
-function screenGestures(state) {
+function screenGestures(state: ScreenPage) {
   const stage = $('#scr-stage');
-  let pinch = null, drag = null;
-  const take = event => { event.stopPropagation(); event.preventDefault?.(); };
-  const onGesture = event => {
-    const d = event.detail || {};
+  let pinch: {dist: number; zoom: number; x: number; y: number} | null = null, drag: ScreenDrag | null = null;
+  const take = (event: Event) => { event.stopPropagation(); event.preventDefault?.(); };
+  const onGesture = (event: CustomEvent<ScreenGesture>) => {
+    const d: ScreenGesture | Record<string, never> = event.detail || {};
     if (d.type === 'pinch') {
       take(event);
       const dist = Math.hypot(d.magnitudeX, d.magnitudeY);
@@ -327,7 +370,7 @@ function screenGestures(state) {
     }
   };
   for (const type of ['gesturestart', 'gesturemove', 'gestureend']) stage.addEventListener(type, onGesture, true);
-  stage.addEventListener('wheel', event => {
+  stage.addEventListener('wheel', (event: WheelEvent) => {
     if (!event.ctrlKey) return;
     take(event);
     screenZoom(state, state.zoom * Math.exp(-event.deltaY / 200), event.clientX, event.clientY);
@@ -338,14 +381,14 @@ function screenGestures(state) {
 // A phone types into a hidden input; each change is sent as key presses. The input keeps two characters, so a
 // backspace on a soft keyboard that sends no key code still shows as a shorter value.
 const SCREEN_KEYS_IDLE = '  ';
-const SCREEN_NAMED = {Enter: 0xff0d, Backspace: 0xff08, Tab: 0xff09, Escape: 0xff1b, Delete: 0xffff, ArrowLeft: 0xff51,
+const SCREEN_NAMED: Record<string, number> = {Enter: 0xff0d, Backspace: 0xff08, Tab: 0xff09, Escape: 0xff1b, Delete: 0xffff, ArrowLeft: 0xff51,
                       ArrowUp: 0xff52, ArrowRight: 0xff53, ArrowDown: 0xff54, Home: 0xff50, End: 0xff57};
-let SCREEN_KEYSYMS = null;
-function screenKeys(state) {
+let SCREEN_KEYSYMS: ScreenKeysyms | null = null;
+function screenKeys(state: ScreenPage) {
   const input = $('#scr-keys');
-  const press = (keysym, code) => state.rfb?.sendKey(keysym, code);
+  const press = (keysym: number | undefined, code: string | null) => state.rfb?.sendKey(keysym, code);
   const reset = () => { input.value = SCREEN_KEYS_IDLE; input.setSelectionRange(2, 2); };
-  input.addEventListener('keydown', event => {
+  input.addEventListener('keydown', (event: KeyboardEvent) => {
     const keysym = SCREEN_NAMED[event.key];
     if (!keysym || !state.control) return;
     event.preventDefault(); press(keysym, event.code || event.key); reset();

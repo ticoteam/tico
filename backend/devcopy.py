@@ -14,7 +14,7 @@ The key files that sit beside a database (backup.KEY_FILES) are never copied, so
 opens nothing. Beside the copy go a `server.env` with TICO_REHEARSAL=1 (nothing runs on a timer, nothing leaves the
 server, and runners are refused), a fresh local sign-in token, and empty registry and attachment folders.
 
-`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, task rules, incoming triggers,
+`--keep-automations` keeps what the team set up to run (AUTOMATIONS: routines, incoming triggers,
 outgoing webhooks and automations; wake rules are always kept) so the one-time move to automations can be rehearsed on it.
 Their queues, deliveries and runs are still emptied, and their secrets replaced: no trigger URL, webhook signature or
 header of the live install works on the copy. Rehearsal mode still holds every timer.
@@ -38,6 +38,8 @@ from .hubdb import now, shift
 
 # Emptied, never pruned: one surviving row is one thing the copy could do.
 EMPTY = (
+    # A file from before the Pipelines v3 cut-over still has the old OKs; the copy's first start drops the table.
+    "approvals",
     # Provider jobs and send grants never become actionable in a rehearsal copy.
     "letter_sources",
     "letter_proofs",
@@ -53,35 +55,23 @@ EMPTY = (
     "doc_source_jobs",
     "update_queue",
     "task_reminders",
-    "task_check_back_wakes",
     "calendar_actions",
     "suggestions",  # each waiting one is an Update turn the copy would give, and each outcome a report to HQ
     "meeting_deliveries",
     "worktree_waits",
-    "check_waits",
-    "check_head_provenance",
+    "effects",  # a GitHub call a task's move still owes (backend/stage_effects.py): the copy makes none
+    "github_deliveries",  # webhook deliveries already taken: a copy hears none of them again
+    "ok_grants",  # an OK bound to an email, a letter or a page (backend/task_asks.py): the copy acts on none
+    "ok_shown",  # what a person was shown of one
     "idempotency",  # bindings too
     "idempotency_messages",
     "blob_media_retries",
     "seat_requests",  # a cloud agent request's key: a replay re-files
-    # milestone waits: each pending row is a wake the copy could send; the milestones seen only settle those
-    "task_milestone_waits",
-    "milestones",
     # reconnect cards: an open one is a wake the copy could send; the refusals only settle those
     "task_reconnects",
     "google_signin_refusals",
     # refusal holds on one task or chat: their cooldowns belong to the source's runs; the copy starts with none
     "quarantine_holds",
-    # Pipeline routing: a live link sends a ticket on to another pipeline when its stage is reached, a handoff is one
-    # it did and may still return, and a review claim is one person's lock on a requirement. The copy starts with none.
-    "pipeline_links",
-    "pipeline_handoffs",
-    "review_claims",
-    # GitHub checks: a check run is one post the copy could make, the cursor a pass's lease. The copy starts with none.
-    "pipeline_check_runs",
-    "pipeline_check_cursor",
-    # A note a migration leaves for the first start (seed the roadmap types once); a copy of a started hub has none.
-    "first_start_seeds",
     # The retired Nightly memory tidy pilot's ledger: history only.
     "memory_tidy_passes",
     "memory_tidy_packets",
@@ -90,7 +80,6 @@ EMPTY = (
     "webhook_events",
     "webhook_sends",
     "webhook_attempts",  # outgoing: a copy never sends an event out
-    "task_rules",
     "schedules",
     "schedule_config",
     "schedule_occurrences",
@@ -165,6 +154,7 @@ EMPTY = (
     "service_keys",
     "service_key_tasks",
     "owner_links",
+    "setup_handoffs",
     # credentials
     "credentials",
     "credential_keys",
@@ -208,6 +198,9 @@ EMPTY = (
     "connector_reports",
     "github_app",
     "github_app_states",
+    # The owner's GitHub user token (sealed, for a personal account) and its single-use states: a copy holds neither.
+    "github_user_token",
+    "github_user_states",
     "granola_connections",
     "meeting_importers",
     "live_meeting_bots",
@@ -298,7 +291,6 @@ EMPTY = (
 AUTOMATIONS = (
     "schedules",
     "schedule_config",
-    "task_rules",
     "triggers",
     "webhooks",
     "automations",
@@ -318,10 +310,7 @@ HISTORY = {
     "skill_usage_dailies": "used_on",
     "unlisted_skill_usage_dailies": "used_on",
     "skill_suggestions": "created_at",
-    "stage_decisions": "created_at",
     # A manager action points at its run: the action is cut first.
-    "pipeline_manager_actions": "created_at",
-    "pipeline_manager_runs": "started_at",
     "factory_manager_actions": "created_at",
     "factory_manager_runs": "started_at",
     # Run steps before their runs: a step row points at its run.
@@ -331,6 +320,10 @@ HISTORY = {
     "entity_value_history": "active_from",
     "entity_activities": "occurred_at",
     "entity_mentions": "created_at",
+    # The linker's run trace: the entities a bot run looked up.
+    "entity_lookups": "created_at",
+    # CI build time (backend/ci_runs.py): the repository's workflow runs and builder permits, priced into Finance.
+    "ci_runs": "created_at",
 }
 # Kept whole, except rows whose parent went (a pruned attempt's events). Tokens on runners are replaced.
 KEEP = (
@@ -351,13 +344,7 @@ KEEP = (
             "postal_mail_settings",  # access and routing settings cannot send in rehearsal mode
             "maintenance_steps",  # each step's switch, "How often" and cursor: a copy keeps the team's settings
             "factories",
-            "pipeline_members",
-            "stage_requirements",
-            "stage_requirement_versions",
-            "requirement_attachments",
-            "stage_visits",
             "agents",
-            "approvals",
             "archives",
             "assistant_actions",
             "attempt_conversations",
@@ -537,10 +524,8 @@ KEEP = (
             "slack_channels",
             "slack_digests",
             "slack_reads",
-            "stale_judged",
             "memory_tidy_cards",
             "memory_tidy_keeps",
-            "stale_suggestions",
             "stall_triage",
             "storage_moves",
             "strategy_bets",
@@ -552,17 +537,34 @@ KEEP = (
             "task_delegations",
             "history_events",
             "task_file_reviews",
-            "task_holds",
             "task_links",
             "task_relations",
             "task_roles",
             "task_run_models",
-            "task_steps",
             "task_tags",
             "task_trash",
             "task_trash_assets",
-            "task_types",
             "tasks",
+            # The one task engine (backend/task_engine.py): what a pipeline is, where each task stands and how it got
+            # there. task_move_guards is the one row the tasks_move_only trigger reads.
+            "pipelines",
+            "stages",
+            "requirements",
+            "visits",
+            "answers",
+            "snoozes",
+            "links",
+            "task_move_guards",
+            # What Product and Engineering read (backend/task_facts.py, backend/task_pages.py): saved copies of PRs and
+            # releases, pages attached to a requirement and Jev's verdicts on them.
+            "pr_facts",
+            "releases",
+            "release_reads",
+            "release_commits",
+            "requirement_pages",
+            "page_verdicts",
+            # The order runs started in (backend/task_wakes.py): kept with the runs it orders.
+            "run_starts",
             "turns",
             "update_archive_overrides",
             "update_reads",
@@ -572,6 +574,7 @@ KEEP = (
             "usage_meter_reads",
             "budget_nodes",
             "task_caps",
+            "ci_run_extensions",  # a ticket's one extension of its CI minutes (backend/ci_runs.py)
             "reach_settings",
             "reach_lines",
             # The five change logs before migration 0064 moved them into history_events. A copy of a database from before that
@@ -1028,7 +1031,7 @@ def main(argv=None):
     parser.add_argument(
         "--keep-automations",
         action="store_true",
-        help="keep routines, task rules, triggers, webhooks and automations (queues and secrets still go)",
+        help="keep routines, triggers, webhooks and automations (queues and secrets still go)",
     )
     parser.add_argument("--profile", help="AWS profile for an s3:// bundle")
     parser.add_argument("--region", default="us-west-2", help="AWS region for an s3:// bundle")

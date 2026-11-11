@@ -1,4 +1,4 @@
-"""`hub docs fetch` (clients/doc_fetch.py): what it refuses and what it never sends. No network, no DNS:
+"""`tico docs fetch` (clients/doc_fetch.py): what it refuses and what it never sends. No network, no DNS:
 names resolve through a table and connections are scripted byte streams."""
 
 import io

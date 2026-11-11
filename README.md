@@ -7,7 +7,7 @@ the team's own model subscriptions, and report back. It is built for teams from 
 A small pilot is what has been measured ([sizing](docs/sizing.md)).
 
 - **A small server holds the team.** One Docker install (the server, HTTPS through Caddy or a
-  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats, approvals,
+  Cloudflare Tunnel, Litestream backups, an optional updater) keeps tasks, chats,
   automations, files and humans in SQLite. The server never runs a bot or a model CLI; when decisions (or Slack routing) are on, it sends the text of each
   question to the decision model: the Tico AI Gateway on Tico HQ with a gateway key, then your own TypeSafe key if you set one, then OpenAI, Anthropic, Gemini, xAI or OpenRouter with a key stored on the server.
 - **Computers run the bots.** A Mac (the native runner) or any Linux or cloud computer (the
@@ -32,7 +32,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
 
 1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Seven built-in bots are created: Assistant, BotOps, Librarian, Strategy Bot, Task Manager, Bookkeeper and Counsel.
+   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -58,7 +58,7 @@ For a team, on a Linux server (about 2 GB, with a domain pointed at it), run the
 curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh -o install.sh && sh install.sh
 ```
 
-It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through `tico setup`:
+It installs Docker if needed, downloads that release's compose bundle (checksum verified) and walks you through the setup wizard (`python3 -m setup`):
 a domain name to a signed-in Tico, with each step checked. Then open the app, complete **Finish setup**, and use
 **Settings > Computers > Add computer** to join a Mac or a Linux computer. What you need first, where to get a server, and what
 you will see are in [docs/install.md](docs/install.md).
@@ -87,9 +87,9 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/meetings.md](docs/meetings.md) | Meetings and call transcripts |
 | [docs/creating-bots.md](docs/creating-bots.md), [docs/onboarding.md](docs/onboarding.md) | Creating bots and finishing setup |
 | [docs/connect-tools.md](docs/connect-tools.md) | Connect common tools (Jira, Confluence, Linear, PostHog, Sentry, GitHub): a vendor's MCP server if it takes an API token, else a REST skill |
-| [docs/starter-bots.md](docs/starter-bots.md) | The 104 bot templates by group, their card fields and what a good bot looks like |
-| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles, models and Dev tickets steps for building software with bots |
-| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, approval gates, and reviewing a bot's first week |
+| [docs/starter-bots.md](docs/starter-bots.md) | The 124 role templates by group, their card fields and what a good bot looks like |
+| [docs/software-factory.md](docs/software-factory.md) | The software factory: Tico's recommended roles and models for building software with bots |
+| [docs/onboarding-guide.md](docs/onboarding-guide.md) | Picking your first bots, writing good instructions, what needs your OK, and reviewing a bot's first week |
 | [docs/environments.md](docs/environments.md) | Sign-in options, environments, profiles, removal |
 | [docs/files.md](docs/files.md) | What bots publish, versions, who can see a file |
 | [docs/docs.md](docs/docs.md) | Docs: internal docs with history and locks, linked docs, import, search |
@@ -117,7 +117,7 @@ For the shortest trial, use Docker above. For a native development setup, follow
 and [register a Mac computer](docs/install.md#mac). Open the app, complete **Finish setup**, join the
 computer and sign in to your model provider. All four built-in repositories are created automatically. Each other role waits as a Recruiting seat; a bot is created only
 when you recruit one, and it is parked in **Needs setup** until you open it and press **Start onboarding**; then follow [Your first result](docs/install.md#your-first-result).
-Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `hub bot copy`.
+Bots can allow [branches](docs/creating-bots.md#branches): personal tasks and chats on your computer, following the original's instructions and repository. Independent copies keep using `tico bot copy`.
 
 See [Setup reference](docs/onboarding.md) for the wizard's saved fields and [Creating bots](docs/creating-bots.md) for custom bots.
 
@@ -163,7 +163,7 @@ which case the bundle is ad-hoc signed and Gatekeeper asks for **Open Anyway** t
 
 A bot is one durable git repository in the environment's workspace plus one row on the server. The
 repository holds `AGENT.md`, playbooks, knowledge and memory; the server holds runtime, model,
-effort, assignment, tasks and approvals. The runner looks for the checkout at
+effort, assignment and tasks. The runner looks for the checkout at
 `<workspace>/bot-<slug>` (an older `emp-<slug>` folder keeps working) unless the registration's `repos` map says otherwise.
 
 A new bot starts from a template, `templates/catalog/<template>/`. Use **Settings > Bots > Add from template**, or ask
@@ -234,8 +234,8 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_CREDENTIAL_KMS_KEY` | Optional AWS KMS key for the credential vault. Unset (the default), the vault works with a key in `/data/credential.key`: back that file up with the database ([docs/credential-vault.md](docs/credential-vault.md)) | `alias/tico-acme` |
 | `TICO_EXPECTED_AWS_ACCOUNT` and `TICO_EXPECTED_AWS_ROLE` | Optional: the Docker server, Slack gateway and `restore` refuse to start unless STS GetCallerIdentity reports this 12-digit account and, when set, this role (a name or role ARN). Unset, nothing is checked. See [docs/install.md](docs/install.md#check-the-aws-identity) | `123456789012`, `tico-server` |
 | `TICO_DECISIONS_DAILY_CALLS_OWNER`, `TICO_DECISIONS_DAILY_CALLS_HUMAN`, `TICO_DECISIONS_DAILY_CALLS_BOT` | How many calls to the server's own models one actor may make in a UTC day, by role (defaults 20000, 5000, 5000; `0` refuses every call). Decisions (`POST /api/v2/decisions`, listening and live-meeting routing, and Slack routing, counted against the sender) share one count; market asks (`POST /api/v2/market/ask`) are counted apart under the same caps. Over the cap is a 429 | `1000` |
-| `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
-| `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `hub_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
+| `TICO_GATEWAY_KEY` or `TICO_GATEWAY_SECRET_ARN`, and `TICO_GATEWAY_URL` | The Tico AI Gateway key behind `tico_decision_ask` / `POST /api/v2/decisions` and the Slack gateway: Decide asks the Gateway first, as Tico Decide 1.0, in one try of at most 8 seconds. The URL defaults to Tico HQ's (`<TICO_HQ_URL>/v1/gateway/decisions`). When the Gateway is not set up, is down or refuses the key, the server asks the next provider below; all of them together answer within 25 seconds | |
+| `TICO_TYPESAFE_SECRET_ARN` or `TYPESAFE_API_KEY` | Optional: your own key for TypeSafe's Jev, asked after the Gateway, behind `tico_decision_ask` / `POST /api/v2/decisions` and the Slack gateway (`skills/decisions/SKILL.md`, `questions/README.md`), which is also what checks a message bot's mail for spam and injection. Not set by default and not needed. Without it, or when it fails, the server asks the team's own model provider, using `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `XAI_API_KEY` or `OPENROUTER_API_KEY` from `.env` (`compose.yaml` hands these to the server); with none of them the route answers 503. The `judge.call` audit events and `TYPESAFE_*` names are unchanged | |
 | `TICO_UPDATE_CHECK`, `TICO_RELEASES_URL`, `TICO_VERSION`, `TICO_UPDATER_URL`, `TICO_UPDATER_TOKEN` | The sidebar's "Update to" row and owner-only "Update now"; `TICO_UPDATE_CHECK=off` disables it. See [docs/releasing.md](docs/releasing.md) | |
 | `TICO_TELEMETRY`, `DO_NOT_TRACK`, `TICO_TELEMETRY_DEBUG`, `TICO_HQ_URL` | The anonymous usage count: `TICO_TELEMETRY=off` or `DO_NOT_TRACK=1` (or Settings > General) turns it off, `TICO_TELEMETRY_DEBUG=1` prints what would be sent and sends nothing. See [PRIVACY.md](PRIVACY.md) | |
 | `TICO_HQ_STAFF_READ_KEY` | For the Tico team's own server only: Tico HQ's read-only staff key. With it, the server reads HQ's nightly billing check every hour and the owner's Health page shows each billing mismatch (the company's install id and the difference in dollars), and a check that missed a night or cannot be read, in red. Read-only; unset, nothing is sent | |
@@ -259,14 +259,14 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `backend/` | The server: API, authorization, write layer, scheduler, backups, settings admin (FastAPI, SQLite) |
 | `runner-rs/` | The local runner (`tico-runner`): enrollment, readiness, leases, runs, subscription profiles, updates, and one host per model CLI in `runner-rs/src/hosts/` |
 | `runner_support/` | The runner's Python helpers: the `python -m runner_support run` shim, the connectors, Close transcript and meeting import jobs, catalog set-up and the update process |
-| `clients/` | What bots and owners call: the `hub` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
+| `clients/` | What bots and owners call: the `tico` CLI, the HTTP client, preflight, routine validation, team documents, and `environments.py` |
 | `ui/`, `app/` | The web interface and its browser tests; the Tauri desktop shell (Rust) |
-| `setup/` | `tico setup`, the guided Docker install of the server and of Linux runners |
+| `setup/` | the setup wizard (`python3 -m setup`), the guided Docker install of the server and of Linux runners |
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
 | `policies/` | Rules every bot follows: approvals, access, handoffs, writing |
 | `templates/` | `catalog/` is the bot templates setup picks from, one folder per template with its card and its starting repository; `employee-repo/` is the generic starting point, `environment-registry/` seeds a new environment with `coo` and `botops` |
-| `scripts/` | `tico`, `hub`, `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
+| `scripts/` | `tico`, `tico-computer`, `hub` (`tico`'s old name), `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
 | `docs/` | Documentation: [how it works](docs/how-it-works.md), [using Tico](docs/using-tico.md), [finish setup](docs/onboarding.md), [creating bots](docs/creating-bots.md), [files](docs/files.md), [environments](docs/environments.md), [Hermes agents](docs/hermes-agents.md) and [OpenClaw agents](docs/openclaw-agents.md) (connect a profile in 2 minutes, with a scheduled sync); `history/` holds retired designs |
 
 ### Where a change belongs
@@ -299,9 +299,9 @@ scripts/tico-computer -e ENV server install|uninstall|start|stop|restart|status|
 
 `-e ENV` (or `TICO_ENV`) picks a team environment.
 
-`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` takes the same commands and hands any
-other to `hub` (`tico task list` is `hub task list`); in a later release `tico` becomes the teamwork CLI and these
-commands stay on `tico-computer` only.
+`install` links `~/.local/bin/tico-computer` and `~/.local/bin/tico`. `tico` is the teamwork CLI (`tico task list`,
+`tico --help`); `tico install`, `tico restart` and the other computer commands above still reach `tico-computer` from
+a person's terminal, with a note, and are refused inside a bot turn.
 
 `scripts/setup-runner.sh [--env <slug>] <enrollment.json> [workspace]` does the venv, the
 enrollment, the bot service and `doctor` in one go from a file downloaded by **Add computer**, and
@@ -322,7 +322,7 @@ python -m pytest -q          # parallel by default (pytest-xdist); add -n 0 to d
 ```
 
 Browser checks need `npm ci` and a Playwright browser (`npx playwright install chromium`), then
-`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cjs <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
+`npm run test:ui` (the core scripts in `ui/tests/`, three at a time; `--all` runs every script, `node scripts/ui-tests.cts <name>` runs one). A script still running after its time limit (`TICO_UI_SCRIPT_TIMEOUT`, 120 seconds times the load slowdown) is stopped with every process it started, and its failure names the browser call it was waiting on; if any of them could not be stopped, the failure says "cleanup incomplete" and why. The UI's TypeScript files are compiled by
 `npm run build:ui` (into `build/ui/`; ui/README.md), and the UI has no runtime network dependency: `marked` and the
 icon font are vendored in `ui/vendor/` with their licenses.
 
@@ -371,11 +371,11 @@ registry directory (`TICO_REGISTRY_DIR`) and in bot repositories outside this on
 is the product. `templates/environment-registry/` shows the shape of the registry.
 
 Tasks support [tags with metadata, Markdown checklists and templates](docs/using-tico.md#tags-and-release-checklists).
-Open **Settings > Tasks** (under **Task tags**) or use `hub tag list|show|create|update`. Existing `--label` and
-`hub_task_label` calls keep using tag keys.
+Open **Settings > Tasks** (under **Task tags**) or use `tico tag list|show|create|update`. Existing `--label` and
+`tico_task_label` calls keep using tag keys.
 
 ## Task pipelines
 
-Tasks start on General. Movers can add types and named steps in Settings → Tasks, then select a
-type on the board to use its steps as columns. Bots and existing scripts keep using task statuses.
-See [Task types and steps](docs/tasks.md) for the UI, CLI, MCP and API.
+Every task sits in a pipeline, at one stage, and always shows whose turn it is. A new team has one pipeline, General,
+with one stage, To do. A task is open, done or closed; a person is asked through an ask on the task, in Needs you.
+See [Tasks](docs/tasks.md) for the UI, CLI, MCP and API, and [the spec](docs/pipelines-v3.md) for the whole design.

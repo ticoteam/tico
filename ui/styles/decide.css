@@ -1,188 +1,60 @@
-/* ui/styles/decide.css — the Needs you card: one item at a time over the list, ‹ › and the count on top, two big buttons
-   at the bottom; a modal on a wide screen, the whole screen on a phone. The way in on Needs you ("Catch up").
+/* ui/styles/decide.css — the ask screen (ui/app/decide.ts, docs/pipelines-v3.md S3): "2 of 7" and 👍 👎 ‹ › ✕ on top,
+   the thing asked about on the left, the sentence and the buttons on the right; the whole screen on a phone, the
+   buttons at the bottom while the thing scrolls.
    The cascade runs in the order index.html links these files; keep rules in order. */
-.tl-decide{flex:none;display:inline-flex;align-items:center;height:var(--ctl);padding:0 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--muted);font:500 var(--t-base) var(--sans);white-space:nowrap;text-decoration:none;cursor:pointer}
-.tl-decide:hover{text-decoration:none;background:var(--surface2);color:var(--ink)}
-.tl-decide[hidden]{display:none}
-
-.dc-dialog{width:min(480px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
+.dc-dialog{width:min(1040px,calc(100vw - 32px));max-width:none;height:min(760px,calc(100dvh - 48px));max-height:none;padding:0;border:1px solid var(--line);border-radius:16px;background:var(--bg);color:var(--ink);box-shadow:0 20px 60px rgba(0,0,0,.45);overflow:hidden}
 .dc-dialog::backdrop{background:rgba(0,0,0,.5)}
 .dc-dialog[open]{display:flex}
-.decide{flex:1 1 auto;min-height:0;width:100%;padding:0 16px;box-sizing:border-box;display:flex;flex-direction:column;position:relative}
-.dc-head{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;min-height:52px}
-.dc-icon{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink);cursor:pointer}
-.dc-icon .nav-icon{width:24px;height:24px;font-size:24px}
-.dc-x{font-size:18px;line-height:var(--lh-none)}
-.dc-icon:hover:not(:disabled){background:var(--surface2)}
+.decide{flex:1 1 auto;min-height:0;width:100%;display:flex;flex-direction:column;position:relative}
+.dc-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:52px;padding:0 8px 0 16px;border-bottom:1px solid var(--line)}
+.dc-count{margin:0;font-size:var(--t-md);font-weight:600}
+.dc-nav{display:flex;align-items:center;gap:2px}
+.dc-icon{display:grid;place-items:center;width:40px;height:40px;padding:0;border:0;border-radius:8px;background:none;color:var(--ink);font-size:18px;line-height:var(--lh-none);cursor:pointer}
+.dc-icon:hover:not(:disabled),.dc-icon[aria-pressed="true"]{background:var(--surface2)}
 .dc-icon:disabled{color:var(--muted);opacity:.4;cursor:default}
-.dc-head>.dc-icon{justify-self:start;margin-left:-8px}
-.dc-nav{justify-self:end;display:flex;margin-right:-8px}
-.dc-count{margin:0;text-align:center;font-size:var(--t-md);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-snug)}
-
-.dc-stage{flex:1 1 auto;min-height:0;position:relative}
-.dc-card{position:absolute;inset:0;display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden;touch-action:pan-y;
-  transition:transform var(--dur) var(--ease),opacity var(--dur) var(--ease)}
-.dc-card.in{transform:translateY(10px);opacity:0}
-.dc-card.out-left{transform:translateX(-110%) rotate(-4deg);opacity:0}
-.dc-card.out-right{transform:translateX(110%) rotate(4deg);opacity:0}
-.dc-who{display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid var(--line)}
-.dc-who .av{flex:none}
-.dc-who-text{flex:1;min-width:0}
-.dc-who-name{font-weight:600;font-size:var(--t-md);line-height:var(--lh-tight);letter-spacing:var(--track-snug)}
-.dc-origin{font-weight:400;color:var(--muted);font-size:var(--t-sm)}
-.dc-who-sub{color:var(--muted);font-size:var(--t-sm);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.dc-who .pill{flex:none}
-/* a bot's face and name open its chat: the name reads as before until hovered or focused */
-.dc-who-face{flex:none;display:flex;border-radius:50%}
-.dc-who-link{color:inherit;text-decoration:none;border-radius:4px}
-.dc-who-link:hover{text-decoration:underline}
-.dc-who-face:focus-visible,.dc-who-link:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
-.dc-body{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:16px;display:flex;flex-direction:column;gap:12px}
-.dc-q{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:balance;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
-.dc-ctx{margin:0;color:var(--muted);font-size:var(--t-md)}
-/* a task card: the plain ask first, large; the title second, smaller; everything else folded under Details */
-.dc-msg{font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:pretty;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
-.dc-msg>:first-child{margin-top:0}.dc-msg>:last-child{margin-bottom:0}
-.dc-msg p{margin:0 0 .5em}
-.dc-title{margin:0;color:var(--muted);font-size:var(--t-md);font-weight:500;line-height:var(--lh-tight);overflow-wrap:anywhere}
-/* no plain ask yet: who it waits on to explain, and the way to ask */
-.dc-wait{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);color:var(--muted);letter-spacing:var(--track-tight)}
-.dc-blank{margin:0;color:var(--muted);font-size:var(--t-md);line-height:var(--lh-read)}
-.dc-ask{align-self:flex-start}
-.dc-details{color:var(--muted);font-size:var(--t-sm);border-top:1px solid var(--line);padding-top:10px}
-.dc-details summary{width:max-content;cursor:pointer;font-weight:500}
-.dc-details[open]>summary{margin-bottom:10px}
-.dc-details>*+*:not(summary){margin-top:10px}
-.dc-rest{color:var(--ink);font-size:var(--t-base);line-height:var(--lh-read);overflow-wrap:anywhere}
-.dc-rest>:first-child{margin-top:0}.dc-rest>:last-child{margin-bottom:0}
-.dc-latest b{font-weight:600}
-.dc-latest p{margin:4px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:var(--lh-read)}
-
-/* options: two pictures side by side, else numbered tiles */
-.dc-pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.dc-opt,.dc-tile{display:flex;flex-direction:column;align-items:stretch;padding:0;border:1px solid var(--line);border-radius:12px;background:var(--bg);color:var(--ink);font:inherit;text-align:left;overflow:hidden;cursor:pointer;
-  transition:border-color var(--dur-fast) var(--ease),box-shadow var(--dur-fast) var(--ease)}
-.dc-opt:hover,.dc-tile:hover{border-color:var(--muted)}
-.dc-opt.sel{border-color:var(--ink);box-shadow:0 0 0 2px var(--ink)}
-.dc-pic{display:block;min-height:120px;background:var(--surface2)}
-.dc-pic.ready{min-height:0;background:none}
-.dc-pic img{display:block;width:100%;height:auto;max-height:45vh;object-fit:contain;opacity:0;transition:opacity var(--dur) var(--ease)}
-.dc-pic.ready img{opacity:1}
-.dc-glyph{display:grid;place-items:center;color:var(--muted);font:600 var(--t-sm) var(--mono)}
-.dc-l{display:block;padding:8px 10px;font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
-.dc-desc{display:block;padding:0 10px 8px;color:var(--muted);font-size:var(--t-sm)}
-.dc-tiles{display:flex;flex-direction:column;gap:8px}
-.dc-tile .dc-tl{display:flex;align-items:baseline;gap:10px;padding:12px 14px}
-.dc-tile .dc-tl .dc-l{padding:0}
-.dc-tile .dc-tl b{color:var(--muted);font-weight:600}
-.dc-tile .dc-desc{padding:0 14px 12px 34px;margin-top:-6px}
-.dc-descs{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;font-size:var(--t-md)}
-.dc-descs .dc-desc{display:inline;padding:0 0 0 6px}
-
-/* a task's files: pictures large, anything else a chip */
-.dc-files{display:flex;flex-direction:column;gap:8px}
-.dc-img{display:block;position:relative;min-height:120px;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--surface2)}
-.dc-img img{display:block;width:100%;height:auto;max-height:60vh;object-fit:contain;opacity:0;transition:opacity var(--dur) var(--ease)}
-.dc-img.ready{min-height:0}
-.dc-img.ready img{opacity:1}
-.dc-file{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font-size:var(--t-sm);text-decoration:none;min-width:0}
-.dc-file:hover{border-color:var(--muted);text-decoration:none}
-.dc-fname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.decide .approval-payload{margin:0}
-.dc-stale .stale-rows{margin:0}
-
-/* the note, and the send button a task card's comment has */
-.dc-note{display:flex;align-items:flex-end;gap:8px;padding:10px 12px;border-top:1px solid var(--line)}
-.dc-note textarea{flex:1;min-width:0;min-height:38px;max-height:120px;box-sizing:border-box;resize:none;padding:8px 14px;border:1px solid var(--line);border-radius:19px;background:var(--bg);color:var(--ink);font:var(--t-md)/var(--lh) var(--sans)}
-.dc-note textarea:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--focus)}
-.dc-send{flex:none;display:grid;place-items:center;width:38px;height:38px;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer}
-.dc-send svg{width:18px;height:18px}
-.dc-send:disabled{background:var(--surface2);color:var(--muted);opacity:1}
-
-/* the two big buttons */
-.dc-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 0}
-.dc-actions:empty{display:none}
-.dc-actions .dc-rec{grid-column:1/-1}
-.dc-actions button{height:52px;min-width:0;padding:0 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface2);color:var(--ink);font:600 var(--t-lg) var(--sans);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dc-actions button:hover:not(:disabled){border-color:var(--g5)}
-.dc-actions button.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
-.dc-actions a.button{display:flex;align-items:center;justify-content:center;height:52px;min-width:0;padding:0 10px;border-radius:14px;font:600 var(--t-lg) var(--sans);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dc-actions kbd{display:none;margin-left:8px;font:500 var(--t-xs) var(--mono);opacity:.6}
-.dc-nav .rd-help{align-self:center;margin:0 6px 0 0}
-.dc-nav .rd-help-pop{left:auto;right:-4px;bottom:auto;top:calc(100% + 6px);transform:none}
-@media (hover:hover) and (pointer:fine) and (min-width:761px){.dc-actions kbd{display:inline}}
-/* the keys are for a keyboard: no "?" without one */
-@media not ((hover:hover) and (pointer:fine) and (min-width:761px)){.dc-nav .rd-help{display:none}}
-/* a wide screen: the modal as tall as its card, up to the cap; the card's body scrolls past that */
-@media (min-width:761px){
-  .dc-dialog[open]{flex-direction:column;height:fit-content;max-height:min(760px,calc(100dvh - 48px))}
-  .dc-stage{flex:0 1 auto;display:flex;flex-direction:column}
-  .dc-card{position:relative;inset:auto;flex:0 1 auto;min-height:0}
-  .dc-done{position:static;padding:56px 0}
-}
-
-.dc-toast{position:absolute;left:16px;right:16px;bottom:116px;z-index:2;display:flex;align-items:center;gap:14px;width:max-content;max-width:calc(100% - 32px);margin:0 auto;padding:10px 14px;box-sizing:border-box;border-radius:12px;background:var(--ink);color:var(--bg);font-size:var(--t-base);box-shadow:0 6px 24px rgba(0,0,0,.25)}
-.dc-toast[hidden]{display:none}
-.dc-toast span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.dc-toast button{flex:none;padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
-
-.dc-done{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:14px;text-align:center}
-.dc-done h2{margin:0;font-size:var(--t-xl);letter-spacing:var(--track-tight)}
-
+.dc-icon[hidden]{display:none}
+.dc-main{flex:1 1 auto;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px}
+.dc-thing{min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:20px 24px}
+.dc-side{min-height:0;overflow-y:auto;padding:20px;border-left:1px solid var(--line);display:flex;flex-direction:column}
+.dc-side>div{display:flex;flex-direction:column;gap:12px}
+.dc-q{margin:0;font-size:var(--t-xl);font-weight:600;line-height:var(--lh-tight);text-wrap:pretty;overflow-wrap:anywhere;letter-spacing:var(--track-tight)}
+.dc-sub{margin:0;color:var(--muted);font-size:var(--t-sm)}
+.dc-title{margin:0 0 8px;font-size:var(--t-lg);font-weight:600;overflow-wrap:anywhere}
+.dc-line{margin:0;color:var(--muted);display:flex;align-items:center;gap:6px}
+.dc-doc{display:flex;flex-direction:column;gap:12px;overflow-wrap:anywhere}
+.dc-doc pre,.dc-raw{max-width:100%;overflow-x:auto;white-space:pre-wrap}
+.dc-quote{margin:12px 0 0;padding:8px 12px;border-left:3px solid var(--line);color:var(--ink)}
+.dc-changed{margin:0 0 12px;padding:8px 12px;border-radius:8px;background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink));font-weight:600}
+.dc-ref{margin:0;color:var(--muted)}
+.dc-proof{width:100%;height:min(70vh,900px);border:1px solid var(--line);border-radius:6px;background:var(--surface2)}
+.dc-media{max-width:100%;height:auto}
+.dc-addr{margin:0}
+.dc-notes{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
+.dc-side textarea,.dc-side select{width:100%;box-sizing:border-box;font:inherit}
+.dc-side textarea{resize:vertical;min-height:64px}
+.dc-acts,.dc-choices,.dc-more,.dc-chips{display:flex;flex-wrap:wrap;gap:8px}
+.dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
+.dc-more{padding-top:4px}
+.dc-chip{padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:none;color:var(--ink);font:inherit;cursor:pointer}
+.dc-chip[aria-pressed="true"]{border-color:var(--wait-ink,var(--ink));background:var(--wait-bg,var(--surface2));color:var(--wait-ink,var(--ink))}
+.dc-bar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);z-index:2;display:flex;align-items:center;gap:14px;max-width:calc(100% - 32px);padding:10px 14px;border-radius:12px;background:var(--ink);color:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.25)}
+.dc-bar[hidden]{display:none}
+.dc-bar button{padding:0;border:0;background:none;color:inherit;font:600 var(--t-base) var(--sans);text-decoration:underline;cursor:pointer}
+.dc-bar button[hidden]{display:none}
+.decide.dc-empty .dc-main{grid-template-columns:1fr}
+.decide.dc-empty .dc-thing{display:none}
+.decide.dc-empty .dc-side{border:0}
+.dc-done{display:grid;place-content:center;justify-items:center;gap:14px;min-height:240px;text-align:center}
+.dc-done h2{margin:0;font-size:var(--t-xl)}
 @media (max-width:760px){
-  /* the whole screen, over the tab bar */
+  /* the whole screen; the sentence and the buttons stay at the bottom while the thing scrolls */
   .dc-dialog{inset:0;width:100%;height:100dvh;margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
-  .decide{padding:0 12px}
-  .dc-actions{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
-  .dc-toast{bottom:calc(84px + env(safe-area-inset-bottom))}
+  .dc-wide{display:none}
+  .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
+  .dc-thing{padding:16px}
+  .dc-side{max-height:55dvh;border-left:0;border-top:1px solid var(--line);padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
+  .dc-q{font-size:var(--t-lg)}
 }
-@media (prefers-reduced-motion:reduce){.dc-card{transition:none}}
 
-/* the question card (ui/app/question-card.ts), the same in Decide and the task page's Needs you box: several picks
-   are checkboxes, every pick and button has its "what happens" line, the fallback is a small line at the foot */
-.qc-why{color:var(--ink)}
-.qc-picks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
-.qc-pick{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--bg);cursor:pointer}
-.qc-pick:has(input:checked){border-color:var(--ink)}
-.qc-pick input{flex:none;margin:3px 0 0;width:18px;height:18px;accent-color:var(--ink)}
-.qc-pick .dc-pic{flex:none;width:64px;min-height:48px;border-radius:8px;overflow:hidden}
-.qc-pick .dc-pic img{max-height:64px;object-fit:cover}
-.qc-changed{margin:0 0 6px;font-size:var(--t-base)}
-.qc-pl{display:flex;flex-direction:column;gap:2px;min-width:0}
-.qc-l{font-weight:600;font-size:var(--t-md);overflow-wrap:anywhere;letter-spacing:var(--track-snug)}
-.qc-l b{color:var(--muted);font-weight:600}
-.qc-rec{color:var(--ink);font-weight:500;font-size:var(--t-sm)}
-.qc-then{display:block;color:var(--muted);font-size:var(--t-sm);font-weight:400;overflow-wrap:anywhere}
-.dc-tile .qc-then{padding:0 14px 12px 34px;margin-top:-6px}
-.dc-opt .qc-then{padding:0 10px 8px}
-.dc-actions .qc-btn,.qc-actions .qc-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;height:auto;min-height:52px;padding:6px 10px;white-space:normal;text-align:center}
-.qc-btn .qc-then{color:inherit;opacity:.8;font-size:var(--t-xs);line-height:var(--lh-tight)}
-.qc-fallback{margin:0;color:var(--muted);font-size:var(--t-xs);font-weight:400}
-/* a review's files (question-card.js): pictures large, two to a row, one alone the full width */
-.qc-review .vcards{margin:0}
-.qc-review .vcard[data-kind="image"],.qc-rpick .vcard[data-kind="image"]{--vcard-cap:min(45vh,420px);width:calc((100% - 10px) / 2)}
-.qc-review .vcard[data-kind="image"]:only-child,.qc-rpick .vcard[data-kind="image"]{width:100%}
-.qc-rpicks{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:10px}
-.qc-rpick{display:flex;flex-direction:column;gap:8px;min-width:0}
-.qc-rpick .vcards{margin:0}
-.qc-rpick .qc-btn,.qc-changes{display:flex;align-items:center;justify-content:center;gap:6px;min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
-.qc-rpick .qc-btn:hover,.qc-changes:hover{border-color:var(--muted)}
-.qc-rpick .qc-btn b{color:var(--muted)}
-.qc-changes{width:100%}
-.qc-rchips{display:flex;flex-wrap:wrap;gap:6px}
-.qc-spend{margin:0;font-size:var(--t-sm);color:var(--muted)}
-.qcard{display:flex;flex-direction:column;gap:10px}
-.qcard .dc-q{font-size:var(--t-lg)}
-.qc-head{font-size:var(--t-sm)}
-.qc-sub{color:var(--muted)}
-.qc-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.qc-actions:empty{display:none}
-.qc-actions .qc-btn{border:1px solid var(--line);border-radius:12px;background:var(--surface2);color:var(--ink);font:600 var(--t-md) var(--sans);cursor:pointer}
-.qc-actions .qc-btn.primary{background:var(--accent);border-color:transparent;color:var(--accent-ink)}
-.qc-actions .qc-btn:disabled{opacity:.5;cursor:default}
-.qc-note{width:100%;box-sizing:border-box;resize:vertical;font:inherit}
-.qc-foot{display:flex;flex-direction:column;gap:8px}
 
-/* Memory proposals are plain text; long diff lines scroll within their card. */
-.dc-body>pre,.dc-body details>pre{max-width:100%;overflow-x:auto;flex-shrink:0}
-.dc-body code{overflow-wrap:anywhere}
+

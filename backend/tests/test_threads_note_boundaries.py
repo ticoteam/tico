@@ -12,39 +12,13 @@ from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each 
 from backend import threads
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.test_api import api, assign, headers, post, ready, runner  # noqa: F401
-
-
-def bot_runner(api, bot="cpo"):
-    r = runner(api)
-    assign(api, r, bot)
-    ready(api, r, [bot])
-    return r
-
-
-def claim(api, r, bot):
-    return post(api, "jobs/claim", {"next_run": True, "bot": bot}, token=r["token"])["attempt"]
+from backend.tests.helpers.api import assign, headers, post, ready
+from backend.tests.helpers.threads_note_boundaries import bot_runner, bot_says, claim, drain, finish, new_thread, say
 
 
 def rows(api, sql, *args):
     with api.app.state.store.read() as c:
         return [dict(r) for r in c.execute(sql, args).fetchall()]
-
-
-def new_thread(api, audience="members", members=("bot:cpo", "bot:ops"), title="Board prep", token="ana-test"):
-    payload = {"title": title, "audience": audience}
-    if audience == "members":
-        payload["members"] = list(members)
-    answer = api.post("/api/v2/threads", json=payload, headers=headers(token))
-    assert answer.status_code == 200, answer.text
-    return answer.json()["id"]
-
-
-def say(api, thread_id, text, token="ana-test", parent=None):
-    payload = {"text": text, **({"parent_message_id": parent} if parent else {})}
-    answer = api.post(f"/api/v2/threads/{thread_id}/messages", json=payload, headers=headers(token))
-    assert answer.status_code == 200, answer.text
-    return answer.json()
 
 
 @pytest.fixture(autouse=True)
@@ -60,20 +34,6 @@ def bot_mentions_wait_as_notes(monkeypatch):
         return None if found == "mention" else found
 
     monkeypatch.setattr(wake_rules, "always_wakes", floor)
-
-
-def bot_says(api, thread_id, text, bot="bot:ops", **kwargs):
-    """A bot's mention of another bot, held as a note (bot_mentions_wait_as_notes), so it starts no run."""
-    with api.app.state.store.transaction() as c:
-        return threads.post(c, bot, thread_id, text, **kwargs)
-
-
-def finish(api, r, attempt, text="Done"):
-    aid = attempt["id"]
-    post(api, f"attempts/{aid}/started", {"thread_id": f"t-{aid}"}, token=r["token"])
-    return post(
-        api, f"attempts/{aid}/complete", {"outcome": "completed", "text": text, "last_seq": 0}, token=r["token"]
-    )
 
 
 def job_count(api, bot="cpo"):
@@ -92,25 +52,6 @@ def wakes(api, bot="cpo"):
 
 def waiting(api, bot="bot:cpo"):
     return rows(api, f"SELECT n.* FROM notes n WHERE n.to_actor=? AND {H.NOTE_WAITING_SQL} ORDER BY n.created_at", bot)
-
-
-def drain(api, r, bot="cpo", most=12):
-    """Every run the runner would get, in order: each one's root and the words of the notes it carried."""
-    runs = []
-    while True:
-        attempt = claim(api, r, bot)
-        if not attempt:
-            return runs
-        runs.append(
-            {
-                "root": attempt["conversation"].get("root_id"),
-                "class": attempt["conversation"].get("audience_class"),
-                "notes": [n["text"] for n in attempt.get("notes") or []],
-                "prompt": json.dumps(attempt),
-            }
-        )
-        finish(api, r, attempt)
-        assert len(runs) < most, "a wake loop"
 
 
 # ----------------------------------------------------------------------------- a private note and a public session
@@ -331,9 +272,17 @@ def test_the_wake_for_a_note_narrower_than_its_public_thread_runs_in_a_private_s
         new_thread(api, audience="company", title="Launch"),
         new_thread(api, audience="company", title="Handbook"),
     )
-    tid = task_about(api)
+    # The note is about a task cpo has the turn on: a bot's news about a task wakes only the bot whose turn it is
+    # (task_wakes.may_start). The task's own turn is set aside so the note's wake is the one left.
+    with api.app.state.store.transaction() as c:
+        tid = H.task_create(c, "bot:cpo", "Launch plan", "Plan it.", "bot:cpo", lint=False)["id"]
+        c.execute(
+            "UPDATE jobs SET state='canceled' WHERE state='queued' AND message_id IN "
+            "(SELECT id FROM messages WHERE wake_key LIKE ? || ':%')",
+            (tid,),
+        )
     bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
-    turn_task_private(api, tid)  # cpo asked for the task, so it still reads the message
+    turn_task_private(api, tid)  # cpo owns the task, so it still reads the message
     say(api, other, "@cpo work here")
     public = claim(api, r, "cpo")
     assert public["conversation"]["audience_class"] == "public" and public["notes"] == []
@@ -404,7 +353,7 @@ def test_a_private_runs_reply_is_narrower_than_its_company_thread(api):
     reply = rows(api, "SELECT id FROM messages WHERE body='Our reply'")[0]["id"]
     tid = task_about(api)
     with api.app.state.store.transaction() as c:  # the run drew on a task that is private now
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (first["id"], tid))
+        c.execute("UPDATE attempts SET task_id=? WHERE id=?", (tid, first["id"]))
     turn_task_private(api, tid)
     assert session_class(api, company, reply) == "private"
 

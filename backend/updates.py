@@ -49,7 +49,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from . import maintenance_limits, run_triggers
+from . import ci_runs, maintenance_limits, run_triggers
 from .store import H, Problem
 
 ZONE = ZoneInfo("America/Los_Angeles")
@@ -696,15 +696,10 @@ def request_text(
         (actor, since, until),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (actor,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id LIKE 'human:%' "
-        "AND status IN ('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
-        (actor,),
-    ).fetchall()
+    asked = waiting_on_others(c, actor, shared, people_only=True)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN ('done','dropped')) "
         "ORDER BY rank LIMIT 5",
@@ -714,13 +709,13 @@ def request_text(
     if week:
         tracked = kpi_snapshot(c, bot)
         ask = [
-            f"Time for your week in review ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create --slides-file`), then carry on.",
+            f"Time for your week in review ({day}). Post it with tico_update_create{post_day} "
+            "(or `tico update create --slides-file`), then carry on.",
             "",
             SLIDES_SHAPE,
             "Say it plainly: these are skimmed by swiping, so a slide is a few short lines, never a wall of text. "
             "If nothing real has happened this week (nothing finished, started, decided, or newly waiting or blocked; "
-            "rechecking that nothing changed does not count), don't post: call hub_update_create with skip instead. "
+            "rechecking that nothing changed does not count), don't post: call tico_update_create with skip instead. "
             "If you have open tasks, still pick the most useful one and start it in this turn. "
             "A review that breaks these rules is refused.",
         ]
@@ -729,9 +724,9 @@ def request_text(
             f"Finished {'that week' if redo else 'this week'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
             "Your goal KPIs (Tico puts these on the KPI slide):",
@@ -746,8 +741,8 @@ def request_text(
         ]
     else:
         ask = [
-            f"Time for your daily update ({day}). Post it with hub_update_create{post_day} "
-            "(or `hub update create`), in plain words, then carry on.",
+            f"Time for your daily update ({day}). Post it with tico_update_create{post_day} "
+            "(or `tico update create`), in plain words, then carry on.",
             "",
             "Write three bullets in plain English and nothing else: no title, no headings or sections, "
             "no task ids or internal codes. Each bullet is one line: what you did, what you do next, or what "
@@ -755,7 +750,7 @@ def request_text(
             f"suggestion you acted on, if any. At most {LIMITS[kind]['bullet']} words a bullet and {LIMITS[kind]['words']} "
             "in all, not counting those two.",
             "If nothing real has happened since your last update (nothing finished, started, decided, or newly waiting "
-            "or blocked; rechecking that nothing changed does not count), don't post: call hub_update_create with skip "
+            "or blocked; rechecking that nothing changed does not count), don't post: call tico_update_create with skip "
             "instead. If you have open tasks, still pick the most useful one and start it in this turn. An update that "
             "breaks these rules is refused.",
         ]
@@ -764,9 +759,9 @@ def request_text(
             f"Finished {'that day' if redo else 'since your last update'}:",
             line(done, lambda r: r["title"]),
             "Open:",
-            line(open_, lambda r: f"{r['title']} ({r['status']})"),
+            line(open_, lambda r: r["title"]),
             "Waiting on a person:",
-            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['owner_id'])})"),
+            line(asked, lambda r: f"{r['title']} ({H.actor_name(c, r['who'])})"),
             "Your goals:",
             line(goals, lambda r: r["title"]),
         ]
@@ -797,6 +792,9 @@ def request_text(
             facts.append("No update from: " + ", ".join(_label(c, a) for a in missing))
         if quiet:
             facts.append("Nothing new from: " + ", ".join(_label(c, a) for a in quiet))
+        # The company's CI build time today, one line (backend/ci_runs.py digest_line), for the manager to report on.
+        if ci_line := ci_runs.digest_line(c):
+            facts.append(ci_line)
     if redo:
         old = c.execute("SELECT body FROM updates WHERE bot=? AND kind=? AND day=?", (bot, kind, day)).fetchone()
         ask.insert(
@@ -842,6 +840,39 @@ def shared_tasks_sql(hidden, prefix=""):
 
         rule += " AND {0}owner_id NOT IN {1} AND {0}requester_id NOT IN {1}".format(prefix, A.qlist(hidden))
     return rule
+
+
+# How an OK's answer reads in a draft; a question's answer is its own words.
+_ANSWER_WORDS = {"ok": "OK", "no": "Sent back", "again": "Asked to look again"}
+WAITING_MAX = 8  # tasks a request or a draft lists as waiting on someone else
+WAITING_SCAN = 50  # newest open tasks whose waits are read for that list
+
+
+def waiting_on_others(c, actor, shared, *, people_only=False):
+    """The shared open tasks `actor` owns or asked for that wait on someone else, newest first: [{title, who}], `who`
+    being whom the first such wait names (backend/waiting_on.py; one read for all the tasks). `people_only` keeps only
+    waits on a person (an ask, a task that fell to one); otherwise a bot with the turn counts too, paused or not."""
+    rows = c.execute(
+        f"SELECT id, title FROM tasks WHERE (owner_id=? OR requester_id=?) AND {shared} AND status='open' "
+        "ORDER BY updated_at DESC LIMIT ?",
+        (actor, actor, WAITING_SCAN),
+    ).fetchall()
+    waits = H.task_waits(c, [r["id"] for r in rows])
+    out = []
+    for row in rows:
+        who = next(
+            (
+                w.who
+                for w in waits.get(row["id"]) or []
+                if w.who
+                and w.who != actor
+                and (w.state == "person" or (not people_only and w.state in ("bot", "paused")))
+            ),
+            None,
+        )
+        if who:
+            out.append({"title": row["title"], "who": who})
+    return out[:WAITING_MAX]
 
 
 def _shared_message(c, message, shared):
@@ -891,28 +922,40 @@ def draft_facts(c, author, kind, day):
         (author, since),
     ).fetchall()
     open_ = c.execute(
-        f"SELECT title, status FROM tasks WHERE owner_id=? AND {shared} AND status IN "
-        "('open','doing','waiting','review','ready') ORDER BY updated_at DESC LIMIT 12",
+        f"SELECT title FROM tasks WHERE owner_id=? AND {shared} AND status='open' ORDER BY updated_at DESC LIMIT 12",
         (author,),
     ).fetchall()
-    asked = c.execute(
-        f"SELECT title, owner_id FROM tasks WHERE requester_id=? AND {shared} AND owner_id<>? AND status IN "
-        "('open','doing','waiting') ORDER BY updated_at DESC LIMIT 8",
-        (author, author),
-    ).fetchall()
+    asked = waiting_on_others(c, author, shared)
     goals = c.execute(
         "SELECT title FROM goals WHERE owner_id=? AND (status IS NULL OR status NOT IN "
         "('done','dropped')) ORDER BY rank LIMIT 5",
         (author,),
     ).fetchall()
-    # Their decisions in Needs you: what they moved a shared task to (approved, declined, done, closed)...
+    # Their decisions: the stage they moved a shared task to (Done, Closed, or another stage), their own move or the
+    # engine's right after they said the stage's work is done (H.task_done answers "owner says done", then it moves)...
     decided = c.execute(
-        f"SELECT t.title, e.new FROM history_events e JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id "
-        f"WHERE e.actor_id=? AND e.kind='status' AND e.old IS NOT NULL AND e.created_at>=? AND {shared_tasks_sql(hidden, 't.')} "
-        "ORDER BY e.created_at DESC LIMIT ?",
-        (author, since, DRAFT_LIST_MAX),
+        "SELECT t.title, coalesce(s.name, e.new) AS new FROM history_events e "
+        "JOIN tasks t ON e.subject_type='task' AND t.id=e.subject_id LEFT JOIN stages s ON s.id=e.new "
+        "WHERE e.kind='move' AND e.old IS NOT NULL AND e.created_at>=? AND (e.actor_id=? OR e.actor_id=? AND "
+        "(SELECT a.actor_id || ' ' || a.kind || ' ' || coalesce(a.new, '') FROM history_events a "
+        "WHERE a.subject_type='task' AND a.subject_id=e.subject_id AND a.rowid<e.rowid ORDER BY a.rowid DESC LIMIT 1)"
+        f"=? || ' answer done') AND {shared_tasks_sql(hidden, 't.')} ORDER BY e.created_at DESC LIMIT ?",
+        (since, author, H.KEEPER, author, DRAFT_LIST_MAX),
     ).fetchall()
-    # ...and their answers to asks, then their comments; a message counts only when every task it names is shared.
+    # ...their answers to asks on shared tasks (the engine's answers, the newest of each ask and not taken back)...
+    answers = [
+        (r["title"], f"{_ANSWER_WORDS.get(r['answer'], r['answer'])}{': ' + r['notes'] if r['notes'] else ''}")
+        for r in c.execute(
+            "SELECT t.title, a.answer, a.notes FROM answers a JOIN visits v ON v.id=a.visit_id "
+            "JOIN tasks t ON t.id=v.task_id JOIN requirements q ON q.id=a.requirement_id "
+            "WHERE a.by_id=? AND a.undone_at IS NULL AND a.created_at>=? AND q.kind IN ('ok','answer') "
+            "AND a.answer NOT IN ('pushed_past','give') AND NOT EXISTS (SELECT 1 FROM answers later "
+            "WHERE later.visit_id=a.visit_id AND later.requirement_id=a.requirement_id AND later.undone_at IS NULL "
+            f"AND later.rowid>a.rowid) AND {shared_tasks_sql(hidden, 't.')} ORDER BY a.created_at DESC LIMIT ?",
+            (author, since, DRAFT_LIST_MAX),
+        ).fetchall()
+    ]
+    # ...then their comments; a message counts only when every task it names is shared.
     said = lambda where: [
         (title, m["body"])
         for m in c.execute(
@@ -923,7 +966,6 @@ def draft_facts(c, author, kind, day):
         ).fetchall()
         if (title := _shared_message(c, m, shared))
     ][:DRAFT_LIST_MAX]
-    answers = said("kind='answer'")
     comments = said("kind IN ('say','ask') AND ref_task_id IS NOT NULL AND json_extract(refs,'$.comment')")
     # The shared meetings they owned or were in (media.shared_meeting; sql.py has the same rule): live,
     # not private, not deleted, with a summary.
@@ -951,13 +993,11 @@ def draft_facts(c, author, kind, day):
         f"Finished {'this week' if week else 'since yesterday'}:",
         line(done, lambda r: r["title"]),
         "Open:",
-        line(open_, lambda r: f"{r['title']} ({r['status']})"),
+        line(open_, lambda r: r["title"]),
         "Waiting on someone else:",
         line(
             asked,
-            lambda r: (
-                f"{r['title']} ({_label(c, r['owner_id'] if is_person(r['owner_id']) else H.actor_id(r['owner_id']))})"
-            ),
+            lambda r: f"{r['title']} ({_label(c, r['who'] if is_person(r['who']) else H.actor_id(r['who']))})",
         ),
         "Their goals:",
         line(goals, lambda r: r["title"]),
@@ -1011,7 +1051,6 @@ def writer_for(c, settings, store=None, vault=None):
         return None
     from clients import gateway as G, judge as J
     from . import gateway_connection, models_preset, providers
-    from .judge import fallback_model
 
     record = providers.load(c, settings)
     if store is not None and models_preset.spends_gateway(record) and gateway_connection.connected(c, settings):
@@ -1028,8 +1067,30 @@ def writer_for(c, settings, store=None, vault=None):
             return secret if G.chat_base(now_base) == base else ""  # moved since: the key is not this address's
 
         return J.gateway_writer(key_of, base, models_preset.pick())
-    found = fallback_model(record)
+    found = own_model(record)
     return J.llm_writer(*found) if found else None
+
+
+def own_model(record, env=None):
+    """(transport, key, model) for a draft on the company's own provider, or None when no enabled provider has a server
+    key. The default model's provider goes first; the rest follow in the order the owner enabled them. A provider the
+    server cannot call (Cursor), or whose key it does not hold, is skipped. Models pi runs through OpenRouter are asked
+    through OpenRouter with OpenRouter's id, as the runner does. Drafts only: decisions are Jev's (backend/judge.py)."""
+    import os
+
+    from clients import judge as J, openrouter
+    from . import providers
+
+    env = os.environ if env is None else env
+    default = providers.runtime_provider(record["runtime"])
+    for provider in dict.fromkeys(([default] if default else []) + record["enabled"]):
+        runtime = (providers.PROVIDER_BY_ID.get(provider) or {}).get("runtime")
+        via = provider if provider in J.LLM_KEYS else "openrouter" if runtime == providers.CATCH_ALL_RUNTIME else None
+        key = (env.get(J.LLM_KEYS[via]) or "").strip() if via else ""
+        model = record["model"] if provider == default else (providers.recommended(provider) or {}).get("id")
+        if key and model:
+            return via, key, openrouter.model_id(model) if via == "openrouter" else model
+    return None
 
 
 def drafter(c, settings, author, assistant):
@@ -1335,7 +1396,7 @@ def _words(text):
 def lint_slides(slides):
     """What is wrong with a week's slides, or None."""
     if not isinstance(slides, dict):
-        return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with hub_update_create."
+        return "Not a week in review yet: it has no slides. " + SLIDES_SHAPE + " Post again with tico_update_create."
     missing, style = slide_problems(slides)
     return _slides_message(missing + style)
 
@@ -1344,7 +1405,11 @@ def _slides_message(problems):
     if not problems:
         return None
     return (
-        "Not a week in review yet: " + "; ".join(problems) + ". " + SLIDES_SHAPE + " Post again with hub_update_create."
+        "Not a week in review yet: "
+        + "; ".join(problems)
+        + ". "
+        + SLIDES_SHAPE
+        + " Post again with tico_update_create."
     )
 
 
@@ -1503,7 +1568,7 @@ def lint(body, kind, version=FORMAT_VERSION):
         + "; ".join(problems)
         + ". "
         + SHAPE
-        + " Rewrite it and post again with hub_update_create."
+        + " Rewrite it and post again with tico_update_create."
     )
 
 
@@ -1695,7 +1760,7 @@ def _style(problem):
     if H.STYLE_LINT == "refuse":
         raise H.Refused("lint", problem, "normal")
     problem = re.sub(r"^Not (?:an update|a week in review) yet: ", "Posted. Next time fix this: ", problem)
-    return re.sub(r" (?:Rewrite it and post|Post) again with hub_update_create\.$", "", problem)
+    return re.sub(r" (?:Rewrite it and post|Post) again with tico_update_create\.$", "", problem)
 
 
 def purge_rejected(c):

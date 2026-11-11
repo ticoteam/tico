@@ -1,4 +1,4 @@
-"""`hub db`: read-only company-database access, its grants, audit and private catalogs.
+"""`tico db`: read-only company-database access, its grants, audit and private catalogs.
 
 Enforcement is tested against a real SQLite file, and against a throwaway PostgreSQL container
 when Docker can run one (skipped otherwise). The statement scanner and binder are tested for
@@ -13,11 +13,11 @@ import types
 import uuid
 
 import pytest
-import yaml
 
-from backend.tests.test_api import api, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import post, setup_attempt  # noqa: F401
 from clients import dbquery as D
 from clients.tico import APIError
+from backend.tests.helpers.databases import FakeHub, workspace
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -39,40 +39,9 @@ def sqlite_db(tmp_path, **kw):
     return D.Database("acme", "sqlite", f"sqlite:///{make_sqlite(tmp_path)}", **kw)
 
 
-class FakeHub:
-    """The two hub calls `hub db` makes: who am I, and record this query."""
-
-    def __init__(self, actor="bot:ops", catalog=None, fail_audit=False):
-        self.actor, self.catalog, self.fail_audit, self.audits = actor, catalog or {}, fail_audit, []
-
-    def get(self, path, **query):
-        if path == "me":
-            return {"actor": self.actor}
-        name = path.split("/")[1]
-        query_id = query.get("id")
-        if (name, query_id) not in self.catalog:
-            raise APIError("not_found", "No query", 404)
-        return self.catalog[(name, query_id)]
-
-    def post(self, path, body, key=None):
-        assert path == "databases/audit"
-        if self.fail_audit:
-            raise APIError("unavailable", "hub down", 503, retryable=True)
-        self.audits.append(body)
-        return {"ok": True}
-
-
 def args(target, sql=None, **kw):
     base = dict(target=target, sql=sql, query_id=None, param=[], json=False, csv=False, max_rows=None, timeout=None)
     return types.SimpleNamespace(**{**base, **kw})
-
-
-def workspace(tmp_path, slug="ops", entries=None):
-    """A workspace with emp-<slug>/employee.yaml declaring `entries` under access."""
-    repo = tmp_path / "ws" / f"emp-{slug}"
-    repo.mkdir(parents=True, exist_ok=True)
-    (repo / "employee.yaml").write_text(yaml.safe_dump({"name": slug, "access": entries or []}))
-    return {"HUB_WORKSPACE": str(tmp_path / "ws")}
 
 
 GRANT = {"service": "sqlite", "database": "acme", "can": ["read"], "identity": "file"}

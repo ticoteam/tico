@@ -11,36 +11,14 @@ import time_machine
 
 from backend import automations, mailbox_access
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_automation_api import patch
-from backend.tests.test_automation_turns import draft_then_tell, finish
-
-EVENT = {"type": "event", "name": "x.y"}
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401
+from backend.tests.helpers.automation_api import patch
+from backend.tests.helpers.automation_turns import draft_then_tell, finish
+from backend.tests.helpers.automation_runs import EVENT, FIND, make, queued, run_row, sql
 
 
 class Stop(BaseException):
     """The server stopping mid-run: nothing in the hub catches it."""
-
-
-def make(api, steps, trigger=EVENT, owner="person:ana", **extra):
-    return post(api, "automations", {"name": "Test", "owner": owner, "trigger": trigger, "steps": steps, **extra})["id"]
-
-
-def queued(api, aid, payload=None):
-    with api.app.state.store.transaction() as c:
-        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
-        return automations.queue(c, row, payload or {}, "test")
-
-
-def run_row(api, rid):
-    with api.app.state.store.read() as c:
-        row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "state": json.loads(row["saved_state"] or "{}")}
-
-
-def sql(api, query, args=()):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute(query, args)]
 
 
 def hub(api):
@@ -343,6 +321,43 @@ def test_a_wake_that_comes_during_a_hold_ends_held_and_resumes_from_its_save_on_
     assert done["status"] == "ok" and [(s["id"], s["status"]) for s in done["state"]["steps"]] == [("tell", "ok")]
 
 
+def test_a_recovered_turn_answers_its_run_which_runs_its_next_step_and_is_charged_once(api):
+    """A bot's turn the run waits on loses its job. Never-stuck writes the wake again with the run's references, so
+    the turn on it answers the run: the next step runs and the turn's cost is charged once."""
+    from backend import never_stuck
+
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    aid = post(api, "automations", draft_then_tell())["id"]
+    rid = queued(api, aid)
+    hub(api).drain()
+    assert run_row(api, rid)["status"] == "waiting"
+    store = api.app.state.store
+    with store.transaction() as c:
+        lost = c.execute("SELECT j.id, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'")
+        lost = [(row[0], json.loads(row[1])) for row in lost.fetchall()]
+        assert len(lost) == 1 and lost[0][1]["automation_run"] == rid and lost[0][1]["automation_step"] == "draft"
+        c.execute("DELETE FROM jobs WHERE id=?", (lost[0][0],))
+    with store.transaction() as c:
+        assert never_stuck.check(c).get("woken") == 1
+        again = c.execute(
+            "SELECT m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"
+        ).fetchall()
+    assert len(again) == 1
+    refs = json.loads(again[0][0])
+    kept = ("automation_run", "automation_step", "automation_key", "automation", "trigger", "trigger_source")
+    assert {k: refs.get(k) for k in kept} == {k: lost[0][1].get(k) for k in kept}
+    finish(api, r, "A recovered draft")
+    hub(api).drain()
+    run = run_row(api, rid)
+    priced = sql(api, "SELECT est_cost_usd FROM attempts")[0]["est_cost_usd"]
+    assert run["status"] == "ok", run["state"]
+    assert [s["id"] for s in run["state"]["steps"]] == ["draft", "tell"]
+    assert run["state"]["steps"][0]["outputs"]["text"] == "A recovered draft"
+    assert priced > 0 and run["cost"] == pytest.approx(priced)
+
+
 def test_a_run_cut_off_during_a_hold_resumes_held_not_queued(api):
     aid = webhook_auto(api)
     rid = queued(api, aid)
@@ -525,7 +540,7 @@ def test_a_manual_run_while_held_is_refused_and_queues_nothing(api):
 
 
 def test_only_someone_who_may_change_it_releases_or_drops_its_held_runs(api):
-    from backend.tests.test_automation_api import as_bot
+    from backend.tests.helpers.automation_api import as_bot
 
     aid = webhook_auto(api)
     slow_drain(api, aid)
@@ -671,10 +686,6 @@ def test_an_inherited_sample_mailbox_still_requires_the_owners_access(api):
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1
 
 
-# ---------------------------------------------------------------------------------------------- the find watermark
-FIND = {"id": "look", "type": "find", "source": "tasks", "query": "Acme batch", "limit": 1}
-
-
 def test_items_with_the_same_time_are_all_found_one_page_at_a_time(api):
     aid = make(api, [FIND])
     ids = [post(api, "tasks", {"owner": "ops", "title": f"Acme batch {n}", "body": "x"})["id"] for n in range(3)]
@@ -797,7 +808,7 @@ def test_a_turn_moving_its_own_task_does_not_start_its_automation_again(api):
     aid = make(
         api,
         [{"id": "work", "type": "bot_turn", "bot": "ops", "prompt": "Handle it"}],
-        trigger={"type": "event", "name": "task.state_changed"},
+        trigger={"type": "event", "name": "task.step_changed"},
     )
     post(api, f"automations/{aid}/run", {})
     finish(api, r)  # the turn ends, and the task its run started changes state
@@ -880,7 +891,7 @@ def test_a_schedule_absorbs_an_occurrence_while_its_last_task_is_open(api):
     turn_tasks = sql(api, "SELECT id FROM tasks WHERE owner_id='bot:ops' AND title='Test'")
     assert len(turn_tasks) == 1
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='closed' WHERE id=?", (turn_tasks[0]["id"],))
+        H.task_close(c, "human:ana", turn_tasks[0]["id"], "Finished with")
     assert queued(api, aid)
 
 

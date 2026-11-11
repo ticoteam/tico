@@ -13,16 +13,15 @@ from backend import (
     org_turns,
     providers,
     start_places,
-    task_relations as TR,
     thread_bot_status,
     usage_limits,
     views,
 )
 from backend.store import H, encode
-from backend.tests.test_api import api, assign, claim, get, ready, runner  # noqa: F401
-from backend.tests.test_cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
-from backend.tests.test_start_places import memory
-from backend.tests.test_thread_halfway import bot_status, new_thread, say
+from backend.tests.helpers.api import assign, claim, get, ready, runner  # noqa: F401
+from backend.tests.helpers.cloud_machines import cloud, enrolled, stopped_when_idle, work  # noqa: F401
+from backend.tests.helpers.start_places import memory
+from backend.tests.helpers.thread_halfway import bot_status, new_thread, say
 
 
 def asleep_bot(cloud):
@@ -38,18 +37,18 @@ def asleep_bot(cloud):
 
 
 def waiting_task(cloud):
+    """A task of ops's set aside by a person (a snooze, with no end), and Tico's notice about it queued 4 hours ago:
+    the claim holds it as `task_wait` until the snooze ends (docs/pipelines-v3.md, rule 7)."""
     with cloud.store.transaction() as c:
-        task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False)
-        # Waiting on Ana: a question task for her under it holds it (derived).
-        H.task_update(
-            c,
-            'bot:ops',
-            task['id'],
-            status='waiting',
-            waiting_on='human:ana',
-            note="Approve the plan? I'll start after.",
+        task = H.task_create(c, 'human:ana', 'Wait for a decision', '', 'bot:ops', private=False, lint=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")  # its first wake ran
+        notice = H._wake(c, H.task(c, task['id']), 'bot:ops', 'A related task moved.', {'wake': 'update'})
+        H.task_snooze(c, 'human:ana', task['id'], "Approve the plan first.")
+        # A job that exists anyway, as a deferred delivery's deadline does: the snooze took back the engine's wakes.
+        c.execute(
+            "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
+            (H.shift(H.now(), hours=-4), notice['id']),
         )
-        c.execute("UPDATE jobs SET created_at=? WHERE bot_id='ops' AND state='queued'", (H.shift(H.now(), hours=-4),))
     return task
 
 
@@ -67,8 +66,7 @@ def test_health_names_the_task_wait_without_calling_a_sleeping_bot_stuck(cloud):
     assert 'Starting' not in queue['summary'] and not body['stuck']
     assert cloud.tick(10) == []
     with cloud.store.transaction() as c:
-        [card] = TR.child_ids(c, task['id'])
-        H.task_update(c, 'human:ana', card, status='done', note='Yes.')  # answered: the task opens again
+        H.task_unsnooze(c, 'human:ana', task['id'], 'Approved.')  # the snooze ends: its work may start
     assert cloud.tick(10) == ['start']
     body = get(cloud.api, 'health')
     queue = next(row for row in body['checks'] if row['id'] == 'queue')
@@ -172,14 +170,14 @@ def test_a_sleeping_bots_hold_does_not_hide_its_signed_out_check(cloud, company_
         ('company_limit', (None, 'check_model'), 'check_model'),
         ('company_limit', ('check_model', None), 'check_model'),
         ('task_wait', ('task_wait', None, 'check_model'), 'check_model'),
-        ('company_limit', (None, 'task_next_run', 'uncertain'), 'uncertain'),
+        ('company_limit', (None, 'uncertain'), 'uncertain'),
         ('task_wait', ('task_wait', None, 'private_update'), 'private_update'),
         ('company_limit', (*health.QUEUE_WAITS, None, 'unreadable'), 'unreadable'),
         ('company_limit', (None, 'check_model', 'uncertain'), 'check_model'),
         ('company_limit', ('uncertain', None, 'check_model'), 'uncertain'),
         ('company_limit', (None,), 'company_limit'),
         ('company_limit', (None, 'task_wait'), 'company_limit'),
-        ('task_wait', ('task_next_run', None, 'task_wait'), 'task_wait'),
+        ('task_wait', (None, 'task_wait'), 'task_wait'),
         ('uncertain', (None, 'task_wait'), 'uncertain'),
     ],
 )
@@ -267,7 +265,7 @@ def test_a_young_claimable_job_is_not_aged_by_an_old_task_wait(cloud, readiness)
     assert next(row for row in body['checks'] if row['id'] == 'queue')['status'] == 'ok'
     assert not body['stuck']
     row = next(row for row in get(cloud.api, 'computers')['computers'] if row['id'] == computer['runner_id'])
-    assert any('person' in w['reason'] and w['count'] == 1 for w in row['turn_counts']['waits'])
+    assert any('snooze' in w['reason'] and w['count'] == 1 for w in row['turn_counts']['waits'])
     with cloud.store.transaction() as c:
         c.execute(
             'UPDATE jobs SET created_at=? WHERE message_id=?',
@@ -348,7 +346,7 @@ def test_resting_computer_splits_job_waits_without_a_stale_sample_label(cloud):
         row = next(row for row in get(cloud.api, path)[key] if row['id'] == rid)
         waits = row['turn_counts']['waits']
         assert sum(w['count'] for w in waits) == 2
-        assert any('person' in w['reason'] and w['count'] == 1 for w in waits)
+        assert any('snooze' in w['reason'] and w['count'] == 1 for w in waits)
         assert any(w['reason'] == CM.ASLEEP and w['count'] == 1 for w in waits)
         assert start_places.NOT_REPORTING not in row['turn_summary']
     assert not any(row['id'] == 'runner_load:' + rid for row in get(cloud.api, 'health')['checks'])

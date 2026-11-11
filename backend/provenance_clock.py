@@ -14,7 +14,7 @@ SOURCES = {
     'messages': ('id', 'conversation_id', 'refs', 'in_reply_to', 'sender_id', 'recipient_id'),
     'conversations': ('id', 'task_id', 'room_key'),
     'live_meeting_turns': ('id', 'meeting_id', 'bot'),
-    'tasks': ('id', 'carried_by'),
+    'tasks': ('id',),
     'events': ('action', 'target', 'detail'),
 }
 

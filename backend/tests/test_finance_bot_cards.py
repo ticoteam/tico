@@ -20,8 +20,8 @@ from backend.finance.core import validate as V
 from backend.finance.core.org import SYSTEM
 from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
-from backend.tests.test_api import api, headers  # noqa: F401
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.api import headers  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -38,6 +38,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
 )
 from clients import hubtools
 from clients.tico import APIError
+from backend.tests.helpers.finance_oks import give
 
 LATER = "2026-10-15T13:30:00.000000Z"
 NEXT = "2026-11-03T09:00:00.000000Z"
@@ -806,11 +807,11 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
             for k in _walk(output)
             if isinstance(k, str) and k.lower() in {"number", "card_number", "pan", "cvc", "cvv", "security_code"}
         }
-    for tool in ("hub_finance_card_fill", "hub_finance_search"):
+    for tool in ("tico_finance_card_fill", "tico_finance_search"):
         fields = set(hubtools.BY_NAME[tool]["inputSchema"]["properties"])
         assert not {"number", "card_number", "pan", "cvc", "cvv"} & fields
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
             None, {"card_id": coder, "merchant": "shop.example", "amount": 5_000}
         )
     assert refused.value.code == "not_available"
@@ -821,10 +822,10 @@ def test_card_fill_is_offered_to_no_one_and_still_runs_by_name():
     reaches it and is answered "not available"."""
     for local in (False, True):
         for kind in (None, *hubtools.KINDS):
-            assert "hub_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
-    assert "hub_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
+            assert "tico_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
+    assert "tico_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
     with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["hub_finance_card_fill"]["fn"](
+        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
             None, {"card_id": "crd_1", "merchant": "x.example", "amount": 1}
         )
     assert refused.value.code == "not_available"
@@ -1387,7 +1388,7 @@ def test_a_routed_raise_is_checked_at_the_raised_amount_with_the_parents_cards(b
         eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 52_000}, key="routed-cards")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1422,7 +1423,7 @@ def test_a_routed_raise_must_fit_every_ancestor_with_its_cards_not_only_its_pare
         assert act(c, OWNER, "budget_update", {"budget_id": company, "amount": 120_000}).status == "committed"
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="grand-fits")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1482,7 +1483,7 @@ def test_a_routed_raise_covers_the_parents_own_holds_with_its_children(books):
         assert held.allowed, held
         asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="held-raise")
         assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1521,7 +1522,7 @@ def test_a_routed_raise_covers_the_grandparents_teammate_and_gateway_allocations
             asked.code,
             asked.reason,
         )
-        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        give(c, "human:dan", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done and done.reason
         amounts = {
@@ -1620,7 +1621,7 @@ def test_a_manager_routed_card_limit_is_not_committed_by_the_old_manager_after_a
         asked = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 6_000})
         assert (asked.status, asked.approver) == ("needs_approval", "human:ben"), (asked.code, asked.reason)
         set_manager(c, "cara", "dan")
-        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        give(c, "human:ben", asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert (done.status, done.approver) == ("needs_approval", "human:dan"), (done.status, done.code, done.reason)
         limits = {str(r["target_id"]): int(r["amount"]) for r in SB.allocations(c, [web])}

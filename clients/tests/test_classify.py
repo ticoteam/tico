@@ -1,4 +1,4 @@
-"""`hub classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
+"""`tico classify`: the same verdicts as HQ's support gate, and a decision model that is missing or down never blocks the work."""
 
 import unittest
 
@@ -22,7 +22,7 @@ class Down(Exception):
 
 class Classify(unittest.TestCase):
     def run_tool(self, api):
-        return hubtools.BY_NAME["hub_classify"]["fn"](api, {"text": "hello"})
+        return hubtools.BY_NAME["tico_classify"]["fn"](api, {"text": "hello"})
 
     def test_verdicts_and_the_confidence_floor(self):
         self.assertEqual(self.run_tool(Api({"choice": "legit", "confidence": 0.4}))["verdict"], "legit")

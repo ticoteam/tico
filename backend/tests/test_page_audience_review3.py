@@ -9,13 +9,13 @@ from backend import counsel, events, files, org_rules, task_privacy
 from backend.auth import Identity, bot_reads_task
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, get, headers, post, restrict  # noqa: F401
-from backend.tests.test_counsel import counsel_on, source
-from backend.tests.test_files import turn
-from backend.tests.test_events import live  # noqa: F401
-from backend.tests.test_org_rules import org
-from backend.tests.test_page_audience import edit, promoted
-from backend.tests.test_pages import HTML, page
+from backend.tests.helpers.api import get, headers, post, restrict  # noqa: F401
+from backend.tests.helpers.counsel import counsel_on, source
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.events import live  # noqa: F401
+from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.page_audience import edit, promoted
+from backend.tests.helpers.pages import HTML, page
 
 
 def test_deletion_retains_denials_for_counsel_copies_and_citations(api):
@@ -92,7 +92,7 @@ def test_raw_task_attachments_and_blob_history_are_scrubbed_after_narrowing(api)
         version = c.execute("SELECT * FROM bot_file_versions WHERE file_id=?", (fid,)).fetchone()
         blob = dict(c.execute("SELECT * FROM blobs WHERE id=?", (version["blob_id"],)).fetchone())
         c.execute("INSERT OR IGNORE INTO task_assets VALUES(?,?)", (tid, blob["id"]))
-        from backend.task_review import file_added
+        from backend.files import file_added
 
         file_added(c, Identity("bot:ops", "bot"), tid, blob, 1)
     edit(api, fid, {"people": ["ben"]})
@@ -156,11 +156,10 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     api, live, monkeypatch, disabled_guard
 ):
     """One canary follows every persisted attachment form through both outsider identities and a real SSE socket."""
-    from backend.tests.test_api import assign, ready, runner
-    from backend.tests.test_events import ready as stream_ready
-    from backend.tests.test_assistant import room
-    from backend.tests.test_file_reviews import ask as review_ask, answer as review_answer
-    from backend.tests.test_page_audience_review6 import held_answers
+    from backend.tests.helpers.api import assign, ready, runner
+    from backend.tests.helpers.events import ready as stream_ready
+    from backend.tests.helpers.assistant import room
+    from backend.tests.helpers.file_reviews import answer as review_answer, approved, ask as review_ask
 
     org(api)
     counsel_on(api)
@@ -213,45 +212,13 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     read_version = get(api, "tasks/" + read_task, token="reader-test")["task"]["version"]
     post(api, "tasks/" + read_task, {"version": read_version, "private": False}, token="reader-test")
     assert "Canary confidential quote." in json.dumps(get(api, "tasks/" + read_task, token="cara-test"))
-    pick = review_ask(
-        api,
-        "ops-test",
-        [{"file": fid}, {"file": ordinary}],
-        on="reader",
-        parent=tid,
-        private=False,
-        pick=True,
-        question="Which folio should ship?",
-    )
-    picked_label = pick["question"]["refs"]["questions"][0]["options"][0]["label"]
-    # A question task is answered on the task itself (its answer is the close, no comment message), so its answer
-    # surface is the task's answers list.
-    review_answer(api, pick, [picked_label], token="reader-test")
-    spend_pick = review_ask(
-        api,
-        "ops-test",
-        [{"file": fid}, {"file": ordinary}],
-        on="cara",
-        parent=tid,
-        topic="canary-spend",
-        private=False,
-        pick=True,
-        question="Which folio should we render?",
-        spend={"label": picked_label, "amount": "12.50", "what": "Render the folio"},
-    )
-    spend_answer = review_answer(api, spend_pick, [picked_label], token="cara-test")
-    approval_id = spend_answer["answer"]["spend_approval"]
-    assert picked_label in json.dumps(get(api, "approvals/" + approval_id, token="cara-test"))
-    with api.app.state.store.read() as c:
-        spend_notice = H.message(
-            c,
-            c.execute(
-                "SELECT id FROM messages WHERE json_extract(refs,'$.approval')=? AND sender_id=?",
-                (approval_id, H.KEEPER),
-            ).fetchone()[0],
-        )
+    # A bound OK of the folio, asked of the reader: its preview names the file, so it follows the page's audience. It
+    # shows only to the OK's parties (task_asks.may_see): the reader sees it; Cara, who reads the task, never does.
+    file_ok = review_ask(api, "ops-test", [{"file": fid}], on="reader", parent=tid, question="Is the folio ready?")
+    review_answer(api, file_ok, "Approve", token="reader-test")
+    assert fid in json.dumps(get(api, "oks/" + file_ok["requirement_id"], token="reader-test"))
+    get(api, "oks/" + file_ok["requirement_id"], token="cara-test", expected=404)
     assert fid in json.dumps(get(api, f"tasks/{tid}/comments", token="cara-test"))
-    holds = held_answers(api, tid, fid, picked_label)
     # Version uploads and blob archives use the same production writers as the task's Files panel.
     uploaded = post(api, f"tasks/{tid}/files", {"name": name, "text": document.decode() + "<p>Revised</p>"})
     assert uploaded["file_id"] == fid and uploaded["version"] == 2
@@ -268,7 +235,6 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             bid,
             second_blob,
             title,
-            picked_label,
             name,
             fid + "@1",
             version["digest"],
@@ -295,6 +261,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         api, "jobs/claim", {"bot": "finance", "start_places": True}, token=machine["token"], key="matrix-assignment"
     )["attempt"]
     if warmup:
+        post(api, f"attempts/{warmup['id']}/started", {"thread_id": "matrix-warmup"}, token=machine["token"])
         post(
             api,
             f"attempts/{warmup['id']}/complete",
@@ -355,15 +322,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         "tasks/" + tid + "/comments",
         "tasks/" + tid + "/answers",
         "tasks/" + tid + "/tree",
-        "tasks/" + pick["task"]["id"],
-        "tasks/" + pick["task"]["id"] + "/comments",
-        "tasks/" + pick["task"]["id"] + "/answers",
-        "tasks/" + spend_pick["task"]["id"] + "/answers",
-        "tasks/" + spend_pick["task"]["id"],
-        "tasks/" + spend_pick["task"]["id"] + "/comments",
-        "approvals/" + approval_id,
-        "messages/" + spend_notice["id"],
-        "conversations/" + spend_notice["conversation_id"] + "/messages",
+        "oks/" + file_ok["requirement_id"],
         "tasks/" + tid + "/links",
         "places/dashboard",
         "places/task:" + tid,
@@ -378,7 +337,6 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
         "threads/search?q=Canary",
         "context/search?q=Canary",
         "rule-holds",
-        *("rule-holds/" + hid for hid in holds),
         "threads/" + cid,
         "threads/" + cid + "/timeline",
         "threads/" + cid + "/members",
@@ -520,16 +478,17 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     assert recreated.status_code == 200, recreated.text
     replacement = recreated.json()["page"]["file_id"]
     assert replacement != fid
-    remake = review_ask(
-        api,
-        "ops-test",
-        [{"file": replacement}],
-        on="ana",
-        parent=tid,
-        private=False,
-        question="Is the replacement folio ready?",
+    # The bot has one ask on the task (C15): it withdraws the given, unused OK of the deleted folio before asking again.
+    withdrawn = api.request(
+        "DELETE",
+        f"/api/v2/tasks/{tid}/asks/{file_ok['requirement_id']}",
+        json={"why": "The folio was deleted"},
+        headers=headers("ops-test"),
     )
-    assert review_answer(api, remake, ["Approve"])["answer"]["reviewed"][0]["file"] == replacement
+    assert withdrawn.status_code == 200, withdrawn.text
+    remake = review_ask(api, "ops-test", [{"file": replacement}], on="ana", parent=tid, question="Is it ready?")
+    review_answer(api, remake, "Approve")
+    assert approved(api, "ana-test", file=replacement)["approved"] is True
 
 
 def test_migration_links_name_only_history_before_page_content_is_purged(api):

@@ -61,12 +61,12 @@ The decision model reading the previous routing and the open ask in its state, n
 | a chosen bot paused or quarantined since the roster was read | keeps the message for it (it runs when the bot is back) and tells the person in the thread that it waits |
 | a chosen bot the write layer refuses (archived, planned or gone since the roster was read) | drops it with the reason; the assistant (or BotOps) if that empties the set |
 
-Without a decision model (no gateway key, no TypeSafe key of your own and no AI provider key on the server) every message goes to the assistant (or BotOps) and the message says so
+Without a decision model (no gateway key and no TypeSafe key of your own) every message goes to the assistant (or BotOps) and the message says so
 (`routed_by: default`). When the decision model is unreachable, the message stays pending and retries after a minute, for up to
 ten minutes. A refused call, or one still failing after that, ends the message as `failed` with the
 reason on it, and Tico tells the human in the thread; nothing retries a failed message. Each try asks the providers in
-order, one short HTTP attempt each with no client-side retries on top of the gateway's own: the Tico AI Gateway
-(`tico-decide-low`), then your own TypeSafe key if you set one, then the team's own AI provider. Any failure moves on to
+order, one short HTTP attempt each with no client-side retries on top of the gateway's own: Jev on the Tico AI Gateway
+(`tico-decide-low`), then Jev on your own TypeSafe key if you set one; no other model is asked. A failure moves on to
 the next, so an outage costs at most eleven attempts per provider per question batch for a message.
 
 Routing a message is a decision call on the server's key, so it counts against the sender's daily decision cap
@@ -112,9 +112,7 @@ except that a person's message, a new thread or a reply in one, to a paused or q
 bot is back (the gateway tells the person in the thread that it waits and when the bot is back); the cap on bot-to-bot traffic, the unsolicited cap, the lint, the escape rule (a message that
 names a `secrets/` path is refused and recorded as such).
 
-A follow-up in a thread is linked to the bot's last line (`in_reply_to`); when that bot has one open
-question task to that person, the follow-up answers it (`question_tasks.answer_from_reply`), so the
-question task closes.
+A follow-up in a thread is linked to the bot's last line (`in_reply_to`).
 
 The bot's run gets the text, and in the message's `refs.slack` the channel or DM name, the
 thread permalink, the sender's email, the last twelve exchanges of the thread and a note that
@@ -170,7 +168,7 @@ goes on), for each reader that is an active bot, in one transaction:
    messages wait unread and the cursor stays. A high-volume channel is best read daily: otherwise every message would cost a short run.
 
 Readers are named per channel in the Slack channel list, which lives in the database and is managed
-in the app (Tools > Slack channels, `hub slack channel add '#name' --reader cto`, or BotOps
+in the app (Tools > Slack channels, `tico slack channel add '#name' --reader cto`, or BotOps
 as the person who asked). Only an owner or an admin changes it, like turning posting off. A channel may be listed
 by name alone: the gateway asks Slack for its id. Reading grants no posting right: a reader that wants to say
 something in the channel is bound by `post:` and the solicited-reply rule exactly as before,
@@ -238,7 +236,7 @@ the preview is sent again with the same link as text.
 | `slack_reads` | channel and reader: the cursor (`last_ts`, `last_run`, `digests`) | |
 | `slack_digests` | digest written: the reader, its conversation and message, the channels, the event ids it covered | |
 
-Only `slack_posts` is in `hub sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
+Only `slack_posts` is in `tico sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
 
 ## Running it
 
@@ -282,7 +280,7 @@ interactivity on, the `app_mention`, `message.im`, `message.channels`, `message.
 
 ## Recovery
 
-Read the queue with `hub sql` or SQLite against the live database, read-only:
+Read the queue with `tico sql` or SQLite against the live database, read-only:
 
 ```sql
 SELECT event_id, channel, thread_ts, state, reason, processed_at

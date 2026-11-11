@@ -1,6 +1,6 @@
 # Write a spec
 
-Triggered by a task that names a problem the Head of Product or the owner has chosen. Budget 45 minutes
+Used in the Spec stage, for an idea the owner moved there or you picked when Spec had room. Budget 45 minutes
 for a first version. The outcome is `specs/<slug>.md` that an engineer can estimate from, with every open
 question assigned. Nothing is filed in GitHub.
 
@@ -8,16 +8,16 @@ question assigned. Nothing is filed in GitHub.
 
 ## 1. Confirm it was chosen
 
-    hub task show <id>
+    tico task show <id>
 
-Check `hub goal list` and the Head of Product's decision log for the decision. If nobody decided it, say so on
+Check `tico goal list` and the owner's decision log for the decision. If nobody decided it, say so on
 the task and ask who did; a spec is not a way to decide by stealth. Pull the repository, and if a spec for this
 problem already exists, extend it instead of starting a second file.
 
 ## 2. Gather the evidence
 
 Read the latest `feedback-analyst` report for the theme and its count, the `product-researcher`
-snapshots and opportunity map, `product-analyst`'s numbers for the area, and `hub meeting search
+snapshots and opportunity map, `product-analyst`'s numbers for the area, and `tico meeting search
 "<feature>"` for what customers and the team said. Quote sparingly, with source and date. Separate what was
 observed from what was inferred, and mark each inference.
 
@@ -49,6 +49,7 @@ before handing over.
 
 ## 6. Hand over
 
-Publish with `hub file publish specs/<slug>.md --task <id>`. List the issues you would file (title and
-body) on the task for a human, and the questions for the owners. `hub task update <id> --status done
---note`: the problem in one line, the appetite, the path, open questions and who owes them.
+Publish with `tico file publish specs/<slug>.md --task <id>`; it prints the file id. Attach it to the requirement
+`tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. Jev checks it, then a person OKs
+it, and the task moves to In development, where {{app_name}} files the Engineering task. Put open questions and who owes
+them in a note on the task.

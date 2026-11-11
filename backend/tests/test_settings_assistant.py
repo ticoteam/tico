@@ -14,35 +14,12 @@ from backend.assistant import valid_operation
 from backend.auth import Identity
 from backend.settings_entries import ENTRIES
 from backend.store import Problem
-from backend.tests.test_api import api, as_member, get, headers, post, put  # noqa: F401  (fixture)
-from backend.tests.test_assistant import assistant_turn
-from backend.tests.test_botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops  # noqa: F401  (fixture)
+from backend.tests.helpers.api import as_member, get, headers, post, put  # noqa: F401  (fixture)
+from backend.tests.helpers.assistant import assistant_turn
+from backend.tests.helpers.botops_repositories import FLAG, effective, repos  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops  # noqa: F401  (fixture)
 from clients import hubtools
-from clients.tico import APIError
-
-
-def mcp(api, name, args, token):
-    """A `hub` tool in the Assistant's run, answered by this server: `(error, payload)` as the MCP helper gives."""
-
-    class Turn:
-        def call(self, method, path, body=None, key=None, query=None, delegate=False):
-            extra = {"X-Tico-On-Behalf-Of": delegate if isinstance(delegate, str) else "turn"} if delegate else {}
-            r = api.request(method, "/api/v2/" + path, json=body, params=query, headers={**headers(token), **extra})
-            if r.status_code >= 400:
-                raise APIError(r.json()["error"]["code"], r.json()["error"]["detail"], status=r.status_code)
-            return r.json()
-
-        def get(self, path, **query):
-            return self.call("GET", path, query=query)
-
-        def post(self, path, body=None, key=None):
-            return self.call("POST", path, body or {}, key)
-
-    try:
-        return False, hubtools.BY_NAME[name]["fn"](Turn(), args)
-    except APIError as refused:
-        return True, {"error": refused.code, "detail": str(refused)}
+from backend.tests.helpers.settings_assistant import mcp
 
 
 def release_times(api):
@@ -54,9 +31,9 @@ def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     assert before != ["09:30"], before
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
-    assert "hub_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert "tico_settings_set" in {t["name"] for t in hubtools.listing(kind="assistant")}
     # On the person's own turn, the message that started it is the citation: it changes at once, no header needed.
-    err, done = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30"}, token)
+    err, done = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30"}, token)
     assert not err and done["value"] == ["09:30"], done
     assert release_times(api) == ["09:30"]
     with api.app.state.store.read() as c:
@@ -72,7 +49,7 @@ def test_a_member_changes_a_direct_setting_anyone_may_as_themselves(api):
     r, attempt = assistant_turn(api, "cara-test", "Make me an incoming trigger called Orders")
     err, done = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "webhooks.incoming.create", "value": {"name": "Orders"}, "on_behalf_of": "turn"},
         attempt["token"],
     )
@@ -85,7 +62,7 @@ def test_a_confirm_setting_is_a_card_in_the_assistant_chat_and_the_tap_changes_i
     r, attempt = assistant_turn(api, "ana-test", "Stop admins seeing SQL")
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "team.rules.admin_sql", "value": "off", "on_behalf_of": "turn"},
         attempt["token"],
     )
@@ -110,7 +87,7 @@ def test_with_assistant_acts_without_asking_off_a_direct_setting_is_a_card(api):
     before = release_times(api)
     r, attempt = assistant_turn(api, "ana-test", "Set the release to 09:30")
     token = attempt["token"]
-    err, card = mcp(api, "hub_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token)
+    err, card = mcp(api, "tico_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token)
     assert not err and card["needs_confirm"] is True, card
     assert release_times(api) == before
     # Nor does the write itself run on the person's words while the rule is off.
@@ -128,7 +105,7 @@ def test_a_member_asking_for_an_admin_setting_changes_nothing_and_is_told_who_ca
     r, attempt = assistant_turn(api, "cara-test", "Set the release to 09:30")
     token = attempt["token"]
     err, refused = mcp(
-        api, "hub_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token
+        api, "tico_settings_set", {"key": "release.times", "value": "09:30", "on_behalf_of": "turn"}, token
     )
     assert err and "owner or an admin" in str(refused), refused
     # The same write sent without asking for its plan: the route's own check, as the person, refuses it.
@@ -243,7 +220,7 @@ def test_with_the_rule_off_a_repository_setting_is_a_card_the_tap_runs(api):
     r, attempt = assistant_turn(api, "ana-test", "Switch off the product repository")
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {"key": "repo.enabled", "id": "Acme/product", "value": "off", "on_behalf_of": "turn"},
         attempt["token"],
     )
@@ -263,7 +240,7 @@ def test_run_workflows_is_a_card_in_the_assistant_chat_and_a_cited_write_never_s
     before = effective(api)  # write on product, no workflows
     err, card = mcp(
         api,
-        "hub_settings_set",
+        "tico_settings_set",
         {
             "key": "bot.repositories",
             "bot": "ops",
@@ -370,8 +347,8 @@ ASSISTANT_REFUSED = {"mail.intake"}
 def test_every_setting_does_for_the_assistant_what_it_does_for_botops(api, role):
     """Stage 1's sweep (test_settings_parity) asked of the person's Assistant on their cited words: every entry ran, was
     a card or was refused exactly as for BotOps, gaps included."""
-    from backend.tests import test_settings_parity as parity
-    from backend.tests.test_api import runner
+    from backend.tests.helpers import settings_parity as parity
+    from backend.tests.helpers.api import runner
 
     token, person = parity.PEOPLE[role]
     objects = parity._objects(api, runner(api))

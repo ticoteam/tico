@@ -6,42 +6,12 @@ from pathlib import Path
 
 
 from backend import market as M
-from backend.blobs import Blobs
 from backend.store import H
-from backend.tests.test_api import api, get, headers, post, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, runner, setup_attempt  # noqa: F401
 from backend import bot_settings as BS
+from backend.tests.helpers.market import _librarian, _seed
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE_REGISTRY = Path(__file__).parent / "fixtures" / "registry"
-
-
-def _seed(api, tmp_path):
-    store = api.app.state.store
-    with store.transaction() as c:
-        M.seed(c, {}, Blobs(store.settings), document=M.load_snapshot(FIXTURE_REGISTRY))
-        if not H.bot(c, "listening"):
-            c.execute(
-                "INSERT INTO bots (id, slug, display_name, effort, state, created_at) VALUES (?,?,?,?,?,?)",
-                ("listening", "listening", "Listening", "high", "active", H.now()),
-            )
-        if not c.execute("SELECT 1 FROM bot_config WHERE bot='listening'").fetchone():
-            c.execute(
-                "INSERT INTO bot_config (bot, team, owner_id, description, reports_to, repo) VALUES (?,?,?,?,?,?)",
-                ("listening", "marketing", "ana", "Listening", "cmo", "emp-listening"),
-            )
-            BS.write(c, "listening", {"runtime": "grok", "model": "grok-4.6", "host": "keeper"})
-
-
-def _librarian(api):
-    with api.app.state.store.transaction() as c:
-        if not H.bot(c, "librarian"):
-            c.execute(
-                "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-                "VALUES('librarian','librarian','Librarian','','active',?)",
-                (H.now(),),
-            )
-            c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('librarian',NULL,'ana')")
-            BS.write(c, 'librarian', {"runtime": "fake", "host": "keeper"})
 
 
 def test_the_librarian_gets_the_market_routines_and_the_old_market_analyst_is_retired(api):
@@ -428,7 +398,8 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
     # A team that rewrote the automation's words gave it other work: it runs with nothing new to curate.
     with store.transaction() as c:
         c.execute("UPDATE market_insights SET status='applied'")
-        c.execute("UPDATE tasks SET status='done' WHERE owner_id='bot:librarian'")
+        for (done,) in c.execute("SELECT id FROM tasks WHERE owner_id='bot:librarian'").fetchall():
+            H.task_done(c, "human:ana", done, "Curated")
     flow = get(api, f"automations/{aid}")
     steps = [{**step, "prompt": "Curate the market, then tidy the glossary."} for step in flow["steps"]]
     r = api.patch(f"/api/v2/automations/{aid}", json={"steps": steps}, headers=headers())

@@ -1,12 +1,12 @@
 """A task comment's delivery (docs/tasks.md, Conversation; backend/delivery.py): steer reaches the bot's running turn
 now, queue runs right after it, defer waits for the bot's next turn on the task or its deadline, goal sets the task
-session's goal. The API, the hub CLI and the MCP tool share one rule, tested here."""
+session's goal. The API, the tico CLI and the MCP tool share one rule, tested here."""
 
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, runner  # noqa: F401
-from backend.tests.test_mcp import call
+from backend.tests.helpers.api import assign, claim, get, headers, post, runner  # noqa: F401
+from backend.tests.helpers.mcp import call
 from clients import hubcli
 
 
@@ -297,7 +297,7 @@ def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api):
 def test_mcp_and_the_hub_cli_send_the_same_delivery(api):
     machine, tid = world(api)
     is_error, payload = call(
-        api, "hub_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h"}
+        api, "tico_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h"}
     )
     assert is_error is False and payload["woke"] is False and payload["sent_as"]["delivery"] == "defer"
     # One of the ways at most, on the command line too.

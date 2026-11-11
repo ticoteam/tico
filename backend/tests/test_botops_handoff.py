@@ -5,8 +5,8 @@ import re
 
 from fastapi import Request
 
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
-from backend.tests.test_member_bots import botops, finish  # noqa: F401  (fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready  # noqa: F401  (fixture)
+from backend.tests.helpers.member_bots import botops, finish  # noqa: F401  (fixture)
 from backend.store import H
 
 
@@ -64,12 +64,16 @@ def test_a_bot_hands_botops_the_persons_own_request_and_botops_acts_as_them(api,
 
     # A task finished and reopened no longer lends: the request it carried was done.
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "bot:ops", task["id"], status="done", note="done")
-        H.task_update(c, "bot:ops", task["id"], status="open", note="one more thing")
+        H.task_update(
+            c, "human:ana", task["id"], status="done", note="done", seen_version=H.task(c, task["id"])["version"]
+        )
+        H.task_update(
+            c, "bot:ops", task["id"], status="open", note="more", seen_version=H.task(c, task["id"])["version"]
+        )
     assert get(api, "qa-handoff-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
     with api.app.state.store.transaction() as c:
         c.execute(
-            "DELETE FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='status'", (task["id"],)
+            "DELETE FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move'", (task["id"],)
         )
 
     # Once the message is more than a week old it lends nothing: BotOps has only Ops' rights again.
@@ -109,7 +113,7 @@ def test_a_hand_off_that_lends_nothing_puts_a_confirm_card_to_the_person(api, bo
 
 def test_a_hand_off_to_add_an_mcp_server_with_a_placeholder_header_is_the_persons_confirm_card(api, botops):
     """A `${VAR}` header names a credential without holding one, so the person gets the card; a literal still gets none."""
-    from backend.tests.test_botops_parity import mcp_tool
+    from backend.tests.helpers.botops_parity import mcp_tool
 
     assign(api, botops, "ops")
     ready(api, botops, ["botops", "ops"])

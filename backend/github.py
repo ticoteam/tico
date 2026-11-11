@@ -1,6 +1,6 @@
 """GitHub keeps the pull requests attached to a task up to date; it never moves the task.
 
-A task carries its pull request as a link (`hub task link`). A link is information only: opening,
+A task carries its pull request as a link (`tico task link`). A link is information only: opening,
 merging or closing the PR, a release tag or a deploy changes the link, never the task's status or
 step. A person moves the task. The repository's webhook posts here signed with
 `TICO_GITHUB_WEBHOOK_SECRET`; nothing else on this path is trusted:
@@ -20,8 +20,8 @@ step. A person moves the task. The repository's webhook posts here signed with
 - a push to main                    -> the commits are recorded, in order, in `main_pushes`
 
 A merge queue (`enqueued`, `dequeued`) sets the link's `merge_queue` state. A removal from the queue for any reason but a
-merge wakes the owner once, after the maintenance pass has read the pull request and found it still open
-(`_queue_event`, `refresh_queue_removals`); nothing else about a queued pull request is news.
+merge is read by the maintenance pass first (`_queue_event`, `refresh_queue_removals`), and wakes the owner once when
+the pull request is still open. Nothing else about a queued pull request is news.
 
 The last hop is a fact of the deploy, not of GitHub: the release manifest names the commit the
 running code was built from (`release.py` writes it from CI), and `ship_deployed` marks a merged
@@ -47,7 +47,6 @@ from urllib.parse import quote
 from fastapi import Request, Response
 
 from . import hubdb as H
-from . import step_flow
 from .batch_work import isolated
 from .store import Problem
 from . import bot_settings as BS
@@ -96,15 +95,14 @@ def _save_burst(c, task, burst, **parts):
     save_metadata(c, "github-task-wake:" + task["id"], kept)
 
 
-def queue_wake(c, task, item, batch=None, handoff=None):
+def queue_wake(c, task, item, batch=None):
     """Keep one bounded, durable burst per task; the scheduler sends it within three minutes.
 
     `batch` is the kind of nonblocking notice the item is (wake_presets.BATCH_KINDS: review comments, a finished
     request), which the owner's wake preset may hold. A burst stays batchable only while every item in it is;
     one item that is not (a conflict, a result an armed link waits on) makes the whole burst wake at once. The burst
     also carries `done` (a head's finished checks) and `notes` (reviews that are not a person's), each sent as its own
-    message so one can never lift or lower another. `handoff` (a merge conflict) puts the burst first in the owner's
-    queue (backend/verdict_moves.py) and stays on it until it is sent."""
+    message so one can never lift or lower another."""
     from .repositories import metadata
 
     burst = metadata(c, "github-task-wake:" + task["id"])
@@ -118,7 +116,6 @@ def queue_wake(c, task, item, batch=None, handoff=None):
         {k: v for k, v in burst.items() if k != "batch"},
         items=items,
         **({"batch": kind} if kind else {}),
-        **({"handoff": handoff} if handoff else {}),
     )
 
 
@@ -169,59 +166,46 @@ def fire_once(detail, item):
 def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
+    from . import task_engine as E
     from .repositories import metadata
-    from .review_gate import engineering
-    from . import step_flow, verdict_moves
 
     sent = []
     for row in c.execute("SELECT key FROM registry_metadata WHERE key LIKE 'github-task-wake:%'").fetchall():
-        with isolated(c, "github_wake", row["key"]):
+        with isolated(c, "github_wake", row["key"], private=True):
             burst = metadata(c, row["key"])
             if burst.get("due", "") > H.now():
                 continue
             task = H.task(c, row["key"].split(":", 1)[1])
-            live = bool(task and task["status"] in (*H.ACTIVE_STATUSES, "blocked"))
-            if live:
+            live = bool(task and task["status"] == "open")
+            if live and task:
+                # Through the engine: one keyed wake per part of the burst, a run only on the owner bot's turn.
+                at = H.now()
                 if burst.get("items"):
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         "\n".join(burst["items"]),
-                        {verdict_moves.HANDOFF: burst["handoff"]}
-                        if burst.get("handoff")
-                        else {"wake_batch": burst["batch"]}
-                        if burst.get("batch")
-                        else None,
+                        f"github:{at}:items",
+                        refs={"wake_batch": burst["batch"]} if burst.get("batch") else None,
                         trigger="pr_checks",
                     )
-                if burst.get("notes"):
-                    H._wake(
-                        c, task, task["owner_id"], "\n".join(burst["notes"]), {"wake": "pr_review"}, trigger="pr_checks"
-                    )
+                if burst.get("notes"):  # reviews that are not a person's: a note for the next run
+                    E.tell_owner(c, task["id"], "\n".join(burst["notes"]), f"github:{at}:notes", wake=False)
                 for done in burst.get("done", []):
-                    # A failed check on a bot's ticket on a board with a flow is its builder's hand-off, at any step.
-                    failed = (
-                        done["result"] == "fail"
-                        and H.is_bot(task["owner_id"])
-                        and (engineering(c, task) or step_flow.has_flow(c, task.get("type_id")))
-                    )
-                    H._wake(
+                    E.tell_owner(
                         c,
-                        task,
-                        task["owner_id"],
+                        task["id"],
                         done["item"],
-                        {
-                            "wake": "pr_checks_done",
+                        f"github:checks:{done['head']}:{done['result']}:{at}",
+                        refs={
                             "pr_head": done["head"],
                             "pr_result": done["result"],
                             **({"pr_armed": True} if done.get("armed") else {}),
-                            **({verdict_moves.HANDOFF: "failed_check"} if failed else {}),
                         },
                         trigger="pr_checks",
                     )
             c.execute("DELETE FROM registry_metadata WHERE key=?", (row["key"],))
-            if live:
+            if live and task:
                 sent.append(task["id"])
     return sent
 
@@ -273,13 +257,13 @@ def _review_role(c, task, payload, role):
     )
 
 
-# The branch `hub task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
+# The branch `tico task worktree add` names: tico/<the task's first 8 id characters>-<title slug>.
 WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
 
 
 def register_worktree_pr(c, pr):
     """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
-    registered here, so a worktree whose bot never ran `hub task link` still gets the link its release waits on.
+    registered here, so a worktree whose bot never ran `tico task link` still gets the link its release waits on.
     Returns the ids of the links it made; a fork's branch, another organization's repository or a branch no
     worktree holds registers nothing."""
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
@@ -316,56 +300,8 @@ def register_worktree_pr(c, pr):
     return made
 
 
-# A pull request names its Dev ticket as "Dev 665", "Dev #665", "Dev ticket 665" or a branch like fix/dev-665-x. A bare
-# "#665" is not read: GitHub's own "(#2851)" suffix and issue references use that form.
-TICKET_NAMED = re.compile(r"(?<![A-Za-z0-9])dev(?:[ _-]ticket)?[ _#-]{1,2}(\d{1,9})(?!\d)", re.I)
-
-
-def named_ticket(c, pr):
-    """The one active Dev ticket a pull request's branch, title or body names, or None. A pull request naming no ticket,
-    two different ones, or a ticket that is finished, not a Dev ticket or already has an open pull request names none."""
-    from .review_gate import engineering
-
-    head = pr.get("head") or {}
-    text = "\n".join(str(x or "") for x in (head.get("ref"), pr.get("title"), pr.get("body")))
-    numbers = {int(n) for n in TICKET_NAMED.findall(text)}
-    if len(numbers) != 1:
-        return None
-    task = H._one(c, "SELECT * FROM tasks WHERE number=?", (numbers.pop(),))
-    if not task or task["status"] not in H.ACTIVE_STATUSES or not engineering(c, task):
-        return None
-    if any(p["kind"] == "pr" and p.get("state") in ("open", "draft", None, "") for p in H.task_links(c, task["id"])):
-        return None
-    return task
-
-
-def register_named_pr(c, pr):
-    """A pull request that names its Dev ticket is linked to it, as `hub task link` would, so a builder who forgot the
-    link does not leave the ticket without one. Same rules as register_worktree_pr: this repository's organization only,
-    a head in the same repository, an open pull request. Returns the ids of the links it made."""
-    url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
-    match = PR_LINK.match(url)
-    if not match or pr.get("state") == "closed" or pr.get("merged"):
-        return set()
-    repo = f"{match.group(1)}/{match.group(2)}"
-    if str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "").lower() != repo.lower():
-        return set()
-    app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    if not app or str(app["org"] or "").lower() != match.group(1).lower():
-        return set()
-    task = named_ticket(c, pr)
-    if not task:
-        return set()
-    link = H.task_link(c, H.KEEPER, task["id"], url)
-    H.event(c, H.KEEPER, "github.pr_linked", task["id"], {"url": url, "named_in": "branch, title or body"})
-    return {link["id"]}
-
-
-def health_wait_reason(link, detail, *, check_flow=False):
-    """The PR condition whose age Health measures, from the already synced link only.
-
-    A ticket with step flow still needs its next move after a review; Health reads its Tico verdicts to name it.
-    """
+def health_wait_reason(link, detail):
+    """The PR condition whose age Health measures, from the already synced link only."""
     if link.get("state") not in ("open", "draft"):
         return ""
     if link.get("mergeable") == "conflict":
@@ -379,15 +315,15 @@ def health_wait_reason(link, detail, *, check_flow=False):
         link.get("state") == "open"
         and link.get("mergeable") == "clean"
         and link.get("checks") == "passing"
-        and (check_flow or not reviewed)
+        and not reviewed
     ):
         return "review"
     return ""
 
 
-def record_health_wait(link, detail, *, check_flow=False):
+def record_health_wait(link, detail):
     """Keep the first observation through refreshes; a resolved condition clears its clock."""
-    reason = health_wait_reason(link, detail, check_flow=check_flow)
+    reason = health_wait_reason(link, detail)
     old = detail.get("health_wait") or {}
     head = detail.get("head_sha") or ""
     if not reason:
@@ -426,8 +362,7 @@ def refresh_queue_removals(service):
     """The maintenance pass's read of merge-queue removals that were not merges (`_queue_event` marks them `verify`), on open
     pull requests of active tasks. Each is read from GitHub first: one that has merged or closed is no news here (its closed
     event and reconcile say what happened), and one pushed since the removal is not news about that head. An open pull
-    request still at the removed head gets the owner's wake once, and the head's merge wake is due again
-    (verdict_moves.pr_notice_seen). A read that fails keeps `verify` for the next pass."""
+    request still at the removed head gets the owner's wake once. A read that fails keeps `verify` for the next pass."""
     with service.store.read() as c:
         app = service.row(c)
         if not app:
@@ -435,7 +370,7 @@ def refresh_queue_removals(service):
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(
             c.execute(
-                "SELECT l.id,l.task_id,l.url,l.repo,l.number FROM task_links l "
+                "SELECT l.id,l.task_id,l.url,l.repo,l.number,l.detail FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND json_extract(l.detail,'$.merge_queue.verify')=1 "
                 "AND l.number IS NOT NULL AND r.reachable=1 "
@@ -470,7 +405,7 @@ _conflict_retry = {}  # link id -> monotonic time a failed read may be tried aga
 
 
 def refresh_conflicts(service: Any) -> int:
-    """The maintenance pass's read of open pull requests on active Dev tickets whose mergeability is not known (read again
+    """The maintenance pass's read of open pull requests on open tasks whose mergeability is not known (read again
     after five minutes: GitHub computes it lazily) or has not been read for thirty (a move of the base branch sends no
     pull request event). A conflict found wakes the owner once per head, as the webhook's would (`pull_request`). At most
     CONFLICT_READS_PER_PASS pull requests are read per pass, the longest unread first."""
@@ -483,9 +418,7 @@ def refresh_conflicts(service: Any) -> int:
             c.execute(
                 "SELECT l.id,l.url,l.repo,l.number FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
-                "JOIN task_types y ON y.id=t.type_id "
                 "WHERE l.kind='pr' AND l.state='open' AND l.number IS NOT NULL AND r.reachable=1 "
-                "AND (y.role='engineering' OR y.name='Dev tickets') "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) "
                 "AND ((coalesce(l.mergeable,'unknown')='unknown' AND coalesce(l.updated_at,l.created_at)<?) "
                 "OR coalesce(l.updated_at,l.created_at)<?) "
@@ -535,9 +468,26 @@ def refresh_conflicts(service: Any) -> int:
     return read
 
 
+def _engine_speaks(c, task_id):
+    """Whether the task is on a pipeline stage that waits on GitHub (a PR open, checks, a merge, a release) or queues
+    its PRs (backend/merge_queue.py). There the engine tells the stage's owner of a removal from the queue, a merge
+    (the move on) and a close (the standing it leaves unmet): this module's wakes for those would be a second message
+    about the same event, in other words. The webhook saves the engine's facts first (`_task_facts`), so a merge
+    has already moved the task on to the stage after Merge when this is asked."""
+    from . import merge_queue, task_engine, task_facts
+    from . import task_requirements as R
+
+    row = task_engine.task(c, task_id)
+    if not row or not row.get("visit"):
+        return False
+    if merge_queue.queues_prs(row.get("stage")):
+        return True
+    return any(r["kind"] in task_facts.PR_KINDS for r in R.for_visit(c, row["visit"]))
+
+
 def _settle_removal(c, link_id, pr):
-    """Clear a removal's `verify`; wake its owner once when the pull request is still open at the removed head."""
-    found = H._rows(c.execute("SELECT id,task_id,url,detail FROM task_links WHERE id=?", (link_id,)))
+    """Clear a removal's `verify`. A pull request still open at the removed head wakes its owner once."""
+    found = H._rows(c.execute("SELECT id,task_id,url,number,detail FROM task_links WHERE id=?", (link_id,)))
     if not found:
         return
     link = found[0]
@@ -555,9 +505,8 @@ def _settle_removal(c, link_id, pr):
         return
     task = H.task(c, link["task_id"])
     H._task_event(c, task["id"], H.KEEPER, "merge_queue_failed", None, f"{link['url']}@{head}", reason)
-    from . import pipeline_engine
-
-    pipeline_engine.queue_ejected(c, link["task_id"], reason)  # the card goes back a stage with the reason
+    if _engine_speaks(c, link["task_id"]):
+        return
     queue_wake(
         c,
         task,
@@ -566,15 +515,12 @@ def _settle_removal(c, link_id, pr):
 
 
 def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=False):
-    from .review_gate import engineering
-
     pr = payload.get("pull_request") or {}
     url = str(pr.get("html_url") or "").split("?")[0].rstrip("/")
     action = str(payload.get("action") or "")
     registered = set() if read_refresh else register_worktree_pr(c, pr)
-    if not read_refresh and action in ("opened", "reopened", "edited", "ready_for_review"):
-        registered |= register_named_pr(c, pr)
     links = _links_for(c, url)
+    merged = []  # the links this event merged for the first time (_merge_wakes)
     for link in links:
         task = H.task(c, link["task_id"])
         if not task:
@@ -593,10 +539,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         if link["state"] == "shipped" and state == "merged":
             state = "shipped"
         detail = H._json(link.get("detail"), {}) or {}
-        if not engineering(c, task):
-            detail.pop("qa_default_pending", None)
-        elif action == "opened" or link["id"] in registered:
-            detail["qa_default_pending"] = True
+        detail.pop("qa_default_pending", None)
         head_sha = (pr.get("head") or {}).get("sha")
         new_head = head_sha and detail.get("head_sha") != head_sha
         mergeable = "unknown" if action == "synchronize" or new_head else link.get("mergeable") or "unknown"
@@ -637,13 +580,11 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
                 detail["health_reviewed_head"] = ""
                 c.execute("UPDATE task_links SET checks='pending' WHERE id=?", (link["id"],))
-                from . import pipeline_engine
-
-                pipeline_engine.work_changed(c, link["task_id"])  # a new head is a work change
             detail["head_sha"] = head_sha
             login = (
                 str((payload.get("sender") or {}).get("login") or "").lower()
@@ -678,24 +619,17 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
         record_health_wait(
             {**link, "state": state, "mergeable": mergeable, **({"checks": "pending"} if new_head else {})},
             detail,
-            check_flow=step_flow.has_flow(c, task.get("type_id")),
         )
+        # The merge's one wake (_merge_wakes), recorded with the link: a stale event that reopens the link, and a later
+        # reading of the same merge, cannot send it again.
+        merge_wake = state == "merged" and link["state"] not in ("merged", "shipped") and not detail.get("merged_wake")
+        if merge_wake:
+            detail["merged_wake"] = True
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
-        if new_head:
-            from . import pipeline_github_checks
-
-            # The new head is saved: its checks show the out-of-date standing from this same write.
-            pipeline_github_checks.publish_affected(c, link["task_id"])
-        if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
-            # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
-            from . import verdict_moves
-
-            verdict_moves.merged(c, task)
-        elif new_head and action == "synchronize" and state == "open":
-            # A push at a check step whose check already finished needs a check of the new head.
-            from . import check_pools, verdict_moves
-
-            check_pools.safely(c, verdict_moves.new_head, task)
+        if merge_wake:
+            # One wake per merge per task: an armed link's last result rides on the merge's own wake.
+            merged.append({**link, "no_ship": wake_once})
+            wake_once = False
         current = c.execute("SELECT * FROM task_links WHERE id=?", (link["id"],)).fetchone()
         changed = [
             field for field in ("state", "repo", "number", "branch", "checks") if current[field] != link.get(field)
@@ -726,47 +660,64 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
-        if state == "closed" and link["state"] != state and link["id"] not in registered or conflict_wake:
+        closed = state == "closed" and link["state"] != state and link["id"] not in registered
+        if closed and not conflict_wake and _engine_speaks(c, task["id"]):
+            closed = False
+        if closed or conflict_wake:
             # Closed without merging is news; a conflict is a blocker on the bot's own work.
-            queue_wake(
-                c,
-                task,
-                item,
-                "completion" if not conflict_wake and not wake_once else None,
-                handoff="merge_conflict" if conflict_wake else None,
-            )
+            queue_wake(c, task, item, "completion" if not conflict_wake and not wake_once else None)
         if not read_refresh:
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
-    woken = []
-    if pr.get("merged"):
-        # Tasks waiting for this merge get their one wake; the PR's own task keeps its step (backend/milestone_waits.py).
-        from . import milestone_waits
+    _merge_wakes(c, merged, url)
+    return {"pr": url, "action": action, "tasks": len(links)}
 
-        target = milestone_waits.pr_target(url)
-        woken = milestone_waits.happened(c, "pr_merged", target[0], url) if target else []
-    return {"pr": url, "action": action, "tasks": len(links), **({"milestone_woken": woken} if woken else {})}
+
+def _merge_wakes(c, links, url):
+    """A linked pull request merged: the bot that has the link's task gets one wake, to carry it on. A person's task is
+    not woken (the person sees it), nor a task that is not open or is snoozed (`H._wake`), and a task a merge of this
+    pull request already woke through another of its links is not woken again (`github-merge-wake:<task>` records the
+    pull requests each task has been woken for). The caller passes only a merge's first reading. Other tasks hear
+    nothing: a task waits on the tasks it filed, never on another task's pull request."""
+    from .repositories import metadata, save_metadata
+
+    match = PR_LINK.match(url)
+    pr_key = f"{match.group(1)}/{match.group(2)}#{match.group(3)}".lower() if match else url.lower()
+    for link in links:
+        row = H.task(c, link["task_id"])
+        if not row or not H.is_bot(row["owner_id"]) or row["status"] != "open" or _engine_speaks(c, row["id"]):
+            continue
+        key = "github-merge-wake:" + row["id"]
+        woke = metadata(c, key).get("prs", [])
+        if pr_key in woke:
+            continue
+        save_metadata(c, key, {"prs": [*woke, pr_key]})
+        said = f"{link['title']} merged: {url}. Carry this task on: say it is done, or close it."
+        if link.get("no_ship"):
+            said += " It is not in the repository Tico releases, so no shipped wake follows."
+        queue_wake(c, row, said)
 
 
 def release(c, payload, release_repo=""):
-    """A release published: tasks waiting for its tag get their one wake (backend/milestone_waits.py), and the Dev
-    tickets it carries are followed up once (backend/release_flow.py)."""
-    from . import milestone_waits
+    """A release published: nothing waits on it in General (In a release is a requirement of the Engineering pipeline,
+    which comes later). A release of the server's release repository, not a draft or a prerelease (a tag with a
+    suffix), is `release.published` for the automations and outgoing webhooks, once: `github-release:<repo>@<tag>`
+    records it, so GitHub redelivering the webhook fires nothing. The payload names the release, never a task."""
+    from .repositories import metadata, save_metadata
 
     rel = payload.get("release") or {}
-    repo = str((payload.get("repository") or {}).get("full_name") or "")
     tag = str(rel.get("tag_name") or "")
-    if payload.get("action") != "published" or rel.get("draft") or not repo or not tag:
-        return {"release": tag, "action": payload.get("action"), "woken": []}
-    target = milestone_waits.release_target(f"{repo}@{tag}")
-    woken = (
-        milestone_waits.happened(
-            c, "release_published", target[0], str(rel.get("html_url") or ""), release_repo=release_repo
-        )
-        if target
-        else []
-    )
-    return {"release": tag, "action": "published", "woken": woken}
+    repo = str((payload.get("repository") or {}).get("full_name") or "")
+    published = payload.get("action") == "published" and not rel.get("draft")
+    action = "published" if published else payload.get("action")
+    if published and tag and "-" not in tag and repo and repo.lower() == str(release_repo or "").lower():
+        target = f"{repo}@{tag}"
+        key = "github-release:" + target.lower()
+        if not metadata(c, key):
+            save_metadata(c, key, {"at": H.now()})
+            facts = {"release": tag, "repository": repo, "url": str(rel.get("html_url") or "")}
+            H.hook(c, "release.published", target, lambda: facts, H.KEEPER, revision=0)
+    return {"release": tag, "action": action, "woken": []}
 
 
 def _own_comment(c, task, payload, key, detail):
@@ -872,18 +823,39 @@ def _worst(a, b):
     return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
 
 
-def _set_dropped(detail, dropped):
+# Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
+# check left out beside a dropped failure would read "failing" and could never be seen to finish.
+DROPPED_PENDING = "checks_dropped_pending"
+
+
+def _dropped_pending(checks, kept):
+    return any(state == "pending" for key, state in checks.items() if key not in kept)
+
+
+def _set_dropped(detail, dropped, pending=False):
     if dropped:
         detail["checks_dropped"] = dropped
     else:
         detail.pop("checks_dropped", None)
+    if dropped and pending:
+        detail[DROPPED_PENDING] = True
+    else:
+        detail.pop(DROPPED_PENDING, None)
+
+
+def _still_going(detail):
+    """Whether the stored copy says a check on the head was still going: one it kept, or one it left out."""
+    return (
+        "pending" in (detail.get("checks") or {}).values()
+        or detail.get("checks_dropped") == "pending"
+        or bool(detail.get(DROPPED_PENDING))
+    )
 
 
 def _finish(c, task, link, detail, full, checks):
     """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
     ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
-    either way: a head green again after a check came late (a suite requested after the rest passed) is still green for
-    the ticket's move (verdict_moves.checks_done, once per head itself)."""
+    either way."""
     failed = list(
         dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing")
     )
@@ -969,8 +941,10 @@ _pending_lock = threading.Lock()
 def refresh_pending_checks(service):
     """The background pass's read of checks that have sat pending with no word from GitHub for `STUCK_SUITE_MINUTES`,
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
-    so a suite that never started stops holding a green head (Dev 646). A link whose stored copy dropped a non-passing
-    check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
+    so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
+    pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
     with service.store.read() as c:
@@ -984,7 +958,9 @@ def refresh_pending_checks(service):
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
                 "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
-                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL) AND l.number IS NOT NULL AND r.reachable=1 "
+                "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
                 (
@@ -1019,38 +995,47 @@ def refresh_pending_checks(service):
 
 def apply_checks(c, link_id, head, checks, since=None):
     """Rebuild a PR link's checks from a fresh read (`read_checks`) at the head the link is at now. Checks that leave
-    pending this way finish the head as a webhook's last check would (`_finish`, then verdict_moves.checks_done).
+    pending this way finish the head as a webhook's last check would (`_finish`).
     `since` is the link's updated stamp when the read began: a link written after it (a webhook during the read) keeps
-    its checks, which are newer than the read. Returns the link's checks state, or None when the read no longer
-    applies (another head, a closed PR, a write since)."""
+    its checks, which are newer than the read. A failed head whose stored copy had a pending check and whose read has
+    none finishes too, though it read "failing" before and after: the pending check is what kept it from finishing.
+    Returns the link's checks state, or None when the read no longer applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
     detail = H._json(link.get("detail"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
-    if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
+    if not checks or link is None or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
     if since is not None and link.get("updated_at") != since:
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
     state, kept = _overall(checks), _kept(checks)
-    dropped = _dropped(checks, kept)
-    if detail.get("checks") == kept and link.get("checks") == state and detail.get("checks_dropped") == dropped:
+    dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
+    # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
+    # even when its state stays the same.
+    held = _still_going(detail) and "pending" not in checks.values()
+    if (
+        detail.get("checks") == kept
+        and link.get("checks") == state
+        and detail.get("checks_dropped") == dropped
+        and bool(detail.get(DROPPED_PENDING)) == dropped_pending
+        and not held
+    ):
         return state
     detail["checks"] = kept
-    _set_dropped(detail, dropped)
-    finished = state != "pending" and state != link.get("checks")
-    finished_head = _finish(c, task, link, detail, head, checks) if finished else None
-    record_health_wait({**link, "checks": state}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
+    _set_dropped(detail, dropped, dropped_pending)
+    changed = state != link.get("checks")
+    # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
+    finished = state != "pending" and "pending" not in checks.values() and (changed or held)
+    if finished:
+        _finish(c, task, link, detail, head, checks)
+    record_health_wait({**link, "checks": state}, detail)
     c.execute(
         "UPDATE task_links SET checks=?,detail=?,updated_at=? WHERE id=?", (state, json.dumps(detail), H.now(), link_id)
     )
-    if state != link.get("checks"):
+    if changed:
         c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
         H.event(c, H.KEEPER, "github.checks_read", task["id"], {"url": link["url"], "head": head, "checks": state})
-    if finished_head:
-        from . import verdict_moves
-
-        verdict_moves.checks_done(c, task, *finished_head)
     return state
 
 
@@ -1098,7 +1083,6 @@ def pr_signal(c, event, payload):
         fields = {}
         label = link["title"]
         wake, batch, who_key = False, None, ""
-        finished_head = None
         if event in ("check_run", "check_suite", "status", "workflow_run"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
@@ -1125,8 +1109,9 @@ def pr_signal(c, event, payload):
                 checks[_suite_key(own, signal)] = "pending"
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
+            pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
-            _set_dropped(detail, dropped)
+            _set_dropped(detail, dropped, pending)
             fields["checks"] = _with_dropped(_overall(checks), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
@@ -1147,11 +1132,13 @@ def pr_signal(c, event, payload):
                 and not set(checks.values()) <= {"skipped"}
                 # A copy that dropped a check cannot finish the head green: only its own failure finishes it.
                 and (not dropped or "failing" in checks.values())
+                # A check the copy left out may still be going: the next fresh read (apply_checks) finishes the head.
+                and not _still_going(detail)
             ):
                 # GitHub sends a suite's `requested` only to its own App, so a single run or status still pending
                 # is often the only sign that another service's checks are not done.
                 full = str(signal.get("head_sha") or payload.get("sha") or detail.get("head_sha") or "")
-                finished_head = _finish(c, task, link, detail, full, checks)
+                _finish(c, task, link, detail, full, checks)
         elif event == "pull_request_review":
             state = str((payload.get("review") or {}).get("state") or "").lower()
             if payload.get("action") == "dismissed":
@@ -1207,7 +1194,7 @@ def pr_signal(c, event, payload):
         if event in ("pull_request_review", "pull_request_review_comment"):
             fields["activity_at"] = H.now()  # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
-        record_health_wait({**link, **fields}, detail, check_flow=step_flow.has_flow(c, task.get("type_id")))
+        record_health_wait({**link, **fields}, detail)
         fields.update(detail=json.dumps(detail), updated_at=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.now(), task["id"]))
@@ -1215,79 +1202,11 @@ def pr_signal(c, event, payload):
             "UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
             (*fields.values(), link["id"]),
         )
-        if finished_head:
-            # Green at a Fixes step moves the ticket on; green where the last check approved wakes the merge.
-            from . import verdict_moves
-
-            verdict_moves.checks_done(c, task, *finished_head)
         if wake and batch == "review" and not by_person(c, payload, who_key):
             queue_note(c, task, item)  # a bot's or an App's review is news for the next run, not a wake
         elif wake:
             queue_wake(c, task, item, batch)
     return {"tasks": len({l["task_id"] for l in links})}
-
-
-def creation_paths(service, pr, headers):
-    """None until the first PR registration; a complete file list or an explicit retry."""
-    with service.store.read() as c:
-        links = _links_for(c, pr.get("html_url", ""))
-        from .review_gate import engineering
-
-        if links:
-            needed = any(
-                engineering(c, H.task(c, l["task_id"]))
-                and (H._json(l.get("detail"), {}) or {}).get("qa_default_pending")
-                for l in links
-            )
-        else:
-            head = pr.get("head") or {}
-            repo = (head.get("repo") or {}).get("full_name")
-            needed = any(
-                engineering(c, H.task(c, r[0]))
-                for r in c.execute(
-                    "SELECT task_id FROM task_links WHERE kind='worktree' AND lower(repo)=lower(?) AND branch=?",
-                    (repo, head.get("ref")),
-                )
-            )
-    if not needed:
-        return None
-    match = PR_LINK.match(pr.get("html_url", ""))
-    if not match:
-        return None
-    paths, count = [], 0
-    for page in range(1, 31):
-        response = service._call(
-            "GET",
-            f"/repos/{match[1]}/{match[2]}/pulls/{match[3]}/files",
-            headers=headers,
-            params={"per_page": 100, "page": page},
-        )
-        if response.status_code != 200:
-            raise ValueError("PR files unavailable for QA default")
-        files = response.json()
-        count += len(files)
-        paths.extend(f["filename"] for f in files)
-        paths.extend(f["previous_filename"] for f in files if f.get("previous_filename"))
-        total = pr.get("changed_files")
-        if total is not None and count >= total:
-            return paths
-        if len(files) < 100:
-            if total is not None and count != total:
-                raise ValueError("PR files incomplete for QA default")
-            return paths
-    raise ValueError("PR files incomplete for QA default")
-
-
-def apply_creation_qa(c, pr, paths):
-    if paths is None:
-        return
-    from . import qa_defaults
-
-    qa_defaults.pr_created(c, pr, paths)
-    for link in _links_for(c, pr["html_url"]):
-        detail = H._json(link.get("detail"), {}) or {}
-        detail.pop("qa_default_pending", None)
-        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
 
 
 def refresh_task_prs(service, task_id):
@@ -1364,10 +1283,17 @@ def refresh_task_prs(service, task_id):
                             except Exception:
                                 logging.getLogger("tico.github").debug("Head identity unavailable for %s #%s", *key)
                         # Pending checks, and a copy that dropped a check, are read afresh: a suite that never starts sends
-                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green.
+                        # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
+                        # a failing link that still holds a running check: this refresh moves the link's updated_at, so
+                        # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
                         checks = None
-                        dropped = (H._json(link.get("detail"), {}) or {}).get("checks_dropped")
-                        if head and (link.get("checks") == "pending" or dropped) and pr.get("state") == "open":
+                        stored = H._json(link.get("detail"), {}) or {}
+                        dropped = stored.get("checks_dropped")
+                        if (
+                            head
+                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and pr.get("state") == "open"
+                        ):
                             try:
                                 checks = _fresh_checks(service, link["repo"], head)
                             except Exception:
@@ -1509,9 +1435,8 @@ def reconcile_worktree_prs(service):
                     "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
                     "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND "
                     + held.format("p")
-                    + " AND (json_extract(p.detail,'$.qa_default_pending')=1 OR EXISTS "
-                    "(SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
-                    "AND coalesce(w.state,'unknown')<>'removed'))",
+                    + " AND EXISTS (SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
+                    "AND coalesce(w.state,'unknown')<>'removed')",
                     (org,),
                 )
             )
@@ -1599,7 +1524,6 @@ def reconcile_worktree_prs(service):
                             if ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
-                    paths_by_url = {p.get("html_url"): creation_paths(service, p, auth) for p in found}
                     registering = kind == "branch" and found
                     try:
                         with service.store.transaction() as c:
@@ -1629,7 +1553,6 @@ def reconcile_worktree_prs(service):
                                     review_role=service.settings.github_review_role,
                                     release_repo=service.settings.release_repo,
                                 )
-                                apply_creation_qa(c, pr, paths_by_url.get(pr.get("html_url")))
                     except Exception:
                         if registering:
                             _pr_error(
@@ -1819,9 +1742,8 @@ def refresh_deployed_tasks(service):
     threading.Thread(target=refresh, name="tico-deploy-refresh", daemon=True).start()
 
 
-# What a release kept of a pull request is read hunk by hunk: release notes move between sections at every cut and
-# tests are cut routinely, so the product files decide when the pull request has any.
-NOTES_FILES = {"CHANGELOG.md"}
+# What a release kept of a pull request is read hunk by hunk: tests are cut routinely, so the product files decide
+# when the pull request has any.
 TEST_PATH = re.compile(r"(^|/)(tests?|testdata|fixtures)/|(^|/)test_[^/]*$|_test\.[a-z]+$|\.test\.[a-z]+$")
 
 
@@ -1878,7 +1800,6 @@ def change_kept(get, repo, merge, release):
     files = commit.get("files") or []
     if len(parents) > 1:  # a merge commit: the pull request is what it changed on top of main
         files = (get(f"{base}/compare/{parents[0]['sha']}...{merge}") or {}).get("files") or []
-    files = [f for f in files if f.get("filename") not in NOTES_FILES]
     product = [f for f in files if not TEST_PATH.search(f["filename"])]
     if not (product or files):
         return None
@@ -1953,7 +1874,7 @@ def ship_deployed(c, settings, *, ancestry=None):
         return bool(link["pr_sha"] == commit or verified or historical)
 
     for link in candidates:
-        with isolated(c, "ship_deployed", link["task_id"]):
+        with isolated(c, "ship_deployed", link["task_id"], private=True):
             if not included(link):
                 continue
             c.execute("UPDATE task_links SET state='shipped',updated_at=? WHERE id=?", (H.now(), link["id"]))
@@ -1975,6 +1896,25 @@ def ship_deployed(c, settings, *, ancestry=None):
             if link["task_id"] not in shipped:
                 shipped.append(link["task_id"])
     return shipped
+
+
+def _task_facts(c, github_app, event, payload):
+    """The engine's PR and release facts from a webhook (backend/task_facts.py), in a savepoint: a fault there is
+    logged and the 5-minute re-read brings the fact, and what else the webhook does still happens."""
+    from . import task_facts
+
+    if event not in ("pull_request", "check_run", "status", "release"):
+        return []
+    app = github_app.row(c) if github_app is not None else None
+    c.execute("SAVEPOINT task_facts")
+    try:
+        found = task_facts.webhook(c, event, payload, (app["slug"] if app else None) or None)
+    except Exception:
+        c.execute("ROLLBACK TO task_facts")
+        logging.getLogger("tico.github").exception("Saving the facts of a %s webhook failed", event)
+        found = []
+    c.execute("RELEASE task_facts")
+    return found
 
 
 def install_github(app, settings, store):
@@ -2004,6 +1944,12 @@ def install_github(app, settings, store):
             queue_sync(app.state.github_app, refresh=True)
             return {"ok": True}
         with store.transaction() as c:
+            from . import task_facts
+
+            # A delivery GitHub sends again (a retry, a redelivery) is taken once (docs/pipelines-v3.md "GitHub").
+            if task_facts.seen_delivery(c, headers.get("x-github-delivery"), event):
+                return {"ok": True, "repeat": True}
+            facts = _task_facts(c, app.state.github_app, event, payload)
             if event == "pull_request":
                 result = pull_request(
                     c, payload, review_role=settings.github_review_role, release_repo=settings.release_repo
@@ -2022,6 +1968,275 @@ def install_github(app, settings, store):
                 result["shipped"] = ship_deployed(c, settings)
             elif event == "release":
                 result = release(c, payload, release_repo=settings.release_repo)
+            elif facts:
+                result = {}
             else:
                 return Response(status_code=204)
-        return {"ok": True, **result}
+        return {"ok": True, **result, **({"facts": facts} if facts else {})}
+
+
+# ----------------------------------------------------------------------------- the engine's GitHub (task_facts.GitHub)
+FACT_READ = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
+mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
+pullRequest(number:$number){id state merged isDraft headRefOid mergedAt mergeCommit{oid} isInMergeQueue
+isMergeQueueEnabled autoMergeRequest{enabledAt}
+timelineItems(last:1,itemTypes:[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT,AUTO_MERGE_ENABLED_EVENT,
+AUTO_MERGE_DISABLED_EVENT]){nodes{__typename ... on RemovedFromMergeQueueEvent{reason createdAt}
+... on AutoMergeDisabledEvent{reason reasonCode createdAt}}}}}}"""
+FACT_ENQUEUE = """mutation($id:ID!,$head:GitObjectID!){
+enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head}){clientMutationId}}"""
+FACT_AUTO = """mutation($id:ID!,$head:GitObjectID!){
+enablePullRequestAutoMerge(input:{pullRequestId:$id,expectedHeadOid:$head}){clientMutationId}}"""
+FACT_MERGE = """mutation($id:ID!,$head:GitObjectID!,$method:PullRequestMergeMethod!){
+mergePullRequest(input:{pullRequestId:$id,expectedHeadOid:$head,mergeMethod:$method}){clientMutationId}}"""
+FACT_READY = """mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){clientMutationId}}"""
+FACT_DEQUEUE = """mutation($id:ID!){dequeuePullRequest(input:{id:$id}){clientMutationId}}"""
+FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequestId:$id}){clientMutationId}}"""
+WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
+FAILED_JOBS = ("failure", "timed_out", "startup_failure", "cancelled")
+
+
+class GitHubRefused(RuntimeError):
+    """A GitHub call that failed or was refused; the message is GitHub's reason."""
+
+
+class AppGitHub:
+    """`task_facts.GitHub` through the company's GitHub App (backend/github_app.py `GitHubApp`): what the PR and release
+    facts read, and the merge queue's enqueue and dequeue (GraphQL). Each call mints a token for the one repo. A failed
+    call raises `GitHubRefused` (or the app's Problem) with GitHub's reason; the caller keeps the fact as it was."""
+
+    def __init__(self, service):
+        self.service = service
+
+    def _headers(self, repo, permissions):
+        token, _ = self.service.mint([repo], permissions)
+        return {"Authorization": "Bearer " + token}
+
+    def _get(self, repo, path, permissions, params=None, ok=(200,)):
+        response = self.service._call(
+            "GET", f"/repos/{quote(repo, safe='/')}{path}", headers=self._headers(repo, permissions), params=params
+        )
+        if response.status_code not in ok:
+            raise GitHubRefused(f"GitHub answered HTTP {response.status_code}")
+        return response
+
+    def _graphql(self, repo, permissions, query, variables):
+        """(data, errors) of one GraphQL call; an HTTP failure raises."""
+        response = self.service._call(
+            "POST", "/graphql", headers=self._headers(repo, permissions), json={"query": query, "variables": variables}
+        )
+        if response.status_code != 200:
+            raise GitHubRefused(f"GitHub answered HTTP {response.status_code}")
+        body = response.json() or {}
+        errors = "; ".join(str((e or {}).get("message") or e) for e in body.get("errors") or [])
+        return body.get("data") or {}, errors
+
+    def _pull(self, repo, number, permissions):
+        """(repository, pullRequest) from GraphQL, the pull request None when it does not exist."""
+        owner, name = repo.split("/", 1)
+        data, errors = self._graphql(
+            repo, permissions, FACT_READ, {"owner": owner, "name": name, "number": int(number)}
+        )
+        repository = data.get("repository") or {}
+        found = repository.get("pullRequest")
+        if not found and errors and "Could not resolve" not in errors:
+            raise GitHubRefused(errors)
+        return repository, found
+
+    # ------------------------------------------------------------------ reads
+    def read_pr(self, repo, number):
+        from . import task_facts
+
+        _, found = self._pull(repo, number, {"pull_requests": "read", "metadata": "read"})
+        if not found:
+            return None
+        merged = bool(found.get("merged"))
+        state = "merged" if merged else "open" if found.get("state") == "OPEN" else "closed"
+        fact = {
+            "state": state,
+            "draft": bool(found.get("isDraft")),
+            "head_sha": str(found.get("headRefOid") or "").lower() or None,
+            "merged_sha": ((found.get("mergeCommit") or {}).get("oid") or None) if merged else None,
+            "merged_at": found.get("mergedAt") if merged else None,
+            "queue_state": "none",
+            "removed_reason": None,
+            "failing_check": None,
+            "failing_check_url": None,
+        }
+        if merged or state != "open":
+            return fact
+        if found.get("isInMergeQueue"):
+            fact["queue_state"] = "queued"
+        elif found.get("autoMergeRequest"):
+            fact["queue_state"] = "auto_merge"
+        else:
+            last = ((found.get("timelineItems") or {}).get("nodes") or [None])[-1] or {}
+            kind = last.get("__typename")
+            reason = str(last.get("reasonCode") or last.get("reason") or "")
+            if kind in ("RemovedFromMergeQueueEvent", "AutoMergeDisabledEvent") and (
+                reason.lower() not in task_facts.MERGED_REASONS
+            ):
+                fact["queue_state"] = "removed"
+                fact["removed_reason"] = task_facts.removal_words(reason)
+                if kind == "RemovedFromMergeQueueEvent":
+                    failed = self._queue_failure(repo, number, str(last.get("createdAt") or ""))
+                    if failed:
+                        fact["failing_check"], fact["failing_check_url"] = failed
+        return fact
+
+    def _queue_failure(self, repo, number, before):
+        """(name, url) of the first failed job of the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
+        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`, or None when GitHub will not say."""
+        try:
+            runs = (
+                self._get(
+                    repo,
+                    "/actions/runs",
+                    {"actions": "read", "metadata": "read"},
+                    params={"event": "merge_group", "per_page": 50},
+                )
+                .json()
+                .get("workflow_runs")
+                or []
+            )
+            mine = [
+                r
+                for r in runs
+                if f"/pr-{int(number)}-" in str(r.get("head_branch") or "")
+                and (not before or str(r.get("created_at") or "") <= before)
+            ]
+            for found in sorted(mine, key=lambda r: str(r.get("created_at") or ""), reverse=True)[:1]:
+                jobs = self.service._call(
+                    "GET",
+                    str(found.get("jobs_url") or ""),
+                    headers=self._headers(repo, {"actions": "read", "metadata": "read"}),
+                )
+                if jobs.status_code != 200:
+                    return None
+                for job in jobs.json().get("jobs") or []:
+                    if job.get("conclusion") in FAILED_JOBS:
+                        return str(job.get("name") or "A check")[:200], job.get("html_url") or None
+        except Exception:  # noqa: BLE001 - the removal stands without its check
+            logging.getLogger("tico.github").info("No merge-queue run read for %s #%s", repo, number)
+        return None
+
+    def read_checks(self, repo, sha):
+        from . import task_facts
+
+        slug = ""
+        row = self.service.row()
+        if row is not None:
+            slug = str(row["slug"] or "")
+        permissions = {"checks": "read", "statuses": "read", "metadata": "read"}
+        base = f"/commits/{quote(sha, safe='')}"
+        checks = {}
+        for page in range(1, 11):
+            got = self._get(repo, base + "/check-runs", permissions, {"per_page": 100, "page": page}).json()
+            runs = got.get("check_runs") or []
+            for run in runs:
+                app_slug = str((run.get("app") or {}).get("slug") or "")
+                name = str(run.get("name") or "Checks")[:200]
+                checks.setdefault(
+                    name,
+                    {
+                        "name": name,
+                        "app": app_slug,
+                        "state": task_facts.check_state(run.get("status"), run.get("conclusion")),
+                        "url": run.get("html_url") or run.get("details_url") or "",
+                        "tico": bool(slug) and app_slug == slug,
+                    },
+                )
+            if len(runs) < 100:
+                break
+        for status in self._get(repo, base + "/status", permissions, {"per_page": 100}).json().get("statuses") or []:
+            name = str(status.get("context") or "Checks")[:200]
+            checks.setdefault(
+                name,
+                {
+                    "name": name,
+                    "app": "status",
+                    "state": task_facts.check_state(status.get("state"), status.get("state")),
+                    "url": status.get("target_url") or "",
+                    "tico": False,
+                },
+            )
+        return list(checks.values())
+
+    def read_releases(self, repo):
+        response = self._get(repo, "/releases", {"contents": "read", "metadata": "read"}, {"per_page": 100}, (200, 404))
+        if response.status_code == 404:
+            return []
+        return [
+            {
+                "tag": r["tag_name"],
+                "commit_sha": None,  # a release names its tag; `contains` compares against the tag
+                "prerelease": bool(r.get("prerelease")),
+                "published_at": r.get("published_at") or r.get("created_at"),
+            }
+            for r in response.json() or []
+            if r.get("tag_name") and not r.get("draft")
+        ]
+
+    def contains(self, repo, release_sha, commit_sha):
+        path = f"/compare/{quote(commit_sha, safe='')}...{quote(release_sha, safe='')}"
+        response = self._get(repo, path, {"contents": "read", "metadata": "read"}, ok=(200, 404))
+        if response.status_code == 404:
+            return False
+        return (response.json() or {}).get("status") in ("ahead", "identical")
+
+    # ------------------------------------------------------------------ the merge queue
+    def ready(self, repo, number):
+        _, found = self._pull(repo, number, WRITE_PERMISSIONS)
+        if not found or not found.get("isDraft") or found.get("state") != "OPEN":
+            return
+        _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_READY, {"id": found["id"]})
+        if errors:
+            raise GitHubRefused(errors)
+
+    def enqueue(self, repo, number, head_sha):
+        repository, found = self._pull(repo, number, WRITE_PERMISSIONS)
+        if not found:
+            return {"ok": False, "how": None, "reason": "The pull request is gone"}
+        if found.get("merged"):
+            return {"ok": True, "how": "merged", "reason": ""}
+        if found.get("state") != "OPEN":
+            return {"ok": False, "how": None, "reason": "The pull request is not open"}
+        if str(found.get("headRefOid") or "").lower() != str(head_sha).lower():
+            return {"ok": False, "how": None, "reason": "The head moved"}
+        if found.get("isInMergeQueue"):
+            return {"ok": True, "how": "queued", "reason": ""}
+        if found.get("autoMergeRequest"):
+            return {"ok": True, "how": "auto_merge", "reason": ""}
+        ids = {"id": found["id"], "head": head_sha}
+        if found.get("isMergeQueueEnabled"):
+            _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_ENQUEUE, ids)
+            return {"ok": not errors, "how": "queued" if not errors else None, "reason": errors}
+        _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_AUTO, ids)
+        if not errors:
+            return {"ok": True, "how": "auto_merge", "reason": ""}
+        if "clean status" not in errors.lower():
+            return {"ok": False, "how": None, "reason": errors}
+        # Auto-merge refuses a PR that can merge now: merge it, with the first way the repo allows.
+        method = next(
+            (m for m, on in (("MERGE", "mergeCommitAllowed"), ("SQUASH", "squashMergeAllowed")) if repository.get(on)),
+            "REBASE",
+        )
+        _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_MERGE, {**ids, "method": method})
+        return {"ok": not errors, "how": "merged" if not errors else None, "reason": errors}
+
+    def dequeue(self, repo, number):
+        _, found = self._pull(repo, number, WRITE_PERMISSIONS)
+        if not found:
+            return {"ok": True, "how": "absent", "reason": ""}
+        if found.get("merged"):
+            return {"ok": True, "how": "merged", "reason": ""}
+        if found.get("isInMergeQueue"):
+            mutation = FACT_DEQUEUE
+        elif found.get("autoMergeRequest"):
+            mutation = FACT_AUTO_OFF
+        else:
+            return {"ok": True, "how": "absent", "reason": ""}
+        _, errors = self._graphql(repo, WRITE_PERMISSIONS, mutation, {"id": found["id"]})
+        if errors:
+            raise GitHubRefused(errors)
+        return {"ok": True, "how": "dequeued", "reason": ""}

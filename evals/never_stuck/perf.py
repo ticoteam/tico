@@ -1,0 +1,221 @@
+"""How long one never-stuck pass takes over many open tasks: `python -m evals.never_stuck.perf [--tasks 10000]`.
+
+Seeded and mostly idle, as an org's tasks are: most bot tasks have had their run and wait for their next try, some wait
+on a person's answer, some are snoozed, a few are due for a try now. It times one pass of the real check after the
+first (the first only sets each task's next try time), counts its SQL statements by kind, and prints where the time
+goes. It changes nothing in the engine."""
+
+import argparse
+import cProfile
+import datetime as dt
+import gc
+import io
+import pstats
+import random
+import re
+import time
+from collections import Counter
+from typing import Any
+
+from . import world as Wd
+from .world import ANA, BEN, BUILDER, CARA, GENERAL, REVIEWER, WRITER, World
+
+
+def fill(world: World, count: int, rng: random.Random, *, queued: bool = False) -> dict[str, int]:
+    """`count` open General tasks. Returns how many of each kind. With `queued`, each bot task's wake is still queued
+    (its bot has not taken it yet); else every wake had its run and the task waits for its next try."""
+    from backend import task_engine as E
+    from backend.store import H
+
+    kinds: Counter[str] = Counter()
+    bots = (BUILDER, WRITER, REVIEWER)
+    with world.tx() as c:
+        for n in range(count):
+            bot = bots[n % len(bots)]
+            row = H.task_create(
+                c, ANA, f"Chore {n}", "What to do and how to tell it is done.", bot, pipeline=GENERAL, lint=False
+            )
+            roll = rng.random()
+            if roll < 0.10:
+                E.add_requirement(c, row["id"], ANA, "answer", rng.choice((BEN, CARA)), "Which one?")
+                kinds["waits on a person"] += 1
+            elif roll < 0.15:
+                E.snooze(c, row["id"], ANA, None, H.shift(H.now(), days=3))
+                kinds["snoozed"] += 1
+            else:
+                kinds["a bot's turn"] += 1
+        if queued:
+            return dict(kinds)
+        # Every wake so far had its run, which ended: the bots' tasks wait for their next try.
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        c.execute(
+            "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, "
+            "created_at, started_at, finished_at, message_id, task_id) "
+            "SELECT 'a' || j.id, j.id, j.bot_id, 'r1', 1, 'a' || j.id, 'completed', ?, ?, ?, ?, j.message_id, "
+            "substr(m.wake_key, 1, instr(m.wake_key, ':') - 1) FROM jobs j JOIN messages m ON m.id = j.message_id "
+            "WHERE m.wake_key IS NOT NULL",
+            (H.now(), H.now(), H.now(), H.now()),
+        )
+        _started(c)
+    return dict(kinds)
+
+
+def _started(c: Any) -> None:
+    """Each run that started takes its start in order (`task_wakes.started`), as a real start does: the run count
+    reads them."""
+    c.execute(
+        "INSERT OR IGNORE INTO run_starts (attempt_id) SELECT id FROM attempts WHERE started_at IS NOT NULL ORDER BY rowid"
+    )
+
+
+# The rows one task on the engine is made of, as `fill` makes them: what `clone` copies.
+CLONED = ("conversations", "tasks", "visits", "requirements", "snoozes", "messages", "jobs", "attempts")
+_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def clone(world: World, times: int) -> int:
+    """Copy every task `fill` made `times` more times, row by row (CLONED), each id given a new one wherever it is
+    written (a column, a wake key, refs): many tasks in seconds, where making each through the engine takes 10-25 ms.
+    Returns how many open tasks there are then. The copies are placed as they were, past the guard that has every new
+    task enter() a stage (tasks_enter_only, put back after)."""
+    with world.tx() as c:
+        guard = c.execute("SELECT sql FROM sqlite_master WHERE type='trigger' AND name='tasks_enter_only'").fetchone()
+        if guard:
+            c.execute("DROP TRIGGER tasks_enter_only")
+        rows: dict[str, tuple[list[str], list[tuple[Any, ...]]]] = {}
+        ids: set[str] = set()
+        for table in CLONED:
+            cursor = c.execute(f'SELECT * FROM "{table}"')
+            names = [d[0] for d in cursor.description]
+            found = [tuple(row) for row in cursor.fetchall()]
+            if table == "requirements":
+                found = [row for row in found if row[names.index("visit_id")]]  # a stage's own stay as they are
+            rows[table] = (names, found)
+            ids |= {str(row[names.index("id")]) for row in found}
+        for n in range(1, times + 1):
+            new = {old: old[:-6] + f"{n:06x}" for old in ids}
+
+            def swap(value: Any, new: dict[str, str] = new) -> Any:
+                if not isinstance(value, str):
+                    return value
+                return new.get(value) or _ID.sub(lambda m: new.get(m.group(), m.group()), value)
+
+            for table, (names, found) in rows.items():
+                number = names.index("number") if table == "tasks" else -1
+                c.executemany(
+                    f'INSERT INTO "{table}" ({", ".join(names)}) VALUES ({", ".join("?" * len(names))})',
+                    [
+                        tuple(
+                            value + n * 1_000_000 if i == number and isinstance(value, int) else swap(value)
+                            for i, value in enumerate(row)
+                        )
+                        for row in found
+                    ],
+                )
+        _started(c)  # a copy's start is its own: run_starts ids only grow, so they are taken, not copied
+        if guard:
+            c.execute(guard[0])
+        return int(c.execute("SELECT COUNT(*) FROM tasks WHERE status='open'").fetchone()[0])
+
+
+def measure(
+    count: int = 10_000,
+    seed: int = 1,
+    profile: bool = True,
+    *,
+    copies: int = 0,
+    queued: bool = False,
+    due: float = 0.02,
+) -> dict[str, Any]:
+    """One pass over `count` tasks made through the engine, times 1 + `copies` (`clone`). `due`: the share of tasks
+    whose next try is due in the pass measured."""
+    from backend import never_stuck as NS
+
+    rng = random.Random(seed)
+    with World(seed) as world:
+        started = time.perf_counter()
+        kinds = fill(world, count, rng, queued=queued)
+        count = clone(world, copies) if copies else count
+        made = time.perf_counter() - started
+        world.shift(30)
+        with world.tx() as c:
+            first = NS.check(c)  # sets every bot task's next try time
+        world.shift(150)  # 2.5 minutes on: the tasks whose bot stopped first are due for try 1
+        with world.tx() as c:
+            # Most tasks stopped later: their next try is not due yet.
+            c.execute(
+                "UPDATE visits SET next_try_at=? WHERE left_at IS NULL AND id NOT IN "
+                "(SELECT id FROM visits WHERE left_at IS NULL ORDER BY id LIMIT ?)",
+                (Wd.ts(world.at() + dt.timedelta(minutes=10)), int(count * due)),
+            )
+        Wd.METER.trace = []
+        before = Wd.METER.count
+        profiler = cProfile.Profile() if profile else None
+        # Python's collector is off for the pass: its sweeps grow with everything else alive in the process (a test
+        # run's other worlds), not with the pass, and made the same pass take 1x to 3x as long.
+        gc.collect()
+        gc.disable()
+        try:
+            started, cpu = time.perf_counter(), time.process_time()
+            if profiler:
+                profiler.enable()
+            with world.tx() as c:
+                done = NS.check(c)
+            if profiler:
+                profiler.disable()
+            seconds, cpu = time.perf_counter() - started, time.process_time() - cpu
+        finally:
+            gc.enable()
+        statements = Wd.METER.count - before
+        trace, Wd.METER.trace = Wd.METER.trace, None
+        shapes = Counter(_shape(s) for s in trace)
+        top = ""
+        if profiler:
+            out = io.StringIO()
+            pstats.Stats(profiler, stream=out).sort_stats("cumulative").print_stats(25)
+            top = out.getvalue()
+        return {
+            "tasks": count,
+            "kinds": kinds,
+            "made_seconds": round(made, 1),
+            "first_pass": {k: n for k, n in first.items() if n},
+            "pass": {k: n for k, n in done.items() if n},
+            "seconds": round(seconds, 3),
+            "cpu_seconds": round(
+                cpu, 3
+            ),  # this process's CPU (SQLite runs in it): what other load on the machine moves least
+            "statements": statements,
+            "statements_per_task": round(statements / count, 1),
+            "reads": sum(s.lstrip().upper().startswith(("SELECT", "WITH")) for s in trace),
+            "live_reads": sum("lease_until >" in s for s in trace),  # reads of live runs: once a pass, not a task
+            "top_statements": shapes.most_common(12),
+            "profile": top,
+        }
+
+
+def _shape(statement: str) -> str:
+    text = re.sub(r"\s+", " ", statement.strip())
+    return text[:110]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("--tasks", type=int, default=10_000)
+    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--no-profile", action="store_true")
+    args = parser.parse_args()
+    out = measure(args.tasks, args.seed, not args.no_profile)
+    print(f"{out['tasks']} open tasks {out['kinds']} made in {out['made_seconds']} s")
+    print(f"first pass: {out['first_pass']}")
+    print(
+        f"one pass: {out['seconds']} s, {out['statements']} statements ({out['statements_per_task']} a task): {out['pass']}"
+    )
+    print("most run statements:")
+    for shape, n in out["top_statements"]:
+        print(f"  {n:7d}  {shape}")
+    if out["profile"]:
+        print(out["profile"])
+
+
+if __name__ == "__main__":
+    main()

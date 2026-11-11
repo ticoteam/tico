@@ -1,6 +1,5 @@
 """shared() reuses one sealed-credentials scan within a read snapshot."""
 
-from backend.tests.test_api import api  # noqa: F401
 from backend import computer_keys
 
 

@@ -10,13 +10,13 @@ import httpx
 from backend import hubdb as H
 from backend import trigger_presets as P
 from backend import webhooks as W
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_event_rules import CALL, judge, rule
-from backend.tests.test_task_rules import department
-from backend.tests.test_triggers import hook, sig
-from backend.tests.test_triggers_incoming import as_bot, stored_rows
-from backend.tests.test_wake_rules import setup
-from backend.tests.test_webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.event_rules import CALL, judge, rule
+from backend.tests.helpers.task_rules import department
+from backend.tests.helpers.triggers import hook, sig
+from backend.tests.helpers.triggers_incoming import as_bot, stored_rows
+from backend.tests.helpers.wake_rules import setup
+from backend.tests.helpers.webhooks import due, make, net, publish, run, sends, verify  # noqa: F401
 from backend import bot_settings as BS
 
 # Slack's published request-signing example (api.slack.com/authentication/verifying-requests-from-slack): its
@@ -220,10 +220,10 @@ def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_comp
     post_w(
         api,
         "webhooks",
-        {"name": "x", "url": "https://hooks.acme.example/x", "filter": {"task_types": ["no-such-type"]}},
+        {"name": "x", "url": "https://hooks.acme.example/x", "filter": {"pipelines": ["no-such-pipeline"]}},
         expected=422,
     )
-    assert eng["filter"] == {"departments": ["engineering"], "bots": [], "task_types": []}
+    assert eng["filter"] == {"departments": ["engineering"], "bots": [], "pipelines": []}
     with api.app.state.store.transaction() as c:
         mine = H.task_create(c, "human:ana", "Engineering job", "x", "bot:ops", lint=False)
         other = H.task_create(c, "human:ana", "Other job", "x", "bot:cpo", lint=False)
@@ -236,7 +236,7 @@ def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_comp
     assert heard["eng"] == {mine["id"], "s1"}  # the other department's task is out; a company event passes
     assert heard["cpo"] == {other["id"]}
     updated = post_w(api, f"webhooks/{eng['id']}/update", {"filter": {}})["webhook"]
-    assert updated["filter"] == {"departments": [], "bots": [], "task_types": []}
+    assert updated["filter"] == {"departments": [], "bots": [], "pipelines": []}
 
 
 def test_replay_missing_queues_exactly_the_events_an_endpoint_lacks(api, net):

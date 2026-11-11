@@ -44,6 +44,8 @@ interface MeetRec {
 }
 interface MeetList { meetings?: MeetRec[]; pending_count?: number }
 interface MeetSourceRow { id: string; status?: string; last_import?: string; last_succeeded_at?: string }
+// The viewer's Granola account: the last GET /v2/meetings/granola (null when the server has no such route).
+interface MeetGranola { connected: boolean; needs_signin: boolean; email?: string | null; last_error?: string | null }
 interface MeetLinkedTask { task_id: string; number?: number | null | undefined; title?: string | undefined; status?: string | undefined; created_by?: string; kind?: string }
 interface MeetLinked { tasks?: MeetLinkedTask[]; next_cursor?: string | null }
 interface MeetDraft {
@@ -57,12 +59,12 @@ interface MeetState {
   filter: string; when: string; person: string; source: string; people: Map<string, string>; selected: string; list: MeetRec[];
   poll: number; sourcesPoll: number; items: Record<string, MeetItems>; itemAdd: string; confirmDelete: string; open: boolean;
   query?: string; reviewBusy?: boolean; loaded?: boolean; empty?: boolean; sourceRows?: MeetSourceRow[] | null;
-  granola?: unknown; noteSave?: (() => Promise<void>) | null; linkOpen?: boolean; showDismissed?: boolean;
+  granola?: MeetGranola | null; noteSave?: (() => Promise<void>) | null; linkOpen?: boolean; showDismissed?: boolean;
   tsearch?: boolean; tq?: string; sideTab?: string | undefined; thit?: number; editing?: boolean; rec?: MeetRec;
   noteDraft?: {id: string; value: string} | null; noteTimer?: number; noteSaving?: boolean; noteAgain?: boolean;
   live?: Record<string, {chat: MeetChatMessage[]; bots: {bot: string; name?: string}[]}>;
   linkedTasks?: Record<string, MeetLinked>; linkedTaskChanges?: Record<string, Map<string, MeetLinkedTask | null>>;
-  itemLoadSequence?: number; pendingDrafts?: Map<string, MeetDraft>;
+  itemLoadSequence?: number; pendingDrafts?: Map<string, MeetDraft>; shared?: SharedPlaceHandle | null | undefined;
 }
 let MEET: MeetState | null = null;
 function meetStop() {
@@ -156,7 +158,8 @@ async function pageNotes(): Promise<void> {
   state.landing = false;
   const open = linked.get('meeting') || linked.get('recording');
   if (open) { state.selected = open; meetShow(state, true); meetDetail(state, open); }
-  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 30000);
+  // A safety read only: the list follows its live events, so the whole list is read every 3 minutes, not every 30 s.
+  state.poll = setInterval(() => { if (!document.hidden && !state.open) meetLoad(state, false); }, 180000);
   state.sourcesPoll = setInterval(() => { if (!document.hidden) meetSources(state); }, 60000);
 }
 
@@ -586,7 +589,8 @@ const meetSourceLabel = (s?: string): string => ({...IMPORT_SOURCES, manual: 'Ty
 // The source in words; a meeting the Recorder filed says so.
 const meetSourceName = (r: MeetRec) => r.client === 'tico-recorder' ? 'Tico Recorder' : r.source === 'tico-live' ? 'Tico live' : meetSourceLabel(r.source);
 const meetIcon = (name: string, label = '') => `<span class="nav-icon" aria-hidden="true">${name}</span>${label}`;
-const meetStatusWord = (s: string | undefined) => (typeof STATUS_WORD === 'object' && STATUS_WORD[s]) || s || '';
+const MEET_STATUS_WORD: Record<string, string> = {open: 'Open', done: 'Done', closed: 'Closed'};
+const meetStatusWord = (s: string | undefined) => (s && MEET_STATUS_WORD[s]) || s || '';
 // Who was there: people, then the bots attached to its live meeting and the bot it was shared with. Each is an
 // avatar; its name shows on hover, or on tap (focus) on a phone.
 function meetFaces(state: MeetState, rec: MeetRec): string {
@@ -945,7 +949,7 @@ function meetMadeTasks(state: MeetState, rec: MeetRec): MeetTaskRow[] {
   if (rec.sent?.task || work) {
     const st = rec.outcome?.status;
     add({id: rec.sent?.task || '', title: bot ? `Review by ${botDisplayName(bot)}` : 'Review', status: work ? '' : st,
-         who: work, spin: work === 'Sending' || ['open', 'doing', 'review', 'ready'].includes(String(st)),
+         who: work, spin: work === 'Sending' || st === 'open',
          line: rec.outcome?.task_id ? meetOneLine(plainMd(rec.outcome.summary || '')) : ''});
   }
   for (const t of rec.outcome?.tasks || []) add({id: t.id, title: t.title, status: t.status});
@@ -1321,7 +1325,7 @@ function meetPendingRender(state: MeetState, rec: MeetRec, data: MeetItems): voi
     for (const field of node.querySelectorAll('[data-pending-field]')) {
       const key = field.dataset.pendingField;
       if (draft.sending) continue;
-      const value = key === 'text' ? displayed.text : displayed.detail[key] || '';
+      const value = key === 'text' ? displayed.text : displayed.detail?.[key] || '';
       if (key === 'owner') {
         const options = [...(S.people || []).map((p): [string, string | undefined] => ['human:' + p.id, p.name || p.id]),
                          ...activeEmps().map((b): [string, string | undefined] => ['bot:' + b.id, b.display_name])]
@@ -1345,7 +1349,7 @@ function meetPendingRender(state: MeetState, rec: MeetRec, data: MeetItems): voi
     if (!conflict) { conflict = document.createElement('div'); conflict.className = 'mp-sub'; conflict.dataset.current = ''; node.querySelector('.mp-prop-body').append(conflict); }
     conflict.hidden = !draft.current;
     conflict.textContent = draft.current ? 'Current: ' + draft.current.text + ' · ' + Object.values(draft.current.detail || {}).join(' · ') : '';
-    const owner = displayed.detail.owner;
+    const owner = displayed.detail?.owner;
     const proposal = item.section === 'task' && item.proposed_task_id;
     node.querySelector('[data-send]').textContent = proposal ? 'Link' : 'Create';
     node.querySelector('[data-send]').disabled = draft.sending || !(data.can_send ?? data.can_push) || (!proposal && !owner);

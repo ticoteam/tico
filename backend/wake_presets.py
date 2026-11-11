@@ -6,9 +6,9 @@ including the former `current` setting, use Performance. New bots start as Doers
 Under a preset, two kinds of job wait at enqueue time (the `wake_preset_hold` trigger on jobs, so every
 event source is held the same way): a nonblocking notice the server marks with `refs.wake_batch`
 (BATCH_KINDS: a finished request, review comments, a failing check nobody armed a wait for) and a sweep
-(a routine's scheduled run, or a legacy stall or status check). Only the keeper writes those refs, so nobody can make
-an immediate wake wait by sending text that looks like one. Other news (a comment, a task's status, step or relation
-moving, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
+(a routine's scheduled run). Only Tico writes those refs, so nobody can make an immediate wake wait by sending text
+that looks like one. A task's turn (`task_turn`, backend/task_wakes.py) is never held. Other news (a comment, a task
+moving or a relation, any notice no rule names) starts no job at all: the rules engine writes it as a note (backend/rules.py,
 `default_note`), so nothing here holds it. A held batch never holds anything else back: a person's message starts
 its turn at once.
 The scheduler plans each held job's release (`tick`) and lets it go when it is due.
@@ -30,7 +30,6 @@ per install without a code change, e.g. `{"token_saver": {"batch_seconds": 900}}
 
 import json
 import os
-import statistics
 
 from . import hubdb as H
 from . import bot_settings as BS
@@ -63,14 +62,14 @@ DIGEST_ROOMS = 40  # rooms a digest names; it counts the rest
 DIGEST_IDS = 200  # job ids its event keeps
 HELD_CLASSES = (*BATCH_KINDS, NOTICE)
 # Sweeps: refs.wake on a keeper notice, or refs.sweep (a routine's scheduled run, by schedule id).
-SWEEP_WAKES = ("stalled", "status_check", "occurrence")
+SWEEP_WAKES = ("occurrence",)
 IMMEDIATE = (
     "A person's message or request",
     "An assignment",
     "A direct question",
-    "An awaited dependency resolving (a blocker done, an awaited review, a release)",
+    "A task to work",
+    "An awaited result (a sub-task finished, a worktree ready, an account reconnected)",
     "An actionable blocker",
-    "A review, QA or Security request",
 )
 _BATCH_SQL = "json_extract(m.refs,'$.wake_batch') IN (" + ",".join(f"'{k}'" for k in BATCH_KINDS) + ")"
 _SWEEP_SQL = (
@@ -188,12 +187,12 @@ def effective(config):
         f"{spec['label']}: finished requests and a person's review comments wait up to {batch}"
         + (" (at most one such wake per " + batch + ")" if spec["batch_scope"] == "bot" else "")
         + f"; an enabled routine runs at most every {_duration(spec['sweep_seconds'])}. "
-        "People, assignments, questions, awaited results, blockers and review requests wake it at once."
+        "People, assignments, questions, awaited results and blockers wake it at once."
     )
     if own and own.get("digest_hour") is not None:
         summary = (
             f"The rest of the news arrives once a day, at {own['digest_hour']:02d}:00 team time. "
-            "People, escalations and approvals wake it at once."
+            "People, escalations and asks wake it at once."
         )
     return {
         "preset": name,
@@ -392,7 +391,7 @@ def _release(c, bot, jobs):
             else "a notice"
         )
         lines.append(
-            f"- {what}: {where}; read them with `hub conversation show {conversation}`"
+            f"- {what}: {where}; read them with `tico conversation show {conversation}`"
             + (
                 f" (the oldest is from {first.get('created_at')}: page back with --before to reach it)"
                 if len(held) > 1
@@ -486,40 +485,26 @@ def classify(message):
             "rule": "A batched update",
         }[refs["wake_batch"]]
     wake = refs.get("wake")
-    if wake in ("stalled", "status_check") or refs.get("sweep") or wake == "occurrence":
-        return "sweep", (
-            "A scheduled routine run"
-            if refs.get("sweep") or wake == "occurrence"
-            else "A stall check"
-            if wake == "stalled"
-            else "A status check"
-        )
-    if body.startswith(("New task from", "Open:", "Next-run task:")) or refs.get("auto_start"):
+    if wake == "task_turn":
+        return "assignment", "A task to work"
+    if refs.get("sweep") or wake == "occurrence":
+        return "sweep", "A scheduled routine run"
+    if body.startswith(("New task from", "Open:")) or refs.get("auto_start"):
         return "assignment", "An assignment"
     if (
-        body.startswith(("Unblocked:", "All subtasks done"))
+        body.startswith("All subtasks done")
         or refs.get("subtask")
         or refs.get("worktree_wait")
-        or wake in ("watcher", "watcher-done", "resume")
-        or refs.get("approval")
-        or refs.get("milestone")
+        or wake in ("watcher", "watcher-done")
         or refs.get("reconnected")
     ):
         return "dependency", "An awaited result"
-    if body.startswith(("Stuck:", "Your task for")) or refs.get("setup_held") or wake == "stuck_cause":
+    if body.startswith("Your task for") or refs.get("setup_held"):
         return "blocker", "A blocker"
-    if body.startswith("Ready for review:"):
-        return "gate", "A review request"
     if refs.get("run_now"):
         return "person", "Run now"
-    if wake in ("due", "snooze", "next-run", "update", "restate_ask", "deferred"):
-        return "scheduled", {
-            "due": "A due date",
-            "snooze": "A snooze ending",
-            "update": "An update request",
-            "restate_ask": "An unanswered ask",
-            "deferred": "A defer deadline",
-        }.get(wake, "A deferred task")
+    if wake in ("due", "snooze", "update"):
+        return "scheduled", {"due": "A due date", "snooze": "A snooze ending", "update": "An update request"}[wake]
     return "notice", "A Tico notice"
 
 
@@ -562,9 +547,8 @@ def _pct(values_, q):
 
 
 def measures(c, since, until=None, limit=20000):
-    """Per preset, over jobs queued in [since, until): turns and tokens per accepted ticket (a task that ended done),
-    pickup latency from the event to the turn that acts on it, the time those tickets spent blocked or waiting, and
-    missed actions (an immediate wake not picked up within MISSED_AFTER_SECONDS). Bounded by `limit` jobs.
+    """Per preset, over jobs queued in [since, until): turns and tokens per accepted task (a task that ended done),
+    pickup latency from the event to the turn that acts on it, and missed actions (an immediate wake not picked up within MISSED_AFTER_SECONDS). Bounded by `limit` jobs.
 
     A notice a batch carried (`wake_carrier`: the batch's newest, or its digest) is picked up when its carrier is, so
     its wait runs from its own event; the carrier's own message is not an event and adds no wait. A carrier's turns
@@ -594,7 +578,6 @@ def measures(c, since, until=None, limit=20000):
             "turns_per_ticket": None,
             "tokens_per_ticket": None,
             "pickup_seconds": {"immediate_p50": None, "immediate_p90": None, "held_p50": None, "held_p90": None},
-            "blocked_seconds_per_ticket": None,
             "missed_actions": 0,
             "held": 0,
             "duplicates": 0,
@@ -637,7 +620,6 @@ def measures(c, since, until=None, limit=20000):
         if accepted:
             bucket["turns_per_ticket"] = round(sum(tickets[name][t][0] for t in accepted) / len(accepted), 2)
             bucket["tokens_per_ticket"] = round(sum(tickets[name][t][1] for t in accepted) / len(accepted))
-            bucket["blocked_seconds_per_ticket"] = round(statistics.mean(_blocked(c, t) for t in accepted))
         for kind in ("immediate", "held"):
             bucket["pickup_seconds"][kind + "_p50"] = _pct(pickups[name][kind], 0.5)
             bucket["pickup_seconds"][kind + "_p90"] = _pct(pickups[name][kind], 0.9)
@@ -663,19 +645,3 @@ def _runs(c, job_ids):
         ):
             out[row["job_id"]] = dict(row)
     return out
-
-
-def _blocked(c, task_id):
-    """Seconds the task spent blocked or waiting, from its status history."""
-    total, entered = 0.0, None
-    for row in c.execute(
-        "SELECT created_at,new FROM history_events WHERE subject_type='task' AND subject_id=? "
-        "AND kind='status' ORDER BY created_at,rowid",
-        (task_id,),
-    ):
-        if row["new"] in ("blocked", "waiting"):
-            entered = entered or row["created_at"]
-        elif entered:
-            total += _seconds(entered, row["created_at"]) or 0
-            entered = None
-    return total

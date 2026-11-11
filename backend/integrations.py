@@ -211,7 +211,7 @@ class Catalog:
 
     def listing(self):
         pages, _ = self.loaded
-        # credentials and access belong on the index: MCP `hub_tool_list` is what a bot
+        # credentials and access belong on the index: MCP `tico_tool_list` is what a bot
         # reads to learn every outside system and what it needs before opening a page.
         keys = (
             "service",
@@ -347,7 +347,7 @@ def add_learning(c, who, service, text):
 
 
 class DatabaseQuery(Contract):
-    """One `hub db` query, as its runner reports it: the statement and its size, never a row."""
+    """One `tico db` query, as its runner reports it: the statement and its size, never a row."""
 
     database: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,40}$")
     kind: str = Field(pattern=r"^(postgres|mysql|mongodb|sqlite)$")
@@ -458,7 +458,7 @@ def install_integrations(app, store, auth, mutate):
 
     @app.get("/api/v2/integrations/{service}/queries")
     def queries(request: Request, service: str, term: str = "", id: str | None = None):
-        """The catalog search `hub tool query-search` does, served so every client reads alike."""
+        """The catalog search `tico tool query-search` does, served so every client reads alike."""
         from clients.hubtools import query_search
 
         page = resolve(service, request.state.identity)

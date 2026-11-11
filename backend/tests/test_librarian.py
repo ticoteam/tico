@@ -1,11 +1,12 @@
 """The Librarian (backend/librarian.py, docs/librarian.md): a person's question goes to a private docs
 conversation with the built-in bot, a bot asks with a message flagged needs-action, and the Librarian acts as itself."""
 
+import json
 import pytest
 
 from backend import librarian
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, ready, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend import bot_settings as BS
 
 RESULTS = [
@@ -167,15 +168,15 @@ def test_a_bot_asks_the_librarian_with_a_needs_action_message_and_the_final_text
 
 def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
     from backend.mcp import InProcessApi
-    from backend.tests.test_mcp import call
+    from backend.tests.helpers.mcp import call
 
     assert InProcessApi.docs_wait_max == 20
-    err, pending = call(desk, "hub_doc_ask", {"question": "Refund window?", "wait_s": 0})
+    err, pending = call(desk, "tico_doc_ask", {"question": "Refund window?", "wait_s": 0})
     assert not err and pending["timeout"] and pending["message_id"] and pending["conversation_id"]
     ids = {k: pending[k] for k in ("message_id", "conversation_id")}
-    err, waiting = call(desk, "hub_doc_ask_status", ids)
+    err, waiting = call(desk, "tico_doc_ask_status", ids)
     assert not err and waiting == pending
-    err, refused = call(desk, "hub_doc_ask_status", ids, token="ben-test")
+    err, refused = call(desk, "tico_doc_ask_status", ids, token="ben-test")
     assert err and refused["error"] == "not_found"
     attempt = claim(desk, desk.runner)
     post(desk, f"attempts/{attempt['id']}/started", {"thread_id": "t"}, token=desk.runner["token"])
@@ -185,7 +186,7 @@ def test_mcp_docs_ask_status_collects_the_same_private_answer(desk):
         {"outcome": "completed", "text": "14 days. [Internal doc · Refund policy](doc:d1)", "last_seq": 0},
         token=desk.runner["token"],
     )
-    err, final = call(desk, "hub_doc_ask_status", ids)
+    err, final = call(desk, "tico_doc_ask_status", ids)
     assert not err and final["covered"] and final["answer"].startswith("14 days")
     snapshot = get(desk, f"conversations/{pending['conversation_id']}/snapshot")
     assert len([m for m in snapshot["messages"] if m["sender_id"] == "human:ana"]) == 1
@@ -317,13 +318,18 @@ def test_market_questions_are_kept_as_answered_so_the_owner_can_skip_and_resume(
 
 
 def test_a_market_setup_task_is_only_ever_the_owners_own_librarian_task(desk):
-    # The owner can write any preferences row, so a stored task id is checked: it must be the Librarian's task and
+    # A preferences row may hold any task id (an old client, a restore), so a stored task id is checked: it must be the Librarian's task and
     # the owner's own, or the setup shows no task.
     elsewhere = post(desk, "tasks", {"owner": "ops", "title": "Not the Librarian's", "body": "x"})
     elsewhere = elsewhere.get("task", elsewhere)
     bens = post(desk, "librarian/setup/docs", {"note": "On the wiki"}, token="ben-test")["task_id"]
     for forged in (elsewhere["id"], bens):
-        post(desk, "preferences/librarian.market_setup", {"value": {"task_id": forged}})
+        with desk.app.state.store.transaction() as c:
+            c.execute(
+                "INSERT INTO preferences(actor,key,value,updated_at) VALUES('human:ana','librarian.market_setup',?,?) "
+                "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value",
+                (json.dumps({"task_id": forged}), "2026-11-10T00:00:00Z"),
+            )
         assert get(desk, "librarian/setup")["market"]["task"] is None
     done = post(
         desk,

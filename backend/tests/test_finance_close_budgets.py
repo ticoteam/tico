@@ -14,7 +14,7 @@ from backend.finance import mirror as M
 from backend.finance.context import load
 from clients import hubtools
 from backend.finance.core.errors import NOT_FOUND, FinanceError
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -114,7 +114,7 @@ def test_the_hub_close_passes_top_n_and_spend_by_offers_every_group_the_server_h
 
     hubtools.finance_report(Api(), {"kind": "close", "month": "2026-10", "top_n": 5})
     assert calls == [("finance/close/2026-10", {"top_n": 5})]
-    report = next(t for t in hubtools.TOOLS if t["name"] == "hub_finance_report")
+    report = next(t for t in hubtools.TOOLS if t["name"] == "tico_finance_report")
     assert set(report["inputSchema"]["properties"]["by"]["enum"]) == set(FR.GROUPS)
 
 

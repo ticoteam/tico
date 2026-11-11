@@ -12,7 +12,7 @@ import pytest
 
 from backend import execution, org_turns
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, post, runner  # noqa: F401
+from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401
 
 OLD, NEW = "0.4.15", "0.4.16"
 CAPPED = "Paused at the computer's drain time limit; work and session saved, queued to continue"
@@ -151,9 +151,9 @@ def test_queued_work_starts_after_the_update_clears_and_an_operator_pause_stays(
         assert before["status"]["ops"]["focus"] == CAPPED
 
 
-def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch):
-    """The live v0.4.16 cutover: a turn marked its task done, then reached the drain time limit. The claim's sweep of
-    notices for finished tasks canceled the continuation, leaving the bot "queued to continue" with nothing queued."""
+def test_a_capped_turn_that_finished_its_own_task_does_not_say_it_is_queued_to_continue(api, monkeypatch):
+    """The live v0.4.16 cutover: a turn marked its task done, then reached the drain time limit. Canceling the
+    continuation once left the bot "queued to continue" with nothing queued (Dev 684)."""
     monkeypatch.setenv("TICO_VERSION", NEW)
     machine = runner(api)
     bots = ("ops", "finance")
@@ -180,8 +180,8 @@ def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch
     current = get(api, "tasks/" + task["id"], token=turn["token"])
     post(
         api,
-        "tasks/" + task["id"],
-        {"version": current.get("task", current)["version"], "status": "done", "note": "Checked."},
+        "tasks/" + task["id"] + "/done",
+        {"version": current.get("task", current)["version"], "note": "Checked."},
         token=turn["token"],
     )
     beat(api, machine, bots, OLD, {"state": "waiting", "target": NEW, "running": 1, "handed_back": 0})
@@ -192,8 +192,12 @@ def test_a_capped_turn_continues_after_it_finished_its_own_task(api, monkeypatch
     after = capture(api, machine, bots)
     started = claim_all(api, machine, tries=2)
     receipt("capped turn after its task finished", before, after, started)
-    assert "ops" in started, (before, after, started)
-    assert started["ops"]["job_id"] == turn["job_id"]
+    # A run about a task starts only while the task is open (task_wakes.may_start), retries and continuations
+    # included: the turn said Done, so nothing is left for it. Its bot's status says nothing is queued.
+    assert "ops" not in started, (before, after, started)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (turn["job_id"],)).fetchone()[0] == "canceled"
+    assert "queued to continue" not in (capture(api, machine, bots)["status"]["ops"]["focus"] or "")
 
 
 def test_a_drained_turn_that_cannot_continue_is_held_with_its_reason_and_other_work_starts(api, monkeypatch):

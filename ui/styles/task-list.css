@@ -4,9 +4,8 @@
 
 /* ---- the page: the list, and the peek beside it when a task is open */
 #main.tasks-layout{max-width:none;padding:0;overflow:hidden;display:flex;flex-direction:column}
-.tasks-page{--peek-w:clamp(380px,42%,600px);--row-hover:var(--surface2);--row-sel:color-mix(in srgb,var(--ink) 7%,transparent);
+.tasks-page{--row-hover:var(--surface2);--row-sel:color-mix(in srgb,var(--ink) 7%,transparent);
   flex:1 1 auto;min-width:0;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr)}
-.tasks-page.peek-open{grid-template-columns:minmax(0,1fr) var(--peek-w)}
 .tasks-pane{min-width:0;min-height:0;overflow-y:auto;padding:8px 28px 56px;container-type:inline-size;container-name:tasks}
 
 /* ---- explicit status words shared by task lists and cards */
@@ -64,7 +63,6 @@
 .tl-head.s-fold .tl-search:not(:focus-within) kbd{display:none}
 .tl-head.s-fold .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){color:var(--ink);border-color:var(--line)}
 .tl-head.s-fold .tl-search:focus-within{position:absolute;top:0;left:0;right:0;z-index:2;height:var(--ctl);max-width:none;background:var(--surface)}
-.tl-new{flex:none;display:inline-grid;place-items:center;width:var(--ctl);height:var(--ctl);padding:0;border-radius:var(--r-ctl)}
 .tl-who{flex:none;display:inline-flex;align-items:center;gap:3px;height:var(--ctl);padding:0 4px 0 6px;border:1px solid transparent;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
 .tl-who:hover,.tl-who[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
 .tl-who.asked{border-color:var(--line)}
@@ -73,6 +71,8 @@
 /* ---- the chips row, only while filters are on (or the finished views have no room in the header) */
 .tl-bar{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 0 6px}
 .tl-bar[hidden]{display:none}
+.tl-more{display:flex;justify-content:center;padding:12px}
+.tl-more[hidden]{display:none}
 .tl-filters{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap}
 .tl-chipset{display:contents}
 .tl-chip{display:inline-flex;align-items:stretch;height:24px;border:1px solid var(--line);border-radius:6px;background:var(--surface);font-size:var(--t-sm);overflow:hidden;max-width:100%}
@@ -216,6 +216,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-owner:hover,.bcard-owner[aria-expanded="true"]{box-shadow:0 0 0 2px var(--g4)}
 .bcard-owner:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .bcard-chips{display:flex;flex-wrap:wrap;gap:4px;min-width:0}
+/* A long tag shortens with an ellipsis instead of running under the Waiting chip beside it. */
+.bcard-chips .tlabel{display:inline-block;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.bcard-chips .tlabel i{margin-right:5px;vertical-align:middle}
 .bcard-chips .tl-due{display:none}
 .bcard-rel{display:inline-flex;align-items:center;gap:2px;font-size:var(--t-sm);color:var(--muted)}
 .bcard-rel svg{flex:none}
@@ -223,22 +226,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .bcard-step-age.late{font-weight:600;line-height:16px;padding:0 6px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--wait) 35%,transparent)}
 .bcard .age{min-width:20px;text-align:right}
 
-/* ---- the side peek: the task's own view (ui/app/task-modal.ts), narrower */
-#task-peek{position:relative;inset:auto;grid-column:2;grid-row:1;width:auto;max-width:none;height:auto;max-height:none;min-height:0;margin:0;padding:0;
-  border:0;border-left:1px solid var(--line);border-radius:0;box-shadow:none;background:var(--surface);overflow-y:auto;z-index:4}
-#task-peek:not([open]){display:none}
-#task-peek[open]{container-type:inline-size;container-name:peek}
-#task-peek .tmodal-head>.tnum{white-space:nowrap}
-@container peek (max-width:460px){#task-peek .tmodal-head>.tnum{display:none}}
-#task-peek .tmodal-head{position:sticky;top:0;z-index:2;padding:10px 10px 10px 16px;background:var(--surface);border-bottom:1px solid var(--line)}
-#task-peek .tmodal-title{margin:14px 16px 2px;outline:0}
-#task-peek .tmodal-body{max-height:none;overflow:visible}
-#task-peek .tmodal-body.task-layout{display:flex;flex-direction:column;align-items:stretch}
-#task-peek .task-side{display:contents}
-#task-peek .task-props{order:-1;margin:2px 0 6px;padding:2px 0 6px;border-bottom:1px solid var(--line)}
-#task-peek .prop{min-height:28px}
-#task-peek .task-rail:not([hidden]){margin:8px 0;border-bottom:1px solid var(--line)}
-.peek-tools{display:inline-flex;gap:2px;margin-left:4px}
+/* ---- the task window's header buttons (ui/app/task-modal.ts) */
 .peek-btn{display:grid;place-items:center;width:26px;height:26px;padding:0;border-radius:6px;color:var(--muted);flex:none}
 .peek-btn:hover{color:var(--ink)}
 /* Done and Close in the task header: compact bordered text buttons the height of the quiet icon buttons beside them */
@@ -257,6 +245,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tl-menu-q,.tl-menu-new input{width:100%;height:28px;margin:0 0 4px;padding:0 8px;font-size:var(--t-base);border:1px solid var(--line);border-radius:6px;background:var(--bg)}
 .tl-menu-new{margin:0}
 .tl-menu-list{display:flex;flex-direction:column}
+.tl-menu-rows{display:contents}
 .tl-opt,.tl-mi{display:flex;align-items:center;gap:8px;width:100%;min-height:28px;padding:0 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:var(--t-base)/var(--lh-tight) var(--sans);text-align:left;cursor:pointer}
 .tl-opt:hover,.tl-mi:hover,.tl-mi:focus-visible,.tl-opt:focus-within{background:var(--surface2);outline:0}
 .tl-opt[hidden],.tl-mi[hidden]{display:none}
@@ -288,11 +277,11 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-note-text,.tl-due{display:none}
 }
 
-/* ---- a phone: the peek is a full-screen sheet; rows are dense, the title gets two lines and the note its own
+/* ---- a phone: rows are dense, the title gets two lines and the note its own
    line below (two lines), a lone subtask's 0/1 stays out (the chevron already shows it) */
 @media (max-width:760px){
   #main.tasks-layout{display:block;overflow:visible}
-  .tasks-page,.tasks-page.peek-open{display:block}
+  .tasks-page{display:block}
   .tasks-pane{overflow:visible;padding:14px 12px calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 12px)}
   .tl{margin:0 -12px}
   .tl-ghead{top:0;padding:0 8px 0 6px}
@@ -313,12 +302,21 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body.has-sel .tl-check-room{display:block;width:18px}
   .tl-chips .tlabel{display:none}
   .tl-bar{overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
-  .tl-head{gap:4px}
-  .tl-head h1{margin-right:2px}
-  .tl-head.h-fold h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
+  .tl-head{--add-w:30px;gap:4px;flex-wrap:wrap;row-gap:6px}
+  .tl-head h1{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}   /* the bottom bar already says Tasks */
+  /* The header's first row is the picker, ⋯, ✎, the run button and +, in that order; a break (::after) then starts the row of
+     view tools: search, filter, list or board, Finished and the archive. */
+  .tl-head::after{content:"";flex:0 0 100%;height:0;order:9}
+  .tl-head #task-scope{order:1}
+  .tl-head #task-more{order:2}
+  .tl-head #task-pipeline-edit{order:3}
+  .tl-head #task-play{order:4}
+  .tl-head #task-new{order:5}
+  .tl-head #task-who-wrap,.tl-head .tl-search,.tl-head #task-filter,.tl-head #task-layout,.tl-head .tl-finished-slot,.tl-head #task-archive,.tl-head .tl-decide{order:10}
+  .tl-head .tl-search{margin-left:auto}
   .tl-head .spacer{display:none}
   .tl-scope{margin-right:auto;padding:0 6px 0 8px;gap:4px}
-  .tl-ib,.tl-new{width:30px}
+  .tl-ib{width:30px}
   .tl-who{padding:0 2px 0 4px}
   .tl-head .tl-search:not(:focus-within){flex:none;position:relative;width:30px;min-width:0;padding:0;justify-content:center;border-color:transparent;background:none}
   .tl-head .tl-search:not(:focus-within) input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
@@ -331,14 +329,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   #task-body .board{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;gap:8px;margin:4px -12px 0;padding:0 12px 6px}
   .bcol{flex:0 0 max(260px,82vw);scroll-snap-align:start;max-height:none}
   .bcol.is-empty{display:none}
-  #task-peek{position:fixed;inset:0;z-index:40;width:100%;height:100%;height:100dvh;border:0}
-  #task-peek .tmodal-head{padding-top:max(10px,env(safe-area-inset-top))}
-  #task-peek .peek-btn,#task-peek .tmodal-x{width:40px;height:40px}
-  #task-peek .tmodal-act{height:40px}
-  #task-peek .prop{min-height:44px}
-  #task-peek .tmodal-head{gap:6px;padding-left:12px}
-  #task-peek .tmodal-head>.tnum{display:none}
-  body.task-peek-open{overflow:hidden}
   .tl-pop{inset:auto 0 0 0!important;width:100%;max-height:72vh;border-radius:16px 16px 0 0;padding:8px 8px max(12px,env(safe-area-inset-bottom))}
   .tl-pop:popover-open::backdrop{background:rgba(0,0,0,.25)}
   .tl-opt,.tl-mi{min-height:44px}
@@ -358,7 +348,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .tmodal-age{flex:none}
 /* A phone's header has no room for the age too (its tooltip has it); a snoozed chip shortens rather than pushing the header wider */
 @media (max-width:480px){.tmodal-head .tmodal-age{display:none}}
-#task-modal .tmodal-head>.tchip-snoozed,#task-peek .tmodal-head>.tchip-snoozed{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+#task-modal .tmodal-head>.tchip-snoozed{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .task-layout .tdesc{margin:4px 0 10px;font-size:var(--t-base);line-height:var(--lh-read);white-space:normal;background:none;padding:0;max-height:none}
 .task-layout .task-wait{margin:2px 0 10px;color:var(--muted);font-size:var(--t-base)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
@@ -405,8 +395,6 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
 /* Release now on the Pending Release column (ui/app/settings-release.ts) */
-.board-release-slot:empty{display:none}
-.board-release-slot .board-release{padding:2px 8px;font-size:var(--t-sm);min-height:0}
 
 /* A refused move says why where it was tried (tasks.js taskRefused), so it keeps its words at every width. */
 .tl-row .tl-note.tl-refused{color:var(--fail)}

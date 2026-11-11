@@ -5,7 +5,6 @@ from fastapi import Request
 from . import (
     agents,
     app_delivery,
-    auto_tasks,
     lifecycle,
     profiles,
     report_managers,
@@ -111,7 +110,6 @@ def register(app, auth, settings, settings_admin, store):
                     "compact_at": compact_at_of(declared),
                     # What its tasks run on: a model (empty: its own), effort and context length; null is all the same.
                     "task_model": task_models.stored(declared),
-                    "keep_tasks_going": auto_tasks.of(json.loads(config["config"]) or {}),
                     "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                     # Plain words for a cheaper task model on a high-stakes bot, against its model now ("" else).
                     "task_model_warning": task_models.warning(
@@ -159,7 +157,6 @@ def register(app, auth, settings, settings_admin, store):
             and assignment["last_seen_at"] > H.shift(H.now(), seconds=-60)
         )
         row["queued"] = rows.queued[slug]
-        row["next_run"] = sum(privacy.task_readable(c, who, t) for t in rows.next_run[slug])
         row["notes"] = rows.notes[slug]
         harness = rows.external_harness(slug)
         external = agents.presence(c, slug, harness) if harness else None
@@ -210,6 +207,27 @@ def register(app, auth, settings, settings_admin, store):
                 for bot, level in shown
             ]
 
+    def cant_run(c, bot):
+        """The bot page's top line (docs/pipelines-v3.md S14): why the bot can't run, as the never-stuck check reads it
+        (task_wakes.cannot_run), and the one fix a person makes, or None while it can run."""
+        from . import task_wakes as W
+
+        cause = W.cannot_run(c, "bot:" + bot)
+        if not cause:
+            return None
+        fixes = {
+            W.STATE_CAUSES["paused"]: "resume",
+            W.STATE_CAUSES["quarantined"]: "release_quarantine",
+            W.STATE_CAUSES["planned"]: "finish_setup",
+            W.NO_COMPUTER: "assign_computer",
+            W.RUNS_FAILING: "release_hold",
+            W.LOGIN: "reconnect",
+            W.COMPANY_PAUSED: "resume_company",
+            W.CLOUD_LOCKED: "unlock_cloud",
+            W.OUT_OF_CREDIT: "add_credit",
+        }
+        return {"cause": W.cause_line(c, "bot:" + bot, cause), "fix": fixes.get(cause)}
+
     @app.get("/api/v2/bots/{bot}")
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
@@ -238,6 +256,8 @@ def register(app, auth, settings, settings_admin, store):
             )
             if config and level["read"]:
                 value["goals"] = config["goals"] or ""
+            if level["read"]:
+                value["cant_run"] = cant_run(c, bot)
             reports = value.get("reports_to") or ""
             if reports.startswith("human:"):
                 person = H.human(c, reports[6:])
@@ -251,7 +271,7 @@ def register(app, auth, settings, settings_admin, store):
 
     @app.get("/api/v2/org")
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
-        """The mixed people-and-bots org chart. Bots use this (and `hub team show` / `hub_team_show`) to
+        """The mixed people-and-bots org chart. Bots use this (and `tico team show` / `tico_team_show`) to
         find who handles a kind of work and how to reach them. Only the bots the caller may see,
         each with `access`, its `reports_to`, its `team` (its group's id), its `department` (its group's name)
         and its `template`; the groups come with their `parent`; `?can=read` or `?can=write` keeps those they hold that level on."""

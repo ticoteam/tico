@@ -3,7 +3,7 @@ within seconds; each step is timed and on its own, a beat is stored small (the b
 something happened, a repeated failure folded into it; step rows only with a write that happens anyway, a changed result
 or every 5 minutes, their counts held in memory till then), its interval is a setting read each pass, the loop reads as
 alive within one interval and a minute, and GET/PUT /api/v2/heartbeat show and set it.
-Ana owns the team, Ben is an admin, Cara a member (backend/tests/test_api.py). Synthetic fixtures only."""
+Ana owns the team, Ben is an admin, Cara a member (backend/tests/helpers/api_app.py). Synthetic fixtures only."""
 
 import dataclasses
 import json
@@ -14,7 +14,7 @@ import pytest
 from backend import heartbeat as HB
 from backend import system_routines as SR
 from backend.scheduler import Scheduler
-from backend.tests.test_api import api, get, put  # noqa: F401  (fixture)
+from backend.tests.helpers.api import get, put  # noqa: F401  (fixture)
 from backend.tests.mirror_rows import dead_mirror, live, mirrors, sync
 
 # Two hours ago: a beat's day counts are read against the clock, and every beat below stays inside the day.
@@ -26,22 +26,23 @@ ORDER = [
     "turn_fixer",
     "run_housekeeping",
     "ship_deployed",
-    "task_loops",
-    "snooze_ends",
+    "never_stuck",
+    "deferred",
     "queue_check",
-    "milestone_waits",
-    "due_reminders",
+    "ci_sweep",
     "updates",
     "company_page",
-    "ask_deadlines",
     "thread_digest",
     "thread_bot_digest",
     "thread_loop_guard",
     "go_live_expiry",
-    "stall_checks",
-    "approval_expiry",
+    "drop_unreadable",
     "repository_waits",
+    "entity_links",
     "call_sweeps",
+    "pr_facts",
+    "merge_queue_effects",
+    "jev_verdicts",
 ]
 
 
@@ -107,27 +108,27 @@ def test_each_step_runs_at_most_as_often_as_it_did(api, fake):
     beat(api, scheduler, AT)
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=10))
-    assert "run_housekeeping" in ran and "due_reminders" in ran, "every beat"
-    for key in ("stall_marks", "stall_checks", "go_live_expiry", "approval_expiry", "thread_digest", "ask_deadlines"):
+    assert "run_housekeeping" in ran and "deferred" in ran, "every beat"
+    for key in ("stall_marks", "drop_unreadable", "go_live_expiry", "thread_digest"):
         assert key not in ran, key
     ran.clear()
     beat(api, scheduler, AT + timedelta(minutes=1, seconds=5))
-    assert {"stall_marks", "stall_checks"} <= set(ran) and "go_live_expiry" not in ran
+    assert {"stall_marks", "drop_unreadable"} <= set(ran) and "go_live_expiry" not in ran
     ran.clear()
     beat(api, scheduler, AT + timedelta(minutes=10, seconds=5))
-    assert "go_live_expiry" in ran and "approval_expiry" not in ran
+    assert "go_live_expiry" in ran and "thread_digest" not in ran
     ran.clear()
     beat(api, scheduler, AT + timedelta(hours=1, seconds=5))
-    assert {"approval_expiry", "thread_digest", "thread_bot_digest", "ask_deadlines"} <= set(ran)
-    # The digests are timed from their last recorded start, so a restarted server keeps the hour: their rows (and Ask
-    # go-ahead's) are written on every run, not left in memory for the next flush.
-    for key in ("thread_digest", "thread_bot_digest", "ask_deadlines"):
+    assert {"go_live_expiry", "thread_digest", "thread_bot_digest"} <= set(ran)
+    # The digests are timed from their last recorded start, so a restarted server keeps the hour: their rows are
+    # written on every run, not left in memory for the next flush.
+    for key in ("thread_digest", "thread_bot_digest"):
         (row,) = rows(api, "SELECT last_run_at FROM heartbeat_steps WHERE key=?", key)
         assert row["last_run_at"] == HB.S.stamp(AT + timedelta(hours=1, seconds=5)), key
     ran.clear()
     beat(api, scheduler_of(api), AT + timedelta(hours=1, minutes=30))
     assert "thread_digest" not in ran and "thread_bot_digest" not in ran
-    assert "approval_expiry" in ran, "a new process times the in-process steps afresh, as the tick's marks did"
+    assert "go_live_expiry" in ran, "a new process times the in-process steps afresh, as the tick's marks did"
 
 
 def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
@@ -136,12 +137,12 @@ def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
     assert poll.floor == HB.POLL_FLOOR == timedelta(seconds=10)
     assert HB.BY_KEY["github_sync"].floor == timedelta(seconds=10)
     assert dataclasses.replace(poll, every=timedelta(seconds=30)).floor == timedelta(seconds=30)
-    assert HB.BY_KEY["due_reminders"].floor is None and HB.BY_KEY["stall_marks"].floor == timedelta(minutes=1)
+    assert HB.BY_KEY["deferred"].floor is None and HB.BY_KEY["stall_marks"].floor == timedelta(minutes=1)
     scheduler = scheduler_of(api)
     beat(api, scheduler, AT)
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=5))  # a 5-second interval
-    polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll"}
+    polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll" and HB.BY_KEY[k].floor <= HB.POLL_FLOOR}  # pr_facts: 1 min
     assert polls.isdisjoint(ran) and "run_housekeeping" in ran
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=10))
@@ -151,11 +152,11 @@ def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
 def test_one_failing_step_is_recorded_and_the_rest_still_run(api, fake):
     ran, answers = fake
     answers["ship_deployed"] = RuntimeError("Ana's private words")
-    answers["due_reminders"] = ("1 reminder sent", False)
+    answers["deferred"] = ("1 deferred run started", False)
     telemetry = Telemetry()
     result, ctx = beat(api, scheduler_of(api), AT, telemetry)
     assert ran == ORDER, "the steps after it ran"
-    assert result["failed"] == ["ship_deployed"] and result["did"] == ["due_reminders"]
+    assert result["failed"] == ["ship_deployed"] and result["did"] == ["deferred"]
     assert {"ship_deployed": "RuntimeError"} in ctx.failures, "the pass's failures, as the tick's raise was"
     assert telemetry.seen == [("scheduler", "RuntimeError")], "captured under the name it was before"
     (step,) = rows(api, "SELECT * FROM heartbeat_steps WHERE key='ship_deployed'")
@@ -163,8 +164,10 @@ def test_one_failing_step_is_recorded_and_the_rest_still_run(api, fake):
     assert step["last_error_at"] == step["last_run_at"]
     (row,) = rows(api, "SELECT * FROM heartbeat_beats")
     lines = {line["key"]: line for line in json.loads(row["steps"])}
-    assert set(lines) == {"ship_deployed", "due_reminders"} and row["failed_count"] == 1 and row["did_count"] == 1
-    assert lines["ship_deployed"]["error"].startswith("Failed:") and lines["due_reminders"]["text"] == "1 reminder sent"
+    assert set(lines) == {"ship_deployed", "deferred"} and row["failed_count"] == 1 and row["did_count"] == 1
+    assert (
+        lines["ship_deployed"]["error"].startswith("Failed:") and lines["deferred"]["text"] == "1 deferred run started"
+    )
     (run,) = rows(api, "SELECT * FROM system_runs WHERE job='heartbeat'")
     assert not run["ok"] and run["result"] == "Failed: Shipped merges"
     assert "private" not in json.dumps([step, row, run])
@@ -214,17 +217,17 @@ def test_a_working_beat_stores_one_row_with_only_the_steps_that_did_something(ap
     _, answers = fake
     scheduler = scheduler_of(api)
     beat(api, scheduler, AT)
-    answers["snooze_ends"] = ("2 snoozes ended", False)
+    answers["deferred"] = ("2 deferred runs started", False)
     answers["queue_check"] = ("1 bot's queue noted", False)
     result, _ = beat(api, scheduler, AT + timedelta(seconds=10))
-    assert result["did"] == ["snooze_ends", "queue_check"]
+    assert result["did"] == ["deferred", "queue_check"]
     (row,) = rows(api, "SELECT * FROM heartbeat_beats")
     assert row["started_at"] == HB.S.stamp(AT + timedelta(seconds=10)) and row["did_count"] == 2
-    assert [line["key"] for line in json.loads(row["steps"])] == ["snooze_ends", "queue_check"]
+    assert [line["key"] for line in json.loads(row["steps"])] == ["deferred", "queue_check"]
     (state,) = rows(api, "SELECT * FROM heartbeat_states")
     assert state["quiet_since_at"] is None and state["quiet_beats_count"] == 1 and state["beats_count"] == 2
-    (step,) = rows(api, "SELECT * FROM heartbeat_steps WHERE key='snooze_ends'")
-    assert step["last_did"] == "2 snoozes ended" and step["did_count"] == 1 and step["runs_count"] == 2
+    (step,) = rows(api, "SELECT * FROM heartbeat_steps WHERE key='deferred'")
+    assert step["last_did"] == "2 deferred runs started" and step["did_count"] == 1 and step["runs_count"] == 2
     runs = rows(api, "SELECT * FROM system_runs WHERE job='heartbeat' ORDER BY started_at")
     assert runs[-1]["result"] == "2 steps did something"
 
@@ -235,7 +238,7 @@ def test_old_beats_are_pruned_hourly_inside_the_beat(api, fake, monkeypatch):
 
     def stored(at):
         with store.transaction() as c:
-            HB._beat_row(c, at, [HB.Ran("snooze_ends", 1, "1 snooze ended", False)], 1)
+            HB._beat_row(c, at, [HB.Ran("deferred", 1, "1 deferred run started", False)], 1)
 
     stored(AT - timedelta(days=8))
     beat(api, scheduler_of(api), AT)  # first beat: prunes
@@ -278,7 +281,7 @@ def test_the_interval_is_clamped_and_read_each_pass(api):
 
 def test_get_shows_the_steps_and_the_log_and_put_needs_an_owner_or_admin(api, fake):
     _, answers = fake
-    answers["due_reminders"] = ("1 reminder sent", False)
+    answers["deferred"] = ("1 deferred run started", False)
     scheduler = scheduler_of(api)
     for n in range(3):
         beat(api, scheduler, AT + timedelta(seconds=10 * n))
@@ -287,10 +290,10 @@ def test_get_shows_the_steps_and_the_log_and_put_needs_an_owner_or_admin(api, fa
     assert data["can_change"] is False and data["last_beat_at"]
     assert [k["key"] for k in data["kinds"]] == ["due", "recovery", "poll"]
     assert [s["key"] for s in data["steps"]] == ORDER
-    reminders = next(s for s in data["steps"] if s["key"] == "due_reminders")
+    reminders = next(s for s in data["steps"] if s["key"] == "deferred")
     assert reminders["kind_name"] == "Due times" and reminders["every"] == "Every beat"
-    assert reminders["last_did"] == "1 reminder sent" and reminders["runs_24h"] == reminders["did_24h"] == 3
-    stalls = next(s for s in data["steps"] if s["key"] == "stall_checks")
+    assert reminders["last_did"] == "1 deferred run started" and reminders["runs_24h"] == reminders["did_24h"] == 3
+    stalls = next(s for s in data["steps"] if s["key"] == "drop_unreadable")
     assert stalls["every"] == "Every minute" and stalls["every_s"] == 60 and stalls["runs_24h"] == 1
     assert next(s for s in data["steps"] if s["key"] == "github_sync")["every"] == "Every 10 s"
     assert len(data["beats"]) == 3 and data["next"] is None
@@ -298,7 +301,7 @@ def test_get_shows_the_steps_and_the_log_and_put_needs_an_owner_or_admin(api, fa
     assert len(page["beats"]) == 2 and page["next"]
     rest = get(api, "heartbeat?limit=2&before=" + page["next"])
     assert [b["id"] for b in page["beats"] + rest["beats"]] == [b["id"] for b in data["beats"]] and rest["next"] is None
-    assert rest["beats"][0]["steps"][0]["name"] == "Due reminders"
+    assert rest["beats"][0]["steps"][0]["name"] == "Deferred runs"
     get(api, "heartbeat?before=nonsense", expected=422)
 
     put(api, "heartbeat", {"interval_s": 20}, token="cara-test", expected=403)
@@ -332,26 +335,6 @@ def test_a_beat_shows_under_the_heartbeat_row_on_automations(api):
     assert runs and all(r["automation_id"] == "heartbeat" and r["id"].startswith("hb_") for r in runs)
     stats = {s["id"]: s for s in get(api, "automations/stats?range=1h")["automations"]}
     assert stats["heartbeat"]["runs"] >= 1
-
-
-def test_a_steps_switch_is_honoured_and_shows_on_its_row(api, fake):
-    ran, _ = fake
-    reply = put(api, "system-routines/ask_deadlines", {"on": False}, token="ben-test")
-    assert reply["job"]["key"] == "ask_deadlines" and reply["job"]["on"] is False and reply["job"]["switch"] is True
-    beat(api, scheduler_of(api), AT)
-    assert "ask_deadlines" not in ran and "approval_expiry" in ran
-    step = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "ask_deadlines")
-    assert step["switch"] and step["on"] is False and step["every"] == "Off" and step["can_change"] is True
-    assert (
-        next(s for s in get(api, "heartbeat", token="cara-test")["steps"] if s["key"] == "ask_deadlines")["can_change"]
-        is False
-    )
-    put(api, "system-routines/ask_deadlines", {"on": True}, token="cara-test", expected=403)
-    put(api, "system-routines/ask_deadlines", {"on": True}, token="ben-test")
-    ran.clear()
-    beat(api, scheduler_of(api), AT + timedelta(seconds=10))
-    assert "ask_deadlines" in ran
-    assert next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "ask_deadlines")["every"] == "Hourly"
 
 
 def test_a_late_outcome_lands_on_its_step_row(api):
@@ -400,7 +383,7 @@ def test_a_repeated_failure_folds_into_the_newest_beat_row(api, fake):
     # A different error, or a beat that also did something, is a row of its own.
     answers["ship_deployed"] = HB.Failed("Failed: the merge list could not be read")
     beat(api, scheduler, AT + timedelta(seconds=30))
-    answers["due_reminders"] = ("1 reminder sent", False)
+    answers["deferred"] = ("1 deferred run started", False)
     beat(api, scheduler, AT + timedelta(seconds=40))
     assert len(rows(api, "SELECT * FROM heartbeat_beats")) == 3
     # Once the step runs clean, its last error stays but is no longer failing.
@@ -447,9 +430,9 @@ def test_the_rest_of_the_pass_carries_a_skipped_passs_failures():
     clock[0] = 5
     assert rest.due(Ctx({"ship_deployed": "RuntimeError"})) is False
     clock[0] = 10
-    ctx = Ctx({"due_reminders": "ValueError"})
+    ctx = Ctx({"deferred": "ValueError"})
     assert rest.due(ctx) is True
-    assert ctx.failures == [{"ship_deployed": "RuntimeError"}, {"due_reminders": "ValueError"}]
+    assert ctx.failures == [{"ship_deployed": "RuntimeError"}, {"deferred": "ValueError"}]
     clock[0] = 12
     assert rest.due(Ctx()) is False and rest.carried == []
 

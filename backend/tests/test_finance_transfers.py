@@ -10,7 +10,7 @@ from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance.mercury import Answer
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import (  # noqa: F401
+from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
     OWNER,
@@ -22,6 +22,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     store,
     sync_once,
 )
+from backend.tests.helpers.finance_oks import give
 
 LATER = "2026-10-15T14:00:00.000000Z"
 LATEST = "2026-10-15T20:00:00.000000Z"
@@ -145,7 +146,7 @@ def test_an_internal_transfer_over_1000_asks_the_owner_then_goes_to_mercury_once
         assert asked.status == "needs_approval" and asked.approver == OWNER and asked.approval_id, asked
         assert c.execute("SELECT count(*) FROM fin_transfers").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM fin_outbox WHERE op='transfer_create'").fetchone()[0] == 0
-        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        give(c, OWNER, asked.approval_id)
         done = FA.approval_decided(c, asked.approval_id, AT)
         assert done is not None and done.status == "committed", done
     sync_once(books, fake)

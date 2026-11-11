@@ -14,7 +14,7 @@ from .live_privacy import sources as meeting_sources
 
 def _task(c, tid):
     # Authorization uses task identity and parties; display tags are unrelated to access.
-    return H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,))
+    return H._one(c, "SELECT * FROM tasks WHERE id=?", (tid,))
 
 
 def snapshot(c):
@@ -29,15 +29,27 @@ def actor(who):
     return (who.actor, other) if other and other != who.actor else who.actor
 
 
+def principals_read(c, principals, row):
+    """Whether every one of `principals` (one actor, or a person and whom they act as) reads the task row. The
+    person's own Assistant also reads the task filed for an OK asked of her (task_asks.assistant_reads_own_ok)."""
+    principals = principals if isinstance(principals, tuple) else (principals,)
+    if all(H.task_private_readable(c, a, row) for a in principals):
+        return True
+    if not row or len(principals) != 2:
+        return False
+    from .task_asks import assistant_for, assistant_reads_own_ok
+
+    return (
+        assistant_for(*principals)
+        and H.task_private_readable(c, principals[0], row)
+        and assistant_reads_own_ok(c, principals[0], principals[1], dict(row)["id"])
+    )
+
+
 def task_readable(c, who, row):
     if snapshot(c) and row:
         row = _task(c, row["id"])
-    if H.own_question_for_assistant(who, row):
-        return H.task_private_readable(c, who.actor, row)  # the person's own question, on their Assistant's turn
-    principals = actor(who)
-    return all(
-        H.task_private_readable(c, a, row) for a in (principals if isinstance(principals, tuple) else (principals,))
-    )
+    return principals_read(c, actor(who), row)
 
 
 def reference_strings(value):
@@ -76,7 +88,7 @@ def _task_rows(c, ids):
         found = {
             row[0]: row
             for row in c.execute(
-                "SELECT id,private,owner_id,requester_id,readers,questions IS NOT NULL AS asked FROM tasks WHERE id IN (%s)"
+                "SELECT id,private,owner_id,requester_id,readers FROM tasks WHERE id IN (%s)"
                 % ",".join("?" * len(chunk)),
                 chunk,
             )
@@ -228,12 +240,16 @@ def _attempt_tasks(c, aid):
     _prime_inputs(c, rows)
     for row in rows:
         ids.update(message_tasks(c, row, include_run=False, current=True))
-    ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
+    ids.update(r[0] for r in c.execute(RUN_TASK_SQL, (aid,)))
     for row in c.execute(
         "SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
     ):
         ids.update(references(c, H._json(row[0], {}) or {}))
     return ids
+
+
+# The task a run works on (attempts.task_id): its run carries that task's text, as a carried task did before.
+RUN_TASK_SQL = "SELECT task_id FROM attempts WHERE id=? AND task_id IS NOT NULL"
 
 
 def carried_tasks(c, aid):
@@ -255,7 +271,7 @@ def carried_tasks(c, aid):
             refs = {key: value for key, value in refs.items() if key != "reconcile"}
             row = {**row, "refs": refs}
         ids.update(_message_tasks(c, row, include_run=False, current=True))
-    ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
+    ids.update(r[0] for r in c.execute(RUN_TASK_SQL, (aid,)))
     for row in c.execute(
         "SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?", (aid,)
     ):
@@ -292,9 +308,9 @@ def prime_attempts(c, aids):
             row = dict(row)
             inputs[row.pop("primed_attempt")].append(row)
         _prime_inputs(c, [message for rows in inputs.values() for message in rows])
-        carried = {aid: [] for aid in chunk}
-        for row in c.execute(f"SELECT carried_by,id FROM tasks WHERE carried_by IN ({marks})", chunk):
-            carried[row[0]].append(row[1])
+        worked = {aid: [] for aid in chunk}
+        for row in c.execute(f"SELECT id,task_id FROM attempts WHERE task_id IS NOT NULL AND id IN ({marks})", chunk):
+            worked[row[0]].append(row[1])
         events = {aid: [] for aid in chunk}
         moved = {aid: [] for aid in chunk}
         for row in c.execute(
@@ -317,8 +333,10 @@ def prime_attempts(c, aids):
         meetings.prime_attempts(inputs, moved)
         tasks = set()
         for aid in chunk:
+            # The run's messages, for attempt_pages_readable (a file refusal is per reader, so only the rows are kept).
+            values[("attempt_messages", aid)] = inputs[aid]
             try:
-                ids = set(carried[aid])
+                ids = set(worked[aid])
                 for message in inputs[aid]:
                     ids.update(message_tasks(c, message, include_run=False, current=True))
                 for detail in events[aid]:
@@ -376,18 +394,6 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
-    if has_letters(c) and read_cache.cache(c) is not None:
-        for part in H.chunks(sorted({m["id"] for m in messages if m.get("id")})):
-            found = {
-                row["approval_message_id"]: row
-                for row in c.execute(
-                    "SELECT l.*,a.message_id AS approval_message_id FROM approvals a JOIN letters l "
-                    "ON l.id=json_extract(a.payload,'$.letter_id') WHERE a.kind='letter' "
-                    f"AND a.message_id IN ({','.join('?' * len(part))})",
-                    part,
-                )
-            }
-            read_cache.prime(c, LETTER_MESSAGE_SQL, {(mid,): found.get(mid) for mid in part})
     refs = [H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
@@ -454,12 +460,7 @@ def readable(c, actor, ids, who=None):
     rows = _task_rows(c, set(ids))
 
     def reads(row):
-        # A person's own question task on their Assistant's turn is read with the person's rights (task_readable).
-        if who is not None and H.own_question_for_assistant(
-            who, {"owner_id": row["owner_id"], "questions": row["asked"]}
-        ):
-            return H.task_private_readable(c, who.actor, row)
-        return all(H.task_private_readable(c, a, row) for a in principals)
+        return principals_read(c, principals, row)
 
     return all(row is not None and reads(row) for row in rows.values())
 
@@ -504,16 +505,16 @@ def message_readable(c, actor, message, current=False):
     message = stored or message
     if message.get("deleted_at") or message.get("deleted"):
         return False
-    if has_letters(c) and message.get("id"):
-        letter = read_cache.one(c, LETTER_MESSAGE_SQL, (message["id"],))
-        if letter and not letter_content_readable(c, actor, letter):
-            return False
     from . import threads
 
     if not threads.legacy_gate(c, actor, message):
         return False
     carried = H._json(message.get("refs"), {}) or {}
-    if not page_message_readable(c, actor, carried):
+    if (
+        not page_message_readable(c, actor, carried)
+        or not reply_pages_readable(c, actor, message)
+        or not run_pages_readable(c, actor, carried)
+    ):
         return False
     if isinstance(carried, dict) and carried.get("carries") and message.get("sender_id") == H.KEEPER:
         # A carrier (threads._carrier) copies the words of the message it carries: it is read as that message.
@@ -608,6 +609,10 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
             if not page_message_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
                 return False
+            if not reply_pages_readable(c, reader, stored):
+                return False
+            if not run_pages_readable(c, reader, H._json(stored.get("refs"), {}) or {}):
+                return False
         except Problem:
             return False
         message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
@@ -679,11 +684,6 @@ def _payload_messages(value, out):
         if isinstance(item, (dict, list)):
             _payload_messages(item, out)
     return out
-
-
-def _own_question_turn(c, who, payload):
-    """Whether `payload` is the person's own question task on their Assistant's turn (task_readable's carve-out)."""
-    return H.assistant_turn_person(who) and bool(H.own_question_for_assistant(who, H.task(c, payload["id"]) or {}))
 
 
 def _prime_payload_messages(c, payload):
@@ -775,18 +775,13 @@ def require_payload(c, who, payload, principal=None, checked_for=None):
             and not message_readable(c, principal, H.message(c, key[7:]))
         ):
             raise Problem("privacy", "This report is no longer available", 403)
-        if isinstance(key, str) and key.startswith("approval:"):
-            approval = H.approval(c, key[9:])
-            if not approval or not message_readable(c, principal, H.message(c, approval["message_id"])):
-                raise Problem("privacy", "This approval is no longer available", 403)
         for key in ("items", "responses", "refs"):
             if isinstance(payload.get(key), str):
                 require_payload(c, who, H._json(payload[key], {}) or {}, principal)
         if payload.get("attempt_id") and not attempt_readable(c, principal, payload["attempt_id"]):
             raise Problem("privacy", "This execution is no longer available", 403)
         if payload.get("conversation_id") and payload.get("id"):
-            reader = who.actor if _own_question_turn(c, who, payload) else principal
-            if not message_readable(c, reader, payload) and not deleted_comment_ack(c, principal, payload):
+            if not message_readable(c, principal, payload) and not deleted_comment_ack(c, principal, payload):
                 raise Problem("privacy", "This message is no longer available", 403)
         if payload.get("kind") == "ask" and payload.get("id") and isinstance(payload.get("answers"), list):
             # Answer projections have no message id; recheck their source before replaying a receipt.
@@ -870,9 +865,53 @@ def hosted_owner_reads(c, who, owner, ids):
 
 def attempt_readable(c, actor, aid, memo=None):
     try:
-        return meeting_sources(c).attempt_readable(actor, aid) and readable(c, actor, attempt_tasks(c, aid, memo))
+        return (
+            meeting_sources(c).attempt_readable(actor, aid)
+            and readable(c, actor, attempt_tasks(c, aid, memo))
+            and attempt_pages_readable(c, actor, aid)
+        )
     except Problem:
         return False
+
+
+def attempt_pages_readable(c, actor, aid):
+    """A run's job message and inputs keep their own file refusal and that of the messages they reply to (the same
+    rule as ReadIndex.attempt_pages). The reply chains are read one query per level for all of them together, so a
+    run with many inputs costs no more statements than one with a few."""
+    values = read_cache.cache(c)
+    messages = values.get(("attempt_messages", aid)) if values is not None else None
+    if messages is None:
+        messages = [
+            dict(row)
+            for row in c.execute(
+                "SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id WHERE a.id=? "
+                "UNION SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?",
+                (aid, aid),
+            ).fetchall()
+        ]
+    parents = reply_chain_rows(c, messages)
+    return all(
+        page_message_readable(c, actor, H._json(message.get("refs"), {}) or {})
+        and reply_pages_readable(
+            c,
+            actor,
+            message,
+            lookup=lambda mid: parents[mid] if mid in parents else H.message(c, mid, include_deleted=True),
+        )
+        for message in messages
+    )
+
+
+def run_pages_readable(c, actor, refs):
+    """A message a run wrote (`refs.run` or `refs.turn_id`) inherits that run's file refusal (attempt_pages_readable),
+    as it inherits the run's task and meeting refusals: a bot's reply is read only by those who may read what its run
+    read. Otherwise a reply stays listed while the run it names is refused, and every response carrying it (a comment
+    write's thread) is refused whole by require_payload."""
+    if not isinstance(refs, dict):
+        return True
+    run = refs.get("run")
+    aid = refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None)
+    return not isinstance(aid, str) or not aid or attempt_pages_readable(c, actor, aid)
 
 
 def require_attempt(c, who, aid):
@@ -900,18 +939,6 @@ def private_execution(c, who):
     )
 
 
-def question_party(c, who, person, parent=None, reach=None):
-    """Whether `person` may be the other party of a private task a bot's run files to put a question to them
-    (backend/media.py task_question): they must already read every private task the run carries, and the parent.
-    Being a party gives them nothing they could not read before, beyond the parent `reach` names (reach_for)."""
-    if parent and not _reads(c, person, parent, reach):
-        return False
-    return not who.attempt_id or all(
-        _reads(c, person, H._one(c, f"SELECT * FROM {H.TASKS} tasks WHERE id=?", (tid,)), reach)
-        for tid in attempt_tasks(c, who.attempt_id)
-    )
-
-
 def _reads(c, actor, row, reach=None):
     """`actor` reads `row`, counting the reader a write is about to bring in, (task id, person), as already there."""
     return H.task_private_readable(c, actor, row) or bool(row and reach and reach == (row["id"], actor))
@@ -921,7 +948,7 @@ def reach_for(c, who, person, parent):
     """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
     the bot owns, makes them its reader (hubdb.task_reach); None when it does not; Problem when it is refused.
 
-    The hand-offs are a subtask for them and a question to them (backend/media.py); waiting on them is hubdb's.
+    The hand-off is a subtask for them; waiting on them is hubdb's.
     Outside private work a hand-off the reach rules refuse only for what is above the task goes on as before,
     without a reader: the person gets the subtask alone. A second, different person is refused either way."""
     if not (
@@ -949,7 +976,7 @@ def reach_for(c, who, person, parent):
 # subtask under it for another bot, which reads that subtask and nothing above it: not the parent, its other subtasks
 # or the run's other work, only the words the filer writes. A private task with a person on it stays that person's to
 # widen: the refusal names them and the route to them.
-SEALED_ROUTE = "ask them with `hub task question`, or have them file the subtask"
+SEALED_ROUTE = "ask them with `tico task ask`, or have them file the subtask"
 COPIED_WORDS = 12
 
 
@@ -1110,7 +1137,7 @@ def sealed_words(kept, title, body):
 FROM_PRIVATE = True
 COMPANY_REFUSAL = (
     "Private task work cannot create company-visible tasks: its owning bot may file one from private "
-    "work, in its own words (`hub task create --from-private`)"
+    "work, in its own words (`tico task create --from-private`)"
 )
 FILE_ID = re.compile(r"\bfile-[0-9a-f]{24}\b")
 
@@ -1133,7 +1160,7 @@ def from_private(c, who, owner, parent):
     if private_meetings(c, meeting_sources(c).attempt(who.attempt_id)):
         raise Problem("privacy", "Private meeting work cannot create company-visible tasks", 403)
     if not H.is_bot(owner or ""):
-        raise Problem("privacy", "A task from private work is for a bot: ask a person with `hub task question`", 403)
+        raise Problem("privacy", "A task from private work is for a bot: ask a person with `tico task ask`", 403)
     if parent and not H.task_private(c, parent):
         raise Problem(
             "privacy", "File a task from private work under the private task it comes from, or with no parent", 403
@@ -1199,20 +1226,14 @@ def create_texts(body):
     could otherwise carry past the words checks."""
     from .task_roles import role_name
 
-    blocker = body.blocker
     # A role's name is checked as sent and as stored (task_roles.role_name): the store lower-cases and trims it.
     roles = [name for raw in (body.roles or {}) for name in (str(raw), role_name(raw) or "")]
     return [
         *body.acceptance_criteria,
         *body.labels,
-        *body.change_paths,
         *body.links,
         body.public_title or "",
         body.public_summary or "",
-        body.check_back_note or "",
-        body.step or "",
-        body.type or "",
-        *((blocker.repo, blocker.endpoint) if blocker else ()),
         *roles,
     ]
 
@@ -1261,7 +1282,7 @@ def require_create(
             raise Problem("privacy", "A task from private work is company-visible: leave out --private", 422)
         kept = from_private(c, who, owner, parent)
         if any(H.task_private(c, _task(c, tid)) for tid in related):
-            # Related, blocked by or a duplicate of a private task, it would say so to that task's readers and wait on it.
+            # Related to or a duplicate of a private task, it would say so to that task's readers.
             raise Problem("privacy", "A task from private work is related to no private task but its parent", 403)
         from_private_words(c, kept, title, body, texts)
         return None
@@ -1278,21 +1299,9 @@ def require_create(
     return reach
 
 
-def require_wait(c, who, row, waiting_on):
-    """A private run's `--status waiting --on <person>` puts its ask in front of that person (a question task,
-    hubdb._ask_in_subtask) and,
-    on a private task with no person on it, makes them its reader: so they must read every private task the run carries,
-    as for a subtask or a question to them (require_create, question_party). Checked in the write's own transaction."""
-    person = H.resolve_actor(c, str(waiting_on or "").strip()) if waiting_on else None
-    if not person or not H.is_human(person) or not private_execution(c, who):
-        return
-    reach = None if H.task_private_readable(c, person, row) else (row["id"], person)
-    require_destination(c, who, person, None, {}, reach=reach)
-
-
 def require_readers(c, who, task_id, readers, shared):
     """A bot adds readers within its reach (reach.check), and a private run only those who read every private task it
-    carries, the task they are added to counted as read (as require_wait). `readers` are the ones being added;
+    carries, the task they are added to counted as read. `readers` are the ones being added;
     `shared` is the task reach counts them as sharing with the bot: the task itself, or a new task's parent."""
     from . import reach
 
@@ -1326,6 +1335,48 @@ PAGE_MESSAGE_KEYS = ("target", "answer", "review", "body_sources")
 def page_message_readable(c, actor, refs):
     """Generated file-review messages carry names in prose as well as structured refs."""
     return isinstance(refs, dict) and page_content_readable(c, actor, [refs.get(key) for key in PAGE_MESSAGE_KEYS])
+
+
+REPLY_CHAIN_LIMIT = 100
+
+
+def reply_chain_rows(c, messages):
+    """The stored messages on the in_reply_to chains of `messages`, keyed by id, one query per level of the chains.
+    The bound is the level: each chain is read as far as its own walk reads (REPLY_CHAIN_LIMIT), however many chains
+    the batch holds, so no chain is cut short by another's rows."""
+    found, frontier = {}, {m["in_reply_to"] for m in messages if m.get("in_reply_to")}
+    for _ in range(REPLY_CHAIN_LIMIT):
+        if not frontier:
+            break
+        marks = ",".join("?" * len(frontier))
+        rows = {
+            row["id"]: dict(row)
+            for row in c.execute(f"SELECT id,refs,in_reply_to FROM messages WHERE id IN ({marks})", sorted(frontier))
+        }
+        found.update(rows)
+        frontier = {
+            row["in_reply_to"] for row in rows.values() if row["in_reply_to"] and row["in_reply_to"] not in found
+        }
+    return found
+
+
+def reply_pages_readable(c, actor, message, lookup=None):
+    """A reply inherits the file refusal of each message it replies to, at any depth: every message on its in_reply_to
+    chain is read with page_message_readable, as its own refs are. A reply with REPLY_CHAIN_LIMIT ancestors or more is
+    refused, as ReadIndex.sources refuses it; a cycle ends at the message seen. `lookup` reads a message by id."""
+    lookup = lookup or (lambda mid: H.message(c, mid, include_deleted=True))
+    seen, mid = set(), dict(message).get("in_reply_to")
+    while mid and mid not in seen:
+        if len(seen) + 1 >= REPLY_CHAIN_LIMIT:
+            return False
+        seen.add(mid)
+        parent = lookup(mid)
+        if not parent:
+            break
+        if not page_message_readable(c, actor, H._json(parent.get("refs"), {}) or {}):
+            return False
+        mid = parent.get("in_reply_to")
+    return True
 
 
 def page_content_readable(c, actor, payload):
@@ -1413,8 +1464,6 @@ def guard_write(c, who, path, auth):
         if thread is None:
             raise Problem("not_found", "Thread not found", 404)
         return private_thread_destination(c, who, thread)
-    if path == "/api/v2/task-questions":
-        return  # a private task of its own, to a person question_party lets read the run's work (media.py)
     if path.startswith(
         ("/api/v2/files/", "/api/v2/messages", "/api/v2/conversations/", "/api/v2/chat/", "/api/v2/tasks")
     ):
@@ -1428,11 +1477,18 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/ci/permits":
+        return  # a CI minutes permit publishes nothing; the route admits only the ticket's own workers (ci_runs.may_ask)
     if path == "/api/v2/rules":
         from . import counsel
 
         if counsel.run_read(c, who):
             return  # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
+    if path == "/api/v2/finance/actions":
+        from . import bookkeeper
+
+        if bookkeeper.private_finance_run(c, who):
+            return  # the Bookkeeper's Finance actions from its own Books check or Watch task; the act route checks the kind
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 
@@ -1547,19 +1603,20 @@ def require_destination(c, who, to, conversation_id, refs, reply=None, reach=Non
         raise Problem("privacy", "Discuss private tasks in their task conversation", 403)
 
 
-# A bot's undecided approvals: `status` counts the readable ones. `{match}` is `=?` for one bot or `IN (...)` for many
-# (`status_inputs`).
-APPROVALS_SQL = (
-    "SELECT m.*, a.task_id AS approval_task{by} FROM approvals a JOIN messages m ON m.id=a.message_id "
-    "WHERE a.requested_by_id{match} AND a.decision IS NULL"
-)
-
-
 # The only tasks `status` looks at: a live one (its counts) or a private one (whether its focus may be shown).
 # A long-lived bot's finished company tasks are most of its rows and change nothing.
 STATUS_TASKS_SQL = "(status IN (%s) OR private IS NOT 0)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
 # The columns `status` reads of them: never the bodies, which were megabytes a status page on a real install.
-STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers"
+STATUS_TASK_COLUMNS = "id,owner_id,requester_id,status,private,readers,askers"
+# Who has an ask open on the task's current visit that names a person and is not answered yet (hubdb.status_counts):
+# a bot's ask counts toward its needs_human only where the reader may read the task.
+_ASKERS = (
+    "(SELECT json_group_array(r.added_by_id) FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "WHERE v.task_id = tasks.id AND v.left_at IS NULL AND r.withdrawn_at IS NULL AND r.person_id LIKE 'human:%' "
+    "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.requirement_id = r.id AND a.visit_id = v.id "
+    "AND a.undone_at IS NULL AND a.answer NOT IN ('give', 'again'))) AS askers"
+)
+STATUS_TASK_SELECT = STATUS_TASK_COLUMNS.replace(",askers", "," + _ASKERS)
 
 
 def status_tasks_sql(match):
@@ -1568,10 +1625,10 @@ def status_tasks_sql(match):
     to test status and privacy columns stored past the bodies; a busy team's page spent most of a second there."""
     live = "status IN (%s)" % ",".join("'%s'" % s for s in H.ACTIVE_STATUSES)
     return (
-        f"SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE owner_id{match} AND {live} "
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks WHERE requester_id{match} AND {live} "
+        f"SELECT {STATUS_TASK_SELECT} FROM tasks WHERE owner_id{match} AND {live} "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks WHERE requester_id{match} AND {live} "
         # `+` keeps the few private tasks on their own index (tasks_private_status), not the owner's every task.
-        f"UNION SELECT {STATUS_TASK_COLUMNS} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
+        f"UNION SELECT {STATUS_TASK_SELECT} FROM tasks INDEXED BY tasks_private_status WHERE private IS NOT 0 "
         f"AND (+owner_id{match} OR +requester_id{match})"
     )
 
@@ -1590,9 +1647,9 @@ def status_tasks(c, match, args):
 
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
-    {bot id: {"tasks": [...], "approvals": [...]}}, to pass to `status` as keywords."""
+    {bot id: {"tasks": [...]}}, to pass to `status` as keywords."""
     snapshot(c)
-    out: dict[str, dict[str, list]] = {bot: {"tasks": [], "approvals": []} for bot in bots}
+    out: dict[str, dict[str, list]] = {bot: {"tasks": []} for bot in bots}
     for part in H.chunks(out):
         # An f-string, not "+": basedpyright sometimes infers the unannotated H.chunks as Unknown | None.
         actors = [f"bot:{bot}" for bot in part]
@@ -1601,17 +1658,10 @@ def status_inputs(c, bots):
             for party in {t["owner_id"], t["requester_id"]}:
                 if party in actors:
                     out[H.actor_id(party)]["tasks"].append(t)
-        # Who asked is read alongside, to sort the rows, and left out of the rows `status` is given.
-        for m in c.execute(APPROVALS_SQL.format(by=", a.requested_by_id AS by_", match=marks), actors):
-            out[H.actor_id(m["by_"])]["approvals"].append({k: m[k] for k in m.keys() if k != "by_"})
-    # Each approval is checked as read here, its tasks, parents and rooms read together: not a few queries per
-    # message, which on a busy team were most of a status page's statements.
-    if read_cache.cache(c) is not None:
-        prime_messages(c, [m for kinds in out.values() for m in kinds["approvals"]])
     return out
 
 
-def status(c, who, row, *, tasks=None, approvals=None):
+def status(c, who, row, *, tasks=None):
     """Free-form focus/results can contain task content; hide it when provenance is lost."""
     snapshot(c)
     if not row:
@@ -1633,21 +1683,12 @@ def status(c, who, row, *, tasks=None, approvals=None):
             t["owner_id"] == "bot:" + row["bot"] and t["status"] in H.ACTIVE_STATUSES for t in tasks
         )
     if "needs_human" in row:
-        # One per readable task that waits on a person (hubdb._recount): filed for a person (a question task among
-        # them, as a task set waiting on a person files one).
+        # One per readable open task the bot filed for a person, and one per unanswered ask it put to a person on a
+        # readable open task (hubdb.status_counts).
         bot = "bot:" + row["bot"]
-        live = {t["id"]: t for t in tasks if t["status"] in H.ACTIVE_STATUSES}
-        waits = {i for i, t in live.items() if t["requester_id"] == bot and H.is_human(t["owner_id"])}
-        approvals = (
-            approvals
-            if approvals is not None
-            else c.execute(APPROVALS_SQL.format(by="", match="=?"), ("bot:" + row["bot"],))
-        )
-        # An approval on a task already counted is the same wait, counted once (hubdb.status_counts).
-        row["needs_human"] = len(waits) + sum(
-            message_readable(c, actor(who), m, current=True) and not (dict(m).get("approval_task") in waits)
-            for m in approvals
-        )
+        row["needs_human"] = sum(
+            t["status"] in H.ACTIVE_STATUSES and t["requester_id"] == bot and H.is_human(t["owner_id"]) for t in tasks
+        ) + sum(json.loads(t.get("askers") or "[]").count(bot) for t in tasks if t["status"] == "open")
     return row
 
 
@@ -1704,10 +1745,6 @@ LETTER_BLOBS_SQL = (
     "SELECT original_blob_id,task_id,attempt_id,thread_id,source_provenance,requested_by,acting_bot_id "
     "FROM letters l WHERE source_blob_id=? OR "
     "EXISTS (SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)"
-)
-LETTER_MESSAGE_SQL = (
-    "SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
-    "WHERE a.kind='letter' AND a.message_id=?"
 )
 
 
@@ -1943,12 +1980,6 @@ def event_readable(c, actor, event):
         letter = None
         if str(event.get("action", "")).startswith("letter."):
             letter = c.execute("SELECT * FROM letters WHERE id=?", (event.get("target"),)).fetchone()
-        elif str(event.get("action", "")).startswith("approval."):
-            letter = c.execute(
-                "SELECT l.* FROM approvals a JOIN letters l ON l.id=json_extract(a.payload,'$.letter_id') "
-                "WHERE a.kind='letter' AND a.id=?",
-                (event.get("target"),),
-            ).fetchone()
         if letter and not letter_content_readable(c, actor, letter):
             return False
     from . import files, teammate_access
@@ -1960,6 +1991,11 @@ def event_readable(c, actor, event):
             c, None, viewer, event.get("target"), event.get("detail")
         ):
             return False
+    from . import task_asks
+
+    # An event about a bound OK reads only to the OK's parties (task_asks.party), whoever reads its task.
+    if task_asks.event_hidden(c, principals, event.get("target")):
+        return False
     detail = H._json(event.get("detail"), {}) or {}
     if str(event.get("action", "")).startswith("alerts.") and event["action"] != "alerts.company_cap":
         recipient = actor[0] if isinstance(actor, tuple) else getattr(actor, "actor", actor)

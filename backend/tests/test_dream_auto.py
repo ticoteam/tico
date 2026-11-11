@@ -2,7 +2,7 @@
 memory changed a lot since its last dream, under the gates, up to "Most bots per run"; a run claims its schedule bucket
 once; Run now ignores the schedule only; the requester is the bot's manager, else the owner; a question from the dream
 reaches the requester without ask ingest.
-Synthetic fixtures: the api fixture's bots (backend/tests/test_api.py; Ana owns the company, Ben is an admin). Memory is
+Synthetic fixtures: the api fixture's bots (backend/tests/helpers/api_app.py; Ana owns the company, Ben is an admin). Memory is
 written as memory_history.record stores it, except the one test that reports through the route."""
 
 import json
@@ -20,10 +20,10 @@ from backend import maintenance as M
 from backend import maintenance_limits as L
 from backend.maintenance_steps import dream as dream_step
 from backend.scheduler import Scheduler
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
-from backend.tests.test_ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (fixtures)
+from backend.tests.helpers.ask_ingest import gate, plate  # noqa: F401  (the ask ingest fixture)
 
-QUESTIONS = "1. Should weekly reports go to Ana or the team? Suggested: the team"
+QUESTIONS = "Should weekly reports go to Ana or the team?"
 LEARNINGS = "memory/learnings.md"
 
 
@@ -98,7 +98,7 @@ def close(api, bot):
         owner = owner_of(c, bot)
         row = dream._open(c, [owner])
         assert row is not None, "there is an open dream to close"
-        H.task_update(c, owner, row["id"], status="done", note="Merged the release rules.")
+        H.task_done(c, owner, row["id"], "Merged the release rules.", seen_version=row["version"])
 
 
 def five_due(api):
@@ -126,13 +126,13 @@ def step_result(store, auth, max_bots=3):
         return dream_step.run(c, ctx)
 
 
-def test_what_counts_as_memory(api):
+def test_what_counts_as_memory():
     assert DA.counted(LEARNINGS) and DA.counted("AGENT.md") and DA.counted("CLAUDE.md")
     assert not DA.counted("memory/state.md"), "state.md is rewritten every turn: churn, not memory"
     assert not DA.counted("knowledge/notes.md") and not DA.counted("secrets/x")
 
 
-def test_changed_lines_are_the_hunk_lines_not_the_file_headers(api):
+def test_changed_lines_are_the_hunk_lines_not_the_file_headers():
     text = (
         "diff --git a/memory/learnings.md b/memory/learnings.md\n--- a/memory/learnings.md\n+++ b/memory/learnings.md\n"
         "@@ -1,2 +1,2 @@\n-old\n+new\n keep\n+++ not a header\n"
@@ -259,14 +259,15 @@ def test_an_auto_dreams_question_reaches_its_manager_without_ask_ingest(gate):
     assert len(run(api)) == 1
     [row] = dream_rows(api, "ops")
     r = api.post(
-        "/api/v2/task-questions",
-        json={"on": "human:ben", "question": QUESTIONS, "parent": row["id"]},
+        f"/api/v2/tasks/{row['id']}/asks",
+        json={"to": "human:ben", "line": QUESTIONS, "version": row["version"]},
         headers=headers(token),
     )
     assert r.status_code == 200, r.text
     assert "ingest" not in r.json() and model.calls == []
     with api.app.state.store.read() as c:
-        assert H.unanswered_ask(c, H.task(c, row["id"]))["recipient_id"] == "human:ben"
+        waits = H.task_waits(c, [row["id"]])[row["id"]]
+        assert [(w.state, w.who, w.ask) for w in waits][:1] == [("person", "human:ben", True)]
 
 
 def test_the_schedule_runs_the_dream_step_once_per_bucket(api, monkeypatch):
@@ -391,8 +392,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
     remember(api, "ops", 10, when=H.parse_ts(first_at) - timedelta(hours=1))
     previous = H.shift(first_at, days=-1)
     with store.transaction() as c:
-        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('find_stuck','dream')")
-        M.save_step(c, "human:ana", {"key": "find_stuck", "frequency": "run"})
+        c.execute("UPDATE maintenance_steps SET enabled=0 WHERE key NOT IN ('collect','dream')")
         M.save_step(c, "human:ana", {"key": "dream", "max_bots": 1})
         c.execute("UPDATE maintenance_steps SET last_started_at=?,cursor_at=? WHERE key='dream'", (previous, previous))
 
@@ -403,7 +403,7 @@ def test_a_dream_refused_only_by_wake_limits_retries_on_a_later_run_that_day(api
                     L.record(write, bot)
         return {"status": "ran"}
 
-    monkeypatch.setitem(M.LIVE, "find_stuck", earlier_wakes)
+    monkeypatch.setitem(M.LIVE, "collect", earlier_wakes)  # a step that runs before Dream
     with settings(store, test_identities={}):
         first, _ = M.run_now(store, auth, "human:ana", wait=True)
         row = steps_by_key(first)["dream"]
@@ -502,7 +502,7 @@ def test_a_bot_no_longer_due_at_its_start_does_not_use_up_a_slot(api, monkeypatc
 def test_a_dream_that_lands_on_a_branch_is_judged_on_the_branch(api):
     """Cara's own dream lands on her branch of cpo and is open there. cpo's night must not file a second dream on that
     branch: the busy check reads the bot the dream lands on, not the original it was judged as."""
-    from backend.tests.test_shared_bots import branch, share
+    from backend.tests.helpers.shared_bots import branch, share
 
     share(api)
     branch(api, runner(api, "cara"))
@@ -577,7 +577,7 @@ def test_a_dreams_own_run_is_not_memory_through_the_one_query(api):
         assert DA.change(c, "ops", DA.stamp(now() - timedelta(days=1))) == (7, 1)
 
 
-def test_paths_with_spaces_and_deletions_are_read_whole(api):
+def test_paths_with_spaces_and_deletions_are_read_whole():
     text = (
         "diff --git a/memory/meeting notes.md b/memory/meeting notes.md\nindex 1..2 100644\n"
         "--- a/memory/meeting notes.md\t\n+++ b/memory/meeting notes.md\t\n@@ -1,2 +1,2 @@\n-old\n+new\n keep\n"

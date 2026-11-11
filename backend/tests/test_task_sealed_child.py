@@ -5,9 +5,10 @@ import json
 import pytest
 
 from backend.store import H
-from backend.tests.test_api import api, assign, claim, get, headers, post, ready, runner  # noqa: F401
-from backend.tests.test_task_readers import dry_run, refused, run_on, subtask, task
-from backend.tests.test_tasks_board import bot_token
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.task_readers import dry_run, refused, run_on, subtask, task
+from backend.tests.helpers.tasks_board import bot_token
+from backend.tests.helpers.task_sealed_child import ROUTE, carry, run_for, sees
 
 REPAIR = {
     "title": "Fix the upload refusal order",
@@ -15,12 +16,11 @@ REPAIR = {
     "add a test that the store is never called on a refused upload.",
 }
 HEAD = "a2944b52a971f509b51b81d40db92c0207cab734"
-ROUTE = "ask them with `hub task question`, or have them file the subtask"
 
 
 @pytest.fixture(autouse=True)
 def private_tasks_have_an_unrelated_manager(api):
-    from backend.tests.test_api import unrelated_task_managers
+    from backend.tests.helpers.api import unrelated_task_managers
 
     with api.app.state.store.transaction() as c:
         unrelated_task_managers(c)
@@ -28,30 +28,6 @@ def private_tasks_have_an_unrelated_manager(api):
 
 def repair(parent, owner="finance", **extra):
     return {**subtask(parent, owner), **REPAIR, **extra}
-
-
-def carry(api, attempt, row):
-    """The run also carries `row`, as when its prompt brought that task in."""
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], row["id"]))
-
-
-def run_for(api, bot):
-    """A run of `bot` on its own computer, on the oldest work waiting for it (a chat when nothing is)."""
-    machine = runner(api)
-    assign(api, machine, bot)
-    ready(api, machine, [bot])
-    with api.app.state.store.read() as c:
-        waiting = c.execute("SELECT 1 FROM jobs WHERE bot_id=? AND state='queued'", (bot,)).fetchone()
-    if not waiting:
-        post(api, "chat/" + bot, {"text": "Please look at your queue."})
-    return claim(api, machine, bot)
-
-
-def sees(api, token, words):
-    r = api.post("/api/v2/sql", json={"sql": "SELECT id,title,body FROM tasks"}, headers=headers(token))
-    assert r.status_code == 200, r.text
-    return words in r.text
 
 
 def test_the_owning_bots_run_hands_a_sealed_subtask_to_a_bot_that_reads_only_that(api):
@@ -159,25 +135,32 @@ def test_done_wakes_the_parents_owner_and_no_words_reach_its_requester(api):
     current = get(api, "tasks/" + child["id"], finance)["task"]
     post(
         api,
-        "tasks/" + child["id"],
-        {"version": current["version"], "status": "done", "note": "Fixed: checked the setting first, test added."},
+        "tasks/" + child["id"] + "/done",
+        {"version": current["version"], "note": "Fixed: checked the setting first, test added."},
         finance,
     )
     with api.app.state.store.read() as c:
         jobs = {
             bot: [
-                json.loads(r[1] or "{}") | {"body": r[0]}
+                json.loads(r[1] or "{}") | {"body": r[0], "key": r[2] or ""}
                 for r in c.execute(
-                    "SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?", (bot,)
+                    "SELECT m.body,m.refs,m.wake_key FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=?",
+                    (bot,),
                 )
             ]
             for bot in ("ops", "cpo")
         }
         assert not H.subtask_flows_up(c, H.task(c, child["id"]), H.task(c, row["id"]))
+    # The engine wakes the filing task's owner once when the last task it filed ends, saying how it ended. The wake is
+    # kept in the parent's thread, which cpo reads too, so the sealed subtask is "A sub-task": never its title.
     assert any(
-        r.get("wake") == "subtask_finished" and r["task"] == row["id"] and r.get("trigger_source") == child["id"]
+        r["task"] == row["id"]
+        and r["key"].endswith(":filed:" + child["id"])
+        and r["body"].startswith("The tasks this one filed have ended: A sub-task: Done")
         for r in jobs["ops"]
     ), jobs["ops"]
+    for words in (REPAIR["title"], "checked the setting first", child["id"]):
+        assert not any(words in r["body"] for r in jobs["ops"] + jobs["cpo"]), (words, jobs)
     assert not any("checked the setting first" in r["body"] for r in jobs["cpo"]), jobs["cpo"]
 
 
@@ -210,7 +193,9 @@ def test_a_person_above_the_parent_is_named_only_to_a_filer_that_reads_that_task
     ), words
     assert "Cara" not in words and words in dry_run(api, body, attempt["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET owner_id='bot:ops' WHERE id=?", (above["id"],))
+        H.task_reassign(
+            c, "bot:cpo", above["id"], "bot:ops", None, H.task(c, above["id"])["version"]
+        )  # cpo hands the task above to ops
     words = refused(api, body, attempt["token"])
     assert words == f"Cara is on a private task above this one: {ROUTE}", words
     assert words in dry_run(api, body, attempt["token"])

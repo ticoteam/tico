@@ -1,7 +1,7 @@
 """Maintenance foundation (docs/maintenance.md; plan 1-3 and Amendment v2 A, B, G, H, I): the fixed step order, each
 "How often" on its own clock, Run now and the schedule as one run, the abandoned-run recovery, cursors that move only on
 `ran`, a failing step that does not stop the run, the switch migration, the wake limiter and the API rights.
-Synthetic fixtures: the api fixture's people (backend/tests/test_api.py; Ana owns the company, Ben is an admin, Cara is a
+Synthetic fixtures: the api fixture's people (backend/tests/helpers/api_app.py; Ana owns the company, Ben is an admin, Cara is a
 member)."""
 
 import importlib
@@ -13,7 +13,7 @@ from backend import hubdb as H
 from backend import maintenance as M
 from backend import maintenance_limits as L
 from backend.maintenance_steps import collect
-from backend.tests.test_api import api, get, headers  # noqa: F401  (fixtures and helpers)
+from backend.tests.helpers.api import get, headers  # noqa: F401  (fixtures and helpers)
 
 mig = importlib.import_module("backend.migrations.0090_maintenance")
 
@@ -47,7 +47,7 @@ def inline(store, auth, run_id, only, wait):
 
 
 def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "find_stuck", "check_health", "learn", "suggest", "update", "dream")
+    assert M.ORDER == ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
     assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
     assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
     suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
@@ -69,12 +69,22 @@ def test_each_frequency_is_due_on_its_own_clock():
     assert not M.due(row("day", la(4, 6)), la(5, 4, 30)), "04:30 is still yesterday's day"
     assert M.due(row("day", la(4, 6)), la(5, 5, 30)), "after 05:00 the day is new"
     old = datetime(2026, 10, 28, 14, 0, tzinfo=timezone.utc)  # absolute time: the clocks changed on Nov 1
-    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(minutes=1)), (
-        "six days and a bit is not a week"
+    assert not M.due(row("week", old), old + timedelta(days=7) - timedelta(hours=1)), (
+        "six days and 23 hours is not a week"
+    )
+    assert M.due(row("week", old), old + timedelta(days=7) - timedelta(seconds=4)), (
+        "a run that starts a few seconds earlier in its bucket than last week's is still due"
     )
     assert M.due(row("week", old), old + timedelta(days=7)), "seven days after the last attempt is due"
     assert not M.due(row("custom", la(4, 6), 3, "hours"), la(4, 8)), "every 3 hours: two hours is not enough"
     assert M.due(row("custom", la(4, 6), 3, "hours"), la(4, 9)), "every 3 hours: three hours is due"
+    last = datetime(2026, 11, 8, 14, 0, 7, 781692, tzinfo=timezone.utc)
+    assert M.due(row("custom", last, 6, "hours"), datetime(2026, 11, 8, 20, 0, 4, 265769, tzinfo=timezone.utc)), (
+        "every 6 hours: a run 3.5 seconds earlier in its bucket than the last is due, not put off a whole hour"
+    )
+    assert not M.due(row("custom", last, 6, "hours"), datetime(2026, 11, 8, 19, 0, 4, tzinfo=timezone.utc)), (
+        "every 6 hours: the bucket before is not"
+    )
     assert not M.due(row("custom", la(2, 6), 2, "days"), la(3, 6)), "every 2 days: one day is not enough"
     assert M.due(row("custom", la(2, 6), 2, "days"), la(4, 6)), "every 2 days: two days is due"
 
@@ -95,7 +105,6 @@ def test_run_now_runs_every_step_in_order_like_a_scheduled_run(api):
     assert [s["step"] for s in run["steps"]] == list(M.ORDER), "one log row per step, in order"
     steps = {s["step"]: s for s in run["steps"]}
     assert steps["collect"]["status"] == "ran"
-    assert steps["find_stuck"]["status"] == "ran" and cursor(store, "find_stuck"), "Find stuck is live"
     assert steps["learn"]["status"] == "off", "learn is off by default"
     assert steps["check_health"]["status"] == "ran"
     assert steps["suggest"]["status"] == "skipped" and steps["suggest"]["reason"] in (
@@ -215,22 +224,6 @@ def _migrated_rows(registry, rules):
             "SELECT key, enabled, frequency, custom_every, custom_unit FROM maintenance_steps"
         )
     }
-
-
-def _migrated(registry, rules):
-    """The step switches after the migration runs on a bare database."""
-    return {key: row[0] for key, row in _migrated_rows(registry, rules).items()}
-
-
-def test_only_an_explicit_roundup_switch_sets_find_stuck_and_stale_review_never_does(monkeypatch):
-    """Stale review defaults off, so a saved off stale review, or TICO_STALE_REVIEW=0, must not turn Find stuck off."""
-    monkeypatch.setenv("TICO_STALE_REVIEW", "0")
-    assert _migrated({}, {"stale_review": False})["find_stuck"] == 1, "Find stuck keeps its default (on)"
-    assert _migrated({}, {})["find_stuck"] == 1
-    assert _migrated({}, {"stale_review": True})["find_stuck"] == 1
-    assert _migrated({"task_roundup": {"on": False}}, {"stale_review": True})["find_stuck"] == 0
-    assert _migrated({"task_roundup": {"on": True}}, {"stale_review": False})["find_stuck"] == 1
-    assert _migrated({"learnings": {"on": True}}, {})["learn"] == 1, "a saved Learn switch carries over"
 
 
 def test_replaying_the_migration_changes_nothing(api):
@@ -638,3 +631,41 @@ def test_the_replaced_jobs_mirrors_are_retired_once():
         )
     with sqlite3.connect(":memory:") as c:
         migration.up(c)  # a file with no automations yet
+
+
+def test_maintenance_has_one_monthly_cap_and_ignores_a_saved_rules_cap(api, monkeypatch):
+    monkeypatch.setattr(M, "_start", lambda *args, **kwargs: None)
+    store = api.app.state.store
+    with store.transaction() as c:  # a rules cap saved before the one decisions budget
+        c.execute(
+            "INSERT INTO registry_metadata VALUES('maintenance', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (json.dumps({"rules_monthly_cap_usd": 0.01}),),
+        )
+    settings = get(api, "maintenance", token="ana-test")["settings"]
+    assert not any(key.startswith("rules_") for key in settings)
+    assert settings["monthly_cap_usd"] is None
+    assert settings["monthly_cap_usd_in_effect"] == store.settings.decisions_monthly_usd
+    patch(api, "maintenance", {"rules_monthly_cap_usd": 80}, expected=422)
+    body = patch(api, "maintenance", {"monthly_cap_usd": 80})
+    assert body["settings"]["monthly_cap_usd"] == body["settings"]["monthly_cap_usd_in_effect"] == 80
+    assert not any(key.startswith("rules_") for key in body["settings"])
+
+
+def test_the_real_clean_up_step_runs_and_prunes_old_maintenance_history(api):
+    """Clean up, as Maintenance runs it (no stand-in): it finishes without raising and drops runs past 30 days."""
+    from backend.maintenance_steps import clean_up
+
+    store, _ = stores(api)
+    now = H.now()
+    old = H.shift(now, days=-(clean_up.RUN_HISTORY_DAYS + 1))
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO maintenance_runs(id,occurrence_key,trigger,step,started_at,heartbeat_at,finished_at,result) "
+            "VALUES('old','schedule:old','schedule',NULL,?,?,?,'ran')",
+            (old, old, old),
+        )
+    with store.read() as c:
+        out = M.LIVE["clean_up"](c, {"store": store, "now": now})
+    assert out["status"] == "ran", out
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM maintenance_runs WHERE id='old'").fetchone()

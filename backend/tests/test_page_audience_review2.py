@@ -8,14 +8,14 @@ from backend import counsel, events, files, task_privacy, teammate_access, threa
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401
-from backend.tests.test_api import api, assign, claim, get, headers, post, put, ready, runner  # noqa: F401
-from backend.tests.test_assistant import room
-from backend.tests.test_counsel import counsel_on, counsel_run, source
-from backend.tests.test_files import turn
-from backend.tests.test_groups import send
-from backend.tests.test_org_rules import org
-from backend.tests.test_page_audience import edit, promoted, read
-from backend.tests.test_pages import page
+from backend.tests.helpers.api import assign, claim, get, headers, post, put, ready, runner  # noqa: F401
+from backend.tests.helpers.assistant import room
+from backend.tests.helpers.counsel import counsel_on, counsel_run, source
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.groups import send
+from backend.tests.helpers.org_rules import org
+from backend.tests.helpers.page_audience import edit, promoted, read
+from backend.tests.helpers.pages import page
 
 
 def assert_placeholder(value, label, fid):
@@ -49,7 +49,7 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     ]
     post(api, f"attempts/{aid}/events", {"events": output}, token=machine["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET checkpoint=?,resume=? WHERE id=?", (original, json.dumps({"text": original}), tid))
+        c.execute("UPDATE tasks SET checkpoint=? WHERE id=?", (original, tid))
         c.execute(
             "UPDATE attempts SET result=?,final_text=?,summary=? WHERE id=?",
             (json.dumps({"text": original, "outcome": "completed"}), original, original, aid),

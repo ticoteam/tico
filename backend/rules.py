@@ -10,29 +10,28 @@ message H._write_message is about to write to a bot, and answers with an outcome
 - `ignore`: write it quietly with no note: the room history is all that carries it.
 - `ask`: write the message quietly with its note, and raise one Needs-you item for the task's human naming the rule
   (`carry_out`, once per task and rule).
-- `action`: run the row's `params.action` (close, move_step, set_wait, relate, note, assign, add_tag, remove_tag) as
-  the keeper, with the rule id in the event payload, and write the message quietly with its note. An action that fails opens the message: it wakes the
-  bot under `fail_open`, so work is never lost to a rule.
+- `action`: run the row's `params.action` (close, move, ask, relate, note, assign, add_tag, remove_tag) as Tico,
+  through the task calls, with the rule id in the event payload, and write the message quietly with its note. An
+  action that fails opens the message: it wakes the bot under `fail_open`, so work is never lost to a rule.
 
 The message is stamped `refs.rule` with the rule id, whatever the outcome, and a run copies it to `attempts.rule_id`
 at claim, so every run joins to the rule that woke it (`rule_weekly` in hub sql).
 
 Built-in rules are defined here, in code, with stable ids. They reproduce what the wake filters did before there
-were rules: the ALWAYS_WAKE classes (a person's message, an ask, an approval, a needs-action flag, a reply, a gate
-verdict) and AWAITED results wake; a bot's own write (`own_write`), news about a parked task (`parked`) and a legacy stall
-or status check on a task that stands as at the last checkpoint (`same_state`) wait; a plain bot-to-bot message waits
-(`bot_to_bot`); a finished request and a person's review comments are batched (`batch_*`); one check finishing is
-ignored (`pr_check`), every check on a pull request head finished (`pr_checks_done`) wakes the ticket's owner at a
-working step and is a note otherwise (`pr_checks_note`), and a review that is not a person's is a note
-(`pr_review_note`: the PR_RULES block); anything else
-wakes under the rule named for its event (`assignment`, `stall`, `routine`, ...); an event no rule names is a note
-under `default_note` (the next run carries it), and the bot's own write is ignored. The logic of
-the filters stays in backend/wake_rules.py and backend/bot_to_bot.py; this module orders them and names them.
+were rules: the ALWAYS_WAKE classes (a task's turn, a person's message, an ask, an OK, a needs-action flag, a reply) and
+AWAITED results wake; a bot's own write (`own_write`) and news about a parked task (`parked`) wait; a plain
+bot-to-bot message waits (`bot_to_bot`); a finished request and a person's review comments are batched (`batch_*`); one
+check finishing is ignored (`pr_check`), every check on a pull request head finished (`pr_checks_done`) wakes the
+task's owner while the task is the bot's to work and is a note otherwise (`pr_checks_note`), and a review that is not a
+person's is a note (`pr_review_note`: the PR_RULES block); anything else wakes under the rule named for its event
+(`assignment`, `routine`, ...); an event no rule names is a note under `default_note` (the next run carries it), and the
+bot's own write is ignored. The logic of the filters stays in backend/wake_rules.py and backend/bot_to_bot.py; this
+module orders them and names them.
 
-Table rows (the `rules` table, `scope_kind` team, type, department, bot or task) override the built-ins. A row
-matches one event (or `*`, every event that is neither always-wake nor awaited) and optional conditions (`condition`), and the
-first match wins by scope, most specific first: task, bot, department, type, team, then the built-ins; inside a
-scope by `position`. The always-wake classes are a floor no row lowers: a person is never made to wait by a rule.
+Table rows (the `rules` table, `scope_kind` team, pipeline, department, bot or task) override the built-ins. A row
+matches one event (or `*`, every event that is neither always-wake nor awaited) and optional conditions (`condition`),
+and the first match wins by scope, most specific first: task, bot, department, pipeline, team, then the built-ins;
+inside a scope by `position`. The always-wake classes are a floor no row lowers: a person is never made to wait by a rule.
 A bot's profile plugs in at the bot scope: `profile_of` names it and PROFILE_RULES holds each profile's built-in
 rows (a profile that is not listed adds none).
 
@@ -57,9 +56,9 @@ log = logging.getLogger(__name__)
 
 IGNORE, NOTE, BATCH, WAKE, ASK, ACTION = "ignore", "note", "batch", "wake", "ask", "action"
 OUTCOMES = (IGNORE, NOTE, BATCH, WAKE, ASK, ACTION)
-SCOPES = ("builtin", "team", "type", "department", "bot", "task")
+SCOPES = ("builtin", "team", "pipeline", "department", "bot", "task")
 # Most specific first: the first scope with a matching row decides.
-PRECEDENCE = ("task", "bot", "department", "type", "team")
+PRECEDENCE = ("task", "bot", "department", "pipeline", "team")
 
 FAIL_OPEN = "fail_open"
 DEFAULT_NOTE = "default_note"
@@ -68,7 +67,7 @@ NO_RUN = "no_run"
 BOT_TO_BOT = "bot_to_bot"
 # What a code action can do, for `action` rows (system_routines' THEN names). The task actions need a task; the event
 # actions (`wake_bot`, `send_webhook`) do not, so they also run from events without one (judge_event).
-TASK_ACTIONS = ("close", "move_step", "set_wait", "relate", "note", "assign", "add_tag", "remove_tag")
+TASK_ACTIONS = ("close", "move", "ask", "relate", "note", "assign", "add_tag", "remove_tag")
 TAG_ACTIONS = ("add_tag", "remove_tag")
 EVENT_ACTIONS = (
     "wake_bot",
@@ -89,78 +88,52 @@ HOLD_ROW, HOLD_IGNORED = "rule", "ignored"
 
 # What a message is, as a rule names it. The always-wake events cannot be lowered by a row.
 FLOOR_EVENTS = {
-    "check_back": "a task follow-up appointment is due",
+    "task_turn": "a task in a pipeline is the bot's to work",
     "person_message": "a person's message or comment, or a notice of a person's own act",
     "ask": "an ask or a steer: a question to the bot",
     "answer": "the answer to an ask the bot made",
-    "approval": "an approval decided, withdrawn or asked about, or a structured question",
+    "approval": "an OK asked of the bot or given on its task, or a structured question",
     "needs_action": "a message its sender flagged needs-action",
     "bot_mention": "another bot's message that @mentions the bot",
     "reply": "a reply to the bot's own ask, to a message it flagged needs-action, or to one it waits on",
-    "verdict": "a factory gate verdict on the bot's ticket: Review 1, Review 2, QA or Security",
     "incident_news": "news about a task marked as an incident wakes the bot at once",
-    "task_action": "a stale-check suggestion on a task it owns needs its action now",
-    "task_blocker": "a blocker or refused move on a task it owns or asked for needs action now",
-    "direct_review_request": "a review or sign-off asked of this bot needs action now",
-    "builder_handoff": "a builder hand-off on its Dev ticket: a verdict to act on, a failed check, a merge conflict or "
-    "a merge",
 }
 # Structured task news that wakes at once when no row already wakes it or keeps it quiet.
-URGENT_EVENTS = ("incident_news", "task_action", "task_blocker", "direct_review_request")
-# wake_rules.always_wakes key -> (event, rule id)
+URGENT_EVENTS = ("incident_news",)
+# wake_rules.always_wakes key -> (event, rule id). A key not named here wakes as a person's message.
 _FLOOR = {
-    "check_back": "check_back",
+    "task_turn": "task_turn",
     "person": "person_message",
     "approval": "approval",
     "needs_action": "needs_action",
     "mention": "bot_mention",
     "reply": "reply",
-    "gate": "verdict",
-    "handoff": "builder_handoff",
 }
 # wake_rules.AWAITED key -> event
 AWAITED_EVENTS = {
-    "blocker_done": ("blocker_done", "a task this one waits on (blocked_by) finished"),
     "wake_once": ("pr_checks_done", "a pull request link armed with wake_once got its result"),
-    "subtask": ("subtask_finished", "a subtask moved or finished"),
+    "subtask": ("subtask_finished", "a sub-task moved or finished"),
     "worktree": ("worktree", "the worktree the task waited for is ready"),
     "watcher": ("watcher", "something the bot watches moved or ended"),
-    "resume": ("resume", "a deferred task's stored resume condition came true"),
-    "milestone": ("milestone", "a pull request it waits for merged or a release it waits for was published"),
-    "reconnected": ("reconnected", "the account or credential its reconnect card waited for works again"),
+    "reconnected": ("reconnected", "the account or credential it waited for works again"),
 }
 # Events that wake under a rule of the same name. Another builder's new event names a `refs.wake` and lands here.
 WAKE_EVENTS = {
     "assignment": "a task is assigned, reassigned or handed back to the bot",
     "blocker": "a setup or run blocker needs the bot",
-    "review_request": "a review or QA child was created for the bot",
     "pr_checks": "a pull request's checks finished",
-    "stall": "a task has gone quiet and nothing is set to move it",
-    "status_check": "a quiet task's status check",
-    "stall_check": "a stall or status check",
-    "task_roundup": "the task roundup lists a bot's tasks, asks, late tickets, exceptions or backlogs",
     "routine": "a routine ran",
     "schedule": "a scheduled run",
     "due": "a task's due date came",
     "snooze": "a task's snooze ended",
-    "next_run": "a next-run task is next",
     "update": "an update was requested",
-    "restate_ask": "an ask nobody answered was restated",
-    "still_needed": "an ask is asked about again",
-    "auto_start": "an assigned task starts on a free turn",
     "background_done": "background work the bot waited for finished",
-    "release_published": "a release was published",
-    "release_now": "a person asked for a release now",
     "task_manager_report": "the Task Manager's report for a department",
     "bookkeeper_check": "the Bookkeeper's Books check found new Finance work",
     "pr_checks_done": "every check on a pull request head finished",
     "pr_review": "a GitHub review or review comment on a pull request, not from a person",
-    "subtask_finished": "a subtask finished",
-    "blocker_done": "a task this one waits on finished",
+    "subtask_finished": "a sub-task finished",
     "task_done": "a task the bot asked for or owns was finished or closed",
-    "task_declined": "a task the bot asked for was declined",
-    "task_blocked": "a task the bot asked for now waits on someone else",
-    "review_handback": "a task the bot asked for was handed back for its review",
     "backlog": "updates held for the bot while it was away",
     "feed": "a Slack channel's messages were handed to the bot to read",
     "digest": "the bot's held updates were let go as one digest",
@@ -168,9 +141,7 @@ WAKE_EVENTS = {
 # Events that wait as a note when no rule says otherwise: the next run carries them. A row may wake on any of them.
 NOTE_EVENTS = {
     "comment": "a comment or message about a task or in a chat",
-    "status_or_relation": "a task's status, step or relation moved",
-    "ready_for_review": "a Dev ticket the bot asked for reached a review step",
-    "step_entered": "a task entered a step of its type",
+    "status_or_relation": "a task moved, or a relation changed",
 }
 BATCH_EVENTS = {
     "completion": "a finished request",
@@ -179,13 +150,11 @@ BATCH_EVENTS = {
     "rule": "a notice a rule batched",
 }
 AWAITED_NAMES = frozenset(v[0] for v in AWAITED_EVENTS.values())
-# What a Manager-profile bot hears of as a note though it wakes every other bot: a ticket's verdicts and builder
-# hand-offs (wake_rules.always_wakes keys), its subtasks' and blockers' results (wake_rules.awaited keys) and a
-# blocker or refused move on a ticket it asked for (urgent_rule's task_blocker). Its exceptions list carries what of
-# those does not move on; a person, an approval, a needs-action flag, a reply it waits on, an incident, its own
-# wake_once, resume, watcher, milestone and worktree waits still wake it.
+# What a Manager-profile bot hears of as a note though it wakes every other bot: its sub-tasks' results
+# (wake_rules.awaited key). A task's turn, a person, an OK, a needs-action flag, a reply it waits on, an incident, its
+# own wake_once, watcher and worktree waits still wake it.
 MANAGER_NOTE = "profile_manager_note"
-MANAGER_QUIET = frozenset({"gate", "handoff", "subtask", "blocker_done", "task_blocker"})
+MANAGER_QUIET = frozenset({"subtask"})
 EVENTS = {
     **FLOOR_EVENTS,
     **WAKE_EVENTS,
@@ -195,31 +164,26 @@ EVENTS = {
 }
 # refs.wake spellings the writers use -> the event a rule names.
 WAKE_ALIASES = {
-    "stalled": "stall",
-    "stuck_retry": "stall",
-    "stuck_cause": "stall",
     "occurrence": "routine",
-    "next-run": "next_run",
     "background-done": "background_done",
     "watcher-done": "watcher",
     "held-messages": "backlog",
-    "step_status": "status_check",
 }
 # `trigger` (an incoming webhook's id) and `type` (its extracted type, a trailing * matches a prefix) are read only for
 # events without a task.
-WHEN_KEYS = ("actor", "step", "role", "tag", "state", "trigger", "type")
+WHEN_KEYS = ("actor", "pipeline", "stage", "role", "tag", "state", "trigger", "type")
 EVENT_WHEN_KEYS = ("trigger", "type")
-# The events without a task, and the only scopes a row for one can have (there is no task and no task type).
+# The events without a task, and the only scopes a row for one can have (there is no task and no pipeline).
 SOURCELESS = frozenset(CAT.sourceless())
 EVENT_SCOPES = ("team", "department", "bot")
 WHEN_ACTORS = ("human", "bot", "keeper")
-WHEN_ROLES = ("owner", "requester", "qa", "release_manager", "other")
+WHEN_ROLES = ("owner", "requester", "other")
 
 # A bot's profile (backend/profiles.py) plugs in at the bot scope. `profile_of` names it and PROFILE_RULES holds each
 # profile's built-in rows, shaped like `rules` rows (a profile that is not listed adds none; `custom` has its own
 # rows in the table). A row naming an event is tried at the bot scope after the bot's own rows; a `*` row is the
-# profile's "everything else" and is tried last of all, after the team's rows, so a type or team rule that names an
-# event (a release waking QA) still reaches a bot whose profile makes everything else a note.
+# profile's "everything else" and is tried last of all, after the team's rows, so a pipeline or team rule that names an
+# event (a pipeline's rule waking a reviewer) still reaches a bot whose profile makes everything else a note.
 PROFILES = ("doer", "reviewer", "lead", "manager", "responder", "monitor", "custom")
 # Time-based events a bot set for itself (its routines, due dates, snoozes): a bot that works to a clock is woken by
 # them whatever its profile says about news.
@@ -229,8 +193,8 @@ OWN_TIMERS = (
     ("due", "a task's due date came"),
     ("snooze", "a task's snooze ended"),
 )
-# Work the bot started or was queued itself: its background work finished, a next-run task came up.
-OWN_WORK = (("background_done", "background work it waited for finished"), ("next_run", "its next-run task is next"))
+# Work the bot started itself: its background work finished.
+OWN_WORK = (("background_done", "background work it waited for finished"),)
 
 
 def _profile_rules():
@@ -253,38 +217,15 @@ def _profile_rules():
         for event, words in which:
             add(profile, f"profile_{profile}_{event}", event, WAKE, words)
 
-    # The task roundup is the one grouped wake per bot per run, whatever its profile: every profile wakes on it, ahead of its
-    # catch-all note. A profile with sweeps off (profiles.SPEC) is listed its questions and its own follow-ups only.
-    for profile in PROFILES:
-        add(profile, f"profile_{profile}_roundup", "task_roundup", WAKE, "the task roundup lists its tasks and lines")
-    add("reviewer", "profile_reviewer_assignment", "assignment", WAKE, "a review or QA request was filed for it")
-    add("reviewer", "profile_reviewer_request", "review_request", WAKE, "a review, QA or Security request")
-    add(
-        "reviewer", "profile_reviewer_handback", "review_handback", WAKE, "a task it asked for came back for its review"
-    )
-    add(
-        "reviewer",
-        "profile_reviewer_release",
-        "release_published",
-        WAKE,
-        "a ticket it checks was released: live tests now",
-    )
+    add("reviewer", "profile_reviewer_assignment", "assignment", WAKE, "a task was given to it to check")
     timers("reviewer", OWN_TIMERS[:2] + OWN_WORK)
     add("reviewer", "profile_reviewer_note", "*", NOTE, "anything else")
     # A bot finishing it is batched news for everyone else (batch_completion); a lead hears it now.
-    for event, words in (
-        ("task_done", "finished"),
-        ("batch_completion", "finished by a bot"),
-        ("task_declined", "declined"),
-        ("task_blocked", "blocked"),
-    ):
-        add("lead", f"profile_lead_{event}", event, WAKE, f"a ticket it asked for was {words}", {"role": ["requester"]})
-    add("lead", "profile_lead_handback", "review_handback", WAKE, "a ticket it asked for came back for its review")
-    add("lead", "profile_lead_release_now", "release_now", WAKE, "someone asked for a release now")
+    for event, words in (("task_done", "finished"), ("batch_completion", "finished by a bot")):
+        add("lead", f"profile_lead_{event}", event, WAKE, f"a task it asked for was {words}", {"role": ["requester"]})
     add("lead", "profile_lead_blocker", "blocker", WAKE, "a blocker needs it")
-    # A lead takes tasks: one handed to it (an escalation, a release, a report) is work now, not digest news.
+    # A lead takes tasks: one handed to it (an escalation, a report) is work now, not digest news.
     add("lead", "profile_lead_assignment", "assignment", WAKE, "a task was given to it")
-    add("lead", "profile_lead_request", "review_request", WAKE, "a review or sign-off was asked of it")
     timers("lead", OWN_TIMERS + OWN_WORK)
     add(
         "lead",
@@ -295,12 +236,11 @@ def _profile_rules():
         {"actor": ["keeper"]},
     )
     add("lead", "profile_lead_note", "*", NOTE, "anything else a bot says")
-    # A manager works by exception: its schedule, a person, work given to it and its exceptions list wake it; a ticket's
-    # steps, its subtasks' results, checks, verdicts and late or backlog notices wait for that run.
+    # A manager works by exception: its schedule, a person, work given to it and a task's turn wake it; its sub-tasks'
+    # results, checks and other news wait for that run.
     add("manager", "profile_manager_assignment", "assignment", WAKE, "a task was given to it")
-    add("manager", "profile_manager_request", "review_request", WAKE, "a sign-off was asked of it")
     timers("manager", OWN_TIMERS + OWN_WORK)
-    add("manager", MANAGER_NOTE, "*", NOTE, "anything else: ticket news waits for its next run")
+    add("manager", MANAGER_NOTE, "*", NOTE, "anything else: task news waits for its next run")
     add("responder", "profile_responder_note", "*", NOTE, "anything but a person")
     add("monitor", "profile_monitor_assignment", "assignment", WAKE, "its watcher filed a task", {"actor": ["keeper"]})
     timers("monitor", OWN_TIMERS + OWN_WORK)
@@ -322,33 +262,21 @@ def profile_of(conn, bot):
     return row[0] if row and row[0] in PROFILES else "doer"
 
 
-def sweeps_on(conn, bot):
-    """Whether the task roundup lists this bot its sweep lines (late, exception, backlog, assigned, restate, missed update and
-    quiet task): False for a reviewer, lead, responder and monitor, and for a custom profile that turned them off, which are
-    listed their questions and their own follow-ups only. A manager and a doer get all of them. Fails open: a bot whose
-    profile cannot be read is swept."""
-    try:
-        from . import profiles
-
-        return profiles.sweeps_on(conn, H.actor_id(bot))
-    except Exception:  # noqa: BLE001
-        return True
-
-
 class Decision(NamedTuple):
     outcome: str
     rule: str
     reason: Optional[str] = None  # the held_by mark when the message is written quiet here
     params: Optional[dict] = None
     by: Optional[str] = None  # task action's effective writer; event actions retain the row's creator
-    notice_only: bool = False  # read urgent news without starting the work its dependency holds
 
 
+# A notice marked to run without its task. Nothing marks one now (the task it waited behind is gone with blocked_by);
+# `stamp` still takes the mark off whatever a caller sends, so nobody can supply it.
 PARKED_NOTICE = "parked_urgent_notice"
 
 
 def notice_only(message):
-    """Only the keeper's server-stamped urgent notices run without attaching their held task."""
+    """Whether a message is a notice from Tico marked to run without its task."""
     return bool(
         message
         and message.get("sender_id") == H.KEEPER
@@ -358,25 +286,26 @@ def notice_only(message):
 
 
 # Pull request checks (backend/github.py): the webhook writes no message for one check finishing (`pr_check`), and one
-# `pr_checks_done` per head when every check on it has finished. It wakes the owner of the ticket the pull request is
-# linked to while the ticket is at a working step (WORKING), or when the link was armed with `wake_once` (the same
-# event: the arming is what the bot asked to be told); anywhere else it is a note. A review or comment on the pull
-# request that is not from a person is a note; a person's keeps the batched review wake. Rows in the table override
-# these as they do any built-in.
-WORKING = ("open", "doing")
+# `pr_checks_done` per head when every check on it has finished. It wakes the owner of the task the pull request is
+# linked to while the task is open and not waiting on a person or set aside (`_waits_on_checks`), or when the link was
+# armed with `wake_once` (the same event: the arming is what the bot asked to be told); anywhere else it is a note. A
+# review or comment on the pull request that is not from a person is a note; a person's keeps the batched review wake.
+# Rows in the table override these as they do any built-in.
 PR_RULES = (
     ("pr_check", "pr_check", IGNORE, "one check on a pull request finished: nothing is written until all of them have"),
     (
         "pr_checks_done",
         "pr_checks_done",
         WAKE,
-        "every check on a pull request head finished, on a ticket the bot owns at a working step or a link it armed",
+        "every check on a pull request head finished, on an open task the bot owns that waits on no person, or a link "
+        "it armed",
     ),
     (
         "pr_checks_note",
         "pr_checks_done",
         NOTE,
-        "every check on a pull request head finished, on a ticket not at a working step or not the bot's",
+        "every check on a pull request head finished, on a task that waits on a person, is set aside, ended, or is "
+        "not the bot's",
     ),
     ("pr_review_note", "pr_review", NOTE, "a review or review comment on a pull request that is not from a person"),
 )
@@ -393,9 +322,18 @@ def _pr_decision(conn, event, target, refs, conv):
         return Decision(WAKE, "awaited_wake_once")
     tid = H.message_task_id({"refs": refs}, conv)
     task = H.task(conn, tid) if tid else None
-    if task and task.get("owner_id") == target and task.get("status") in WORKING:
+    if task and task.get("owner_id") == target and _waits_on_checks(conn, task):
         return Decision(WAKE, "pr_checks_done")
     return Decision(NOTE, "pr_checks_note", HOLD_ROW)
+
+
+def _waits_on_checks(conn, task):
+    """Whether the owner is the one to act on the task now: it is open, and what it waits on first is not a person or
+    a snooze (backend/waiting_on.py)."""
+    if task.get("status") != "open":
+        return False
+    waits = H.task_waits(conn, [task["id"]]).get(task["id"]) or []
+    return not waits or waits[0].state not in ("person", "snoozed")
 
 
 def _builtins():
@@ -430,13 +368,6 @@ def _builtins():
         add("awaited_" + key, event, WAKE, words, "awaited")
     add("own_write", "status_or_relation", IGNORE, "the bot's own write caused it", "filter")
     add("parked", "status_or_relation", NOTE, "news about a task the bot owns that waits on something", "filter")
-    add(
-        "same_state",
-        "stall_check",
-        IGNORE,
-        "a stall or status check on a task that stands as at the last checkpoint",
-        "filter",
-    )
     add(BOT_TO_BOT, "comment", NOTE, "a plain message from another bot", "filter")
     for kind, words in BATCH_EVENTS.items():
         add("batch_" + kind, "batch_" + kind, BATCH, words, "batch")
@@ -502,7 +433,7 @@ def event_of(actor, kind, refs, body, floor=None):
     if batch in BATCH_EVENTS:
         return "batch_" + batch
     key = wake_rules.awaited(refs)
-    if key:
+    if key in AWAITED_EVENTS:
         return AWAITED_EVENTS[key][0]
     wake = refs.get("wake")
     if isinstance(wake, str):
@@ -514,8 +445,6 @@ def event_of(actor, kind, refs, body, floor=None):
         return news
     if refs.get("sweep"):
         return "routine"
-    if refs.get("auto_start"):
-        return "auto_start"
     trigger = run_triggers.of_message({"refs": refs, "sender_id": actor})[0]
     if trigger in ("comment", "status_or_relation") or actor == H.KEEPER:
         label = wake_presets.classify({"refs": refs, "sender_id": actor, "body": body, "kind": kind})[0]
@@ -523,8 +452,6 @@ def event_of(actor, kind, refs, body, floor=None):
             return "assignment"
         if label == "blocker":
             return "blocker"
-        if label == "gate":
-            return "ready_for_review"
     if trigger == "other":
         return "other"
     return {"stall_check": "stall_check", "schedule": "schedule"}.get(trigger, trigger)
@@ -536,12 +463,6 @@ def _rule_for_event(event):
 
 
 # ----------------------------------------------------------------------------- the table
-def _release_flow():
-    from . import release_flow
-
-    return release_flow
-
-
 class _Context:
     """What a row's scope and conditions read, loaded only when a row asks."""
 
@@ -586,8 +507,8 @@ class _Context:
             return ident == self.slug
         if kind == "task":
             return bool(self.task) and self.task["id"] == ident
-        if kind == "type":
-            return bool(self.task) and self.task.get("type_id") == ident
+        if kind == "pipeline":
+            return bool(self.task) and self.task.get("pipeline_id") == ident
         if kind == "department":
             return ident in self.departments()
         return False
@@ -610,9 +531,12 @@ class _Context:
                 # A condition saved before a column rename names the old column; the task row has the new one.
                 if task.get(renames.current_column("tasks", key)) not in wanted:
                     return False
-            elif key == "type":
-                names = {str(task.get("type_id") or "").lower()}
-                found = self.conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
+            elif key in ("pipeline", "stage"):
+                # By id or by name, ignoring case: the task's pipeline, or the stage it is in.
+                ident = task.get("pipeline_id" if key == "pipeline" else "stage_id")
+                table = "pipelines" if key == "pipeline" else "stages"
+                names = {str(ident or "").lower()}
+                found = self.conn.execute(f"SELECT name FROM {table} WHERE id=?", (ident,)).fetchone()
                 if found:
                     names.add(str(found[0]).lower())
                 if not names & {str(w).lower() for w in wanted}:
@@ -621,20 +545,7 @@ class _Context:
                 owner = task.get(renames.current_column("tasks", "owner"))
                 requester = task.get(renames.current_column("tasks", "requester"))
                 mine = {"owner" if owner == self.target else "requester" if requester == self.target else "other"}
-                # QA and the Release Manager are found, never configured per ticket (release_flow): a bot holds
-                # that role here when it is the one the ticket's QA or the team's release setting names.
-                if "qa" in wanted and self.slug == _release_flow().qa_owner(self.conn, task):
-                    mine.add("qa")
-                if "release_manager" in wanted and self.slug == _release_flow().release_manager(self.conn):
-                    mine.add("release_manager")
                 if not mine & set(wanted):
-                    return False
-            elif key == "step":
-                names = {str(task.get("step_id") or "").lower()}
-                found = self.conn.execute("SELECT name FROM task_steps WHERE id=?", (task.get("step_id"),)).fetchone()
-                if found:
-                    names.add(str(found[0]).lower())
-                if not names & {str(w).lower() for w in wanted}:
                     return False
             elif key == "tag":
                 for tag in wanted:
@@ -692,10 +603,9 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
             for r in PROFILE_RULES.get(profile_of(conn, slug), ())
             if r["event"] in (event, "*")
         ]
-    if event in AWAITED_NAMES or event in ("digest", "step_entered"):
-        # What the bot waits on wakes it, a digest is held news let go, and a step move is news only for a bot a row
-        # names: a `*` row (a lead's batch-everything, a note-everything) reaches none of them, only a row that names
-        # the event.
+    if event in AWAITED_NAMES or event == "digest":
+        # What the bot waits on wakes it, and a digest is held news let go: a `*` row (a lead's batch-everything, a
+        # note-everything) reaches neither, only a row that names the event.
         rows = [r for r in rows if r["event"] != "*"]
         profile = [r for r in profile if r["event"] != "*"]
     if not rows and not profile:
@@ -721,35 +631,20 @@ def _table_decision(conn, event, actor, target, refs, conv, task_row=None):
 
 
 def incident_task(conn, task):
-    """The persisted marker, never a title match when judging news."""
-    if not task:
-        return False
-    if "incident" in H.task_labels(task):
-        return True
-    task_type = conn.execute("SELECT name FROM task_types WHERE id=?", (task.get("type_id"),)).fetchone()
-    return bool(task_type and task_type[0].strip().lower() in ("incident", "incidents"))
+    """The persisted marker (the `incident` label), never a title match when judging news."""
+    return bool(task) and "incident" in H.task_labels(task)
 
 
 def urgent_rule(conn, actor, target, refs, conv, event):
-    """Structured task news that wakes at once when no row already wakes it or keeps it quiet. A row that
-    wakes keeps its own rule name; an explicit ignore or quiet marker keeps the silence. Own writes stay quiet."""
+    """Structured task news that wakes at once when no row already wakes it or keeps it quiet: news about an incident.
+    A row that wakes keeps its own rule name; an explicit ignore or quiet marker keeps the silence. Own writes stay
+    quiet."""
     from . import wake_rules
 
     if wake_rules.CAUSE.get() == target or actor == target:
         return None
-    ctx = _Context(conn, actor, target, refs, conv, None)
-    task = ctx.task
-    if task:
-        if incident_task(conn, task):
-            return "incident_news"
-        party = target in (task.get("owner_id"), task.get("requester_id"))
-        if refs.get("stale_check") and target == task.get("owner_id"):
-            return "task_action"
-        if party and (event in ("blocker", "task_blocked") or refs.get("review_gate")):
-            return "task_blocker"
-    if event in ("review_request", "review_handback"):
-        return "direct_review_request"
-    return None
+    task = _Context(conn, actor, target, refs, conv, None).task
+    return "incident_news" if task and incident_task(conn, task) else None
 
 
 # ----------------------------------------------------------------------------- the decision
@@ -759,20 +654,7 @@ def judge(conn, actor, target, kind, refs, body, conv, in_reply_to=None, decided
     if not str(target).startswith("bot:"):
         return None
     try:
-        found = _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
-        if found.outcome == WAKE and actor == H.KEEPER and kind == "notice":
-            from . import wake_rules
-
-            task = _Context(conn, actor, target, refs, conv, None).task
-            if (
-                task
-                and not H.TS.snoozed(task)
-                and wake_rules.parked(conn, task) == "blocked_by"
-                and urgent_rule(conn, actor, target, refs, conv, event_of(actor, kind, refs, body))
-            ):
-                # This changes delivery only, after the decision and its silence controls. Preserve the rule id.
-                found = found._replace(notice_only=True)
-        return found
+        return _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided)
     except Exception:  # noqa: BLE001 - fail open: a message the engine cannot read starts its run as before
         return Decision(WAKE, FAIL_OPEN)
 
@@ -783,8 +665,8 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
     refs = refs if refs is not None else {}
     if not isinstance(refs, dict):
         return Decision(WAKE, FAIL_OPEN)
-    # The built-in filters (own write, parked, same state) stay in wake_rules.gate, asked first: it costs what it
-    # always did, and a table row may override what it says.
+    # The built-in filters (own write, parked) stay in wake_rules.gate, asked first: it costs what it always did, and
+    # a table row may override what it says.
     held = wake_rules.gate(conn, actor, target, kind, refs, body, conv, in_reply_to)
     if decided is not None:
         return decided
@@ -820,17 +702,8 @@ def _judge(conn, actor, target, kind, refs, body, conv, in_reply_to, decided=Non
         return Decision(WAKE, "batch_digest")
     if refs.get("wake_batch") in BATCH_EVENTS and actor == H.KEEPER:
         return Decision(BATCH, "batch_" + refs["wake_batch"])
-    if held == "same_state":
-        return Decision(IGNORE, "same_state", "same_state")
     if held == "own_write":
         return Decision(IGNORE, held, HOLD_IGNORED)  # the bot's own run already knows what it wrote
-    if (
-        held == "parked"
-        and wake_rules.parked(conn, _Context(conn, actor, target, refs, conv, None).task) == "blocked_by"
-    ):
-        urgent = urgent_rule(conn, actor, target, refs, conv, event)
-        if urgent:
-            return Decision(WAKE, urgent)
     if held:
         return Decision(NOTE, held, held)
     outcome, rule = _rule_for_event(event)
@@ -912,8 +785,6 @@ def stamp(refs, decision):
     a rule that lets a Tico notice through takes off a batch mark the writer put on it."""
     out = {**(refs or {}), "rule": decision.rule}
     out.pop(PARKED_NOTICE, None)  # callers cannot supply a notice-only dispatch capability
-    if decision.notice_only:
-        out[PARKED_NOTICE] = True
     out.pop("wake_immediate", None)
     if decision.outcome == WAKE and decision.rule in (*URGENT_EVENTS, "needs_action", "ask"):
         # Urgent news and a question or flagged action for the bot skip every hold; the trigger reads this.
@@ -955,9 +826,10 @@ ASKED = "rule.ask"
 def carry_out(conn, decision, actor, target, kind, refs, body, conv):
     """What `ask` and `action` decisions do, before the message is written; the decision to write it under.
 
-    `ask`: one Needs-you item for the task's human, then the message waits as a note. `action`: the row's action runs
-    as the keeper, then the message waits as a note; an action that fails opens the message instead (`fail_open`), so a
-    rule never costs the bot work it was meant to do. Anything else is returned as it is."""
+    `ask`: an ask on the task for its person, or with no task a task for one (`_ask`), then the message waits as a
+    note. `action`: the row's action
+    runs as Tico, then the message waits as a note; an action that fails (a task call refused, say) opens the message
+    instead (`fail_open`), so a rule never costs the bot work it was meant to do. Anything else is returned as it is."""
     if decision.outcome not in (ASK, ACTION):
         return decision
     if _CARRYING.get():
@@ -969,7 +841,7 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         row = H.task(conn, tid) if tid else None
         with TTR.from_action(decision.rule):
             if decision.outcome == ASK:
-                _ask(conn, decision, row, actor, body)
+                _ask(conn, decision, row, actor, body, target, conv)
             else:
                 _act(
                     conn,
@@ -988,47 +860,78 @@ def carry_out(conn, decision, actor, target, kind, refs, body, conv):
         _CARRYING.reset(token)
 
 
-def _ask(conn, decision, row, actor, body):
-    """One open Needs-you item per task and rule, for the task's requester when that is a person, else the owner bot's
-    operator. Raises when nobody can be asked, so the message wakes the bot instead of waiting for no one."""
-    if not row:
-        raise ValueError("an ask rule needs a task")
+def _operator(conn, bot):
+    """The person a bot works for (usage_limits.recipients), or None."""
+    from . import usage_limits
+
+    person = usage_limits.recipients(conn, H.actor_id(bot)) if H.is_bot(bot) else None
+    return H.human_actor(person["id"]) if person else None
+
+
+def _ask_without_task(conn, decision, actor, body, target, conv):
+    """A message no task is about: one open task owned by the person responsible, the bot's operator, else the rule's
+    maker when that is a person, so it is in their Needs you. While the one this rule filed for this thread (or, with
+    no thread, this bot) is open, nothing more. Raises when nobody can own it, so the message wakes the bot."""
+    about = f"thread:{conv['id']}" if conv and conv.get("id") else f"bot:{H.actor_id(target)}"
     if conn.execute(
-        "SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? "
-        "AND json_extract(e.detail,'$.rule')=? AND json_extract(e.detail,'$.task')=? "
-        f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) LIMIT 1",
-        (ASKED, decision.rule, row["id"], *H.ACTIVE_STATUSES),
+        "SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? AND json_extract(e.detail,'$.rule')=? "
+        "AND json_extract(e.detail,'$.about')=? AND t.status='open' LIMIT 1",
+        (ASKED, decision.rule, about),
     ).fetchone():
         return
-    who = row["requester_id"] if H.is_human(row["requester_id"]) else None
-    if not who and H.is_bot(row["owner_id"]):
-        from . import usage_limits
-
-        person = usage_limits.recipients(conn, H.actor_id(row["owner_id"]))
-        who = H.human_actor(person["id"]) if person else None
+    who = _operator(conn, target) or (decision.by if H.is_human(decision.by) else None)
     if not who:
         raise ValueError("no person to ask")
-    private = H.task_private(conn, row)
-    if private and not H.task_private_readable(conn, who, row):
-        raise ValueError("no person who may read the task")  # the bot is woken instead of naming it to someone else
     sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
     text = str(body or "").strip()[:1500]
-    # The card carries the task's title and the message, so it is as private as the task it is about.
-    card = H.task_create(
+    heading = " ".join(text.split())[:80] or f"a message to {H.actor_id(target)}"
+    made = H.task_create(
         conn,
         H.KEEPER,
-        f"A rule needs you: {row['title']}"[:300],
-        f"The rule {decision.rule} asked for a person on {row['title']} ({row['id']}).\n\nFrom {sender}: {text}",
+        f"A rule needs you: {heading}"[:300],
+        f"The rule {decision.rule} asked for a person on a message to {H.actor_id(target)}.\n\nFrom {sender}: {text}",
         who,
         lint=False,
         deduplicate=False,
-        private=True if private else None,
+        private=True,  # the message was for the bot: only the person it falls to reads it
     )
-    H.event(conn, H.KEEPER, ASKED, card["id"], {"rule": decision.rule, "task": row["id"]})
+    H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": decision.rule, "about": about})
+
+
+def _ask(conn, decision, row, actor, body, target=None, conv=None):
+    """An ask on the message's task (H.task_ask), for its requester when that is a person, else the owner bot's
+    operator; while one this rule added still waits, nothing more. With no task, a task for a person
+    (`_ask_without_task`). Raises when nobody can be asked or the ask is refused (the person may not read a private
+    task), so the message wakes the bot instead of waiting for no one."""
+    if not row:
+        return _ask_without_task(conn, decision, actor, body, target, conv)
+    asked = {
+        r[0]
+        for r in conn.execute(
+            "SELECT json_extract(detail,'$.requirement') FROM events WHERE action=? AND target=? "
+            "AND json_extract(detail,'$.rule')=?",
+            (ASKED, row["id"], decision.rule),
+        )
+    }
+    waits = H.task_waits(conn, [row["id"]]).get(row["id"]) or []
+    if any(w.requirement_id in asked for w in waits):
+        return
+    who = (row["requester_id"] if H.is_human(row["requester_id"]) else None) or _operator(conn, row["owner_id"])
+    if not who:
+        raise ValueError("no person to ask")
+    sender = "Tico" if actor == H.KEEPER else H.actor_id(actor)
+    text = " ".join(str(body or "").split())[:400]
+    line = (
+        f"The rule {decision.rule} asks you about this. {sender} said: {text}"
+        if text
+        else (f"The rule {decision.rule} asks you about this.")
+    )
+    added = H.task_ask(conn, H.KEEPER, row["id"], who, line)
+    H.event(conn, H.KEEPER, ASKED, row["id"], {"rule": decision.rule, "requirement": added.get("requirement_id")})
 
 
 def _act(conn, decision, row, message=None):
-    """Run `params.action` as the keeper: a task action on the message's task, an event action (`wake_bot`,
+    """Run `params.action` as Tico: a task action on the message's task, an event action (`wake_bot`,
     `send_webhook`) with or without one. `message` is the message being judged, for the event actions' templates."""
     params = decision.params or {}
     action = params.get("action")
@@ -1062,8 +965,8 @@ def _act(conn, decision, row, message=None):
         raise ValueError(f"unknown action {action!r}")
     if not row:
         raise ValueError("an action rule needs a task")
-    # The keeper passes the private-task check, so the rule's writer is held to it here: a rule never changes a
-    # private task its writer could not change by hand. Failing opens the message, so the owner still hears of it.
+    # Tico passes the private-task check, so the rule's writer is held to it here: a rule never changes a private task
+    # its writer could not change by hand. Failing opens the message, so the owner still hears of it.
     if (
         H.task_private(conn, row)
         and decision.by != H.KEEPER
@@ -1076,21 +979,51 @@ def _act(conn, decision, row, message=None):
     H.event(conn, H.KEEPER, "rule.action", row["id"], {"rule": decision.rule, "action": action, **done})
 
 
+# The task actions. Each is one task call as Tico, with the rule's words as its why; a refusal raises, and the caller
+# undoes the action and says it failed. A rule never pushes past what a stage needs: a forward move it asks for is
+# refused while anything is missing.
 def _close(conn, tid, params, said):
-    H.task_close(conn, H.KEEPER, tid, note=said, strict=False)
+    H.task_close(conn, H.KEEPER, tid, said)
 
 
-def _move_step(conn, tid, params, said):
-    H.task_update(conn, H.KEEPER, tid, step=str(params["step"]), note=said, strict=False)
+def _needs_why(conn, tid, to):
+    """Whether a move of the task to `to` is a reopen, a close or a move back: those carry the rule's reason. A forward
+    move, or one to Done, carries none, so it is refused while the stage needs anything (a rule never pushes past)."""
+    from . import task_engine as E
+
+    if to in (H.TASK_CLOSED, H.TASK_REOPEN):
+        return True
+    if to in (H.TASK_NEXT, H.TASK_DONE):
+        return False
+    row = E.task(conn, tid)
+    if not row:
+        return False
+    order = E.stages(conn, row["pipeline_id"])
+    target = next((s for s in order if s["id"] == to), None) or next(
+        (s for s in order if s["name"].lower() == to.strip().lower()), None
+    )
+    if not target:
+        return False  # no such stage: the engine refuses it
+    here = row["stage"]
+    if target["kind"] == "closed" or here["kind"] != "work":
+        return True  # a close, or a reopen into a work stage
+    work = [s["id"] for s in order if s["kind"] == "work"]
+    return target["kind"] == "work" and work.index(target["id"]) < work.index(here["id"])
 
 
-def _set_wait(conn, tid, params, said):
-    if params.get("blocked_by"):
-        from . import task_relations as TR
+def _move(conn, tid, params, said):
+    """`params.stage`: a stage of the task's pipeline (by id or name), or next, done, closed or reopen."""
+    to = str(params["stage"])
+    H.task_move(conn, H.KEEPER, tid, to, said if _needs_why(conn, tid, to) else None)
+    return {"stage": to}
 
-        TR.add_blocker(conn, H.KEEPER, tid, str(params["blocked_by"]), mover=True, note=said)
-    else:
-        H.task_update(conn, H.KEEPER, tid, status="waiting", waiting_on=str(params["waiting_on"]), note=said)
+
+def _ask_person(conn, tid, params, said):
+    """`params.person` is asked `params.line` on the task (with `params.choices` when there are some)."""
+    person, line = str(params["person"]), str(params.get("line") or said)
+    choices = params.get("choices") if isinstance(params.get("choices"), list) else None
+    added = H.task_ask(conn, H.KEEPER, tid, person, line, choices=[str(c) for c in choices] if choices else None)
+    return {"person": person, "requirement": added.get("requirement_id")}
 
 
 def _relate(conn, tid, params, said):
@@ -1106,13 +1039,13 @@ def _note(conn, tid, params, said):
 
 
 def _assign(conn, tid, params, said):
-    # The same write a person's reassignment makes, so the new owner is woken and the old one told as usual. The keeper
-    # passes the private-task check, so it is made here: a rule never hands a private task to someone who may not read
-    # it. Failing opens the message, so the current owner is still woken.
+    # The same call a person's reassignment makes, so the new owner is woken as usual. Tico passes the private-task
+    # check, so it is made here: a rule never hands a private task to someone who may not read it. Failing opens the
+    # message, so the current owner is still woken.
     owner, task = str(params["owner"]), H.task(conn, tid)
     if H.task_private(conn, task) and not H.task_private_readable(conn, owner, task):
         raise ValueError("the new owner cannot read this private task")
-    H.task_update(conn, H.KEEPER, tid, owner=owner, note=said)
+    H.task_reassign(conn, H.KEEPER, tid, owner, said)
     return {"owner": owner}
 
 
@@ -1129,8 +1062,8 @@ def _retag(add):
 
 TASK_RUNNERS = {
     "close": _close,
-    "move_step": _move_step,
-    "set_wait": _set_wait,
+    "move": _move,
+    "ask": _ask_person,
     "relate": _relate,
     "note": _note,
     "assign": _assign,
@@ -1217,7 +1150,7 @@ def _message_values(conn, task, message):
     if task:
         out["task"] = {
             key: task.get(renames.current_column("tasks", key))
-            for key in ("id", "title", "status", "owner", "requester", "step_id")
+            for key in ("id", "title", "status", "owner", "requester", "pipeline_id", "stage_id")
         }
     return out
 
@@ -1288,7 +1221,7 @@ def _wake_text(params, values, ctx, default):
     if ctx.get("content"):
         parts.append(str(ctx["content"]))
     if ctx.get("cut") and ctx.get("trigger") and ctx.get("delivery") and not isinstance(ctx.get("trigger"), dict):
-        parts.append(f"The rest: `hub trigger delivery {ctx['trigger']} {ctx['delivery']} --part 2`.")
+        parts.append(f"The rest: `tico trigger delivery {ctx['trigger']} {ctx['delivery']} --part 2`.")
     return "\n\n".join(parts)
 
 
@@ -1385,15 +1318,9 @@ def _run_create_task(conn, rule_id, by, params, values, *, event, subject, revis
             return {**result, "ok": True, "detail": waits}
     conn.execute("SAVEPOINT rule_task")
     try:
-        options = {}
-        if event in TTR.TRIGGERS and task:
-            options = {
-                "private": True if H.task_private(conn, task) else None,
-                "type": params.get("type"),
-                "step": params.get("step"),
-            }
+        private = True if event in TTR.TRIGGERS and task and H.task_private(conn, task) else None
         row = H.task_create(
-            conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False, **options
+            conn, by or H.KEEPER, title[:300], body, H.bot_actor(slug), lint=False, deduplicate=False, private=private
         )
         if event in TTR.TRIGGERS and task:
             from . import task_relations as TR
@@ -1471,8 +1398,8 @@ def _event_target(row, params):
 
 
 def _event_ask(conn, row, name, params, values, ctx):
-    """One open Needs-you card for the rule's maker (a bot's maker is its operator), for as long as the last one is
-    open. Returns (ok, detail)."""
+    """One open task for the rule's maker (a bot's maker is its operator), owned by them so it is in their Needs you,
+    for as long as the last one is open: there is no task to ask on. Returns (ok, detail)."""
     who = row["created_by"] if H.is_human(row["created_by"]) else None
     if not who and H.is_bot(row["created_by"]):
         from . import usage_limits
@@ -1483,14 +1410,13 @@ def _event_ask(conn, row, name, params, values, ctx):
         return False, "No person to ask"
     if conn.execute(
         "SELECT 1 FROM events e JOIN tasks t ON t.id=e.target WHERE e.action=? "
-        "AND json_extract(e.detail,'$.rule')=? "
-        f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) LIMIT 1",
-        (ASKED, row["id"], *H.ACTIVE_STATUSES),
+        "AND json_extract(e.detail,'$.rule')=? AND t.status='open' LIMIT 1",
+        (ASKED, row["id"]),
     ).fetchone():
         return True, "already asked"
     text = templating.render(str(params.get("text") or ""), values, cap=1500).strip() or f"{name} happened."
     heading = " ".join(text.split())[:80]
-    card = H.task_create(
+    made = H.task_create(
         conn,
         H.KEEPER,
         f"A rule needs you: {heading}"[:300],
@@ -1499,7 +1425,7 @@ def _event_ask(conn, row, name, params, values, ctx):
         lint=False,
         deduplicate=False,
     )
-    H.event(conn, H.KEEPER, ASKED, card["id"], {"rule": row["id"], "event": name})
+    H.event(conn, H.KEEPER, ASKED, made["id"], {"rule": row["id"], "event": name})
     return True, "asked"
 
 
@@ -1657,160 +1583,6 @@ def prune_events(conn):
     return conn.execute(
         "DELETE FROM rule_events_seen WHERE seen_at<?", (H.shift(H.now(), days=-EVENT_KEEP_DAYS),)
     ).rowcount
-
-
-# ----------------------------------------------------------------------------- step entry and the Dev tickets rows
-# What a Dev ticket's hand-offs say, as editable type rows: (note, when, outcome). Seeded once per type (`seed_dev`);
-# a person edits or deletes them in Settings, and a type that lost them is not given them again.
-DEV_ROWS = (
-    ("QA Fixes entered: wake the Builder who owns the ticket", {"step": "QA Fixes", "role": "owner"}, WAKE),
-    (
-        "Pending Release entered: a note to the Release Manager",
-        {"step": "Pending Release", "role": "release_manager"},
-        NOTE,
-    ),
-    ("In QA entered: wake QA only", {"step": "In QA", "role": "qa"}, WAKE),
-)
-SEEDED = "rules.seeded"
-
-
-def steps_renamed(conn, type_id, renamed):
-    """A type's steps were renamed ({old name: new name}): its own rows that name a step by its old name name the new
-    one, so a rule set on a step (QA wakes on In QA, ...) stays on that step. Quietly does nothing before the rules
-    table exists."""
-    lower = {str(k).lower(): v for k, v in renamed.items()}
-    try:
-        rows = conn.execute(
-            "SELECT id, condition FROM rules WHERE scope_kind='type' AND scope_id=?", (type_id,)
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return
-    from . import redesign_migration
-
-    if H._has_table(conn, "automations"):
-        redesign_migration.rename_steps(conn, type_id, lower)  # the rows moved into its What wakes automation
-    for ident, raw in rows:
-        when = H._json(raw, {}) or {}
-        step = when.get("step") if isinstance(when, dict) else None
-        if step is None:
-            continue
-        names = step if isinstance(step, list) else [step]
-        moved = [lower.get(str(n).lower(), n) for n in names]
-        if moved != names:
-            when["step"] = moved if isinstance(step, list) else moved[0]
-            conn.execute(
-                "UPDATE rules SET condition=?, updated_at=?, revision=revision+1 WHERE id=?",
-                (json.dumps(when, sort_keys=True), H.now(), ident),
-            )
-
-
-def seed_dev(conn):
-    """Give every Dev tickets type its hand-off rows once. A type that already has them recorded keeps what a person
-    made of them. Quietly does nothing before the rules table or the events table exists."""
-    from .roadmap_flow import _dev
-
-    try:
-        types = [r for r in conn.execute("SELECT id,name FROM task_types").fetchall() if _dev(r)]
-        for ident, _name in types:
-            if conn.execute("SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1", (SEEDED, ident)).fetchone():
-                continue
-            at = H.now()
-            for position, (note, when, outcome) in enumerate(DEV_ROWS, 1):
-                conn.execute(
-                    "INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
-                    "position,note,created_by,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
-                    (
-                        "rule-" + H.new_id(),
-                        "type",
-                        ident,
-                        "step_entered",
-                        json.dumps(when, sort_keys=True),
-                        outcome,
-                        "{}",
-                        position,
-                        note,
-                        H.KEEPER,
-                        at,
-                        at,
-                    ),
-                )
-            H.event(conn, H.KEEPER, SEEDED, ident, {"rows": len(DEV_ROWS)})
-            from . import redesign_migration
-
-            redesign_migration.adopt(conn, "wake_rules", ("type", ident))  # after the cutover: its What wakes
-    except sqlite3.OperationalError:
-        return
-
-
-STEP_NOISE_DROPPED = "rules.step_noise_dropped"
-
-
-def drop_step_noise(conn):
-    """Once per install: cancel the Release Manager's queued step-entry notices a profile catch-all held for its digest
-    (before only a row naming `step_entered` could reach it, every task's step move did). Nothing else is touched: a
-    note, another bot's jobs, a job already let go, a notice a team's own step_entered row batched. Quietly does
-    nothing before the tables exist."""
-    try:
-        if conn.execute("SELECT 1 FROM events WHERE action=? LIMIT 1", (STEP_NOISE_DROPPED,)).fetchone():
-            return 0
-        flow = _release_flow()
-        manager = flow.load(conn)["bot"] or flow.release_manager(conn)  # a paused one's jobs too
-        dropped = (
-            conn.execute(
-                "UPDATE jobs SET state='canceled',held=0 WHERE bot_id=? AND state='queued' AND held=1 AND message_id IN "
-                "(SELECT id FROM messages WHERE json_extract(refs,'$.news')='step_entered' "
-                "AND json_extract(refs,'$.wake_batch')='rule' AND json_extract(refs,'$.rule')='profile_lead_digest')",
-                (manager,),
-            ).rowcount
-            if manager
-            else 0
-        )
-        H.event(conn, H.KEEPER, STEP_NOISE_DROPPED, manager or "", {"jobs": dropped})
-        return dropped
-    except sqlite3.OperationalError:
-        return 0
-
-
-def step_entered(conn, actor, row, *, skip=()):
-    """A task entered a step: the bots that have a rule for it hear it (a note or a wake, as the rule says); everyone
-    else hears nothing. Incident tasks also notify their owner and requester without a configured step rule.
-    Ordinary step moves need a row naming `step_entered`. The owner, the requester, the ticket's QA and the Release Manager are the ones a row can reach.
-    Callers can skip recipients already notified by the event that moved the task."""
-    try:
-        incident = incident_task(conn, row)
-        from . import redesign_migration
-
-        # A row naming a step entry, kept or moved into a "What wakes" automation (a Dev tickets type's are adopted).
-        if (
-            not incident
-            and not conn.execute("SELECT 1 FROM rules WHERE enabled=1 AND event='step_entered' LIMIT 1").fetchone()
-            and not any(r["event"] == "step_entered" for r in redesign_migration.wake_rows(conn, "step_entered"))
-        ):
-            return
-        step = conn.execute("SELECT name FROM task_steps WHERE id=?", (row.get("step_id"),)).fetchone()
-        flow = _release_flow()
-        qa, manager = flow.qa_owner(conn, row), flow.release_manager(conn)
-        who = [
-            row.get("owner_id"),
-            row.get("requester_id"),
-            H.bot_actor(qa) if qa else None,
-            H.bot_actor(manager) if manager else None,
-        ]
-        conv = H.conversation(conn, row.get("conversation_id"))
-        for target in dict.fromkeys(a for a in who if a and H.is_bot(a) and a != actor and a not in skip):
-            refs = {"task": row["id"], "news": "step_entered"}
-            if (incident and target in (row.get("owner_id"), row.get("requester_id"))) or _table_decision(
-                conn, "step_entered", actor, target, refs, conv, row
-            ):
-                H._wake(
-                    conn,
-                    row,
-                    target,
-                    f"{row['title']} entered {step[0] if step else 'a new step'}.",
-                    {"news": "step_entered", **({"at_step": row["step_id"]} if row.get("step_id") else {})},
-                )
-    except Exception:  # noqa: BLE001 - a step move never fails for the news about it
-        return
 
 
 # ----------------------------------------------------------------------------- reading

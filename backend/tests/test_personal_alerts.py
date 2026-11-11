@@ -9,7 +9,7 @@ import pytest
 
 from backend import hubdb as H, personal_alerts as A
 from backend.auth import Identity
-from backend.tests.test_api import api, get, post, put, headers  # noqa: F401
+from backend.tests.helpers.api import get, post, put, headers  # noqa: F401
 
 PHONE = "+14155550123"
 OTHER = "+14155550124"
@@ -186,38 +186,21 @@ def due_task(api, owner="human:ana", private=True):
         )
 
 
-def test_real_overdue_task_is_deduped_and_urgent_call_is_opt_in(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "urgent_calls": True, "quiet_start": "", "quiet_end": ""})
-    task = due_task(api)
-    service = api.app.state.personal_alerts
-    service.collect()
-    service.collect()
-    with api.app.state.store.read() as c:
-        rows = c.execute("SELECT * FROM personal_alerts WHERE kind='urgent_needs'").fetchall()
-        assert len(rows) == 1 and rows[0]["subject_id"] == task["id"]
-    assert service.dispatch(rows[0]["id"])["status"] == "accepted"
-    assert hq.accepted[0]["channel"] == "call"
-    service.collect()
-    assert len(hq.accepted) == 1
-
-
 def test_quiet_hours_defer_and_closed_tasks_do_not_page(api, hq):
     connect(api)
     put(
         api,
         "alerts/me",
-        {"urgent_needs": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"},
+        {"legal_mail": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"},
     )
     task = due_task(api)
     service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        alert = A.enqueue(c, "ana", "legal_mail", task["id"], "legal-mail:quiet")
     assert service.dispatch(alert)["status"] == "quiet_hours"
     assert hq.accepted == []
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+        H.task_done(c, "human:ana", task["id"], "Filed it.")
     put(api, "alerts/me", {"emergency_exception": True})
     assert service.dispatch(alert)["status"] == "canceled"
     assert hq.accepted == []
@@ -225,12 +208,11 @@ def test_quiet_hours_defer_and_closed_tasks_do_not_page(api, hq):
 
 def test_opt_out_blocks_calls_and_sms_and_old_hq_fails_closed(api, hq):
     connect(api)
-    put(api, "alerts/me", {"urgent_needs": True, "urgent_calls": True, "emergency_exception": True})
-    due_task(api)
+    put(api, "alerts/me", {"legal_mail": True, "urgent_calls": True, "emergency_exception": True})
+    task = due_task(api)
     service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
+    with api.app.state.store.transaction() as c:
+        alert = A.enqueue(c, "ana", "legal_mail", task["id"], "legal-mail:opt-out", True)
     hq.stopped = True
     assert get(api, "alerts/me")["status"] == "opted_out"
     assert service.dispatch(alert)["error"] == "opted_out"
@@ -291,68 +273,6 @@ def test_rehearsal_refuses_verification_and_paid_sends(api, hq, monkeypatch):
     monkeypatch.setattr(api.app.state.store.settings, "rehearsal", True)
     post(api, "alerts/me/phone", {"phone": PHONE, "sms_consent": True}, expected=409)
     assert hq.calls == []
-
-
-def test_stalled_task_alerts_only_a_manager_and_cancels_when_recovered(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"bot_stuck": True, "quiet_start": "", "quiet_end": ""})
-    task = due_task(api, owner="bot:ops")
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed'")
-        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (H.shift(NOW, hours=-2), task["id"]))
-    service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT * FROM personal_alerts WHERE kind='bot_stuck'").fetchone()
-        assert alert is not None
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-    assert service.dispatch(alert["id"])["status"] == "canceled"
-    assert hq.accepted == []
-
-
-def test_future_offset_deadline_is_not_deduped_before_it_is_due(api, hq):
-    connect(api)
-    put(api, "alerts/me", {"urgent_needs": True})
-    task = due_task(api)
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET due_at=? WHERE id=?", ("2026-11-04T14:00:00-08:00", task["id"]))
-    api.app.state.personal_alerts.collect()
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM personal_alerts").fetchone()[0] == 0
-
-
-def test_quiet_alerts_and_future_deadlines_wake_a_sleeping_install(api, hq):
-    from backend import sleep_idle
-
-    connect(api)
-    put(
-        api,
-        "alerts/me",
-        {"urgent_needs": True, "timezone": "America/Los_Angeles", "quiet_start": "09:00", "quiet_end": "12:00"},
-    )
-    due_task(api)
-    service = api.app.state.personal_alerts
-    service.collect()
-    with api.app.state.store.read() as c:
-        alert = c.execute("SELECT id FROM personal_alerts").fetchone()[0]
-    assert service.dispatch(alert)["status"] == "quiet_hours"
-    at = H.parse_ts(NOW).timestamp()
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='completed'")
-        assert c.execute("SELECT next_attempt_at FROM personal_alerts").fetchone()[0] == "2026-11-04T20:00:00Z"
-        assert H.parse_ts("2026-11-04T20:00:00Z").timestamp() in sleep_idle.later_sends(c, at)
-        future = H.task_create(
-            c,
-            "human:ana",
-            "Review the next filing",
-            "Review the next filing.",
-            "human:ana",
-            due="2026-11-05T18:00:00Z",
-            lint=False,
-            deduplicate=False,
-        )
-        assert H.parse_ts(future["due_at"]).timestamp() in A.future_deadlines(c, at)
 
 
 def test_hq_confirmed_provider_refusal_releases_the_dollar_reservation(api, hq):

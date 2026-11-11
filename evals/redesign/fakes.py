@@ -22,8 +22,7 @@ from connectors.mail.tests.fake import FakeGmailService  # noqa: F401 (the mail 
 
 RECORDINGS = Path(__file__).parent / "recordings"
 LIVE_RATE, LIVE_MAX = 0.05, 10
-# The company's Decisions level in the fixture (clients/judge.py normalize_level(None)). A call with no step level, such
-# as the listening judge's, is asked at it, as the Gateway engine resolves it. Every recording was taken at low.
+# The level every decision runs at: Low, Jev (backend/judge.py asks with no level). Every recording was taken at low.
 COMPANY_LEVEL = "low"
 PUBLIC = [ipaddress.ip_address("93.184.216.34")]  # backend/tests/test_webhooks.py:20
 

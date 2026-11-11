@@ -6,8 +6,9 @@ import json
 
 from backend import hubdb as H
 from backend import rules as R
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.wake_rules import as_cause, claim, finish, jobs, news, parked_task, setup, skips
+from backend.tests.helpers.rules import plain_task
 
 
 def rule_row(
@@ -40,13 +41,6 @@ def rule_row(
     with api.app.state.store.transaction() as c:
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return {"rule": {**row, "params": params or {}}}
-
-
-def plain_task(c, title="Plain work", clear=True):
-    task = H.task_create(c, "bot:ops", title, "Do it", "bot:cpo")
-    if clear:
-        c.execute("DELETE FROM jobs")
-    return H.task(c, task["id"])
 
 
 def reopened(c, task):
@@ -96,8 +90,8 @@ def test_rows_override_by_scope_task_over_bot_over_team_and_the_floor_stays(api)
         last = c.execute("SELECT refs FROM messages WHERE sender_id='human:ana' ORDER BY rowid DESC").fetchone()
         assert json.loads(last[0])["rule"] == "person_message" and "quiet" not in json.loads(last[0])
         # What the bot waits on still wakes it under a `*` row.
-        found = R.judge(c, H.KEEPER, "bot:cpo", "message", {"task": task["id"], "blocker_done": True}, "Done", None)
-        assert (found.outcome, found.rule) == ("wake", "awaited_blocker_done")
+        found = R.judge(c, H.KEEPER, "bot:cpo", "message", {"task": task["id"], "subtask": True}, "Done", None)
+        assert (found.outcome, found.rule) == ("wake", "awaited_subtask")
 
 
 def test_a_run_records_the_rule_that_woke_it_and_fail_open_wakes(api, monkeypatch):
@@ -138,13 +132,13 @@ def test_an_event_no_rule_names_is_a_note_and_a_named_one_wakes(api):
         assert plain["refs"]["rule"] == "status_or_relation" and plain["refs"]["quiet"] is True
         assert c.execute("SELECT count(*) FROM notes WHERE message_id=?", (plain["id"],)).fetchone()[0] == 1
         assert R._rule_for_event("brand_new_event") == (R.NOTE, R.DEFAULT_NOTE)
-        for event in ("subtask_finished", "task_done", "blocker", "release_published", "backlog"):
+        for event in ("subtask_finished", "task_done", "blocker", "backlog"):
             woke = news(c, task, "x", refs={"wake": event})
             assert woke["refs"]["rule"] == event and not woke["refs"].get("quiet"), event
-        assert jobs(c, "cpo") == 5
+        assert jobs(c, "cpo") == 4
 
 
-def test_an_ask_rule_writes_quietly_and_raises_one_needs_you_item_per_task_and_rule(api):
+def test_an_ask_rule_writes_quietly_and_asks_the_tasks_person_once(api):
     setup(api)
     row = rule_row(api, then="ask")["rule"]
     with api.app.state.store.transaction() as c:
@@ -154,27 +148,12 @@ def test_an_ask_rule_writes_quietly_and_raises_one_needs_you_item_per_task_and_r
         for msg in (first, again):
             assert msg["refs"]["rule"] == row["id"] and msg["refs"]["quiet"] is True
         assert jobs(c, "cpo") == 0
-        cards = c.execute(
-            "SELECT t.owner_id, t.title, t.body FROM events e JOIN tasks t ON t.id=e.target WHERE e.action='rule.ask'"
-        ).fetchall()
-        assert len(cards) == 1 and cards[0]["owner_id"] == "human:ana" and row["id"] in cards[0]["body"]
+        asks = [w for w in H.task_waits(c, [task["id"]])[task["id"]] if w.ask]
+        assert [(w.state, w.who) for w in asks] == [("person", "human:ana")]
+        assert row["id"] in asks[0].line
 
 
-def test_an_ask_card_about_a_private_task_is_private(api):
-    setup(api)
-    rule_row(api, then="ask")
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Acme layoff plan", "Plan it", "bot:cpo", private=True)
-        c.execute("DELETE FROM jobs")
-        news(c, H.task(c, task["id"]))
-        card = c.execute(
-            "SELECT t.id, t.private FROM events e JOIN tasks t ON t.id=e.target WHERE e.action='rule.ask'"
-        ).fetchone()
-        assert card and card["private"] == 1
-        assert not H.task_private_readable(c, "human:cara", H.task(c, card["id"]))
-
-
-def test_an_action_rule_runs_as_the_keeper_and_a_failed_action_wakes_the_bot(api):
+def test_an_action_rule_runs_as_tico_and_a_failed_action_wakes_the_bot(api):
     setup(api)
     row = rule_row(api, then="action", params={"action": "close", "note": "Not needed"})["rule"]
     with api.app.state.store.transaction() as c:
@@ -184,10 +163,10 @@ def test_an_action_rule_runs_as_the_keeper_and_a_failed_action_wakes_the_bot(api
         assert H.task(c, task["id"])["status"] == "closed"
         ran = c.execute("SELECT detail FROM events WHERE action='rule.action' AND target=?", (task["id"],)).fetchone()
         assert json.loads(ran[0]) == {"rule": row["id"], "action": "close"}
-    with api.app.state.store.transaction() as c:  # edited by someone who may: a step that is not there
+    with api.app.state.store.transaction() as c:  # edited by someone who may: a stage that is not there
         c.execute(
             "UPDATE rules SET params=?, revision=2, action_by='human:ana' WHERE id=?",
-            (json.dumps({"action": "move_step", "step": "No such step"}), row["id"]),
+            (json.dumps({"action": "move", "stage": "No such stage"}), row["id"]),
         )
     with api.app.state.store.transaction() as c:
         other = plain_task(c, "Other work", clear=False)
@@ -231,7 +210,8 @@ def test_a_tag_rule_assigns_the_task_through_a_reassignment_and_records_the_rule
         assert H.task(c, task["id"])["owner_id"] == "bot:ops"
         assert jobs(c, "ops") == 1, "the new owner is woken as on any reassignment"
         moved = c.execute(
-            "SELECT actor_id AS actor, old, new, note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='owner'",
+            "SELECT actor_id AS actor, old, new, note FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='reassign'",
             (task["id"],),
         ).fetchone()
         assert tuple(moved) == (H.KEEPER, "bot:cpo", "bot:ops", f"Rule {row['id']}")
@@ -339,32 +319,3 @@ def test_tag_actions_add_and_remove_once_and_cannot_retrigger_their_rule(api):
         assert [tuple(r) for r in labels[1:]] == [(H.KEEPER, f"Rule {drop['id']}"), (H.KEEPER, f"Rule {add['id']}")]
         assert [a["changed"] for a in actions(c, add["id"])] == [True, False]
         assert [a["changed"] for a in actions(c, drop["id"])] == [True]
-
-
-def test_two_assign_rules_that_hand_a_task_back_and_forth_run_once(api):
-    setup(api)
-    to_ops = rule_row(
-        api,
-        scope_kind="bot",
-        scope_id="cpo",
-        event="assignment",
-        then="action",
-        params={"action": "assign", "owner": "bot:ops"},
-    )["rule"]
-    to_cpo = rule_row(
-        api,
-        scope_kind="bot",
-        scope_id="ops",
-        event="assignment",
-        then="action",
-        params={"action": "assign", "owner": "bot:cpo"},
-    )["rule"]
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "human:ana", "Hand-off work", "Do it", "bot:cpo")
-        assert H.task(c, task["id"])["owner_id"] == "bot:ops"
-        # ops's assignment, written by cpo's rule, is news: ops's own rule does not hand the task back.
-        assert len(actions(c, to_ops["id"])) == 1 and actions(c, to_cpo["id"]) == []
-        last = c.execute(
-            "SELECT refs FROM messages WHERE recipient_id='bot:ops' ORDER BY rowid DESC LIMIT 1"
-        ).fetchone()
-        assert json.loads(last[0])["rule"] == to_cpo["id"]

@@ -53,19 +53,47 @@
   hub:
     - match: '^needs-you show'
       out:
-        board: "3 need you: 2 tasks, 1 approval"
-        counts: {tasks: 2, questions: 0, approvals: 1, held: 0}
-        by_bot: {"bot:release-manager": 1, "bot:technical-writer": 1}
+        actor: "human:dana"
+        count: 3
+        by_kind: {task: 2, ask: 1}
+        items:
+          - kind: ask
+            id: 5d1f7a20-5000-4000-8000-000000000001
+            task_id: 8e2a4c61-5000-4000-8000-000000000001
+            requirement_id: 5d1f7a20-5000-4000-8000-000000000001
+            line: "OK to publish v0.5.20 to stable"
+            missing: ["OK to publish v0.5.20 to stable"]
+            since: "2026-11-02T22:00:00Z"
+            task: {id: 8e2a4c61-5000-4000-8000-000000000001, number: 220, title: "Release v0.5.20", status: open, version: 3, pipeline_id: engineering, stage_id: release, owner: "bot:release-manager"}
+            ask: {requirement_id: 5d1f7a20-5000-4000-8000-000000000001, kind: ok, line: "OK to publish v0.5.20 to stable", met: false, who: "human:dana", asked_by: "bot:release-manager", choices: null, shows: [], answer: null, may: [ok, no]}
+          - kind: task
+            id: 1a0c5e27-5000-4000-8000-000000000002
+            task_id: 1a0c5e27-5000-4000-8000-000000000002
+            requirement_id: null
+            line: "Docs for v0.5.20 release notes"
+            missing: ["Done"]
+            since: "2026-11-02T23:10:00Z"
+            task: {id: 1a0c5e27-5000-4000-8000-000000000002, number: 221, title: "Docs for v0.5.20 release notes", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana"}
+          - kind: task
+            id: 6a0f3c28-5000-4000-8000-000000000003
+            task_id: 6a0f3c28-5000-4000-8000-000000000003
+            requirement_id: null
+            line: "Update the 2025 vendor list"
+            missing: ["Done"]
+            since: "2026-06-02T09:00:00Z"
+            task: {id: 6a0f3c28-5000-4000-8000-000000000003, number: 98, title: "Update the 2025 vendor list", status: open, version: 2, pipeline_id: general, stage_id: general-todo, owner: "human:dana"}
+        version: "d4e5f6a7"
+        next: null
   must:
     - '^needs-you show\b'
   must_not:
-    - '^approval (approve|decline)\b'
-    - '^task (close|bulk)\b'
+    - '^task answer\b'
+    - '^task (close|done)\b'
   reply: |
-    Explains in plain words what the number counts: tasks filed for her (a bot's ask, a review or a missing input), bots'
-    questions, approvals waiting on her, and tasks held on her. Most are routine output, not decisions. It may say the
-    current count from the record (3: 2 tasks, 1 approval), and links the tasks page, [Tasks](#/tasks). It closes nothing
-    and approves nothing.
+    Explains in plain words what the number counts: what only she can do, which is tasks she owns, questions and OKs asked of
+    her on tasks, paused bots she can fix, and people's @mentions. Most are routine output, not decisions. It may say the
+    current count from the record (3: 2 tasks, 1 ask), and links the tasks page, [Tasks](#/tasks). It closes nothing, answers
+    nothing and gives no OK.
 
 - id: tico-budgets-in-finance
   group: tico
@@ -92,17 +120,16 @@
     person by hand stays until it is set back to automatic. It is short and correct, and does not
     change anything.
 
-- id: tico-board-for-marketing
+- id: tico-growth-ideas-where
   group: tico
-  prompt: "Where is the Marketing board?"
+  prompt: "Where are the Marketing ideas?"
   hub: []
   must_not:
     - '^task (create|close|update)\b'
   reply: |
-    Says the Marketing board is on the Tasks page: the board of tasks of type Marketing, linked
-    ([Marketing board](#/tasks?view=board&type=idea&who=all), or [Tasks](#/tasks) with the Marketing board named). It may add
-    that the Growth page links it as Growth board. It never says there is no board, invents no step names (the real ones are
-    On deck, In development, Live, Working, and the outcomes), and changes no task. Short.
+    Says growth ideas are General tasks with labels on the Tasks page, linked ([Tasks](#/tasks)), and that a label such
+    as `growth:ideas` or `growth:running` says where each idea is. It may add that the Growth page lists them. It invents
+    no pipeline or stage for them and changes no task. Short.
 
 - id: tico-credential-link-only
   group: tico

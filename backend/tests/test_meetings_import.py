@@ -1,7 +1,7 @@
 """One import API for every source (`POST /api/v2/meetings/import`, docs/meetings.md)."""
 
-from backend.tests.test_api import api, headers, runner, setup_attempt  # noqa: F401
-from backend.tests.test_media import import_meeting, media_post
+from backend.tests.helpers.api import headers, runner, setup_attempt  # noqa: F401
+from backend.tests.helpers.media import import_meeting, media_post
 
 TEXT = "[00:05] Ana: Let's raise the annual plan.\n[01:10] Ben: Ten percent, then."
 

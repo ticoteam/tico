@@ -18,7 +18,7 @@ from backend.app import create_app
 from backend.observability import Observability
 from backend.onboarding import Onboarding
 from backend.store import Store
-from backend.tests.test_api import api_settings
+from backend.tests.helpers.api import api_settings
 
 
 def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tmp_path, monkeypatch):
@@ -118,18 +118,8 @@ def startup_jobs(tmp_path, monkeypatch):
 
         return run
 
-    onboarding = SimpleNamespace(
-        **{
-            name: job(name)
-            for name in (
-                "ensure_librarian",
-                "ensure_goal_manager",
-                "ensure_task_manager",
-                "ensure_counsel",
-                "ensure_brand_owner",
-            )
-        }
-    )
+    completes = job("complete_company")
+    onboarding = SimpleNamespace(complete_company=lambda c, failed=None: completes(c))
     monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
@@ -182,11 +172,7 @@ def test_start_jobs_wait_for_write_admission_instead_of_skipping_jobs(startup_jo
     else:
         assert str(failures[0]) == "database is locked"
     expected = [
-        "ensure_librarian",
-        "ensure_goal_manager",
-        "ensure_task_manager",
-        "ensure_counsel",
-        "ensure_brand_owner",
+        "complete_company",
         "market",
         "message_bots",
         "ship_deployed",
@@ -211,7 +197,7 @@ def test_a_permanent_admission_failure_is_captured_and_the_next_job_still_runs(s
     monkeypatch.setattr(store, "_take", unavailable)
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
     assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
-    assert startup_jobs.captured == [("librarian", failure)]
+    assert startup_jobs.captured == [("complete_company", failure)]
 
 
 def test_a_database_that_stays_busy_ends_the_wait_and_the_job_is_captured(startup_jobs, monkeypatch):
@@ -228,4 +214,4 @@ def test_a_database_that_stays_busy_ends_the_wait_and_the_job_is_captured(startu
     monkeypatch.setattr(store, "_take", locked_once_past_the_deadline)
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
     assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
-    assert startup_jobs.captured == [("librarian", busy)]
+    assert startup_jobs.captured == [("complete_company", busy)]

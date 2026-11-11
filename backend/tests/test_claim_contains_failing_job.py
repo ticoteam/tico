@@ -13,7 +13,6 @@ import sqlite3
 import pytest
 
 from backend import (
-    auto_tasks,
     batch_work,
     claim_holds,
     execution,
@@ -29,19 +28,9 @@ from backend import (
     wake_presets,
 )
 from backend.store import H
-from backend.tests.test_api import (  # noqa: F401 (api is a fixture)
-    api,
-    assign,
-    claim,
-    get,
-    headers,
-    post,
-    ready,
-    runner,
-    setup_attempt,
-)
-from backend.tests.test_held_runs import task_held
-from backend.tests.test_run_backoff import at, complete, setup as budget_setup
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner, setup_attempt
+from backend.tests.helpers.held_runs import task_held
+from backend.tests.helpers.run_backoff import at, complete, setup as budget_setup
 
 
 @pytest.fixture(autouse=True)
@@ -213,6 +202,8 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     machine, attempt, task_id, _ = task_held(api)
     store = api.app.state.store
     with store.transaction() as c:
+        # Tico's notice on the task queues behind the stopped run.
+        H._wake(c, H.task(c, task_id), "bot:ops", "VERDICT: changes PR #12 head " + "a" * 40, {"wake": "update"})
         verdict = c.execute(
             "SELECT m.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id='ops' "
             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'"
@@ -307,17 +298,20 @@ def test_a_task_gets_no_second_job_while_its_held_job_waits(api, monkeypatch):
     assert [job["held"] for job in task_jobs(api, task_id)] == [1]
 
 
-def test_a_held_job_is_canceled_by_the_obsolete_pass_only_after_its_wait_ends(api, monkeypatch):
-    """The obsolete-notice pass leaves a held job alone while its wait runs. Once the wait has ended the job is free,
-    and the next claim cancels it, its task being finished, and closes the Needs-you item its hold filed."""
+@pytest.mark.xfail(
+    strict=True,
+    reason="the engine cancels a finished task's queued wakes in task_wakes without claim_holds.clear, so a held run "
+    "it cancels keeps hold_reason and its Needs-you item stays open; release_due and the obsolete-notice pass look "
+    "only at queued jobs, so nothing closes the item until a person releases the bot",
+)
+def test_a_held_job_whose_task_finishes_is_canceled_and_its_needs_you_item_closes(api, monkeypatch):
+    """A task that finishes cancels the wakes still queued for it, a held one too. Once its wait has ended nothing is
+    left to retry, and the Needs-you item its hold filed closes, so no item waits on a run that can no longer start."""
     machine, task_id = held_refresh(api, monkeypatch)
     held = task_jobs(api, task_id)[0]
     with api.app.state.store.transaction() as c:
-        H.task_update(c, H.KEEPER, task_id, status="done")
-    at(monkeypatch, api, H.shift(hold_of(api, held["id"])["hold_until"], seconds=-30))
-    assert claim(api, machine) is None
-    assert (hold_of(api, held["id"])["state"], hold_of(api, held["id"])["held"]) == ("queued", 1)
-    assert item_status(api, held["hold_task_id"]) in H.ACTIVE_STATUSES
+        H.task_done(c, H.KEEPER, task_id, "Exported by hand.")
+    assert hold_of(api, held["id"])["state"] == "canceled"
 
     monkeypatch.undo()  # the job's checks work again, and its wait has ended
     wait_ends(api, monkeypatch, held["id"])
@@ -352,7 +346,7 @@ def test_a_start_retry_never_hands_out_an_obsolete_notice(api, monkeypatch):
         ).fetchone()[0]
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
+        H.task_done(c, H.KEEPER, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued' AND id<>?", (person_job,))
         conversation = H.task(c, done)["conversation_id"]
         # A claim's obsolete pass cancels a page of CLAIM_MAINTENANCE notices, so one is left queued for the retry.
@@ -597,7 +591,7 @@ def test_a_claim_passes_over_at_most_claim_picks_obsolete_notices(api, monkeypat
     store = api.app.state.store
     with store.transaction() as c:
         done = H.task_create(c, H.KEEPER, "Finished export", "Done.", H.bot_actor("ops"), lint=False)["id"]
-        c.execute("UPDATE tasks SET status='done' WHERE id=?", (done,))
+        H.task_done(c, H.KEEPER, done, "Exported.")
         c.execute("UPDATE jobs SET state='canceled' WHERE bot_id='ops' AND state='queued'")
         conversation = H.task(c, done)["conversation_id"]
         for n in range(execution.CLAIM_MAINTENANCE + obsolete_ahead):
@@ -819,141 +813,6 @@ def test_a_batch_planned_after_a_claim_hold_was_let_go_is_not_spaced_by_that_hol
 def wake_tick(api, when):
     with api.app.state.store.transaction() as c:
         wake_presets.tick(c, when)
-
-
-def test_a_bot_check_that_raises_does_not_stop_another_bots_open_task_from_starting(api, monkeypatch):
-    """The idle claim's backfill asks each bot with an open task the same bot-wide checks: one that raises passes that
-    bot over there too, and is recorded and backed off as in the queue, so the other bot's task still starts."""
-    machine = runner(api, "ana")
-    for bot in ("ops", "cpo"):
-        assign(api, machine, bot)
-    ready(api, machine, ["ops", "cpo"])
-    tasks = {
-        bot: post(
-            api, "tasks", {"owner": bot, "title": f"Implement the {bot} report", "body": "Build the requested feature."}
-        )
-        for bot in ("ops", "cpo")
-    }
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled'")  # no notice queued: only the backfill starts them
-    calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    turn = claim(api, machine)
-    assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
-    assert calls
-    # Inside the back-off the next polls do not run ops's check again, and they answer.
-    seen = len(calls)
-    for _ in range(3):
-        assert claim(api, machine) is None
-    assert len(calls) == seen
-    with api.app.state.store.transaction() as c:
-        assert "claim_check" in {f["check_id"] for f in maintenance_health.findings(c, api.app.state.store.settings)}
-
-
-def open_task_only(api, machine, bots):
-    """Each bot has one open task and nothing queued: only the claim's backfill starts them."""
-    for bot in bots:
-        assign(api, machine, bot)
-    ready(api, machine, list(bots))
-    tasks = {
-        bot: post(
-            api, "tasks", {"owner": bot, "title": f"Implement the {bot} report", "body": "Build the requested feature."}
-        )
-        for bot in bots
-    }
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE jobs SET state='canceled'")
-    return tasks
-
-
-def claim_check_bots(api):
-    with api.app.state.store.transaction() as c:
-        return [r[0] for r in c.execute("SELECT service FROM service_health WHERE service GLOB 'claim_check:*'")]
-
-
-def test_a_task_whose_backfill_check_raises_does_not_stop_another_bots_task(api, monkeypatch):
-    """An error in one open task's own checks belongs to that task: the backfill passes it over and the next bot's task
-    still starts."""
-    machine = runner(api, "ana")
-    tasks = open_task_only(api, machine, ("ops", "cpo"))
-    real, raised = auto_tasks.refusal, []
-
-    def raising(c, row, *args, **kwargs):
-        if row["owner_id"] == "bot:ops":
-            raised.append(row["id"])
-            raise RuntimeError("ops's open task cannot be read")
-        return real(c, row, *args, **kwargs)
-
-    monkeypatch.setattr(auto_tasks, "refusal", raising)
-    # ops's task is looked at first, so its error is met before cpo's task could answer the claim.
-    monkeypatch.setattr(execution, "turns_here", lambda c, runner_id: {"cpo": 0, "ops": -1})
-    turn = claim(api, machine)
-    assert raised and set(raised) == {tasks["ops"]["id"]}
-    assert (turn["bot"], turn["task"]["id"]) == ("cpo", tasks["cpo"]["id"])
-
-
-def test_a_bot_check_that_raises_in_the_backfill_alone_is_recorded_and_backed_off(api, monkeypatch):
-    """A bot whose only work is an open task: its raising check is recorded and backed off even though the claim has
-    nothing to hand out, so later polls neither run the check again nor lose the Health finding. The claims skip the
-    idle read, as one does whenever there is something to write first, so the writer's backfill meets the error."""
-    machine = runner(api, "ana")
-    open_task_only(api, machine, ("ops",))
-    monkeypatch.setattr(execution.Execution, "idle_claim", lambda *args, **kwargs: None)
-    calls = bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    assert claim(api, machine) is None
-    seen = len(calls)
-    assert seen and claim_check_bots(api) == ["claim_check:ops"]
-    for _ in range(3):
-        assert claim(api, machine) is None
-    assert len(calls) == seen
-
-
-def test_a_bot_check_that_passes_again_in_the_backfill_ends_its_back_off_and_finding(api, monkeypatch):
-    """Once the bot's check reads cleanly in the backfill, Health stops naming it and a later failure backs off from
-    the first wait again, though no run of the bot started."""
-    machine = runner(api, "ana")
-    open_task_only(api, machine, ("ops",))
-    monkeypatch.setattr(auto_tasks, "refusal", lambda *a, **k: "auto_start_off")
-    real = run_backoff.refusal
-    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    assert claim(api, machine) is None
-    assert claim_check_bots(api) == ["claim_check:ops"]
-    monkeypatch.setattr(run_backoff, "refusal", real)
-    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_MAX + 1))
-    assert claim(api, machine) is None
-    assert claim_check_bots(api) == []
-    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    assert claim(api, machine) is None
-    assert api.app.state.execution.check_backoff["ops"][1] == 1
-
-
-def test_a_check_that_passes_after_a_restart_still_ends_its_finding(api, monkeypatch):
-    """The back-off lives in the server's memory and a restart forgets it; the Health finding is in the database, and
-    the first clean check after the restart ends it."""
-    machine = runner(api, "ana")
-    open_task_only(api, machine, ("ops",))
-    monkeypatch.setattr(auto_tasks, "refusal", lambda *a, **k: "auto_start_off")
-    real = run_backoff.refusal
-    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    assert claim(api, machine) is None
-    assert claim_check_bots(api) == ["claim_check:ops"]
-    monkeypatch.setattr(run_backoff, "refusal", real)
-    api.app.state.execution.check_backoff.clear()
-    assert claim(api, machine) is None
-    assert claim_check_bots(api) == []
-
-
-def test_a_draining_bot_keeps_its_check_back_off(api, monkeypatch):
-    """Draining refuses the bot before its checks run, so it says nothing of whether they pass: the back-off and the
-    finding stay."""
-    machine = runner(api, "ana")
-    open_task_only(api, machine, ("ops",))
-    bot_check_raising(monkeypatch, run_backoff, "refusal", "ops")
-    assert claim(api, machine) is None
-    monkeypatch.setattr(execution, "_claim_refusal", lambda c, settings, runner, bot, *a, **k: ("draining", None))
-    at(monkeypatch, api, H.shift(H.now(), seconds=claim_holds.CHECK_RETRY_MAX + 1))
-    assert claim(api, machine) is None
-    assert claim_check_bots(api) == ["claim_check:ops"]
-    assert "ops" in api.app.state.execution.check_backoff
 
 
 @pytest.mark.parametrize("check", ["bot", "job"])

@@ -4,47 +4,11 @@ and person, in Tasks and Decide, closed by itself once resolved. Only above Pass
 
 from datetime import datetime, timedelta, timezone
 
-from backend import strategy_bot
 from backend import goal_asks as GA
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_kpis import goal_with_kpi, log
-from backend import bot_settings as BS
-
-MANAGER = "bot:goal-manager"
-
-
-def goal_manager(api, level=1):
-    """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
-    the default level."""
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
-            (H.now(),),
-        )
-        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
-        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
-    raise_level(api, level)
-
-
-def raise_level(api, level):
-    """The owner chooses `level` (`strategy_bot.set_level`); None chooses nothing."""
-    if level is not None:
-        with api.app.state.store.transaction() as c:
-            strategy_bot.set_level(c, "human:ana", level)
-
-
-def asks(api, owner=None):
-    with api.app.state.store.read() as c:
-        return [
-            dict(r)
-            for r in c.execute(
-                "SELECT t.id, t.title, t.body, t.owner_id, t.status, a.kind, a.ref FROM goal_asks a JOIN tasks t ON t.id=a.task_id "
-                "WHERE t.requester_id=?" + (" AND t.owner_id=?" if owner else "") + " ORDER BY t.created_at",
-                (MANAGER, owner) if owner else (MANAGER,),
-            )
-        ]
+from backend.tests.helpers.api import get, post  # noqa: F401
+from backend.tests.helpers.kpis import goal_with_kpi, log
+from backend.tests.helpers.goal_asks import MANAGER, asks, goal_manager, needs_tasks, raise_level, sync
 
 
 def manager_tasks(api, status):
@@ -52,14 +16,13 @@ def manager_tasks(api, status):
         return [dict(r) for r in c.execute("SELECT * FROM tasks WHERE requester_id=? AND status=?", (MANAGER, status))]
 
 
-def sync(api, at=None):
-    with api.app.state.store.transaction() as c:
-        return GA.sync(c, api.app.state.auth.owner_id(c), at)
-
-
-def needs_tasks(api, token):
-    page = get(api, "needs-you", token)
-    return {str(i["id"]) for i in page["items"] + page["older"]}
+def close_note(c, task_id):
+    """Why a task was closed: the reason on the visit its close ended (the engine keeps no note on the task)."""
+    found = c.execute(
+        "SELECT why FROM visits WHERE task_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, rowid DESC LIMIT 1",
+        (task_id,),
+    ).fetchone()
+    return (found[0] if found else None) or ""
 
 
 def stale_asks(api, owner="human:ana"):
@@ -141,7 +104,7 @@ def test_a_measure_ask_from_before_the_bundle_is_folded_into_the_one_ask(api):
     [bundle] = stale_asks(api)
     old = []
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", bundle["id"], status="declined", note="Replaced by the old asks")
+        H.task_update(c, "human:ana", bundle["id"], status="closed", note="Replaced by the old asks")
         c.execute("DELETE FROM goal_asks WHERE kind='kpi_stale'")
         for kpi in kpis:
             made = H.task_create(
@@ -154,8 +117,8 @@ def test_a_measure_ask_from_before_the_bundle_is_folded_into_the_one_ask(api):
             old.append(made["id"])
     sync(api)
     with api.app.state.store.read() as c:
-        rows = [H.task(c, t) for t in old]
-    assert [(r["status"], r["note"]) for r in rows] == [("closed", "Folded into one ask for all measures.")] * 2
+        rows = [(H.task(c, t)["status"], close_note(c, t)) for t in old]
+    assert rows == [("closed", "Folded into one ask for all measures.")] * 2
     [folded] = stale_asks(api)
     assert folded["ref"] == GA.KPIS_REF and folded["status"] == "open"
     assert all(f"- {name}: has no reading yet" in folded["body"] for name in ("Calls made", "Demos booked"))
@@ -170,7 +133,7 @@ def test_a_bundled_ask_that_closes_does_not_say_it_went_to_another_person(api):
     log(api, mine["id"], 12, period_end=H.now())
     with api.app.state.store.read() as c:
         row = H.task(c, ana_task["id"])
-    assert row["status"] == "closed" and "Now asked of" not in row["note"]
+        assert row["status"] == "closed" and "Now asked of" not in close_note(c, ana_task["id"])
 
 
 def test_a_red_kpi_asks_the_goal_owner_and_closes_once_back_on_track(api):
@@ -216,7 +179,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "reject", "note": "Keep it"}, token="ben-test")
     with api.app.state.store.read() as c:
         row = H.task(c, task["id"])
-    assert row["status"] == "closed" and "rejected" in row["note"]
+        assert row["status"] == "closed" and "rejected" in close_note(c, task["id"])
 
 
 def test_a_task_the_person_closed_is_not_asked_again_while_the_cause_stands(api):
@@ -224,7 +187,7 @@ def test_a_task_the_person_closed_is_not_asked_again_while_the_cause_stands(api)
     post(api, "kpis", {"name": "Unreported measure", "owner": "me", "cadence": "weekly"})
     [task] = stale_asks(api)
     with api.app.state.store.transaction() as c:
-        H.task_update(c, "human:ana", task["id"], status="declined", note="Not tracking this one")
+        H.task_update(c, "human:ana", task["id"], status="closed", note="Not tracking this one")
     sync(api)
     assert [a["id"] for a in stale_asks(api)] == [task["id"]]
     assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "kpi_stale"]
@@ -257,7 +220,7 @@ def test_a_task_marked_done_while_the_cause_stands_is_asked_again(api):
     [again] = stale_asks(api)
     assert again["id"] != task["id"] and again["status"] == "open"
     with api.app.state.store.read() as c:
-        assert H.task(c, task["id"])["status"] == "closed"
+        assert H.task(c, task["id"])["status"] == "done"  # a person's Done stands: nothing closes it after them
 
 
 def test_at_passive_nobody_is_asked_anything_and_what_was_asked_still_closes(api):

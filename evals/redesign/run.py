@@ -1,5 +1,5 @@
 """Run the redesign scenarios: python -m evals.redesign.run [names or numbers] [--explain], or matrix [--seed N],
-or the ten fake-day workflows with --workflows (TESTING L2c; not in the default run).
+or the nine fake-day workflows with --workflows (TESTING L2c; not in the default run).
 
 Each check prints PASS, or FAIL with the PLAN §6 wave it waits on ("not built yet: wave 2 · budgets"). A wave listed in
 harness.BUILT prints the real reason instead. A check the CONTRACT cannot back prints as untestable. Exit 1 on any FAIL."""
@@ -19,7 +19,7 @@ def main(argv=None):
     parser.add_argument("names", nargs="*", help="scenario names or numbers (default: all), or 'matrix'")
     parser.add_argument("--explain", action="store_true", help="also print each API call a scenario made")
     parser.add_argument("--seed", type=int, default=1, help="seed for the matrix's all-pairs plan (default 1)")
-    parser.add_argument("--workflows", action="store_true", help="run workflows 1-10 (a fake day each) instead")
+    parser.add_argument("--workflows", action="store_true", help="run workflows 1-9 (a fake day each) instead")
     args = parser.parse_args(argv)
     if args.workflows:
         from .workflows import WORKFLOWS

@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import scheduler, thread_digest, threads
-from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
-from backend.tests.test_oidc import CLIENT, provider, signin  # noqa: F401  (the fixtures)
+from backend.tests.helpers.api import post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.oidc import CLIENT, provider, signin  # noqa: F401  (the fixtures)
 
 
 class Issuer:
@@ -169,7 +169,7 @@ def test_a_title_is_one_line_within_the_issuers_limit_so_the_email_still_goes(ap
 
 def test_a_long_or_blank_subject_becomes_a_one_line_title_the_issuer_accepts():
     assert thread_digest.title_of("Launch\n\tplans " + "x" * 300) == "Launch plans " + "x" * 187
-    assert thread_digest.title_of(" \n\t ") == "Untitled thread"
+    assert thread_digest.title_of(" \n\t ") == "Thread"
 
 
 def test_an_install_without_a_tico_account_issuer_reads_and_writes_no_digest(api):

@@ -10,7 +10,6 @@ waits while the last one's run has not started, so one bot never has two.
 """
 
 from . import hubdb as H
-from . import threads
 
 WAKE = "thread_digest"
 MAX_BOTS = 200  # bots one run looks at
@@ -42,6 +41,8 @@ def _batch_open(c, slug):
 
 def wake_bot(c, bot):
     """One batch for one bot, in the caller's transaction. Returns the notice's id, or None when nothing is due."""
+    from . import threads  # local: keeps threads out of the selector's fan-in
+
     slug = H.actor_id(bot)
     if (H.bot(c, slug) or {}).get("state") != "active" or _batch_open(c, slug):
         return None
@@ -68,7 +69,7 @@ def wake_bot(c, bot):
         H.KEEPER,
         bot,
         f"New messages in threads you follow on digest (thread: messages):\n{lines}\n"
-        "Catch up with hub_thread_catchup if they need you.",
+        "Catch up with tico_thread_catchup if they need you.",
         kind="notice",
         refs={"wake": WAKE, "wake_digest": len(covered), "trigger": "other", "threads": sorted(counts)},
     )
@@ -96,6 +97,8 @@ def sweep(store):
 def grant(c, attempt_id, message):
     """A run a digest notice started, or took in, reads the threads it names: each one the bot is still in the audience
     of, so a thread it lost since is not granted. Every other message is left alone at the cost of a dict look."""
+    from . import threads  # local: keeps threads out of the selector's fan-in
+
     refs = message.get("refs") if isinstance(message.get("refs"), dict) else H._json(message.get("refs"), {})
     if (refs or {}).get("wake") != WAKE or message.get("sender_id") != H.KEEPER:
         return

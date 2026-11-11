@@ -37,6 +37,6 @@ file, and new contractors with no form collected during setup.
 
 ## 5. Write and hand over
 
-Write `reports/YYYY-MM-tax-calendar.md` in the shape of `knowledge/examples/tax-calendar.md`, `hub file publish` it, commit,
-and `hub task update <id> --status done --note` with the next deadline and anything late. Questions for the accountant are
+Write `reports/YYYY-MM-tax-calendar.md` in the shape of `knowledge/examples/tax-calendar.md`, `tico file publish` it, commit,
+and `tico task done <id> -m "..." --version N` with the next deadline and anything late. Questions for the accountant are
 drafts on the task, under the Sending rules in AGENT.md.

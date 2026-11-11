@@ -401,10 +401,10 @@ def from_person(c, job_id):
     Such a turn passes CPU overload and runs ahead of the turns waiting there, when memory permits: the load is the bots' own work,
     and holding it left a person's message waiting behind a hundred bot turns. A keeper notice (a routine, a sweep,
     a rule's wake), or a bot's message, is not one, even when a person's act caused it; the keeper's carrier of a
-    person's message is one (H.person_sent_sql). Two primary-key reads."""
+    person's message is one (H.in_person_name_sql). Two primary-key reads."""
     return bool(
         c.execute(
-            f"SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=? AND {H.person_sent_sql()}",
+            f"SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=? AND {H.in_person_name_sql()}",
             (job_id,),
         ).fetchone()
     )
@@ -415,7 +415,7 @@ def person_queued(c, runner_id):
     return bool(
         c.execute(
             "SELECT 1 FROM assignments x JOIN jobs j ON j.bot_id=x.bot AND j.state='queued' AND j.held=0 "
-            f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {H.person_sent_sql()} "
+            f"JOIN messages m ON m.id=j.message_id WHERE x.runner_id=? AND {H.in_person_name_sql()} "
             "LIMIT 1",
             (runner_id,),
         ).fetchone()
@@ -567,6 +567,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         'bot_limit': 'at its turn limit',
         'task_wait': 'a snooze, prerequisite, person or check',
         'task_next_run': 'the next run or a stored resume condition',
+        'on_ice': 'a card On ice',
     }
     for row in c.execute(
         f"SELECT a.runner_id,j.bot_id,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,b.state bot_state "

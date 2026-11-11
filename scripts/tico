@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
-# `tico`: this computer's commands go to scripts/tico-computer, everything else to scripts/hub (the teamwork CLI).
-# Usage: tico [-e ENV] install|uninstall|restart|status|doctor|logs|update|open|env|enroll|profile|screen|server|help ...
-#        tico [-e ENV] bot create ...      the same as tico-computer ... (see scripts/tico-computer help)
-#        tico update list|show|create|reply ...   the bots' updates: hub update ... (a bare tico update updates Tico)
-#        tico <anything else>              the same as hub <anything else>: tico task list = hub task list
-# A scripts/tico from before tico-computer ends `update` with `scripts/tico [-e ENV] restart all`: that lands here.
+# `tico`: the teamwork CLI (tasks, messages, bots, ...): `tico task list`, `tico --help`, `tico bot create ...`.
+# This computer's own commands are scripts/tico-computer (install, restart, status, update, ...: tico-computer help).
+# From a person's terminal, `tico [-e ENV] install|uninstall|restart|doctor|logs|open|env|enroll|profile|screen|server`
+# still reaches tico-computer, with a one-line note; inside a bot turn (HUB_BOT set by the runner) it is refused, so a
+# bot never restarts or updates its own runner. `restart` forwards without the note: a scripts/tico from before
+# tico-computer ends `update` with `scripts/tico [-e ENV] restart all`, and that lands here.
+# `scripts/hub` is the same teamwork CLI under its old name.
 set -euo pipefail
 
 SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"   # ~/.local/bin/tico is a symlink here
 DIR="$(dirname "$SELF")"
 
-case "${1:-help}" in
-  # Only the computer commands take an environment.
-  -e|--env|-e=*|--env=*|install|uninstall|restart|status|doctor|logs|open|env|enroll|profile|screen|server|help|-h|--help)
-    exec "$DIR/tico-computer" "$@" ;;
-  bot) [ "${2:-}" != create ] || exec "$DIR/tico-computer" "$@" ;;
-  update) [ $# -gt 1 ] || exec "$DIR/tico-computer" "$@" ;;
+computer=0 word="${1:-}"
+case "$word" in
+  # An environment is only ever the computer's.
+  -e|--env) computer=1 word="${3:-}" ;;
+  -e=*|--env=*) computer=1 word="${2:-}" ;;
+  install|uninstall|restart|doctor|logs|open|env|enroll|profile|screen|server) computer=1 ;;
 esac
+if [ "$computer" = 1 ]; then
+  if [ -n "${HUB_BOT:-}${HUB_EMPLOYEE:-}" ]; then
+    echo "tico: \"$*\" is this computer's own command (tico-computer), for people at the computer; a bot turn does" \
+      "not run it. Ask a person, or see tico computer list." >&2
+    exit 2
+  fi
+  [ "$word" = restart ] || echo "tico: this computer's commands are tico-computer now: running tico-computer $*" >&2
+  exec "$DIR/tico-computer" "$@"
+fi
 exec "$DIR/hub" "$@"
