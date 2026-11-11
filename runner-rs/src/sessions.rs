@@ -1781,8 +1781,11 @@ impl Runner {
             }
         }
         ensure_reads(&self.config.projects_dir(), path).await?;
-        // A built-in bot's product files follow the release (crate::product_files); a task lane pushes them at once.
-        crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
+        // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
+        if crate::product_files::refresh_due(&place.bot, &attempt["config"]) {
+            let _git = self.lanes.git_lock(path).lock_owned().await;
+            crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
+        }
         if !place.task.is_empty() && !place.private && crate::product_files::unpushed(&place.bot) {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             if self.push_checkout(path, env).await {

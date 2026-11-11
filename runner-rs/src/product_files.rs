@@ -1,9 +1,9 @@
-//! Built-in bots (the assistant, BotOps, Librarian, Strategy Owner and the starters onboarding made) follow the
-//! catalog the release ships (service.py bootstrap and refresh_product_files). This binary carries no templates:
-//! the Python helper does the work, as `python -m runner_support --config <path> catalog` (runner_support/catalog_job.py),
-//! the way side jobs run (crate::sidejobs). A bot assigned here without a repository is set up from its template
-//! before its repository is fetched; once per start of this runner, before a built-in bot's turn, the product files
-//! its template changed are brought up and committed. A failure is a log line, never a failed turn.
+//! Bots made from a template follow the catalog the release ships. This binary carries no templates: the Python
+//! helper does the work, as `python -m runner_support --config <path> catalog` (runner_support/catalog_job.py), the
+//! way side jobs run (crate::sidejobs). A built-in bot (the assistant, BotOps, Librarian, Strategy Owner and the
+//! starters onboarding made) assigned here without a repository is set up from its template before its repository is
+//! fetched; once per start of this runner, before any templated bot's turn, the files its template changed are brought
+//! up, committed and reported to the server (clients/catalog.py refresh). A failure is a log line, never a failed turn.
 //!
 //! Task worktrees sync from the upstream, so a refresh commit is pushed before a task gets its worktree: a task
 //! lane's turn waits for that push (crate::sessions), a main-lane turn pushes it with its own work at the end.
@@ -169,8 +169,19 @@ pub async fn bootstrap_missing(config: &Config, candidates: &[Value]) {
     }
 }
 
-/// Once per start of this runner, before a built-in bot's turn in its checkout: the product files its template
-/// changed are written and committed there, and the bot stays `unpushed` until a push of the checkout succeeds.
+/// Whether this bot's next turn would refresh its files from its template: its first since this runner started.
+pub fn refresh_due(bot: &str, bot_config: &Value) -> bool {
+    could_be_built_in(bot, bot_config)
+        && !REFRESHED
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|s| s.contains(bot))
+}
+
+/// Once per start of this runner, before a templated bot's turn in its checkout (the caller holds its git lock, so no
+/// task worktree is made mid-refresh): the files its template changed are written and committed there, and the bot
+/// stays `unpushed` until a push of the checkout succeeds. The files come from this release (RUNNER_RELEASE).
 pub async fn refresh(config: &Config, bot: &str, bot_config: &Value, path: &Path) {
     if !REFRESHED
         .lock()
@@ -181,7 +192,7 @@ pub async fn refresh(config: &Config, bot: &str, bot_config: &Value, path: &Path
     {
         return;
     }
-    let request = json!({"bots": [{"bot": bot, "entry": {"bot": bot, "config": bot_config}, "path": path.display().to_string(), "action": "refresh"}]});
+    let request = json!({"release": crate::runner::RUNNER_RELEASE, "bots": [{"bot": bot, "entry": {"bot": bot, "config": bot_config}, "path": path.display().to_string(), "action": "refresh"}]});
     let Some(answer) = ask(config, &request).await else {
         return;
     };

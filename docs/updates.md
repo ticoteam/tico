@@ -492,13 +492,32 @@ Automatic rollback covers a release that does not come up. To go back by choice:
   back to the server's release.
 - **Docker runner:** set `TICO_TAG=vX.Y.Z` and `TICO_RUNNER_PINNED=1` in `.env`, then `docker compose -f runner.compose.yaml up -d`.
 
-## The built-in bots' instructions
+## Bots follow their template
 
-The Assistant, BotOps, the Librarian and the Strategy Owner keep their instructions and playbooks in a repository on the computer that
-runs them. When a release changes one of those files in its template (`AGENT.md`, `playbooks/`, `skills/`), the computer brings that file up
-before the bot's next run, once per start of the runner; a file the release did not change keeps whatever the bot improved since. What the
-bot had before is kept in the repository's history. The bot's own notes, knowledge, state and playbooks it wrote are never touched
-(`clients/catalog.py`, `refresh`).
+Every bot made from a template (built-in, starter or one that fills a seat) takes the newer template's files after an
+update, before its first run once its computer has the new release (once per start of the runner, never mid-run).
+These files are the template's: the ones its card calls Tico's own (`AGENT.md`, `playbooks/`, `skills/`), the
+permissions file `.claude/settings.json` (no template ships a Codex settings file), and the template's `knowledge/`
+pages. `knowledge/company.md` (written from the onboarding answers), `memory/`, `state.md`, `reports/`, `bot.yaml` and
+anything the bot wrote itself are never touched.
+
+A file the bot or a person changed since the bot was given it (when it was made, or by the last refresh) is kept, not
+overwritten. A new template file is added. A file the template dropped is removed only if the bot never changed it. A
+seat bot's `AGENT.md` keeps its `## Job description`. The repository's `.tico-template.json` records what the bot was
+given; a bot made before that record counts its first commit ("Set up ... from the ... template") as what it was given.
+
+The Assistant, BotOps, the Librarian and the Strategy Owner are the exception for `AGENT.md`, `playbooks/` and
+`skills/`: the release's text wins over their edits, which stay in the repository's history.
+
+Each refresh is a `bot.template_refreshed` event naming the bot, the release its files came from and the one they come
+from now, and the files added, updated, removed and kept because they were changed. The bot's `template_version` moves
+to the release (`tico bot show`, `GET /api/v2/bots/{bot}`). A bot whose template no longer exists (renamed or removed
+in a release) is left as it is and reported once, as a `bot.template_missing` event. A refresh that fails for one bot
+is a line in the computer's log; its other bots and the run go on (`clients/catalog.py`, `refresh`).
+
+The computer does the refresh, so an existing company gets its first one when both its computer and its server run
+the release with this change (on Tico's hosting, the company's computers update with it). An older server keeps the
+files refreshed but cannot record them; the version is reported again after the computer's next start.
 
 ## Coming from an older version
 
