@@ -2,113 +2,205 @@
 
 > **Beta**: Listening works today and may still change. See [Beta features](support.md#beta-features).
 
-Listening saves posts a bot finds, asks the Decision provider to classify them, and routes useful posts to a receiving bot's
-inbox. A receiving bot accepts, rejects or marks each post as a duplicate. A score alone does not contact anyone.
+Listening reads the outside world and sends a short, ranked text into an automation. A listening has three parts:
+**Sources** (what to read), **Rules** (remove copies, then keep and tag, or drop) and **Rate limits** (how many items
+go out, and how often). What comes out is text. The automation's ordinary steps do the rest: post it, give it to a bot,
+make a task.
+
+Listening is not a pipeline. A post never becomes a task on its own, and nothing waits for a person to accept or reject
+it.
 
 [Use Tico](using-tico.md) · [API](api.md) · [Glossary](glossary.md)
 
-## Start with one topic
+## Start with one source
 
-1. Open **Settings > Bots > Add from template**, choose Listening, and press **Set up** on its page.
-   Tell it one topic to watch, the sources to read and what a useful result looks like. Connect any requested Tools and Credentials.
-2. Add one destination in **Settings > Listening** (owner), as below. Choose a receiving bot that already exists, such as Content.
-   Without destinations, posts can be saved and scored but route nowhere. The same destinations can be written in the server's
-   `registry/listening.yaml`, which suits a company that keeps its registry in a repository.
-3. Configure a server Decision provider ([Decision setup](../questions/README.md)). Ask Listening for one sweep, then review the
-   receiver's result before changing its Routine. Use `tico listening stats` to distinguish an empty sweep from a blocked source.
+1. Open **Listening** in the sidebar, under Automations. One listening comes ready-made:
+   [Market listening](#market-listening). Open it, or press **+** for a new one.
+2. Add a source. A **Push** source needs nothing else in Tico. A **Search** source needs a bot that holds the Listening
+   tool and a browser: add the Social Media Manager from **Settings > Bots > Add from template** and press **Set up**.
+3. Write a Keep rule for each thing worth hearing, with a tag. Leave the rate limit at 10 a day to start.
+4. Configure a server Decision provider ([Decision setup](../questions/README.md)). Rules are answered by it; without
+   one, nothing is kept and the listening's dot goes hollow.
 
-```yaml
-destinations:
-  content:
-    category: content
-    threshold: 0.75
-    receiver: bot:content-owner
-    what: a question a useful article could answer
+A listening is an automation of one special kind, so it has an owner, an on/off switch, versions, runs, cost and a spend
+cap like any other. It is listed under Listening, not in the Automations list.
+
+## Sources
+
+A source is one thing to read. A listening has 1 to 50.
+
+| Kind | What it reads | Who reads it |
+|---|---|---|
+| **Search** | A search or a community on a site (Reddit, X, LinkedIn and so on) | A bot with a browser that holds the Listening tool. It is due again 24 hours after its last read |
+| **Page** | One web address | The server, once a day. A change is an item |
+| **Push** | Nothing: an outside service (a monitoring service, a partner, a script) sends matches to an address | Nobody. Saving the source shows a secret address once |
+
+Every read is saved with whether it worked. Saving the same post twice does nothing.
+
+Each source has a dot:
+
+- **Filled**: the last read worked, and it is not overdue.
+- **Hollow**: blocked, failed, never read, or not read for two days.
+
+A push source is never overdue. Its dot is filled once something has arrived. The Listening line on
+[Tools](connect-tools.md#tools-list) shows the worst source's state, so a blocked source does not read as "on".
+
+A blocked or rate-limited read is not evidence that nothing was posted.
+
+## Rules
+
+Rules are plain text, in a list. A listening has up to 20, besides the first one.
+
+- **Remove duplicates** is always first, always on, and cannot be removed. Two posts are copies when their text is at
+  least 95% the same after links, case and spacing are ignored. It looks back 30 days, inside the same listening. The
+  first one stays and counts its copies ("3 copies").
+- **Keep** rules: one sentence and a tag. "Someone asking how to plan or track work for a small team" → `question`.
+- **Drop** rules: one sentence. "Vendors promoting themselves. Job posts."
+
+How an item is decided:
+
+- One call to the decision model per item answers every Keep and Drop rule at once. More rules do not cost more calls.
+- A rule is a yes at 0.75 or more.
+- An item is **kept** when at least one Keep rule is a yes and no Drop rule is. Its tag is the Keep rule with the highest
+  score. Otherwise it is **dropped**.
+- With no Keep rules, everything that is not a copy or a Drop is kept, with no tag.
+- An edited rule applies to items read after the edit. Waiting items keep their tag.
+
+Scoring cost is added to the run that sends the items and counts toward the automation's spend cap.
+
+## Rate limits
+
+A list of limits, each "up to N every hour, day, week or month". At most one per unit. All of them hold at once: they
+stack. A new listening starts at 10 a day.
+
+- **When it sends**: on the smallest unit in the list. Hour: at the top of each hour. Day: at the set time (08:00 unless
+  changed). Week: Monday at that time. Month: the 1st at that time.
+- **How many**: the smallest amount any limit still allows.
+- **Which**: best-ranked first. Rank is the Keep score, raised a little for each copy, newest first on a tie.
+- **Nothing kept, nothing sent.** There is no empty send.
+- **Leftovers** wait and compete next time. An item that has waited 7 days is dropped.
+
+Example, "3 an hour, 10 a day": it sends up to 3 each hour and stops when the day has had 10. With a full queue that
+uses the day's 10 by 03:00. If that is not what you want, raise the daily limit or remove the hourly one.
+
+A send that was missed while the server was down goes out once when it is back, not once per missed time.
+
+## What is sent
+
+One run of the automation, carrying text like this:
+
+```
+Market listening · Tue Nov 10, 14:00 · 3 of 30
+
+1. competitor  Northwind Team plan is now $15 a seat
+   Page · northwind.com/pricing
+2. question    Which tracker works for a 6-person agency?
+   Reddit · 3 copies · reddit.com/r/agency/…
+3. buyer       We're 8 people and need to replace our spreadsheet this month
+   Reddit · reddit.com/r/smallbusiness/…
 ```
 
-## Settings > Listening
+An item's title is the post's own title, or the first 140 characters of its text. No model writes a summary.
 
-The owner and admins see every destination: its category, receiving bot, threshold and where it comes from. The owner adds,
-edits and removes the ones saved in Settings (category, receiving bot, threshold from 0 to 1, optional readers and `unless`,
-and what the receiver reads). The same checks as the file apply: the category must be a yes-or-no question in the active
-question set, the receiver and readers must exist, and a bad destination is refused when it is saved. A destination from
-`listening.yaml` is shown read-only; if Settings saves one with the same key, the saved one wins, and removing it brings the
-file's back. Changes affect the next decision; inbox rows stay.
+The run also records the counts since the last send: read, duplicates removed, dropped, kept, sent, waiting, could not
+score. The run's page shows the counts, the text that was sent and what the steps did.
 
-When the Librarian exists and nothing routes `market`, Tico adds a `market` destination once: category `market`, threshold 0.70,
-receiver `bot:librarian`. Remove it in Settings and it stays removed.
+## Steps and routing
 
-| Call | Who | Returns |
+The steps get the whole text. The simple case is one step: post it, or give it to a bot. A new listening starts with one
+step, Post an update.
+
+To route, use the **Paths** step. In a listening it can split what was sent:
+
+- **By tag**: each tag's items travel together. A bot gets one turn with all of its items.
+- **Each item**: every item goes alone. Use it for one task per item.
+
+Each part takes the first path whose tag matches, or Otherwise. Untagged items travel as one group with no tag.
+
+Sources, rules and rate limits never name a bot. Who gets what is set in the steps only.
+
+## Market listening
+
+One listening comes ready-made, named "Market listening":
+
+- Keep `competitor`: "A competitor changed a price, a plan, a product or an offer".
+- Keep `buyer`: "A buyer describing a problem, a need or what they pay, in their own words".
+- Drop: "Vendors promoting themselves. Job posts."
+- 10 a day.
+- One step that gives the text to the [Librarian](librarian.md), which files what is worth keeping in Market. With no
+  Librarian, the step is Post an update.
+
+It has no sources, so it does nothing until you add one. It is made once and is yours to edit or delete; a deleted one
+does not come back.
+
+## Item states
+
+```
+new ──► duplicate
+    ──► dropped
+    ──► kept ──► sent
+    │        └─► expired   (waited 7 days)
+    ├─► failed             (could not be scored, 3 tries)
+    └─► expired            (unscored for 7 days: decisions off or over the spend cap)
+```
+
+Every item reaches an end. A `sent` item names the run that carried it; a `duplicate` names the item it copies. Sent
+items are kept 90 days, everything else 30.
+
+A source is `never`, `ok`, `blocked`, `rate_limited` or `error`, set by each read.
+
+A listening is on or off. Off means no sources are offered for reading, nothing is scored and nothing is sent. Waiting
+items stay and expire as usual.
+
+## Read and save
+
+These are internal v2 APIs and may change between releases. Listenings are created and edited through the automations
+API; there is no separate create route. Every POST has an `Idempotency-Key` for safe retries ([API](api.md)). The bodies
+below contain fictional data.
+
+| Call | Who | What |
 |---|---|---|
-| `GET /api/v2/listening/destinations` | owner, admins | `destinations` (each with `source`: `settings` or `yaml`), `categories`, `receivers` |
-| `PUT /api/v2/listening/destinations/{key}` | owner | the saved destination; body `{category, threshold, receiver, readers?, unless?, what?}`; `422` when invalid |
-| `POST /api/v2/listening/destinations/{key}/remove` | owner | removes a saved destination; `409 yaml` for one only the file has |
+| `GET /api/v2/listening/sources?due=1` (`tico_listening_sources`) | a bot holding the Listening tool | the sources the caller may read, overdue first |
+| `POST /api/v2/listening/sources/{id}/items` (`tico_listening_save`) | a bot holding the Listening tool | saves one read of one source |
+| `POST /api/v2/listening/in/<token>` | whoever has a push source's address | the same body, with no sign-in |
+| `GET /api/v2/listening/items?automation=&status=&limit=` | | items, for a run's page and for debugging |
+| `GET /api/v2/listening/stats` | | `daily` and `recent`, built from sent items, which Market's What are buyers saying? draws |
 
-Categories are question ids in `questions/listening-item.json`. Optional `readers` can read a destination; only its receiving bot
-or the Team owner can resolve it. An optional `unless: {category: vendor_pitch, threshold: 0.70}` excludes posts that clear
-that second threshold. Changes affect future decisions; existing inbox rows remain.
+A read is saved as its status and up to 200 items:
 
-To use your company's categories, put a validated question set in the server's
-`registry/questions/listening-item.json` (`TICO_REGISTRY_DIR` selects the registry). It takes precedence over the shipped
-copy. Both destination and `unless` categories must name `noul` questions; missing or differently typed categories appear
-in Health and the server log. An invalid custom set is refused. Increase its `version` when changing questions: the
-`id@version` label makes recent saved posts eligible for a new decision without duplicating existing inbox rows.
+```json
+{"status": "ok",
+ "items": [{"native_id": "example-1", "url": "https://example.com/posts/1", "author": "sam",
+            "title": "Welcome guides for small teams", "text": "How can a small team write a helpful welcome guide?",
+            "posted_at": "2026-11-10T14:00:00Z"}]}
+```
 
-Registry overrides must be regular JSON files in a real `questions` directory under the configured registry; symlinks
-for the registry, question directory or question file are refused. A dangling link, nonfile, unreadable or invalid override
-produces a fixed configuration error rather than falling back to shipped questions. Only an absent override falls back.
-On platforms without safe no-follow directory opens, existing registry overrides fail closed; absent overrides and
-shipped or explicitly selected question directories continue to work.
-Unchanged configuration warnings are logged once per process while retained in a bounded cache; changing destinations
-or questions rearms them. Health continues showing the current warning to owners and admins on every read.
+`status` is `ok`, `blocked`, `rate_limited` or `error`. An `ok` read with no items means the source had nothing. An item
+is known by its `native_id` inside its listening; saving it again leaves the first one as it was. `text` holds at most
+20,000 characters. A save is refused while the listening is off.
 
-Health also catches a registry that lost its files, as a server move can. When Listening has sent posts to an inbox
-before and saved posts in the last 14 days, but `listening.yaml` is missing, Health shows **Listening** as bad with the
-date it last routed a post and how many it has saved since; a file that is present with no valid destinations is a
-warning, since a company may empty it on purpose. When the registry has no
-`questions/listening-item.json` but posts were scored in the last 30 days with a later version of the set than the
-shipped one, Health names both versions so the company's own questions can be restored.
+A push address takes the same body. The token is the right to post: an unknown token gets 404, and a listening that is
+off gets 409. A source accepts at most 200 items a call and 60 calls a minute. Tico keeps only a hash of the token, so the
+address is shown once; **New address** replaces it and stops the old one.
 
-## Save, decide and resolve
+In the automation, the listening is the trigger:
 
-These are internal v2 APIs and may change between releases. Only the Listening bot (`bot:social-media-manager`) and the Team owner can save
-runs and make decisions. Receivers and configured readers can read their own destinations. Use a bot's run credential or the owner's
-personal token; every POST has an `Idempotency-Key` for safe retries ([API](api.md)). The bodies below contain fictional data.
+```json
+{"type": "listening",
+ "sources": [{"id": "s1", "kind": "search", "site": "reddit", "target": "project tracking small team"},
+             {"id": "s2", "kind": "page", "target": "https://northwind.com/pricing"},
+             {"id": "s3", "kind": "push", "site": "monitoring"}],
+ "rules":   [{"do": "keep", "tag": "question", "text": "Someone asking how to plan or track work for a small team"},
+             {"do": "drop", "text": "Vendors promoting themselves. Job posts."}],
+ "limits":  [{"count": 3, "per": "hour"}, {"count": 10, "per": "day"}],
+ "at": "08:00", "tz": "America/Los_Angeles"}
+```
 
-1. Save a sweep with `POST /api/v2/listening/runs` (`tico_listening_save`):
+A tag is lower-case letters, digits and hyphens, up to 24 characters, and unique among the Keep rules. A rule's text
+holds up to 300 characters. A limit's count is 1 to 100. A `paths` step may carry `"by": "tag"` or `"by": "item"`.
 
-   ```json
-   {"source":"news","query":"example app onboarding","status":"ok","pages_read":1,"items_seen":1,"items":[{"native_id":"example-1","url":"https://example.com/posts/1","content":"How can a small team write a helpful welcome guide?"}]}
-   ```
+## Coming from the earlier Listening
 
-   Keep `items[0].id` from the response as `<item-id>`. `status` is `ok`, `blocked`, `rate_limited` or `error`; a non-`ok`
-   sweep needs a `note`. An `ok` sweep with no items means no results. A saved post is deduplicated by `(source, native_id)`;
-   saving it again leaves its original content intact. Each sweep accepts at most 200 posts.
-2. Ask for a decision with `POST /api/v2/listening/decide` (`tico_listening_decide`):
-
-   ```json
-   {"item_ids":["<item-id>"],"limit":1}
-   ```
-
-   `/api/v2/listening/judge` is the older compatible route. This sends saved post text to the configured Decision provider.
-   Check `results` and `errors`; a successful HTTP response can contain per-post errors. A per-post error is only a
-   code (`auth`, `http`, `invalid`, `not_found`, `shape`, `spend_cap`, `unavailable`, `unconfigured`, `budget`, else
-   `unreadable`), never the provider's error text, which can repeat the post. Every destination whose category
-   clears its threshold gets one intake row. If none clears, the post remains saved and goes nowhere.
-3. As the receiver or owner, read `GET /api/v2/intake?destination=content&status=new` (`tico_listening_item_list`).
-   Keep the intake row's `id` as `<intake-id>`; this differs from the saved post id. Resolve with
-   `POST /api/v2/intake/<intake-id>/resolve` (`tico_listening_item_resolve`):
-
-   ```json
-   {"status":"rejected","reason":"The post has no detail our team can use."}
-   ```
-
-   `accepted` and `duplicate` require `receiver_ref`, the id of the record created or already present. `rejected` requires a
-   reason. Repeating the same verdict is safe; changing a resolved verdict returns `409 conflict`. Receiving bots poll new rows;
-   Tico does not push them.
-
-Trace a post with `GET /api/v2/listening/items/<item-id>`, read sweep history with `GET /api/v2/listening/runs`, and inspect
-coverage and receiver verdicts with `GET /api/v2/listening/stats`. Do not treat blocked or rate-limited sweeps as evidence that
-no relevant posts exist. Stats also carry `daily` (posts first seen per UTC day, by
-source) and `recent` (the newest posts routed to a destination you read, one row per post), which the Market page's What are buyers saying? draws.
-See `templates/environment-registry/listening.yaml` for the full routing shape.
+Listening is now sources, rules and rate limits on an automation. The destinations form, `listening.yaml`, thresholds,
+the inbox of posts and accept / reject / duplicate are gone, with their routes and tools. Old listening settings and
+posts were not moved: set it up again under Listening.

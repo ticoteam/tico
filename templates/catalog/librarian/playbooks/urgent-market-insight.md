@@ -16,8 +16,7 @@ Steps:
    or `--status rejected --resolution "<one sentence>"`. The command refuses either without a resolution.
 5. If two credible sources disagree and it matters, resolve it `--status needs-human --resolution "<one sentence on the
    disagreement>"` and file the run, so the owner gets one task and not one per insight.
-6. If it came from a listening item, resolve that item as `curate-the-market.md` step 6 says, then file the run with
-   `tico market sweep`.
+6. File the run with `tico market sweep`.
 
-Done when the insight is applied, merged, rejected or needs-human, its listening item is resolved, and the sweep is filed.
+Done when the insight is applied, merged, rejected or needs-human, and the sweep is filed.
 Urgent is no reason to skip a source: no evidence row, no change to the graph.

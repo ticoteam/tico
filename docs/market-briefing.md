@@ -25,20 +25,21 @@ first date.
 
 ## Built-in automations
 
-The hub makes two built-in automations for the Librarian (see Automations):
+The hub makes one built-in automation for the Librarian (see Automations), and one ready-made listening:
 
 - **Market briefing**: daily at 07:00 team time. The Librarian's turn writes the briefing (a one-line title, then a
   bullet per point); the run's `post_update` step, `{"to": ["market", "updates"]}`, posts it as this week's briefing
   and adds one line pointing at it to the Librarian's daily update. A daily briefing replaces the week's title and page; the items the Librarian tagged that week (`tico market briefing post --items-file`), the bets they touch and the answers (`--answers-file`) stay.
-- **Market listening · <destination>**: one per listening destination the Librarian receives. Each match is a
-  Librarian turn; the turn changes the graph through the market routes, never the match itself.
+- **Market listening**: a [listening](listening.md#market-listening), made once, with no sources until you add one.
+  Each send is one Librarian turn that gets the items as text; the turn files what is worth keeping through the market
+  routes. It is yours to edit or delete, and a deleted one does not come back.
 
 What an automation's turn posts or changes names it: the briefing and the update carry `source: {automation, run,
 task}` (each briefing read also says its `cadence`: `daily` when its automation posts more than once a week, so
 Market dates it by the day; else `weekly`), and each entity or edge on `GET /api/v2/market/graph` that a turn changed carries `source: {automation, run,
-turn: {attempt, bot, task}, match}`, `match` being the listening post that started it. The top of the org may pause
-either built-in; neither can be deleted. Each stands down while the team's own Librarian automation does the same
-work, and the briefing starts paused while a Librarian briefing routine still runs. Converting the routines turns
+turn: {attempt, bot, task}}`. The top of the org may pause
+the briefing; it cannot be deleted. It stands down while the team's own Librarian automation does the same
+work, and starts paused while a Librarian briefing routine still runs. Converting the routines turns
 that routine into the built-in, on the routine's time and words.
 
 ## Where it shows

@@ -1,8 +1,8 @@
 # Listening practice
 
 The standing method behind `playbooks/weekday-sweep.md`, `playbooks/look-up-a-topic.md` and `playbooks/plan-the-social-week.md`.
-`watchlist.md` and `sources.md` hold the team's own queries and sources. This file holds what is true about listening in
-general. Sources were read on 2026-11-01 through search excerpts unless marked otherwise.
+The team's sources live in Listening (`tico listening sources`); `sources.md` holds how each site behaves. This file
+holds what is true about listening in general. Sources were read on 2026-11-01 through search excerpts unless marked otherwise.
 
 ## Query precision
 
@@ -12,17 +12,24 @@ general. Sources were read on 2026-11-01 through search excerpts unless marked o
   main term is weak (practice).
 - Prove an exclusion by flipping it to AND for one pass and reading what it would drop. A common word can sit inside a
   real mention (practice).
-- Precision is the share of items pushed to a person that the person acts on. Measure it on a fixed sample drawn the same
-  way each week. The sample sets the error: for a true 5 percent rate, the 95 percent error is about 4 points at 100
+- Precision is the share of a source's hits that fit its job. Measure it on a fixed sample drawn the same way each
+  week. The sample sets the error: for a true 5 percent rate, the 95 percent error is about 4 points at 100
   items and about 3 points at 200. For a rate near 10 percent, it is about 6 points at 100 items (normal approximation
   to the binomial, arithmetic only). Report the count with the rate when the sample is small.
 - A forced single label gives a poor read on a post that is honestly two things. Keep an "ambiguous" label (practice).
 
-## Alerts and feeds
+## Reading and sorting
 
-- An alert interrupts a person. A feed collects for a digest. Keep them apart. Judge an alert by what people act on; judge a
-  feed by coverage and categories (practice).
-- Urgency wears out. A queue people stop reading has a precision problem, whatever its point estimate (practice).
+- Reading and sorting are separate jobs. The reader saves what a source shows. Listening's rules remove copies, keep and
+  tag, or drop. Its rate limits set how much is sent. A reader that also picks hides what the rules never saw.
+- A source that sends too much noise is fixed at the source (a tighter search) or by a Drop rule, not by reading less of it.
+- Urgency wears out. A feed people stop reading has a precision problem, whatever its point estimate (practice).
+
+## Reading a site politely
+
+- One pass per source per sweep, at the pace of a person reading. No reloading to get past a limit.
+- Read what the page shows. Never click, type, submit or sign in.
+- When a site says slow down, stop reading it for this sweep and save it as rate limited.
 
 ## Competitor moves
 
@@ -45,7 +52,8 @@ general. Sources were read on 2026-11-01 through search excerpts unless marked o
 - Redact before anything is saved: home addresses, unit numbers, personal phone numbers and emails, door codes, guest
   names, and anything about children. A phone number in a public post is not consent to call or text that person
   (practice; check local law).
-- Keep a saved item short: the link, the minimum visible text needed to decide, and the reason it matters.
+- Save a post as it is: its link, its own words, its author as shown and its date. Add nothing about the person that the
+  post does not show.
 
 ## Disclosure before a human replies
 
@@ -61,7 +69,8 @@ general. Sources were read on 2026-11-01 through search excerpts unless marked o
 
 ## Coverage
 
-- Each source is returned, blocked or not read. Blocked means unknown coverage, never nothing found (practice).
+- Each read of a source ends as ok, blocked, rate limited or error. Anything but ok means unknown coverage, never nothing
+  found (practice).
 - Read only the sources the team has authorised. Never use another identity or a signed-in session that belongs to someone
   else (practice).
 

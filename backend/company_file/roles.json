@@ -3337,7 +3337,7 @@
    "department": "marketing",
    "lead": false,
    "core": false,
-   "summary": "Plans and prepares the team's social posts and sweeps public conversation every weekday for mentions, questions and competitor moves. Nothing is posted or replied to unless the task asks for it and a granted Tool allows it.",
+   "summary": "Plans and prepares the team's social posts, and every weekday reads the team's Listening sources and saves what it found for Listening to sort and send. Nothing is posted or replied to unless the task asks for it and a granted Tool allows it.",
    "when": "A team whose buyers talk in public (forums, review sites, social, news) and that wants to hear it without anyone scrolling.",
    "tags": [
     "social",
