@@ -256,7 +256,7 @@ def register(app, auth, mover, mutate, store, task_filters, task_idents, task_vi
                 if str(row["owner_id"]).startswith("bot:") and who.actor != row["owner_id"]:
                     auth.require_write(c, who, H.actor_id(row["owner_id"]))
             after, queued = H.task_run_now(c, who.actor, task_id)
-            if not queued and H.is_bot(after["owner_id"]):
+            if not queued and after and H.is_bot(after["owner_id"]):
                 # Its run was already waiting: on a cloud machine that was started for it once and ran nothing, Run now
                 # starts the machine again instead of answering yes and doing nothing.
                 from . import cloud_machines

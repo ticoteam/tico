@@ -1719,6 +1719,7 @@ class Manager:
         with self.store.read() as c:
             found = facts(c, self.settings, current, at)
         action, problem = decide(current, found, at, pause_after(current))
+        woke_for = (current or {}).get("wake_key")
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
                 save(c, key, problem=problem, problem_at=H.now())
@@ -1726,7 +1727,7 @@ class Manager:
             problem is None
             and not action
             and current["problem"] == "stuck"
-            and not any(covers(current["wake_key"], want) for want in found["wants"])
+            and not any(covers(woke_for, want) for want in found["wants"])
         ):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
