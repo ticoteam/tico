@@ -205,6 +205,8 @@ def test_every_setup_route_records_its_refusals(api):
         "GET /api/v2/computer-subscriptions",
         "GET /api/v2/cloud-machines",
         "GET /api/v2/cloud-machines/support",
+        # A setting, not a setup step: its refusals are HQ's current answer and the page reads them back.
+        "PUT /api/v2/cloud-machines/support",
     }
     # Calls a computer or a turn makes, not a person: their failures are the run's (attempt events) or Health's.
     machine_calls = {

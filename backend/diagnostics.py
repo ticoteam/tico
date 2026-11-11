@@ -576,7 +576,11 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
         github_on = bool(github and github.row(c) and github.row(c)["installation_id"])
         perf = _performance(c, performance_hours) if performance_hours else None
         beta_on = beta.turned_on(c, settings, shell)
-        failures = setup_failures.failures(c, lambda runner_id: runner_label(c, runner_id))
+        failures = setup_failures.failures(
+            c,
+            lambda runner_id: runner_label(c, runner_id),
+            lambda bot: bot_label(c, (H.resolve_bot(c, bot) or {}).get("id")),
+        )
     features = {
         "demo": bool(settings.demo),
         "updater": bool(releases._updater()[0]),

@@ -33,7 +33,7 @@ WRITES = (
     "/api/v2/bots/{bot}/github-repos",
     "/api/v2/bots/{bot}/go-live",
     "/api/v2/bots/{bot}/cloud-machine",
-    "/api/v2/cloud-machines",
+    "/api/v2/cloud-machines/shared",
     "/api/v2/model-subscriptions",
     "/api/v2/computer-subscriptions",
     "/api/v2/enrollments",
@@ -178,10 +178,14 @@ def lines(values: object, keep: int = LINES) -> list[str]:
 
 
 def failures(
-    c: sqlite3.Connection, runner_label: Callable[[str], str | None] = lambda runner_id: None
+    c: sqlite3.Connection,
+    runner_label: Callable[[str], str | None] = lambda runner_id: None,
+    bot_label: Callable[[str], str | None] = lambda bot: None,
 ) -> list[dict[str, Any]]:
     """The last failure events, newest first, for the support bundle: only the keys named above, so a field nobody
-    listed (a provider's sentence, a name) cannot appear. `runner_label` gives a computer's label in the bundle."""
+    listed (a provider's sentence, a name) cannot appear. `runner_label` and `bot_label` give a computer's and a
+    bot's label in the bundle (`runner-1`, `bot-3`); one with no label is named only as "computer" or "bot", never
+    by its id or slug, which is its name."""
     marks = ",".join("?" * len(KINDS))
     out: list[dict[str, Any]] = []
     for row in c.execute(
@@ -193,6 +197,8 @@ def failures(
         who, action, target = str(row["actor"]), str(row["action"]), str(row["target"] or "")
         if who.startswith("runner:"):  # a computer's own report: its label, as the bundle's `runners` rows have it
             who = runner_label(who[7:]) or "computer"
+        elif who.startswith("bot:"):
+            who = bot_label(who[4:]) or "bot"
         item: dict[str, Any] = {"at": row["created_at"], "event": action, "who": who}
         category = detail.get("category") or detail.get("code")
         item["category"] = category if isinstance(category, str) and CODE.fullmatch(category) else ""
@@ -205,8 +211,8 @@ def failures(
             if isinstance(word, str) and word:
                 item[key] = word[:120]
         bot = detail.get("bot") or (target if action.startswith("bot.") else "")
-        if isinstance(bot, str) and ID.fullmatch(bot):
-            item["bot"] = "bot:" + bot
+        if isinstance(bot, str) and bot:
+            item["bot"] = bot_label(bot) or "bot"
         computer = detail.get("computer") or detail.get("runner") or target
         label = runner_label(computer) if isinstance(computer, str) and computer else None
         if label:
