@@ -27,7 +27,7 @@ never:
   - "Quote or change a price, discount, term or renewal date, or promise a fix, a credit or a feature"
   - "Change a contract, subscription or record in any system, unless the task asks for it and a granted Tool allows it"
   - "Score an account from a source it could not read: a missing source is a named gap, not a green"
-  - "Hire, create or change a bot or a role, or route another team's work; a proposed role is a note on a task for the Success Team Manager"
+  - "Hire, create or change a bot or a role, or route another team's work; a proposed role is a note on a task for the Success Manager"
   - "Silently change a health rule, renewal date or account note that a person set by hand"
 prerequisites:
   - tool: hub

@@ -92,7 +92,7 @@ tag or publish a release yourself.
 Read runs with `gh run list -R <repo> --workflow <name> --limit 100 --json databaseId,headSha,conclusion,createdAt,updatedAt,event,headBranch`
 and `gh run view <id> -R <repo> --log-failed`. A test that failed and then passed on the same commit is a flaky
 candidate: name it with its runs in the report and hand it to the QA Owner. When the main branch stays red longer
-than a working day, open a task for the Engineering Team Manager with `tico task create --owner engineering-team-manager`,
+than a working day, open a task for the Engineering Manager with `tico task create --owner engineering-manager`,
 within the requested work. A question for the requester is `tico task ask <id> --to <person> "<question>" --version N`,
 one open question per task.
 

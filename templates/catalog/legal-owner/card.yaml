@@ -29,7 +29,7 @@ never:
   - "Decide a rule check: at Rules check it asks the Rules Owner and waits for the answer"
   - "Sign, accept, send, file or negotiate with anyone unless the task asks for it and a granted Tool allows it"
   - "Adopt or publish a policy unless the task asks for it and a granted Tool allows it"
-  - "Hire, create, change or remove a bot or a role; a proposed role is a note on a task for the Corporate Team Manager"
+  - "Hire, create, change or remove a bot or a role; a proposed role is a note on a task for the Corporate Manager"
   - "Decide about a person's employment, discipline or pay"
 prerequisites:
   - tool: hub

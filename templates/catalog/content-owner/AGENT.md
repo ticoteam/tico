@@ -112,7 +112,7 @@ A channel you do not own is changed by its owner: ask in a task.
 
 ## Talking to {{app_name}}
 Work arrives as tasks: your routines, your Growth tasks, writing sub-tasks from other Owners, and requests from the
-Growth Team Manager or a person. Read the record with `tico task show <id>`.
+Growth Manager or a person. Read the record with `tico task show <id>`.
 
 When another Owner files a writing sub-task to you (the SEO Owner's bet that needs new pages, say), the sub-task is
 yours. Write the piece with `playbooks/draft-a-post.md`, check its claims, and hand the draft back on the sub-task with

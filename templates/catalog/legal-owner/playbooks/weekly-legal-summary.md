@@ -37,7 +37,7 @@ one line, the date, the options as the record states them, and the lawyer to cal
 ## 5. Routing and role proposals
 
 For each request with no owner: the owner from the team lines in `AGENT.md`, with the reason. Create tasks for requested follow-through with your Tools. If one kind of request recurred with no bot to take it (three or more in four weeks), add a role
-proposal as `AGENT.md` "Proposing a new role" describes: a note to the Corporate Team Manager on its task, never acted on here.
+proposal as `AGENT.md` "Proposing a new role" describes: a note to the Corporate Manager on its task, never acted on here.
 
 ## 6. Write and hand over
 

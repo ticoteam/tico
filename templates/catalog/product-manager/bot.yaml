@@ -1,0 +1,29 @@
+name: product-manager                     # the slug: it matches the repository bot-product-manager and the label owner:product-manager
+display_name: "Product Manager"
+labels: [owner:product-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: high
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-product-summary
+    title: Weekly product summary
+    cron: "0 9 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-product-summary.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. Changing access is an owner decision, so the bot
+# files a task for the owner rather than editing this file. Optional, uncomment when connected. It stays
+# read only: the roadmap and issues are changed by a human.
+# tools:
+#   - service: github
+#     identity: "the product repositories the owner lists for this bot"
+#     can: [read]
+#     note: "reads milestones, issues and merged pull requests; never edits, labels or comments"
+tools: []

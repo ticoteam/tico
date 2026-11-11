@@ -1,7 +1,7 @@
 # Build a task
 
 Triggered when a task you own enters Build. Budget as long as the change needs; the stage's expected time is a day, and
-past it the task is Late and the Engineering Pipeline Manager looks at it.
+past it the task is Late and the Engineering Manager looks at it.
 
 Inputs: the task and its conversation (`tico task show <id>`), the Spec page it links (`page:<file id>@<version>`,
 listed under "From earlier stages"; read with `tico file read <file id>`), the person's notes on the spec under it in
