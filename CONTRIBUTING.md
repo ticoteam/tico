@@ -107,11 +107,11 @@ only shrinks the same way. Fix a call by pointing it at the route it should reac
 
 ## Profiling API test setup
 
-Each API test creates a fresh app, store, authentication state, registry and database. For targeted
-runs with repeated API setup, `--api-database-snapshots` restores a worker-local schema snapshot with
-SQLite's backup API before normal lifespan initialization. It is opt-in: template construction can
-cost more than it saves for small selections at high worker counts. `--fresh-api-databases` forces
-empty database paths, and direct Store/migration fixtures always initialize from empty paths.
+Each API test creates a fresh app, store, authentication state, registry and database. The database is a copy of a
+worker-local schema snapshot (`--api-database-snapshots`, on by default in `pytest.ini`), restored with SQLite's
+backup API before normal lifespan initialization: on a whole suite that halves the time of a migration per test.
+`--fresh-api-databases` forces empty database paths, and direct Store/migration fixtures always initialize from
+empty paths.
 
 Compare the same tests and dependencies with alternating fresh/snapshot runs:
 

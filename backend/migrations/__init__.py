@@ -110,6 +110,19 @@ class Migration:
         self.checksum = hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+_READ = {}  # {path: ((mtime_ns, size), Migration)}: a test process opens thousands of databases
+
+
+def _migration(path):
+    """The Migration for a file, read and hashed again only when the file's mtime or size changed."""
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    known = _READ.get(path)
+    if known is None or known[0] != stamp:
+        known = _READ[path] = (stamp, Migration(path))
+    return known[1]
+
+
 def files(directory=None):
     """The migration files in full string version order. Digit-led names use NNNN_ or YYYYMMDDHHMMSS_ and .sql/.py.
     A name that does not match is an error, not skipped. Only digit-led names are listed, so this module does not
@@ -121,7 +134,7 @@ def files(directory=None):
                 f"{path.name} is not a migration name: use YYYYMMDDHHMMSS_name.sql or .py "
                 "(NNNN_name.sql or .py for existing legacy files)"
             )
-        found.append(Migration(path))
+        found.append(_migration(path))
     found.sort(key=lambda migration: migration.version)
     numbers = [migration.version.split("_", 1)[0] for migration in found]
     if len(set(numbers)) != len(numbers):

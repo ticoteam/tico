@@ -10,6 +10,15 @@ from backend.tests.helpers.onboarding import as_person, environment, signed_in  
 from backend.tests.helpers.support import hq, file  # noqa: F401  (the fake HQ, autouse)
 
 
+@pytest.fixture(autouse=True)
+def own_server_log():
+    """The log ring is one per process. A server's holds only its own hub's lines; a test worker's held every earlier
+    test's warnings, other companies' bot names included (a Slack test's "routes to coo"), so which tests ran before on
+    the worker decided a bundle's content."""
+    D.RING.lines.clear()
+    D.RING.previous, D.RING.count = None, 0
+
+
 def redactor():
     return D.Redactor(
         ["acme.example"],
