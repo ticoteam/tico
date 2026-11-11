@@ -182,7 +182,9 @@ over HTTP can also `POST /api/v2/mcp` with a bearer token. Either way every call
 the same routes and `backend/hubdb.py` rules; there is no privileged path.
 
 Calendar appointments are three shared Tico tools available to every bot:
-`tico_calendar_list`, `tico_calendar_schedule`, and `tico_calendar_status`. Reads come from the
+`tico_calendar_list`, `tico_calendar_schedule`, and `tico_calendar_status`. Events and bookings have their own
+tools: `tico_calendar_events`, `tico_calendar_free`, `tico_calendar_search`, and the writes `tico_calendar_add`,
+`tico_calendar_move`, `tico_calendar_cancel`. Reads come from the
 bounded calendar snapshot, limited to the team owner's or the bot operator's calendar
 ([calendar paths](mail.md#calendar)). A schedule call writes an idempotent Tico action; the private calendar tool
 claims it once, creates the Google event and invitations locally, and reports the result. Bots must
