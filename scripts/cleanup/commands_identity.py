@@ -79,7 +79,12 @@ NORMALIZATIONS = (
 
 
 # clients/hubtools_<area>.py modules move whole into the package, under these names.
-SIBLINGS = {"hubtools_org": "org", "hubtools_pipelines": "pipelines", "hubtools_connections": "connections"}
+SIBLINGS = {
+    "hubtools_org": "org",
+    "hubtools_pipelines": "pipelines",
+    "hubtools_connections": "connections",
+    "hubtools_computers": "machines",
+}
 
 
 def sibling_imports(code):
