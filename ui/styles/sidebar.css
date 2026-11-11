@@ -94,10 +94,8 @@ a.org-history{color:var(--muted);text-decoration:none}a.org-history:hover{color:
 #changelog-notice:hover{background:var(--surface2);color:var(--ink)}
 .changelog-notice-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ink)}
 #changelog-badge{margin-left:auto;font-size:var(--t-2xs)}
-/* The first-run wizard while setup is not done (renderOnboardingNav): Finish setup and the team, not the app's pages
-   or What's new. */
-html.in-setup .side-scroll>.nav-link:not(#nav-welcome),html.in-setup .side-scroll>.nav-row,html.in-setup #nav-pins,
-html.in-setup #nav-inboxes-section,html.in-setup #gs-org-hint,html.in-setup #changelog-notice,html.in-setup #changelog-badge{display:none}
+/* Behind the setup modal on a new install (html.in-setup): no What's new yet, its count marked read at Create. */
+html.in-setup #changelog-notice,html.in-setup #changelog-badge,html.in-setup #gs-org-hint{display:none}
 #new-version{display:flex;align-items:center;gap:8px;width:100%;padding:6px 8px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 #new-version:hover,#new-version[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 #new-version .nv-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--ink)}

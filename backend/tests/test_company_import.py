@@ -893,14 +893,14 @@ def test_hqs_chart_with_pipeline_managers_starts_one_manager_per_team_running_it
 
 
 def test_every_way_out_of_a_failed_setup_import_clears_it(tmp_path):
-    """Reverse state of the kept start failure, before setup is complete: the file setting removed and the owner's
-    Dismiss each end it; a start with the same broken file shows it again."""
+    """Reverse state of the kept start failure, before setup is complete: the file setting removed and a dismiss
+    through the API each end it; a start with the same broken file shows it again."""
     start, failed = starts(tmp_path)
     broken = unknown_role_plan(company_text())
     with start(error="The company file setup copied to this server can't be read (no access)") as api:
         assert "can't be read" in failed(api)["reason"]
         checks = {row["id"]: row for row in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}
-        assert "dismiss" in checks["company_import"]["summary"]
+        assert checks["company_import"]["status"] == "bad"
     with start(configured=False) as api:  # the file setting is removed
         assert failed(api) is None
     with start(broken) as api:
@@ -1801,6 +1801,59 @@ def test_setup_with_no_chart_starts_the_default_chart_and_its_live_bots_once(env
     again = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert again.status_code == 200, again.text
     assert (len(rows(api, "SELECT id FROM seats")), len(bot_ids(api))) == before
+
+
+def test_setup_lists_the_default_chart_by_team_and_leaves_out_the_teams_switched_off(environment):
+    """Setup's Your team step reads the default chart by team from GET /api/v2/setup and switches teams off with
+    `answers.teams_off`: completing then makes no seat of a team that is off, and the rest as before. Chart-agnostic:
+    the chart's teams and titles are the chart formula's to change."""
+    api = environment()
+    view = api.get("/api/v2/setup", headers=signed_in()).json()
+    teams = view["default_chart"]
+    assert len(teams) >= 2 and all(row["on"] and row["roles"] for row in teams)
+    # The built-ins' own team, always on: its manager first and every other built-in in it reporting to it; no role is
+    # in two teams, and the Assistant (it reports to its person) is in none.
+    general = [row for row in teams if row["locked"]]
+    assert len(general) == 1 and general[0] == teams[-1]
+    head, *rest = general[0]["roles"]
+    assert head["reports_to"] is None and rest and {role["reports_to"] for role in rest} == {head["id"]}
+    every = [role["title"] for row in teams for role in row["roles"]]
+    assert len(every) == len(set(every))
+    assert "assistant" not in {role["id"] for row in teams for role in row["roles"]}
+    teams = [row for row in teams if not row["locked"]]
+    for row in teams:
+        ids = {role["id"] for role in row["roles"]}
+        assert all(role["reports_to"] in ids for role in row["roles"] if role["reports_to"])
+        assert any(role["reports_to"] is None for role in row["roles"]), "each team has a top seat"
+    assert view["machine"]["cloud"] is False
+    off, kept = teams[-1], teams[:-1]
+    saved = api.put("/api/v2/setup", json={"answers": {"teams_off": [off["team"]]}}, headers=signed_in())
+    assert saved.status_code == 200, saved.text
+    assert {row["team"]: row["on"] for row in saved.json()["default_chart"]}[off["team"]] is False
+    # A client that does not send it keeps it.
+    api.put("/api/v2/setup", json={"answers": {"building": "Rentals"}}, headers=signed_in())
+    done = api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
+    assert done.status_code == 200, done.text
+    assert done.json()["default_chart"] == []
+    titles = {r["title"] for r in rows(api, "SELECT title FROM seats")}
+    others = {role["title"] for row in kept for role in row["roles"]}
+    assert titles & others
+    assert not titles & ({role["title"] for role in off["roles"]} - others)
+
+
+def test_a_default_team_of_built_ins_only_is_locked():
+    """A team every seat of which is a built-in is always made: setup cannot switch it off."""
+    from backend import company_import
+
+    cards = {"gm": {"required": True}, "ops": {"required": True}, "pm": {"required": False}}
+    rows = [
+        {"team": "General", "template": "gm"},
+        {"team": "General", "template": "ops"},
+        {"team": "Product", "template": "pm"},
+        {"team": "Corporate", "template": "ops"},
+        {"team": "Corporate", "template": "pm"},
+    ]
+    assert company_import.locked_teams(rows, cards) == {"General"}
 
 
 def _reviewer_models(api, enabled):

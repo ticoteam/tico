@@ -71,6 +71,8 @@ EMPTY_ANSWERS = {
     "briefings": {},
     # Where the company serves (a company file's company.regions); [] is none given.
     "regions": [],
+    # The default chart's teams setup's Your team step switched off (company_import.default_chart); [] keeps them all.
+    "teams_off": [],
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
@@ -622,9 +624,11 @@ class Onboarding:
             **record,
             "home": home,
             "bots": self._bots(c),
-            "machine": self._machine(c),
+            "machine": self._machine(c, self.settings),
             "needed": needed(c, who, record),
             "company_import_failed": company_import.failure(c),
+            # The chart a setup with no roles picked creates, by team, for the Your team step; nothing once completed.
+            "default_chart": [] if record["completed"] else company_import.default_teams(self, c, home),
         }
 
     def _bots(self, c):
@@ -673,7 +677,9 @@ class Onboarding:
         )
 
     @staticmethod
-    def _machine(c):
+    def _machine(c, settings=None):
+        from . import cloud_machines
+
         recent = H.shift(H.now(), seconds=-60)
         runners = [
             {
@@ -685,7 +691,8 @@ class Onboarding:
                 "SELECT id,label,last_seen_at FROM runners_with_state WHERE revoked_at IS NULL ORDER BY created_at"
             )
         ]
-        return {"runners": runners, "enrolled": bool(runners)}
+        # A Tico Cloud company's bots get a cloud computer each, so setup asks for none.
+        return {"runners": runners, "enrolled": bool(runners), "cloud": bool(cloud_machines.offered(c, settings))}
 
     # ------------------------------------------------------------------ writes
     def save(self, c, who, body):
@@ -727,6 +734,8 @@ class Onboarding:
         )
         if "regions" not in body.answers.model_fields_set:  # a client that never asks keeps where the company serves
             answers["regions"] = record["answers"].get("regions") or []
+        if "teams_off" not in body.answers.model_fields_set:  # and the teams it switched off
+            answers["teams_off"] = record["answers"].get("teams_off") or []
         if (
             not names["website"]
             and not answers["building"]
@@ -951,7 +960,7 @@ class Onboarding:
         return {**laid, **lifecycle.lay_out(c, who.actor, rows)}
 
     def start_sample(self, c, who):
-        """The welcome's "Start with a sample company": this new company becomes Tico's sample company
+        """POST /api/v2/setup/sample: this new company becomes Tico's sample company
         (backend/sample_company.py). The owner only; refused once the company is set up."""
         self._owner(who)
         from . import sample_company

@@ -800,13 +800,15 @@ def finish_new_company(onboarding, c, who, seats, made, teams):
     return True
 
 
-def default_chart(onboarding, c, home):
+def default_chart(onboarding, c, home, every_team=False):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
     install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
-    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
-    Finance Owner's seat is filled by the Finance Owner, as on import."""
+    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`), and a team
+    setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all);
+    a team of built-ins only (`locked_teams`) is never off. The Finance Owner's seat is filled by the Finance Owner, as
+    on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
@@ -819,6 +821,8 @@ def default_chart(onboarding, c, home):
         if row["template"] in cards
         and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
+    off = set() if every_team else set(record["answers"].get("teams_off") or []) - locked_teams(rows, cards)
+    rows = [row for row in rows if row["team"] not in off]
     keys = {row["id"] for row in rows}
     seats = {}
     for row in rows:
@@ -837,6 +841,64 @@ def default_chart(onboarding, c, home):
             **({"fills": built_in} if built_in else {}),
         }
     return seats
+
+
+def locked_teams(rows, cards):
+    """The default chart's teams made of built-ins only: every company has them, so setup cannot switch them off."""
+    teams = {}
+    for row in rows:
+        teams.setdefault(row["team"], []).append(bool(cards[row["template"]]["required"]))
+    return {team for team, required in teams.items() if all(required)}
+
+
+def default_teams(onboarding, c, home):
+    """The default chart by team, for setup's Your team step: each team's name, whether it is on, and its seats in
+    chart order (live: a bot works from day one; else a Recruiting seat), each with the seat it reports to inside the
+    team (None for the team's top seats), so the step draws the chart's own shape. Every team is listed, the
+    switched-off ones as off; a team of built-ins only is `locked`, always on."""
+    off = set(O.load(c)["answers"].get("teams_off") or [])
+    chart = default_chart(onboarding, c, home, every_team=True)
+    teams = {}
+    for key, seat in chart.items():
+        team = teams.setdefault(
+            seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "locked": True, "roles": []}
+        )
+        team["locked"] = team["locked"] and bool(seat.get("fills"))
+        boss = chart.get(seat["reports_to"])
+        team["roles"].append(
+            {
+                "id": key,
+                "title": seat["title"],
+                "live": seat["live"] or bool(seat.get("fills")),
+                "reports_to": seat["reports_to"] if boss and boss["team"] == seat["team"] else None,
+            }
+        )
+    for team in teams.values():
+        team["on"] = team["on"] or team["locked"]
+    return [*teams.values(), *general_team(onboarding)]
+
+
+def general_team(onboarding):
+    """The built-ins' own team as setup shows it, always on: the General Manager first, then the built-ins that report to
+    it (groups.GENERAL_TEAM, onboarding.ensure_general_team), under the group's own name. The chart formula leaves the
+    built-ins out (every company has them), and the Assistant reports to its person, so it is in no team."""
+    from . import groups as G
+
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    names = [(slug, (cards.get(slug) or {}).get("name")) for slug in (G.GENERAL_MANAGER, *G.GENERAL_TEAM)]
+    roles = [
+        {
+            "id": slug,
+            "title": name,
+            "live": True,
+            "reports_to": None if slug == G.GENERAL_MANAGER else G.GENERAL_MANAGER,
+        }
+        for slug, name in names
+        if name
+    ]
+    if not roles or roles[0]["id"] != G.GENERAL_MANAGER:
+        return []
+    return [{"team": G.BUILT_IN_NAME, "on": True, "locked": True, "roles": roles}]
 
 
 def add_invitee(onboarding, c, who, key, email):

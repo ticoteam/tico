@@ -4,7 +4,7 @@
    where the market is asked for. */
 'use strict';
 interface GsItem { id: string; done: boolean; skipped?: boolean }
-interface GsAnswer { items: GsItem[]; can_build?: boolean; tour_seen?: boolean }
+interface GsAnswer { items: GsItem[]; can_build?: boolean; tour_seen?: boolean; dismissed?: boolean }
 interface GsTour {
   root: HTMLDivElement; steps: [string, string, string][]; at: number; phone: boolean; opener: HTMLElement | null;
   off?: () => void;
@@ -19,14 +19,24 @@ async function gsRefresh(): Promise<GsAnswer | null> {
   if (seq !== GS_LOAD) return GS;
   GS = data && Array.isArray(data.items) ? data : null;
   gsOrgHint();
+  renderOnboardingNav();
   return GS;
 }
 
-async function gsState(change: {tour: boolean}): Promise<void> {
+async function gsState(change: {tour?: boolean; checklist?: boolean}): Promise<void> {
   try {
     const next = await post('/v2/setup/getting-started/state', change);
-    if (GS && next) GS = {...GS, tour_seen: next.tour};
+    if (GS && next) GS = {...GS, tour_seen: next.tour, dismissed: next.checklist};
   } catch { /* a choice that did not save is asked again next time */ }
+}
+
+// Setup's last step (ui/app/welcome.ts) still has a row open: the computer (a hosted company's Tico Cloud computers
+// count, as the step shows them ticked) or the subscription line, not done or skipped. Finish setup stays in the
+// sidebar for the owner until both are, or until they hide it for good from that step (the checklist's own `dismissed`).
+function gsSetupOpen(): boolean {
+  if (!GS || GS.dismissed || S.me?.role !== 'owner') return false;
+  const computer = GS.items.find(item => item.id === 'computer'), sub = GS.items.find(item => item.id === 'subscription');
+  return (!!computer && !computer.done && !S.config?.hosted) || (!!sub && !sub.done && !sub.skipped);
 }
 
 // "Ask to add or edit your bots" (it opens Ask, ui/app/ask-panel.ts), for whoever may add bots, until there is one of your own.
@@ -155,8 +165,8 @@ function gsTourEnd(): void {
 
 window.gsStartTour = gsTourStart;
 window.gsBoot = function () {
-  // The first look around, once per person, never over the wizard: the owner who just created the team has Show me
-  // around on that screen (ui/app/welcome.ts), else gets it on the next visit, like someone who joins later.
+  // The first look around, once per person, never over setup: the owner who set the team up has it marked seen
+  // (ui/app/welcome.ts) and finds it in the account menu; someone who joins later gets it on their first visit.
   void gsRefresh().then(seen => {
     if (seen && !seen.tour_seen && !S.config?.onboarding_needed && S.route !== '#/welcome') gsTourStart();
   });

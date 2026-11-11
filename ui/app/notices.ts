@@ -108,15 +108,15 @@ window.ticoAppUpdate = ({state, detail}: {state?: string; detail?: string} = {})
     appUpdateFailed('the update feed does not have it yet');
   }
 };
-// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It
-// would sit over the first-run wizard and its after-Create screen, so it waits for the first other page. Before the
-// first route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to the wizard after
-// its config is read.
+// The anonymous usage count (PRIVACY.md): the owner sees this once, and nothing is counted before they have. It never
+// shows with setup open (#/welcome, or its modal anywhere), so it waits for the first other page. Before the first
+// route() (LAST_ROUTE, ui/app/router.ts) there is no page yet: a new install's boot sends it to setup after its config
+// is read.
 let usageNoticeShown = false;
 function renderUsageNotice() {
   const bar = $('#usage-notice');
   if (!bar) return;
-  bar.hidden = !S.config.usage_count_notice || !LAST_ROUTE || S.route === WELCOME;
+  bar.hidden = !S.config.usage_count_notice || !LAST_ROUTE || S.route === WELCOME || !!$('#onb');
   if (!bar.hidden && !usageNoticeShown) { usageNoticeShown = true; post('/v2/system/usage-count/notice', {state: 'shown'}).catch(() => {}); }
 }
 document.addEventListener('click', ev => {
@@ -183,13 +183,13 @@ function renderFeedbackAsk() {
     catch (error) { toast(errorMessage(error, '') || 'Not sent. Try again.', true); buttons.forEach(b => { b.disabled = false; }); }
   };
 }
-// "Finish setup" tops the nav while the owner has not finished setup, and disappears the
-// moment the server stops asking for one. Everyone else never sees it. On the wizard itself the rest of the app's
-// pages and What's new are not shown until setup is done: a new install has nothing there yet (html.in-setup,
-// ui/styles/sidebar.css). Until the config is read, both stay as ui/theme.ts marked them from this browser's last
-// answer; the in-setup mark waits for the first route() too, since a new install's boot sends it to the wizard after
-// its config is read. route() marks it before Ask's button syncs, so a tap made before /me never opens Ask over the
-// wizard, and a change here syncs Ask (ask-panel.js askAway).
+// "Finish setup" tops the nav while the owner has not finished setup, and after the team exists while a row on setup's
+// last step is still open (getting-started.ts gsSetupOpen); it opens that step again. Everyone else never sees it. Setup is a modal over the whole app
+// (ui/app/welcome.ts); while it is open the phone's tab bar and Ask's button stay away (html.in-setup). Until the
+// config is read, both stay as ui/theme.ts marked them from this browser's last answer; the in-setup mark waits for
+// the first route() too, since a new install's boot sends it to setup after its config is read. route() marks it
+// before Ask's button syncs, so a tap made before /me never opens Ask over setup, and a change here syncs Ask
+// (ask-panel.js askAway).
 function setupMark() {
   if (!CONFIG_READ || !LAST_ROUTE) return;
   const setup = !!S.config.onboarding_needed && S.route === WELCOME, root = document.documentElement;
@@ -199,7 +199,7 @@ function setupMark() {
 }
 function renderOnboardingNav() {
   if (!CONFIG_READ) return;
-  rdNavShow('welcome', !!S.config.onboarding_needed);
+  rdNavShow('welcome', !!S.config.onboarding_needed || gsSetupOpen());
   setupMark();
   renderUsageNotice();
 }

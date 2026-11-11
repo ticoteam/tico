@@ -1209,23 +1209,13 @@ def company_import_failed(c):
     found = failure(c)
     if not found:
         return None
-    from .onboarding import load
-
-    # A company already set up can't take an import, so the way out offered is the one that works: dismissing it
-    # (or removing or fixing the file setup gave the server); before then, importing or setting the team up.
-    way_out = (
-        "This company is already set up, so the file can't replace its team: dismiss this on the welcome page, "
-        "or fix or remove the company file setup gave this server."
-        if load(c).get("completed")
-        else "Import it again, set your team up, or dismiss this, on the welcome page."
-    )
     return _check(
         "company_import",
         "Company file from setup not imported",
         "bad",
         f"{found.get('reason') or 'It could not be applied'}. Nothing from it was created and no sample team "
-        f"took its place. {way_out}",
-        [_fix("Open the welcome page", WELCOME)],
+        "took its place. Set your team up in setup, from the default team or a fixed company file.",
+        [_fix("Open setup", WELCOME)],
     )
 
 

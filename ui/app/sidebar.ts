@@ -987,10 +987,10 @@ function renderTree() {
     const mobilePrimary = inOverview || S.route === UPDATES || S.route.startsWith(UPDATES + '?') || isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap'
       || S.route.startsWith(THREADS_ROUTE) || S.route.startsWith(THREAD_ROUTE);
     const isCurrent = (a.dataset.nav === 'overview' && inOverview) ||
-      (a.dataset.nav === 'welcome' && S.route === WELCOME) ||
       (a.dataset.nav === 'meetings' && (S.route === MEETINGS || S.route.startsWith(MEETINGS + '?'))) ||
       (a.dataset.nav === 'mail' && (S.route === MAIL || S.route.startsWith(MAIL + '?') || S.route.startsWith(MESSAGING))) ||
-      (a.dataset.nav === 'tasks' && (isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap')) ||
+      // Setup is a modal over Tasks: Tasks is the page, and Finish setup is never marked current.
+      (a.dataset.nav === 'tasks' && (isTasksRoute(S.route) || S.route.startsWith('#/task/') || S.route === '#/roadmap' || S.route === WELCOME)) ||
       (a.dataset.nav === 'settings' && S.route === SETTINGS) ||
       (a.dataset.nav === 'credentials' && S.route === CREDENTIALS) ||
       (a.dataset.nav === 'docs' && (S.route === DOCS || S.route.startsWith(DOCS + '/') || S.route.startsWith(DOCS + '?'))) ||

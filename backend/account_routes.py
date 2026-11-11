@@ -95,7 +95,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     @app.post("/api/v2/onboarding/company/import-failure/dismiss")
     def onboarding_company_import_failure_dismiss(request: Request, body: M.Empty):
-        """The owner leaves a kept setup-file failure they won't fix by importing (Health and the welcome page)."""
+        """The owner leaves a kept setup-file failure they won't fix by importing (Health and setup)."""
         from . import company_import
 
         return mutate(request, body, lambda c: company_import.dismiss(onboarding, c, request.state.identity))
