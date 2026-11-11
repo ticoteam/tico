@@ -177,6 +177,17 @@ def _monitoring(pid: str, name: str, goal: str, prefix: str, factory: str) -> Ro
     return _pipeline(pid, name, goal, prefix, factory, stages)
 
 
+# The texts these lines shipped with before (pipeline_settings.EARLIER: add a line's old text when you change it). The
+# 0.6.0-rc.3 Experiments had On deck and Measuring and no Building, so a company still on that shape keeps these: a
+# purpose follows only where every stage the preset has is there.
+_IDEAS_RC3 = "Ideas wait here. Move one to On deck when it is worth trying. Snooze one to park it."
+_RUNNING_RC3 = "Run it as planned. Say done once it has run long enough to measure."
+EARLIER: dict[str, tuple[str, ...]] = {
+    f"{pid}-{stage}/purpose": (text,)
+    for pid in ("growth-experiments", "success-experiments")
+    for stage, text in (("ideas", _IDEAS_RC3), ("running", _RUNNING_RC3))
+}
+
 FACTORIES: dict[str, Row] = {
     "growth": {"id": "growth", "name": "Growth", "goal": "Find leads and turn them into customers."},
     "success": {"id": "success", "name": "Success", "goal": "Customers reach their goals and refer others."},

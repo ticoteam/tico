@@ -504,7 +504,8 @@ pipeline_settings.check(conn, record) -> list[str]           # every problem, as
 pipeline_settings.may_change(conn, by, pipeline_row) -> bool # owner, Admins, the pipeline's owner and manager
 pipeline_settings.PRESETS: dict[str, dict]                   # general (phase 1), product, engineering
 pipeline_settings.preset(conn, key) -> dict                  # a preset's record for this org, manager filled in
-pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made
+pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made;
+                                                             # unedited wording follows the preset (EARLIER)
 ```
 
 General's ids are fixed: pipeline `general`, stages `general-todo`, `general-done`, `general-closed`.

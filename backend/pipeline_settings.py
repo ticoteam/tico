@@ -11,7 +11,8 @@ writer of `pipelines`, `stages` and of the requirements set on a stage (`require
   changed in place, a row without one is made. A stage left out is retired, a requirement left out is withdrawn, so
   history and answers stay readable. Each save raises `settings_version` by one and logs who changed what.
 - `retire` takes a pipeline out of use once it holds no open task.
-- `ensure_presets` makes each preset an org does not have yet. It never changes one the org has.
+- `ensure_presets` makes each preset an org does not have yet. Of one the org has, it changes only what nobody set: an
+  empty role, and wording that still reads a text the preset shipped with before (EARLIER).
 
 Every function takes the caller's open write transaction and never commits. Names and signatures are in
 docs/dev/pipelines-v3-build.md.
@@ -282,6 +283,28 @@ PRESETS["product"] = {
     "done": {"id": "product-done"},
     "closed": {"id": "product-closed"},
 }
+# Every text a preset line shipped with before its current one, by where it sits (`preset_texts`). A company's line
+# that still reads one of these was never edited, so `ensure_presets` moves it to the current text (`_follow`). When you
+# change a preset line, add the text it had to its list here: backend/tests/test_preset_texts.py fails until you do.
+_REVIEW_RC3 = (
+    "A real review of the newest commit of every linked PR: what was read and run, what is wrong, and what to fix. Not a "
+    "summary of the change."
+)
+EARLIER: dict[str, tuple[str, ...]] = {
+    "engineering-review-1/page/rubric": (_REVIEW_RC3,),
+    "engineering-review-2/page/rubric": (_REVIEW_RC3,),
+    "engineering-fixes-2/purpose": (
+        "Fix what the second review found and attach a Review page that shows what was built.",
+        "Fix what the second review found and attach a Review page that shows what was built, the checks at the "
+        "newest commit and what both reviewers found.",
+    ),
+    "engineering-fixes-2/page/rubric": (
+        "Shows what was built, with screenshots or output, and how it was checked. Enough for a person to OK it "
+        "without opening the code.",
+        "Shows what was built, with screenshots or output, and how it was checked; that the checks pass at the newest "
+        "commit; and what Reviewer 1 and Reviewer 2 found. Enough for a person to OK it without opening the code.",
+    ),
+}
 SOFTWARE = ("engineering", "product")  # the presets only a company that builds software gets
 FACTORY = {"id": "product", "name": "Product", "goal": "From an idea to something checked in production."}
 # Who fills each preset's manager, its stage owners, and which stages' page requirement a person OKs (D5, D9).
@@ -314,6 +337,7 @@ ROLES: dict[str, Row] = {
 # Growth Experiments, Lead, Opportunity, Customer and Success Experiments, with their Growth and Success factories.
 PRESETS.update(more.PRESETS)
 ROLES.update(more.ROLES)
+EARLIER.update(more.EARLIER)
 
 
 def _h() -> Any:
@@ -1273,6 +1297,114 @@ def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
                 )
 
 
+TEXT_SETTINGS = ("rubric", "question")  # a requirement's settings that are wording; the rest are choices a person makes
+
+
+def requirement_key(req: Row) -> str:
+    """Which requirement of its stage this is, the same in every company: its kind, an item's source and condition, an
+    answer's name."""
+    kind = str(req.get("kind") or "")
+    if kind == "item":
+        return f"item:{req.get('source')}.{req.get('condition')}"
+    if kind == "answer":
+        settings: Row = req.get("settings") or {}
+        return f"answer:{settings.get('name')}"
+    return kind
+
+
+def preset_texts(key: str) -> dict[str, str]:
+    """Every line of wording in a preset, by where it sits: `<pipeline>/goal`, `<stage>/purpose`,
+    `<stage>/<requirement>/line` and `<stage>/<requirement>/<setting>` (TEXT_SETTINGS)."""
+    record = PRESETS[key]
+    out = {f"{record['id']}/goal": str(record["goal"])}
+    for stage in record["stages"]:
+        out[f"{stage['id']}/purpose"] = str(stage["purpose"])
+        for req in stage["requirements"]:
+            at = f"{stage['id']}/{requirement_key(req)}"
+            if req.get("line"):
+                out[f"{at}/line"] = str(req["line"])
+            settings: Row = req.get("settings") or {}
+            out.update(
+                {f"{at}/{name}": settings[name] for name in TEXT_SETTINGS if isinstance(settings.get(name), str)}
+            )
+    return out
+
+
+def _same(a: object, b: object) -> bool:
+    return isinstance(a, str) and isinstance(b, str) and a.split() == b.split()
+
+
+def _behind(path: str, text: object, now: str) -> bool:
+    """Whether a company's line still reads a text its preset shipped with before (EARLIER), so nobody edited it."""
+    return not _same(text, now) and any(_same(text, old) for old in EARLIER.get(path, ()))
+
+
+def _follow(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> list[str]:
+    """A preset's lines a company never edited move to the preset's current text: its goal, its stages' purposes, its
+    requirements' lines and wording (`preset_texts`). A line that reads anything but an earlier shipped text (EARLIER)
+    was edited and stays. Stages and requirements are found by their preset ids and keys, never by position: one the
+    company removed is passed over, as is a requirement that is not the only one of its key on both sides, and a
+    purpose follows only where the stage keeps the preset's requirements and every stage the preset has is there (a
+    purpose names the stages around it). Nothing is made, removed or moved, and no setting changes. Returns the paths
+    that moved, logged once as Tico's save. The settings version goes up as a save's does, except on a preset still at
+    version 1: it reads as the preset still, so it stays untouched (`_untouched`)."""
+    texts = preset_texts(key)
+    if not any(path in EARLIER for path in texts):
+        return []
+    row = task_engine.pipeline(conn, pipeline_id)
+    if not row or row.get("retired_at"):
+        return []
+    record = PRESETS[key]
+    work = {str(s["id"]): s for s in task_engine.stages(conn, pipeline_id) if s["kind"] == "work"}
+    whole = all(s["id"] in work for s in record["stages"])
+    ts = _h().now()
+    paths: list[str] = []
+    writes: list[tuple[str, tuple[object, ...]]] = []
+    goal = f"{record['id']}/goal"
+    if _behind(goal, row.get("goal"), texts[goal]):
+        paths.append(goal)
+        writes.append(("UPDATE pipelines SET goal=? WHERE id=?", (texts[goal], pipeline_id)))
+    for stage in record["stages"]:
+        have = work.get(stage["id"])
+        if not have:
+            continue
+        reqs = R.on_stage(conn, stage["id"])
+        keys = [requirement_key(r) for r in reqs]
+        wanted = [requirement_key(r) for r in stage["requirements"]]
+        purpose = f"{stage['id']}/purpose"
+        if whole and sorted(keys) == sorted(wanted) and _behind(purpose, have.get("purpose"), texts[purpose]):
+            paths.append(purpose)
+            writes.append(("UPDATE stages SET purpose=?, updated_at=? WHERE id=?", (texts[purpose], ts, stage["id"])))
+        for k in wanted:
+            if wanted.count(k) != 1 or keys.count(k) != 1:
+                continue
+            mine, at = reqs[keys.index(k)], f"{stage['id']}/{k}"
+            if f"{at}/line" in texts and _behind(f"{at}/line", mine.get("line"), texts[f"{at}/line"]):
+                paths.append(f"{at}/line")
+                writes.append(("UPDATE requirements SET line=? WHERE id=?", (texts[f"{at}/line"], mine["id"])))
+            settings: Row = dict(mine.get("settings") or {})
+            moved = [n for n in TEXT_SETTINGS if f"{at}/{n}" in texts]
+            moved = [n for n in moved if _behind(f"{at}/{n}", settings.get(n), texts[f"{at}/{n}"])]
+            if moved:
+                settings.update({n: texts[f"{at}/{n}"] for n in moved})
+                paths.extend(f"{at}/{n}" for n in moved)
+                writes.append(("UPDATE requirements SET settings=? WHERE id=?", (_h()._dump(settings), mine["id"])))
+    if not paths:
+        return []
+    before = read(conn, pipeline_id)
+    for sql, args in writes:
+        conn.execute(sql, args)
+    bump = 1 if int(row.get("settings_version") or 1) > 1 else 0
+    conn.execute(
+        "UPDATE pipelines SET settings_version = settings_version + ?, updated_at=? WHERE id=?", (bump, ts, pipeline_id)
+    )
+    after = read(conn, pipeline_id)
+    assert after is not None
+    detail = {"version": after["settings_version"], "made": False, "changes": _changes(before, after)}
+    _h().event(conn, SYSTEM, "pipeline.save", pipeline_id, {**detail, "newer_preset_text": paths})
+    return paths
+
+
 def _ensure_factory(conn: "sqlite3.Connection") -> None:
     """The Product factory that holds Product and Engineering (S12), made when missing."""
     if conn.execute("SELECT 1 FROM factories WHERE id=?", (FACTORY["id"],)).fetchone():
@@ -1344,9 +1476,10 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
     - Legal and Finance, private, in the Corporate factory, likewise, but only once their owner bot exists (the Legal
       Owner, the Bookkeeper): never with the Task Manager standing in. `ensure_private` makes them when that bot is
       made.
-    - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with one exception:
+    - A preset the org has, under its id or as its preset, is never changed, nor one it retired, with two exceptions:
       while nobody has changed it (settings version 1), an empty manager, stage owner or person on a people OK is
-      filled in once the bot or person for it exists.
+      filled in once the bot or person for it exists (`_fill`); and a line of its wording nobody edited, one that still
+      reads a text the preset shipped with before, moves to the preset's current text (`_follow`).
     - A preset whose name or prefix another pipeline already uses is left out, so a start never fails on it."""
     made: list[str] = []
     software = makes_software(conn)
@@ -1361,6 +1494,7 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
                 _bring_back(conn, str(have[0]))
             if _untouched(conn, str(have[0])):
                 _fill(conn, key, str(have[0]))
+            _follow(conn, key, str(have[0]))
             continue
         if key in SOFTWARE:
             if not _set_up(conn):
