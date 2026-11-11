@@ -14,7 +14,7 @@ from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import hubcli_pipelines, s3links
+from clients import cli_spec, hubcli_pipelines, s3links
 from clients.tico import APIError, Client
 
 
@@ -41,60 +41,6 @@ def _delivery(args):
     from clients.hubcli import delivery_of
 
     return delivery_of(args)
-
-
-def _rules_args(args):
-    """`tico rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
-
-    def scope(names, everyone=False, all_bots=False, outside_editions=False):
-        out = {}
-        if names:
-            out["names"] = list(names)
-        if everyone:
-            out["everyone"] = True
-        if all_bots:
-            out["all_bots"] = True
-        if outside_editions:
-            out["outside_editions"] = True
-        return out or None
-
-    if args.fn in ("rules add", "rules edit", "rules accept"):
-        who = scope(
-            getattr(args, "who_names", None),
-            getattr(args, "everyone", False),
-            getattr(args, "all_bots", False),
-            getattr(args, "outside_editions", False),
-        )
-        if who is not None:
-            args.who = who
-    if args.fn in ("rules add", "rules edit"):
-        with_scope = scope(getattr(args, "with_names", None))
-        if with_scope is not None:
-            setattr(args, "with", with_scope)
-    if args.fn == "rules read" and not getattr(args, "source", None):
-        args.fn = "rules get"  # one rule by id; with --from it is a document read (tico_rules_read)
-    if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
-        raise SystemExit("tico rules add: --version goes with --file and --quote")
-    if args.fn == "rules add" and getattr(args, "quote", None):
-        if not getattr(args, "file_id", None):
-            raise SystemExit("tico rules add: a quote needs --file (the document it is in)")
-        args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
-        if getattr(args, "file_version", None):
-            args.cite["version"] = args.file_version
-    for flag in (
-        "who_names",
-        "with_names",
-        "everyone",
-        "all_bots",
-        "outside_editions",
-        "file_id",
-        "section",
-        "quote",
-        "file_version",
-    ):
-        if hasattr(args, flag):
-            delattr(args, flag)
-    return args
 
 
 def _contacts_args(args):
@@ -306,7 +252,6 @@ COMMAND_ALIASES = {
     "tasks": "task",
     "automations": "automation",
     "bots": "bot",
-    "rule": "rules",
 }
 
 
@@ -337,6 +282,8 @@ def run(args, who=None):
         else 15,
     )
     fn = args.fn
+    if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
+        return spec.call(client, args)
     from clients.commands.org import COMMANDS as ORG_COMMANDS
 
     if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # clients/commands/org.py, clients/commands/pipelines.py
@@ -349,8 +296,6 @@ def run(args, who=None):
         return hubtools_connections.run_command(client, args)
     if args.cmd == "inbound":
         return via_tool(client, args)
-    if args.cmd == "rules":
-        return via_tool(client, _rules_args(args))
     if args.cmd in ("mail", "email", "letter", "alerts") or fn in ("tool index", "tool check"):
         return via_tool(client, args)
     if args.cmd == "maintenance":
@@ -373,10 +318,10 @@ def run(args, who=None):
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):
         return via_tool(client, args)
-    if fn.startswith(("trigger relay ", "relay ", "sleep ")):
+    if fn.startswith(("relay ", "sleep ")):
         return via_tool(client, args)
     # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
-    if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
+    if fn.startswith("notice ") or fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -1899,6 +1844,8 @@ def main(args, who=None, fields=None):
             and not args.json
         ):
             print(email_text(result, args.sub))
+        elif (spec := cli_spec.of(args)) is not None and spec.render and not args.json:
+            print(spec.render(args, result))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))
         elif args.cmd == "db" and not args.json:

@@ -2,6 +2,7 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+from clients.cli_spec import Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import _key, _s
 from clients.commands._requester import ON_BEHALF_OF, _as_person
@@ -241,6 +242,49 @@ def trigger_relay_rotate(api, args):
 )
 def trigger_relay_delete(api, args):
     return _as_person(api).post(f"triggers/{args['trigger']}/relay/delete", {}, key=_key(args))["relay"]
+
+
+# `tico trigger ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+CLI = (
+    Group("trigger", "webhooks that start automations (Automations › Incoming webhooks)"),
+    Command("trigger list"),
+    Command(
+        "trigger create",
+        "make a webhook trigger; the address with its secret is shown once",
+        args=(Arg("id", help="lowercase letters, digits and dashes; made from the name by default"),),
+    ),
+    Command("trigger show"),
+    Command(
+        "trigger update",
+        "change a trigger's name or settings",
+        args=(
+            Arg("preset", help="how calls are verified (needs a signing secret)"),
+            Arg("hourly", help="calls an hour, 1-600 (60 by default)"),
+            Arg("keep_days", help="days calls stay readable and can run again, 1-30 (7 by default)"),
+            Arg("unheard", help="note: tell the maker, at most hourly, when no automation or rule acted"),
+        ),
+    ),
+    Command("trigger rotate", "a new secret; the old address stops working"),
+    Command(
+        "trigger sign",
+        "verify each call with a preset; the signing secret is shown once",
+        args=(Arg("preset", help="the current one, else hmac"), Arg("off", help="stop checking signatures")),
+    ),
+    Command("trigger delete"),
+    Command("trigger deliveries", "the latest calls to a trigger"),
+    Command("trigger delivery", "one stored call: redacted headers and the body (long bodies in parts)"),
+    Command("trigger replay", "run a stored call again as a new occurrence"),
+    Command(
+        "trigger recover",
+        "run again, under the current secret and preset, every call refused in the last hours whose body is kept; a "
+        "sender's later retry of one is a duplicate",
+        args=(Arg("since", default=24),),
+    ),
+    Group("trigger relay", "a second address through Tico Gateway, so nothing is lost while this server is off"),
+    Command("trigger relay create", "make the address; its secret is shown once"),
+    Command("trigger relay rotate", "replace the secret; the old address stops at once"),
+    Command("trigger relay delete", "remove the address; the trigger and its own address stay"),
+)
 
 
 @tool(
