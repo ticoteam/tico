@@ -10,7 +10,8 @@ person on its people OKs from `resolve`, and `ensure_presets` fills a still-empt
   ordered by title then `created_at`, the first is Reviewer 1 and the second Reviewer 2.
 - With no such seat, the first active bot whose `bot_settings.template` is the role's, by slug.
   Reviewer 2 is then the second `pr-reviewer` bot.
-- Release Manager is `release_schedule_routes.release_manager`: the same bot the release hour runs on.
+- Release Manager is `release_schedule_routes.release_manager`: the same bot the release hour runs on. That one must be
+  active, so until a Release Manager is set up (a live seat's bot starts planned) it is found like any other role.
 - `ok_person` (D5): the person on a stage's people OK is the first person above the pipeline's manager bot on the org
   chart, else the org owner (C16). None only when no person can sign in.
 
@@ -86,7 +87,8 @@ def resolve(conn: "sqlite3.Connection") -> dict[str, str | None]:
     for role in ROLES:
         if role == RELEASE_MANAGER:
             rm: Any = release_schedule_routes
-            bot: str | None = rm.release_manager(conn)
+            others = _bots(conn, TEMPLATES[role], seats)
+            bot: str | None = rm.release_manager(conn) or (others[0] if others else None)
         elif role in (REVIEWER_1, REVIEWER_2):
             at = 0 if role == REVIEWER_1 else 1
             bot = reviewers[at] if len(reviewers) > at else None

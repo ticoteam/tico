@@ -66,11 +66,12 @@ def sample(api):
     assert done.status_code == 200, done.text
 
 
-# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps).
+# Setup starts the default chart's bots; a company file starts the bots it lists (here only the COO and BotOps). With no
+# Product or Engineering Manager, the Task Manager stands in (pipeline_settings.preset: the ladder).
 MANAGERS = {
     "onboarding": {"product": "product-manager", "engineering": "engineering-manager"},
-    "company_file": {"product": None, "engineering": None},
-    "sample": {"product": None, "engineering": None},
+    "company_file": {"product": "task-manager", "engineering": "task-manager"},
+    "sample": {"product": "task-manager", "engineering": "task-manager"},
 }
 
 

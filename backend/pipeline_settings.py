@@ -989,7 +989,9 @@ def _set_up(conn: "sqlite3.Connection") -> bool:
 
 def preset(conn: "sqlite3.Connection", key: str) -> Row:
     """A preset's record for this org, ready to save: its manager, its stage owners and the person on its people OKs
-    filled in from the bots and people the org has (pipeline_seats). A role nobody fills is left empty."""
+    filled in from the bots and people the org has (pipeline_seats). No work stage is left without an owner: a role
+    nobody fills goes up the ladder, a stage's to the pipeline's manager and a manager's to the Task Manager, until the
+    role's bot appears (`_fill`)."""
     record = copy.deepcopy(PRESETS[key])
     if key == "general":
         record["manager_id"] = _task_manager(conn)
@@ -997,10 +999,11 @@ def preset(conn: "sqlite3.Connection", key: str) -> Row:
     if not roles:
         return record
     who = S.resolve(conn)
-    record["manager_id"] = who.get(roles["manager"])
+    record["manager_id"] = who.get(roles["manager"]) or _task_manager(conn)
     person = S.ok_person(conn, record["manager_id"])
     for stage in record["stages"]:
-        stage["owner"] = who.get(roles["stages"].get(stage["id"], ""))
+        role = roles["stages"].get(stage["id"])
+        stage["owner"] = (who.get(role) or record["manager_id"]) if role else None
         if stage["id"] in roles["ok"]:
             for req in stage["requirements"]:
                 if req["kind"] == "page":
@@ -1017,19 +1020,23 @@ def _untouched(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
 def _fill(conn: "sqlite3.Connection", key: str, pipeline_id: str) -> None:
     """An untouched preset made before its roles' bots existed gets them once they do: an empty manager, an empty
     stage owner, an empty person on a stage's people OK. Nothing a person set is changed, and the settings version
-    stays 1, so the next bot that appears is filled in too."""
+    stays 1, so the next bot that appears is filled in too. A stand-in up the ladder (`preset`: the Task Manager for
+    a manager, the manager for a stage) gives way to the role's bot once it exists."""
     record = preset(conn, key)
     ts = _h().now()
+    found = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
+    stand_ins = (found[0] if found else None, _task_manager(conn))
     if record.get("manager_id"):
         conn.execute(
-            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND manager_id IS NULL",
-            (record["manager_id"], ts, pipeline_id),
+            "UPDATE pipelines SET manager_id=?, updated_at=? WHERE id=? AND (manager_id IS NULL OR manager_id=?)",
+            (record["manager_id"], ts, pipeline_id, stand_ins[1]),
         )
     for stage in record["stages"] if key in ROLES else ():
         if stage.get("owner"):
             conn.execute(
-                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? AND owner IS NULL",
-                (stage["owner"], ts, stage["id"], pipeline_id),
+                "UPDATE stages SET owner=?, updated_at=? WHERE id=? AND pipeline_id=? "
+                "AND (owner IS NULL OR owner=? OR owner=?)",
+                (stage["owner"], ts, stage["id"], pipeline_id, *stand_ins),
             )
         for req in stage["requirements"]:
             if req.get("person_id"):
