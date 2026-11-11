@@ -658,6 +658,14 @@ renamed is never made again. Legal and Finance are made only once their owner bo
 Bookkeeper as Finance Owner), the moment it is made; never with the Task Manager standing in. Growth and Success
 Monitoring are made only where their factory's Experiments pipeline is.
 
+A preset the company has keeps its stages and requirements on an upgrade, but its wording nobody edited follows the
+preset: at each start, a goal, stage purpose, requirement line or check line that still reads a text the preset shipped
+with before moves to the current text. Anything else was edited and stays. A purpose follows only where the stage keeps
+the preset's requirements and every stage of the preset is there. The move is logged as Tico's save of the pipeline,
+and raises its settings version unless nobody has changed it yet. **When you change a preset line, add the text it had
+to `EARLIER`** (`backend/pipeline_settings.py`, or `backend/pipeline_presets_more.py` for the presets there), then run
+`python -m backend.tests.test_preset_texts --write`; `backend/tests/test_preset_texts.py` fails until both are done.
+
 ### Private pipelines
 
 Every task in a private pipeline is a private task. When a task enters one (filed, filed by a stage, or restored) it is
