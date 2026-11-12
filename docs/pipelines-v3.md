@@ -792,7 +792,12 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
   when the fault needs the Builder. A bot queues a new commit only when it changes the same lines as the one the task
   came into Merge with; otherwise it sends the task back to Fixes 2, where Reviewer 2 reads it and the person's OK
-  comes back with the task (C22). A person may queue any commit.
+  comes back with the task (C22). A person may queue any commit. A bot's snooze in Merge ends, and whoever has the
+  turn is woken once with the reason, when the checks on the PR's newest commit finish, the PR starts or stops
+  conflicting, GitHub takes it out of the queue or merges it, or its base branch moves (once per base commit; a snooze
+  whose reason names a PR, "waiting for #3417 to merge", waits for that one's merge). Not while the PR is queued or its
+  checks run. A person's snooze stays. *Added Nov 11: Tico Team's Release Owner slept to guessed clock times, up to 90
+  minutes past the merge it waited for.*
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).
 
