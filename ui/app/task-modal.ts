@@ -148,8 +148,9 @@ function taskModalLoadFailed(id: string, error: unknown, d?: ModalDialog) {
   toast(errorMessage(error, 'The task did not load'), true, {label: 'Retry', run: () => taskModalOpen(id, d)}, opts);
 }
 // Opens a task by its id in the task's window.
-// `opts` as taskModalShow takes them: a pipeline's board on a phone opens a task at its conversation, asking its owner.
-async function taskModalOpen(id: string, d?: ModalDialog, opts: {thread?: boolean; ask?: boolean} = {}) {
+// `opts` as taskModalShow takes them: a pipeline's board on a phone opens a task at its conversation, asking its owner;
+// `direct`: the task page itself, even when the task waits on the person's answer (Open task ↗ on the ask screen).
+async function taskModalOpen(id: string, d?: ModalDialog, opts: {thread?: boolean; ask?: boolean; direct?: boolean} = {}) {
   const from = S.route, load = ++TASK_MODAL_LOAD;
   let detail: ModalDetail | null;
   try { detail = await get<ModalDetail>(`/v2/tasks/${encodeURIComponent(id)}`); }
@@ -169,7 +170,15 @@ function taskModalRunsKeep(d: ModalDialog, keep: TaskChatState | null) {
 // The one way a task opens in full: from a list, from a link, from a chat card.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
 // `opts.ask`: its box asks the task's owner ("Ask Product Owner about this task…"), as a pipeline's board on a phone opens it.
-async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail} = {}) {
+async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail; direct?: boolean} = {}) {
+  // A task opened (not redrawn) while it waits on the person's own answer opens on that ask, from wherever it was opened
+  // (the board, a list, a #/task/ link, a link in chat, a bot's page); its Open task ↗ comes back here with `direct`. The
+  // task's conversation (opts.thread) is asked for by name and opens as it is.
+  if (!d?.open && !opts.direct && !opts.thread) {
+    const load = ++TASK_MODAL_LOAD;
+    if (await decideTaskOpen(task)) return;
+    if (load !== TASK_MODAL_LOAD) return;      // another task was opened meanwhile
+  }
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
   const sameTask = d.open && String(d.dataset.task) === String(task.id);

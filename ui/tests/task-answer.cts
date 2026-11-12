@@ -1,7 +1,8 @@
 // A task page's Answer opens that task's own ask on the Needs you card. Needs you items are keyed `<ask id>:<requirement
 // id>` (GET /api/v2/needs-you items[].id), and a stage's requirement id is the same on every task in the stage, so Answer
 // matches the task and the requirement, never the requirement alone:
-// - two tasks ask one stage requirement: Answer on the second task's page opens the second task's ask;
+// - two tasks ask one stage requirement: the second task opens on its own ask, and Answer on its page (Open task ↗)
+//   comes back to that ask;
 // - an ask not yet in the held list: Answer reads Needs you once more, then opens it;
 // - an ask past the first page of Needs you: Answer reads on, page by page, then opens it;
 // - an ask that is not in the list at all: Answer says why, never nothing.
@@ -28,8 +29,11 @@ const need = (t: Task, ask: string, line: string): Need => ({kind: 'ask', id: `$
     {
       const {page, errors} = await open(browser, {hash: '#/task/t-2', tasks: [a, b, c], needs});
       try {
-        await page.locator('#task-modal[open] [data-task-answer]').click();
         const card = page.locator('#need-card[open]');
+        await card.waitFor({timeout: 5000});
+        assert.equal(await card.locator('.dc-q').innerText(), 'Is the signup spec OK?', "the task opens on its own ask, not another task's");
+        await card.locator('[data-dc="task"]').click();
+        await page.locator('#task-modal[open] [data-task-answer]').click();
         await card.waitFor({timeout: 5000});
         assert.equal(await card.locator('.dc-q').innerText(), 'Is the signup spec OK?', "Answer opens this task's ask, not another task's");
         assert.deepEqual(errors, []);

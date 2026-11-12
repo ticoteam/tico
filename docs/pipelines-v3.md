@@ -1288,7 +1288,17 @@ Mark met, Message Product Owner twice. New: Approve and Send back.
   account. The order summary stays visible on every step." The second sentence is highlighted: it changed since the
   version you last saw. The rest of the page follows.
 - **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
-  "Notes" box; buttons "Approve" (main) and "Send back".
+  "Open task #80 ↗" link; a "Notes" box; buttons "Approve" (main) and "Send back".
+
+**Opening a task opens its ask.** A task waiting on your own answer opens on this screen from anywhere (the board, a
+task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
+opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
+
+**Notes** is 7 lines in a 420 px column (4 lines on a phone) and grows with its text before it scrolls. A screenshot
+pasted into it, a file dropped on the right side or one picked with 📎 Attach (up to 10) uploads to the task's Files at
+once and shows under the note with ✕. Send back waits until they are up ("Uploading 1 of 2…"), names a failed one with
+Retry and sends nothing; the note it sends ends with each file's name and id, so the bot's wake lists them. A question's
+"Something else" box works the same way.
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
 
