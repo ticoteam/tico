@@ -204,7 +204,9 @@ def settle_failure(
     holds the row (then it returns False: the row did not give up)."""
     wait = schedule.after(attempts, rng)
     if wait is None:
-        if not finish(c, table, row_id, give_up_state, attempts=attempts, error=error, due_at=now, extra=extra, token=token):
+        if not finish(
+            c, table, row_id, give_up_state, attempts=attempts, error=error, due_at=now, extra=extra, token=token
+        ):
             return False
         note(table.name, "gave_up", row_id, attempts=attempts)
         return True

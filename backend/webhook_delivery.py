@@ -310,7 +310,9 @@ def record(store, send, timestamp, status, head, error, abort, ms):
         if not now_row:
             # Deleted, or its claim lapsed and the send went back to ready (and maybe to another worker) while the post
             # was out: the attempt stays logged and nothing else changes.
-            log.warning("webhook send %s: a late answer (status %s) from a lapsed claim was logged only", send["id"], status)
+            log.warning(
+                "webhook send %s: a late answer (status %s) from a lapsed claim was logged only", send["id"], status
+            )
             return False
         if status is not None and 200 <= status < 300:
             c.execute(

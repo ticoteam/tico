@@ -573,7 +573,8 @@ def test_an_automation_has_ten_runs_in_flight_and_the_rest_wait_queued(api):
     assert hub.claim() is not None  # one finished: one more starts
     with store.transaction() as c:
         c.execute(
-            "UPDATE automation_runs SET status='waiting', wake_at=? WHERE id=?", (H.shift(H.now(), days=1), claimed[1].id)
+            "UPDATE automation_runs SET status='waiting', wake_at=? WHERE id=?",
+            (H.shift(H.now(), days=1), claimed[1].id),
         )
     assert hub.claim() is not None  # waiting for a batch time holds no place
     assert hub.claim() is None

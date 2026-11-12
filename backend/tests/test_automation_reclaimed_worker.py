@@ -12,6 +12,7 @@ import pytest
 from backend import automations as A
 from backend.tests.helpers.automation_runs import make as make_automation, queued, run_row, sql
 
+
 class Stop(BaseException):
     """The server stopping mid-run: nothing in the hub catches it."""
 
@@ -140,8 +141,6 @@ def test_a_resumed_run_still_does_each_effect_once(api):
     done = run_row(api, rid)
     assert done["status"] == "ok" and done["state"]["resumes"] == 1
     assert len(sql(api, "SELECT id FROM tasks WHERE title='Acme fence check'")) == 1
-
-
 
 
 def test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run(api):
