@@ -44,6 +44,11 @@ def refusal_text(payload, task_id=None):
     return "\n".join(lines)
 
 
+def _kinds(schema):
+    kind = schema.get("type")
+    return [kind] if isinstance(kind, str) else kind or []
+
+
 def argument_error(value, schema, path="arguments"):
     types = {
         "object": dict,
@@ -54,11 +59,14 @@ def argument_error(value, schema, path="arguments"):
         "boolean": bool,
         "null": type(None),
     }
-    kind = schema.get("type")
-    kinds = [kind] if isinstance(kind, str) else kind or []
-    if kinds and not any(
-        isinstance(value, types[k]) and (k not in ("integer", "number") or not isinstance(value, bool)) for k in kinds
-    ):
+    kinds = _kinds(schema)
+
+    def is_kind(k):  # JSON Schema's numbers: a bool is neither, and 1.0 is an integer
+        if isinstance(value, bool):
+            return k == "boolean"
+        return isinstance(value, types[k]) or k == "integer" and isinstance(value, float) and value.is_integer()
+
+    if kinds and not any(is_kind(k) for k in kinds):
         return f"{path}: expected {' or '.join(kinds)}"
     if "enum" in schema and value not in schema["enum"]:
         return f"{path}: use one of {', '.join(str(v) for v in schema['enum'])}"
@@ -172,7 +180,9 @@ class Protocol:
         missing = [
             k
             for k in entry["inputSchema"].get("required", [])
-            if args.get(k) is None or args.get(k) == "" and properties.get(k, {}).get("minLength") != 0
+            if k not in args
+            or args[k] is None and "null" not in _kinds(properties.get(k, {}))
+            or args[k] == "" and properties.get(k, {}).get("minLength") != 0
         ]
         if missing:
             return self._tool_error(
