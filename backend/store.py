@@ -1287,9 +1287,6 @@ class Store:
             # anything. On a new file a module's tables do not exist yet; a migration skips them and the module's
             # CREATE below makes the new shape (backend/migrations).
             c.executescript(SCHEMA)
-            from . import step_briefs as _step_briefs
-
-            c.executescript(_step_briefs.SCHEMA)
             from . import start_places as _start_places
 
             c.executescript(_start_places.SCHEMA)

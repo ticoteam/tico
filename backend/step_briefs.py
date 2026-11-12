@@ -4,7 +4,8 @@
 The status line under a chat (thread_bot_status._step) decides its one word from a running turn's newest STEP_EVENTS
 delta, message and tool events. A tool event can carry a large output and a message a long text, and decoding those
 in full to read a status and a label cost as much as the outputs weighed. So when an event's stored payload is longer
-than SMALL characters, `record` keeps its brief in `attempt_event_briefs`: what the replay (turns.reply_parts) reads,
+than SMALL characters, `record` keeps its brief in `attempt_event_briefs` (its migration
+20261112081510_attempt_event_briefs): what the replay (turns.reply_parts) reads,
 with a text reduced to whether it is blank and a digest of its stripped words. The status line reads the brief instead
 of the payload; a smaller event is cheap to decode and gets none.
 
@@ -26,20 +27,6 @@ LABEL_CHARS = 400
 KEY_CHARS = 200
 STATUS_CHARS = 64
 KINDS = ("delta", "message", "tool")
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS attempt_event_briefs(
- attempt_id TEXT NOT NULL, seq INTEGER NOT NULL, brief TEXT NOT NULL,
- PRIMARY KEY(attempt_id,seq)) WITHOUT ROWID;
-CREATE TRIGGER IF NOT EXISTS attempt_event_briefs_rewritten AFTER UPDATE OF payload ON attempt_events
-BEGIN
- DELETE FROM attempt_event_briefs WHERE attempt_id=OLD.attempt_id AND seq=OLD.seq;
-END;
-CREATE TRIGGER IF NOT EXISTS attempt_event_briefs_deleted AFTER DELETE ON attempt_events
-BEGIN
- DELETE FROM attempt_event_briefs WHERE attempt_id=OLD.attempt_id AND seq=OLD.seq;
-END;
-"""
 
 
 def digest(text: str) -> str:

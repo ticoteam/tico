@@ -141,6 +141,13 @@ def test_a_runner_s_big_output_is_kept_with_its_brief(api):
         ],
     )
     with api.app.state.store.read() as c:
+        # A new file gets the triggers too: the migration runs before the store makes attempt_events.
+        assert {
+            r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE tbl_name='attempt_events' AND type='trigger'")
+        } >= {
+            "attempt_event_briefs_rewritten",
+            "attempt_event_briefs_deleted",
+        }
         kept = c.execute(
             "SELECT seq, brief FROM attempt_event_briefs WHERE attempt_id=? ORDER BY seq", (aid,)
         ).fetchall()

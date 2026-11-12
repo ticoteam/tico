@@ -3,9 +3,17 @@ status line as it was made before step briefs (backend/step_briefs.py)."""
 
 import json
 import sqlite3
+from importlib import import_module
 
 from backend import step_briefs, thread_bot_status
 from backend.turns import reply_parts
+
+MIGRATION = import_module("backend.migrations.20261112081510_attempt_event_briefs")
+
+
+def briefs_schema(c):
+    """The briefs table and its triggers, as the migration makes them (over a bare `attempt_events`, if one is there)."""
+    MIGRATION.up(c)
 
 
 def replayed(c, attempt_id):
@@ -41,7 +49,7 @@ def database():
         "CREATE TABLE attempt_events(id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT, seq INTEGER, kind TEXT, "
         "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))"
     )
-    c.executescript(step_briefs.SCHEMA)
+    briefs_schema(c)
     return c
 
 

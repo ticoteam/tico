@@ -18,7 +18,7 @@ import time
 import tracemalloc
 
 from backend import step_briefs, thread_bot_status
-from backend.tests.helpers.step_briefs import replayed
+from backend.tests.helpers.step_briefs import briefs_schema, replayed
 
 SIZES = (1024, 512 * 1024)
 LENGTHS = (100, 1_000, 20_000)
@@ -45,7 +45,7 @@ def database(path, length, size):
         "CREATE TABLE attempt_events(id INTEGER PRIMARY KEY AUTOINCREMENT, attempt_id TEXT, seq INTEGER, kind TEXT, "
         "payload TEXT, created_at TEXT, UNIQUE(attempt_id,seq))"
     )
-    c.executescript(step_briefs.SCHEMA)
+    briefs_schema(c)
     seq, n = 0, 0
     while seq < length:
         for kind, payload in cycle(n, size):
