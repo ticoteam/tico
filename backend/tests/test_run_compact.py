@@ -153,14 +153,17 @@ def test_the_stream_takes_output_full_or_compact_only(api):
     assert api.get("/api/v2/events?output=everything", headers=headers()).status_code == 422
 
 
-def test_a_compact_stream_behind_on_large_outputs_catches_up_in_one_read(api):
-    """A compact stream is sent none of a step's payload, so one read is not cut to READ_BYTES of stored output."""
+def test_a_compact_read_loads_no_more_stored_output_than_one_read_carries(api):
+    """A compact stream is sent none of a step's payload, but its read still loads and checks each one: a stream behind
+    on large outputs takes them a READ_BYTES budget at a time, as a full stream does, not all in one read."""
     r, msg, aid, after = started_run(api)
-    write(api, r, aid, *[(n, "tool", {"output": "v" * 100_000}) for n in range(1, 6)])
-    compact, _, more = read_once(api, "ana-test", after, True, None, E.BATCH)
-    assert [d["output"]["seq"] for _, d, _ in compact if "output" in d] == [1, 2, 3, 4, 5] and not more
-    full, _, more = read_once(api, "ana-test", after, False, None, E.BATCH)
-    assert more and len([d for _, d, _ in full if "output" in d]) < 5  # the whole steps still wait for later reads
+    write(api, r, aid, *[(n, "tool", {"output": "v" * 200_000}) for n in range(1, 6)])
+    for compact in (True, False):
+        events, cursor, more = read_once(api, "ana-test", after, compact, None, E.BATCH)
+        steps = [d["output"]["seq"] for _, d, _ in events if "output" in d]
+        assert more and 1 <= len(steps) < 5, (compact, steps)
+    caught_up, _ = read(api, "ana-test", after, True)  # the later reads bring the rest, in order
+    assert [d["output"]["seq"] for _, d, _ in caught_up if "output" in d] == [1, 2, 3, 4, 5]
 
 
 def test_a_compact_step_counts_its_size_in_utf8_bytes(api):
