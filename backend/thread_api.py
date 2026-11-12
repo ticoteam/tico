@@ -459,6 +459,13 @@ def install(app, store, auth, mutate, rule_check):
         """A teammate's Home (`actor` = bot:<slug>, human:<id> or group:<id>, in the path), made on first use. The viewer
         needs Read on that teammate; without it, or when the teammate does not exist, the answer is the same 404."""
         v = threads.viewer(auth, request.state.identity)
+        # An existing Home is read under a snapshot: the writer is taken only to make a missing one, and access and
+        # existence are checked again under it (another request may have made it meanwhile).
+        with store.read_transaction() as c:
+            _read_or_404(c, v, actor)
+            row = threads.home(c, _home_owner(actor), create=False)
+            if row is not None:
+                return threads.get(c, v, row["id"])
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
