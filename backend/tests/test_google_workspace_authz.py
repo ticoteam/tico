@@ -322,7 +322,10 @@ def test_a_publisher_without_mail_takes_a_first_connect_beside_a_non_publisher_g
     connect.back(api, "cara-test", state=query["state"], code="c-2")
     office = runner(api, label="Office Mac")  # a publisher with no mail credentials
     claimed = post(api, "connectors/mail/google/claim", {"holds_mail": False}, office["token"])["connect"]
-    assert claimed and claimed["id"] == "cara" and claimed["action"] == "connect" and claimed["mailbox"] == PERSONAL
+    assert claimed and claimed["action"] == "connect" and claimed["mailbox"] == PERSONAL
+    with api.app.state.store.read() as c:  # Cara's connect: the claim names the operation, not the person
+        owner = c.execute("SELECT person_id FROM google_connects WHERE operation_id=?", (claimed["id"],)).fetchone()
+    assert owner[0] == "cara"
 
 
 def test_a_revoked_computers_fresh_failure_does_not_count(api, workspace_key):
