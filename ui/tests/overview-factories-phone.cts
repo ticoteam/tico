@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Company › Factories at a phone width (390 × 844): the header row keeps the h1, the Day/Week/Month control and
-// + Factory on screen, the Company tabs get their own full-width row of tabs (not a squeezed column), and #main does
-// not scroll sideways. At a desktop width the header stays one row. Fixtures only.
+// + Factory on screen, the Company tabs get their own full-width row of tabs (not a squeezed column, all six an owner
+// sees on screen), and #main does not scroll sideways. At a desktop width the header stays one row. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -47,7 +47,8 @@ const FACTORIES = {factories: [{id: 'f-growth', name: 'Growth', goal: null, mana
       const tabs = [...document.querySelectorAll('.of-page .overview-tabs .dash-tabs a, .of-page .overview-tabs .dash-tabs button')]
         .map(t => Math.round(t.getBoundingClientRect().top));
       return {vw: innerWidth, scroll: main.scrollWidth, client: main.clientWidth, add: box('#of-new-b'), period: box('#of-period'),
-        h1: box('.of-page .overview-tabs h1'), nav: box('.of-page .overview-tabs .dash-tabs'), tabTops: [...new Set(tabs)], count: tabs.length};
+        h1: box('.of-page .overview-tabs h1'), navScroll: document.querySelector('.of-page .dash-tabs')!.scrollWidth, navClient: document.querySelector('.of-page .dash-tabs')!.clientWidth,
+        lastTab: document.querySelector('.of-page .dash-tabs')!.lastElementChild!.getBoundingClientRect().right, nav: box('.of-page .overview-tabs .dash-tabs'), tabTops: [...new Set(tabs)], count: tabs.length};
     });
 
     // Phone: nothing past the right edge, + Factory and the period control fully on screen, the tabs one row.
@@ -61,6 +62,10 @@ const FACTORIES = {factories: [{id: 'f-growth', name: 'Growth', goal: null, mana
       assert.equal(g.tabTops.length, 1, `the Company tabs stack instead of one row: tops ${g.tabTops.join(', ')}`);
       assert.ok(g.nav.top >= g.add.bottom - 1, 'the tabs sit on their own row below the header controls');
       assert.ok(g.nav.right <= g.vw, 'the tab row fits the screen');
+      // An owner sees six tabs, Share last: every one on screen, none hidden past the row's own scroll.
+      assert.equal(g.count, 6, 'an owner sees six Company tabs');
+      assert.ok(g.navScroll <= g.navClient, `tabs past the row's edge: scrollWidth ${g.navScroll} > clientWidth ${g.navClient}`);
+      assert.ok(g.lastTab <= g.vw, `the last tab ends at ${g.lastTab}, past ${g.vw}`);
       assert.deepEqual(errors, []);
       await page.close();
     }
