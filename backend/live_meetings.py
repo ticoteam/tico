@@ -873,13 +873,19 @@ CLAIM_ABANDON_SECONDS = 300
 LIVE_JOB_STATES = "('queued','leased','running','input')"
 
 
-def _job_owner(c, attempt_id):
-    """The claim owner a call made from runner attempt `attempt_id` speaks for (`job:<job id>`); None for a direct
-    client, which runs in no attempt."""
+def _job_owner(c, attempt_id, rid):
+    """The claim owner a call made from runner attempt `attempt_id` speaks for: `job:<job id>` when that job is one of
+    meeting `rid`'s turns (the turn's own run, or a later turn steered into it). None otherwise: a direct client runs in
+    no attempt, and a call from an unrelated run (a task turn) claims as a direct client does, so a lost claim of
+    it ends after CLAIM_ABANDON_SECONDS rather than when that other run ends."""
     if not attempt_id:
         return None
-    row = c.execute("SELECT job_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
-    return "job:" + row[0] if row and row[0] else None
+    row = c.execute(
+        "SELECT j.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "WHERE a.id=? AND json_extract(m.refs,'$.live_meeting.meeting_id')=?",
+        (attempt_id, rid),
+    ).fetchone()
+    return "job:" + row[0] if row else None
 
 
 def _holds(turn, job):
@@ -1011,7 +1017,7 @@ def complete_runner_turn(
     ).fetchone()
     if not turn or turn["status"] in ("replied", "skipped"):
         return
-    if turn["status"] == "claimed" and attempt_id and not _holds(turn, _job_owner(c, attempt_id)):
+    if turn["status"] == "claimed" and attempt_id and not _holds(turn, _job_owner(c, attempt_id, rid)):
         return  # another delivery holds this turn: it is theirs to answer
     if _meeting(c, rid)["state"] == "ended":
         _finish_pass(c, rid, turn, "meeting_ended_before_reply")
@@ -1795,7 +1801,7 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
         raise Problem("turn_state", "This bot turn is no longer available", 409)
     if turn["status"] != "claimed":
         raise Problem("turn_claim", "Claim this meeting turn before replying", 409)
-    if not _holds(turn, _job_owner(c, who.attempt_id)):
+    if not _holds(turn, _job_owner(c, who.attempt_id, rid)):
         raise Problem("turn_claimed", "Another delivery of this bot is answering this meeting turn", 409)
     current = _meeting(c, rid)
     if _is_pass(text):
@@ -2527,7 +2533,7 @@ def install_live_meetings(app, store, auth, write):
             raise Problem("identity", "Only bots claim meeting turns", 403)
 
         def work(c):
-            job = _job_owner(c, who.attempt_id)
+            job = _job_owner(c, who.attempt_id, rid)
             result = claim_runner_turn(c, rid, turn_id, H.actor_id(who.actor), auth=auth, job=job)
             if result["status"] == "claimed_elsewhere":
                 raise Problem("turn_claimed", "Another delivery of this bot is answering this meeting turn", 409)

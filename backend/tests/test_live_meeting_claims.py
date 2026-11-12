@@ -6,6 +6,7 @@ passed the bot over as busy. Each test drives the real routes and the router's o
 import json
 
 from backend import live_meetings as LM
+from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.live_meetings import attach, live, ready  # noqa: F401
@@ -21,10 +22,10 @@ def meeting(api):
     return mid
 
 
-def invite(api, mid, key):
-    """The router's own automatic invitation of ops (what a routed window does)."""
+def invite(api, mid, key, named=False):
+    """The router's own automatic invitation of ops (what a routed window does); `named` as when a speaker names it."""
     with api.app.state.store.transaction() as c:
-        return LM._enqueue(c, mid, ["ops"], source_key=key)
+        return LM._enqueue(c, mid, ["ops"], source_key=key, named=named)
 
 
 def turn_row(api, tid):
@@ -199,3 +200,24 @@ def test_detaching_the_bot_or_ending_the_meeting_during_a_claim_ends_it_and_fenc
     assert turn_row(live, tid)["skip_reason"] == "meeting_ended_before_reply"
     assert reply(live, ended, tid).status_code == 409
     assert get(live, f"live-meetings/{ended}")["chat"] == []
+
+
+def test_a_claim_from_an_unrelated_run_of_the_bot_is_a_direct_claim(live):
+    """A bot that calls the claim API from a task turn does not tie the meeting turn to that run: it claims as a direct
+    client, so its claim is listed for it and ends after the bound like any direct claim."""
+    machine = runner_for_ops(live)
+    with live.app.state.store.transaction() as c:
+        H.task_create(c, H.human_actor("ana"), "Tidy the notes", "Please tidy them.", "bot:ops")
+    task_run = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert "live_meeting" not in json.dumps(task_run["message"].get("refs") or {})
+    live.app.state.store.settings.test_identities["ops-in-task"] = Identity(
+        "bot:ops", "bot", runner_id=machine["runner_id"], attempt_id=task_run["id"]
+    )
+    mid = meeting(live)
+    tid = invite(live, mid, "window:1", named=True)[0][0]["id"]  # busy with its task run, so named
+    claim = post(live, f"live-meetings/{mid}/turns/{tid}/claim", {}, token="ops-in-task")
+    assert claim["by"] == "direct" and turn_row(live, tid)["claim_owner"].startswith("direct:")
+    assert [t["id"] for t in get(live, f"live-meetings/{mid}/turns", token="ops-live")["turns"]] == [tid]
+    age_claim(live, tid)
+    sweep(live)
+    assert turn_row(live, tid)["skip_reason"] == "claim_abandoned"
