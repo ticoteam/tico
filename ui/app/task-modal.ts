@@ -138,10 +138,22 @@ window.addEventListener('popstate', () => {
   const d = $('#task-modal');
   if (d?.open && d.returnContext && !history.state?.taskModal) d.close();
 });
+// A task that could not be read says so: "Task not found" for a 404 or 403, anything else (a 500, a network error) with
+// Retry, which opens the task by its id again.
+function taskModalLoadFailed(id: string, error: unknown, d?: ModalDialog) {
+  const status = errorStatus(error);
+  if (status === 404 || status === 403) { toast('Task not found', true); return; }
+  toast(errorMessage(error, 'The task did not load'), true, {label: 'Retry', run: () => taskModalOpen(id, d)});
+}
 // Opens a task by its id in the task's window.
 async function taskModalOpen(id: string, d?: ModalDialog) {
   const from = S.route, load = ++TASK_MODAL_LOAD;
-  const detail: ModalDetail | null = await v2Get(`/v2/tasks/${encodeURIComponent(id)}`);
+  let detail: ModalDetail | null;
+  try { detail = await get<ModalDetail>(`/v2/tasks/${encodeURIComponent(id)}`); }
+  catch (error) {
+    if (S.route === from && load === TASK_MODAL_LOAD) taskModalLoadFailed(id, error, d);
+    return;
+  }
   if (S.route !== from || load !== TASK_MODAL_LOAD || !detail?.task) return;
   void taskModalShow(detail.task, d, {detail});
 }
@@ -191,7 +203,9 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   if (onProp) d.focusProp = onProp;
   // The detail is asked for at once; the first draw waits only for the CLI's manifest (session copy commands need it
   // even when Tasks is the first page opened), read once.
-  const reading = Promise.all([opts.detail || v2Get(`/v2/tasks/${encodeURIComponent(task.id)}`)]);
+  // A read that fails is kept, so the window that closes for it says why (taskModalLoadFailed).
+  let readFailed: unknown = null;
+  const reading = Promise.all([opts.detail || get<ModalDetail>(`/v2/tasks/${encodeURIComponent(task.id)}`).catch((error: unknown) => { readFailed = error; return null; })]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
@@ -223,7 +237,11 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   // the list knows the task; the detail adds its parts, its parent and the comments
   const [detail] = await reading;
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
-  if (!detail?.task) { d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id)); return; }
+  if (!detail?.task) {
+    d.close(); d.innerHTML = ''; TASK_DRAFTS.delete(String(task.id));
+    if (readFailed) taskModalLoadFailed(String(task.id), readFailed, d);
+    return;
+  }
   await taskMenuSettled(d);                 // never pull a menu out from under the pointer
   if (!d.open || String(d.dataset.task) !== String(task.id) || d.drawSeq !== seq) return;
   if (d.liveTask && Number(detail.task.version) < Number(d.liveTask.version)) return;   // a save landed since this was asked for
