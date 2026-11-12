@@ -22,7 +22,7 @@ from . import models as M
 from . import changelog as CL
 from . import releases
 from . import visuals
-from . import app_delivery, login_holds, providers, runner_versions, runs
+from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, bot_stops, run_triggers
@@ -2131,8 +2131,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
             }
         )
     if not count_only:
-        # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do.
-        views = {}
+        # An ask carries its requirement as the task's own read gives it (`to_leave`), with what this person may do:
+        # that entry alone (task_calls.ask_entry), not the whole view of its task.
         from . import task_calls
 
         # Every ask's task read together: the list costs what one task's view does.
@@ -2140,16 +2140,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False):
         for item in items:
             if item["kind"] != "ask":
                 continue
-            if item["task_id"] not in views:
-                views[item["task_id"]] = H.task_view(c, item["task_id"], who.actor) or {}
-            item["ask"] = next(
-                (
-                    r
-                    for r in views[item["task_id"]].get("to_leave") or ()
-                    if r["requirement_id"] == item["requirement_id"]
-                ),
-                None,
-            )
+            item["ask"] = task_calls.ask_entry(c, item["task_id"], item["requirement_id"], who.actor)
             # What the task waits on says only "a person's OK" for a bound OK (waiting_on); its own line is this
             # person's to read when they are one of its parties, as their read of the task gives it.
             if item["ask"] and item["ask"]["kind"] == "ok":
@@ -3490,7 +3481,7 @@ def install_views(app, store, auth, mutate, task_view):
             }
 
     @app.get("/api/v2/needs-you")
-    def needs(
+    async def needs(
         request: Request,
         count: bool = False,
         ids: str | None = None,
@@ -3507,6 +3498,9 @@ def install_views(app, store, auth, mutate, task_view):
         each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
         who = request.state.identity
         human_only(who)
+        return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
+
+    def needs_answer(who, count, ids, version, limit, cursor):
         with store.read_transaction() as c:
             if count:
                 items = needs_items(c, auth, who, count_only=True)
@@ -3544,13 +3538,16 @@ def install_views(app, store, auth, mutate, task_view):
             return out
 
     @app.get("/api/v2/needs-you/summary")
-    def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
+    async def needs_summary_route(request: Request, limit: int = NEEDS_SUMMARY_ITEMS):
         """What the Needs you list holds: the total, per kind and per bot, with each bot's newest `limit` items (at
         most 10). `tico needs-you show` over MCP. A person only: the list is theirs."""
         who = request.state.identity
         human_only(who)
+        return await needs_lane.run(request.app, summary_answer, who, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
+
+    def summary_answer(who, limit):
         with store.read_transaction() as c:
-            return needs_summary(c, auth, who, task_view, max(0, min(int(limit), NEEDS_SUMMARY_ITEMS)))
+            return needs_summary(c, auth, who, task_view, limit)
 
     @app.get("/api/v2/tico/fleet")
     def tico_fleet(request: Request):

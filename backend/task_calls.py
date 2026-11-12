@@ -870,6 +870,77 @@ def _decided(conn: "sqlite3.Connection", task_id: str, visit_id: str, viewer: st
     return out
 
 
+def _leave_entry(
+    conn: "sqlite3.Connection",
+    row: Row,
+    standing: Any,
+    answers: dict[str, Row],
+    viewer: str | None,
+    hidden: Any,
+    holder: Any,
+    works: bool,
+) -> Row:
+    """One entry of a task's `to_leave` (task_view): a requirement of its open visit, where it stands, and what `viewer`
+    may do about it. `hidden` is what `hidden_filed` keeps from them; `holder` and `works` are the task's."""
+    from . import task_asks
+    from . import task_requirements as R
+
+    task_id = row["id"]
+    requirement: Row = standing.requirement
+    answer = answers.get(requirement["id"])
+    # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
+    # reads the task learns only that it waits on a person.
+    private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
+    # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
+    page = _page_of(conn, row["visit"]["id"], requirement) if requirement["kind"] == "page" else None
+    shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
+    typed = _typed_view(requirement)
+    return {
+        "requirement_id": requirement["id"],
+        "kind": requirement["kind"],
+        "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
+        "met": standing.met,
+        "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
+        "who": None if standing.met or standing.on in hidden else standing.on,
+        "asked_by": None if private else requirement.get("added_by_id") if requirement.get("visit_id") else None,
+        "choices": None if private else requirement.get("choices"),
+        **({"typed": typed} if typed else {}),
+        "shows": shows,
+        # What it shows is where its words come from: a reader who may not open one of those pages reads
+        # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
+        **({"source": shows} if shows else {}),
+        **({"page": page} if page else {}),
+        "answer": _answer_view(conn, task_id, answer, private) if answer else None,
+        "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
+    }
+
+
+def ask_entry(conn: "sqlite3.Connection", task_id: str, requirement_id: str, viewer: str) -> Row | None:
+    """The `to_leave` entry of one requirement of a task, as `task_view(conn, task_id, viewer)` gives it, without the
+    rest of the view (its waits, next stage, filed tasks and values): Needs you shows each ask with this alone. None
+    when the view has no such entry."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import waiting_on as W
+
+    row = E.task(conn, task_id)
+    if not row:
+        return None
+    visit: Row = row.get("visit") or {}
+    if not (row["status"] == "open" and visit):
+        return None
+    standings = R.standings(conn, row)
+    found = next((s for s in standings if s.requirement["id"] == requirement_id), None)
+    if found is None:
+        # Not a live requirement: the view lists what was decided after the live ones.
+        return next(
+            (r for r in _decided(conn, task_id, visit["id"], viewer) if r["requirement_id"] == requirement_id), None
+        )
+    hidden = hidden_filed(conn, row, viewer, None)
+    answers = R.newest_answers(conn, visit["id"])
+    return _leave_entry(conn, row, found, answers, viewer, hidden, W.holder(conn, row), can_work(conn, viewer, row))
+
+
 def task_view(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -903,43 +974,7 @@ def task_view(
     answers = R.newest_answers(conn, visit["id"]) if live else {}
     holder = W.holder(conn, row) if live else None
     works = bool(viewer) and can_work(conn, str(viewer), row)
-    to_leave: list[Row] = []
-    from . import task_asks
-
-    for standing in standings:
-        requirement: Row = standing.requirement
-        answer = answers.get(requirement["id"])
-        # A bound OK's line, what it shows and a send back's note are its parties' (task_asks.party): anyone else who
-        # reads the task learns only that it waits on a person.
-        private = requirement["kind"] == "ok" and task_asks.hidden_from(conn, viewer, requirement["id"])
-        # A page requirement shows the page attached now, at its pinned version: what an OK of it is for.
-        page = _page_of(conn, visit["id"], requirement) if requirement["kind"] == "page" else None
-        shows = [page["ref"]] if page else [] if private else requirement.get("shows") or []
-        typed = _typed_view(requirement)
-        to_leave.append(
-            {
-                "requirement_id": requirement["id"],
-                "kind": requirement["kind"],
-                "line": task_asks.PRIVATE_LINE if private else R.name_of(requirement),
-                "met": standing.met,
-                "standing": task_asks.PRIVATE_LINE if private and not standing.met else standing_line(standing, hidden),
-                "who": None if standing.met or standing.on in hidden else standing.on,
-                "asked_by": None
-                if private
-                else requirement.get("added_by_id")
-                if requirement.get("visit_id")
-                else None,
-                "choices": None if private else requirement.get("choices"),
-                **({"typed": typed} if typed else {}),
-                "shows": shows,
-                # What it shows is where its words come from: a reader who may not open one of those pages reads
-                # none of the ask, its choices or its answer (files.readable_page_refs drops the whole entry).
-                **({"source": shows} if shows else {}),
-                **({"page": page} if page else {}),
-                "answer": _answer_view(conn, task_id, answer, private) if answer else None,
-                "may": _may(conn, row, standing, answer, str(viewer), holder, works) if viewer else [],
-            }
-        )
+    to_leave = [_leave_entry(conn, row, standing, answers, viewer, hidden, holder, works) for standing in standings]
     if live:
         to_leave.extend(_decided(conn, task_id, visit["id"], viewer))
     following = E.next_stage(conn, row) if live else None

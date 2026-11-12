@@ -173,7 +173,9 @@ def stages(conn: "sqlite3.Connection", pipeline_id: str) -> list[Row]:
     pipelines together by `prime_stages`); a write reads them again (read_cache)."""
     from . import read_cache
 
-    return read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id])
+    # Stored rows hold only plain values, so a shallow copy of each is a full one; the snapshot keeps its own.
+    found = read_cache.value(conn, ("stages", pipeline_id), lambda: _stages_of(conn, [pipeline_id])[pipeline_id], True)
+    return [dict(row) for row in found]
 
 
 def prime_stages(conn: "sqlite3.Connection", pipeline_ids: Iterable[str]) -> None:
