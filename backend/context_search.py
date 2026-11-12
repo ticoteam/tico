@@ -1,7 +1,9 @@
 """Read-only, source-linked company knowledge and meeting discovery."""
 
+import itertools
 import json
 import re
+from contextlib import closing
 from datetime import date
 from typing import Literal
 from urllib.parse import quote
@@ -73,6 +75,116 @@ def transcript_text(row):
         or row["transcript_original"]
         or "\n".join(t.get("text", "") for t in row["metadata"].get("turns", []))
     )
+
+
+def search_text(row, body):
+    """What a meeting search matches its words against, case-folded once per candidate."""
+    return (row["title"] + " " + body).casefold()
+
+
+# The metadata access and the date need; a candidate's turns and transcripts are not read to decide either.
+ACCESS_KEYS = ("kind", "audience", "private", "audience_emails", "calendar", "participants", "started")
+# The date today's check compares (str(started or created_at)[:10]), where SQL can say it exactly: a text `started`,
+# else an unset, null, false or empty one falls back to a text created_at. Anything else is NULL, kept for Python.
+# The index meetings_recorded_day (migration 20261112080700) is on this expression, character for character.
+RECORDED_DAY = (
+    "CASE WHEN json_type(metadata,'$.started')='text' AND json_extract(metadata,'$.started')<>'' "
+    "THEN substr(json_extract(metadata,'$.started'),1,10) "
+    "WHEN (json_type(metadata,'$.started') IS NULL OR json_type(metadata,'$.started') IN ('null','false') "
+    "OR json_type(metadata,'$.started')='text') AND typeof(created_at)='text' THEN substr(created_at,1,10) END"
+)
+
+
+def candidates(c, who, since=None, until=None):
+    """Meetings `who` may read and whose date is in range, newest first, without their transcripts.
+
+    SQL drops only rows the per-meeting rules (`readable`) certainly refuse: anything else stays a candidate, and the
+    same rules decide it here, on the metadata they read. One statement for the whole archive, read lazily: without
+    dates it walks meetings_newest and stops where the caller stops; with dates meetings_recorded_day finds the range.
+    """
+    where, args = ["m.review_state='live'", "NOT (typeof(mc.deleted_at)='text' AND mc.deleted_at<>'')"], []
+    index = "meetings_newest"
+    if since or until:
+        index, day = "meetings_recorded_day", f"({RECORDED_DAY})"
+        bounds = [f"{day}{op}?" for bound, op in ((since, ">="), (until, "<=")) if bound]
+        # Both OR terms must stay answerable from meetings_recorded_day: a clause the index cannot seek turns the
+        # plan into a silent scan of the whole index, every meeting's metadata parsed, with the same results.
+        where.append(f"(({' AND '.join(bounds)}) OR {day} IS NULL)")
+        args += [bound.isoformat() for bound in (since, until) if bound]
+    attached = "0"
+    if who.role == "bot":
+        attached = (
+            "m.id IN (SELECT lm.imported_meeting_id FROM live_meetings lm JOIN live_meeting_bots b "
+            "ON b.meeting_id=lm.id WHERE lm.discarded_at IS NULL AND b.bot=?)"
+        )
+        args.insert(0, who.actor.removeprefix("bot:"))
+        where += [
+            "json_extract(m.metadata,'$.kind')='meeting'",
+            f"(json_type(m.metadata,'$.private')='false' OR {attached})",
+        ]
+        args.append(args[0])
+    elif who.role == "human":
+        # Another person's typed note is never theirs to read. SQLite's NOCASE folds ASCII only, so the owner
+        # comparison is made in SQL only where both sides are ASCII; a non-ASCII owner stays a candidate.
+        mine = "0"
+        if who.email and who.email.isascii():
+            mine = "(m.owner=? COLLATE NOCASE OR length(m.owner)<>length(CAST(m.owner AS BLOB)))"
+            args.append(who.email)
+        elif who.email:
+            mine = "1"
+        where.append(f"(json_extract(m.metadata,'$.kind')='meeting' OR {mine})")
+    paths = ",".join(f"'$.{key}'" for key in ACCESS_KEYS)
+    rows = c.execute(
+        f"SELECT m.id,m.owner,m.created_at,m.review_state,mc.deleted_at,json_extract(m.metadata,{paths}) AS access,"
+        f"{attached} AS attached FROM meetings m INDEXED BY {index} LEFT JOIN media_control mc ON mc.meeting_id=m.id "
+        f"WHERE {' AND '.join(where)} ORDER BY m.created_at DESC,m.id",
+        args,
+    )
+    with closing(rows):
+        yield from decided(who, rows, since, until)
+
+
+def decided(who, rows, since, until):
+    for row in rows:
+        meta = dict(zip(ACCESS_KEYS, json.loads(row["access"]), strict=True))
+        record = {"id": row["id"], "owner": row["owner"], "metadata": meta, "review_state": row["review_state"]}
+        if not may_find(who, record, row["deleted_at"], row["attached"]):
+            continue
+        recorded_date = str(meta.get("started") or row["created_at"])[:10]
+        if since and recorded_date < since.isoformat():
+            continue
+        if until and recorded_date > until.isoformat():
+            continue
+        yield row["id"]
+
+
+def may_find(who, record, deleted, attached):
+    """`readable`'s answer for one meeting, from its metadata, tombstone and the bot's live-meeting attachment."""
+    if deleted or record.get("review_state", "live") != "live":
+        return False
+    meta = record["metadata"]
+    if who.role == "bot":
+        if meta.get("kind") != "meeting":
+            return False
+        return bool(media.effective_audience(meta) == "team" and meta.get("private") is False or attached)
+    return media.may_write(who, record) or (who.role in ("human", "owner") and media.shared_meeting(record, who))
+
+
+def loaded(c, ids, wanted, cap=256):
+    """Full meeting rows for candidate `ids`, in their order: one statement per batch, batches growing from `wanted`."""
+    ids, size = iter(ids), max(wanted, 8)
+    while batch := list(itertools.islice(ids, size)):
+        rows = c.execute(
+            "SELECT * FROM meetings WHERE id IN (SELECT value FROM json_each(?)) ORDER BY created_at DESC,id",
+            (json.dumps(batch),),
+        )
+        with closing(rows):
+            for row in rows:
+                record = dict(row)
+                record["metadata"] = json.loads(record["metadata"])
+                record["metadata"]["review_state"] = record["review_state"]
+                yield record
+        size = min(size * 2, cap)
 
 
 def install_context_search(app, store, auth):
@@ -231,20 +343,14 @@ def install_context_search(app, store, auth):
         auth.domain(who)
         if since and until and since > until:
             raise Problem("dates", "since must be on or before until", 422)
-        words, found = terms(q), []
-        with store.read() as c:
-            for item in c.execute("SELECT id FROM meetings ORDER BY created_at DESC,id"):
-                try:
-                    row = readable(c, who, item[0], auth=auth)
-                except Problem as exc:
-                    if exc.status not in (403, 404):
-                        raise
-                    continue
-                recorded_date = str(row["metadata"].get("started") or row["created_at"])[:10]
-                if since and recorded_date < since.isoformat():
-                    continue
-                if until and recorded_date > until.isoformat():
-                    continue
+        words, found, wanted = terms(q), [], offset + limit + 1
+        # One snapshot: every access decision and every row returned come from the same moment.
+        with (
+            store.read_transaction() as c,
+            closing(candidates(c, who, since, until)) as ids,
+            closing(loaded(c, ids, wanted)) as rows,
+        ):
+            for row in rows:
                 meta = row["metadata"]
                 turns = meta.get("turns") or []
                 people = json.dumps(
@@ -263,7 +369,8 @@ def install_context_search(app, store, auth):
                 body = "\n".join(
                     [text, row["notes"] or "", str(meta.get("note") or ""), "\n".join(t.get("text", "") for t in turns)]
                 )
-                if not all(w in (row["title"] + " " + body).casefold() for w in words):
+                haystack = search_text(row, body)
+                if not all(w in haystack for w in words):
                     continue
                 passages = [
                     {
@@ -276,7 +383,7 @@ def install_context_search(app, store, auth):
                     if words and any(w in t.get("text", "").casefold() for w in words)
                 ][:5]
                 found.append({**meeting_info(row), "excerpt": excerpt(body, words), "passages": passages})
-                if len(found) > offset + limit:
+                if len(found) >= wanted:
                     break
         return {
             "results": found[offset : offset + limit],
