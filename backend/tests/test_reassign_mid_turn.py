@@ -84,3 +84,36 @@ def test_a_bot_asked_on_the_task_runs_beside_the_owner(api):
         assert c.execute("SELECT 1 FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchone()
     second = claim(api, machine)
     assert second and _bot(api, second["id"]) == "cpo"
+
+
+def test_a_turn_claimed_but_not_yet_started_holds_the_new_owner_too(api):
+    """The handoff race of the stress run: the first owner's runner has claimed the turn (leased) and not yet said it
+    started when the task is handed on. That claimed turn is out all the same."""
+    machine = _setup(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Fix the invoice total", "body": "Build it."})["id"]
+    first = claim(api, machine)
+    assert first and _bot(api, first["id"]) == "ops"
+    post(api, f"tasks/{tid}/owner", {"owner": "cpo", "why": "cpo builds this", "version": _version(api, tid)})
+    assert claim(api, machine) is None, "no second turn while the first is claimed"
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    second = claim(api, machine)
+    assert second and _bot(api, second["id"]) == "cpo"
+
+
+def test_a_turn_from_an_earlier_visit_never_holds_the_next_one(api):
+    """The hold is keyed on the stage visit: once the task has moved on (here done and reopened, a new visit), the old
+    owner's run that is still out holds neither the new visit's owner nor a stale wake from the visit that ended."""
+    machine = _setup(api)
+    tid = post(api, "tasks", {"owner": "ops", "title": "Tidy the docs", "body": "Do it."})["id"]
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t-" + first["id"]}, machine["token"])
+    with api.app.state.store.transaction() as c:
+        old_visit = E.task(c, tid)["visit"]["id"]
+        E.move(c, tid, E.DONE, "human:ana", "Done", seen_version=E.task(c, tid)["version"])
+        E.move(c, tid, E.REOPEN, "human:ana", "One more pass", seen_version=E.task(c, tid)["version"])
+        assert E.task(c, tid)["visit"]["id"] != old_visit
+        E.reassign(c, tid, "bot:cpo", "human:ana", "cpo takes the new pass", E.task(c, tid)["version"])
+        stale = {"wake": "task_turn", "visit": old_visit}
+        assert not execution.turn_moved_on(c, "cpo", tid, stale), "a wake from a visit that ended holds nothing"
+    second = claim(api, machine)
+    assert second and _bot(api, second["id"]) == "cpo", "the new visit's owner starts beside the old run"
