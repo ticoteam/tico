@@ -1379,7 +1379,7 @@ def test_a_review_tasks_holds_page_by_cursor_within_a_byte_budget(ruled, monkeyp
     assert get(api, f"rule-holds?task={task_id}", token="cara-test")["holds"] == []
 
 
-def test_the_cache_splits_on_context_and_rules_past_one_call_are_judged_in_more_calls(ruled, monkeypatch):
+def test_the_cache_splits_on_context_and_rules_too_big_for_one_call_are_judged_in_more_calls(ruled, monkeypatch):
     api, judge = ruled
     color_rule(api)
     store, ops = api.app.state.store, Identity("bot:ops", "bot")
@@ -1388,12 +1388,41 @@ def test_the_cache_splits_on_context_and_rules_past_one_call_are_judged_in_more_
     assert len(judge.calls) == 2
     from clients import judge as J
 
-    monkeypatch.setattr(J, "MAX_QUESTIONS", 1)
+    monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 1)  # one rule per call fits
     rule(api, {"kind": "internal", "text": "Never share the launch date.", "who": {"bots": ["ops"]}})
     first = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
     assert len(judge.calls) == 4 and "unchecked_rules" not in first and first["outcome"] == "pass"
     again = K.preflight(store, judge, ops, "message", "Lunch at noon.", ["human:ana"])
     assert again["cached"] and "unchecked_rules" not in again and len(judge.calls) == 4
+
+
+def test_a_draft_matching_45_rules_is_checked_in_one_call(ruled):
+    """One call per input: every matching rule is a question of the same call, however many there are."""
+    api, judge = ruled
+    for n in range(44):
+        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"bots": ["ops"]}})
+    color_rule(api)
+    store, ops = api.app.state.store, Identity("bot:ops", "bot")
+    got = K.preflight(store, judge, ops, "message", "Our favorite color is red.", ["human:ana"])
+    assert (
+        len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45 and len(judge.calls[0]["state"]["rules"]) == 45
+    )
+    assert got["outcome"] == "broken" and "unchecked_rules" not in got
+    assert [json.loads(e["detail"])["questions"] for e in events(api, "judge.call")] == [45]
+
+
+def test_an_outside_edition_with_45_rules_is_checked_in_one_call_not_refused(ruled):
+    api, judge = ruled
+    for n in range(44):
+        rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"outside_editions": True}})
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"outside_editions": True}})
+    store = api.app.state.store
+    clean = K.outside_edition(store, judge, "Our launch went well.", to="press@example.com")
+    assert clean["outcome"] == "pass" and len(clean["rules"]) == 45
+    assert len(judge.calls) == 1 and len(judge.calls[0]["questions"]) == 45
+    broken = K.outside_edition(store, judge, "Our favorite color is red.", to="press@example.com")
+    assert broken["outcome"] == "held" and broken["reason"] == "broken" and len(broken["broken"]) == 1
+    assert len(judge.calls) == 2
 
 
 def test_rule_checks_and_ask_ingest_count_their_own_daily_calls(ruled):

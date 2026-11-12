@@ -375,16 +375,16 @@ def digests(hub):
     )
 
 
-# ----------------------------------------------------------------------------- the question cap
+# ----------------------------------------------------------------------------- the call's size
 class CappedJudge:
-    """The real contract's cap and shape check on every call; answers by question id."""
+    """The real contract's size and shape check on every call; answers by question id."""
 
     def __init__(self, scores, fail=None):
         self.scores, self.fail, self.calls = scores, fail, []
 
     def __call__(self, state, questions, label=None):
         self.calls.append(list(questions))
-        J.validate(state, questions, label)  # more than J.MAX_QUESTIONS is refused, as the real call does
+        J.validate(state, questions, label)  # a call past J.MAX_CALL_CHARS is refused, as the real call does
         if self.fail:
             raise self.fail
         return {

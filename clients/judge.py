@@ -105,13 +105,16 @@ QUESTIONS_DIR = Path(__file__).resolve().parents[1] / "questions"
 _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
 
 # What one call may carry. TypeSafe takes up to 255 options and 10 levels, and Jev 1.13 reads
-# 32k tokens of state plus the longest question (64k for the whole call); the state limit here
-# is that budget at roughly four characters a token, so an oversized call is refused before it
-# is sent. The rest are ours.
-MAX_QUESTIONS = 40
+# 32k tokens of state plus the longest question (64k for the whole call); the limits here are
+# that budget at roughly four characters a token, less about 6% for text that takes more tokens
+# per character (code, JSON, non-Latin scripts), so an oversized call is split or refused before
+# it is sent. Jev has no limit on how many questions one call asks, and neither does Tico: Jev charges
+# for what it reads, so every question about one state goes in one call (`split` makes more only
+# when the questions do not fit beside the state). The rest are ours.
 MAX_OPTIONS = 255
 MIN_LEVELS, MAX_LEVELS = 2, 10
 MAX_STATE_CHARS = 120_000
+MAX_CALL_CHARS = 240_000  # the state and every question, as sent
 MAX_INSTRUCTIONS = 8_000
 MAX_LABEL = 80
 TIMEOUT = 20
@@ -360,8 +363,6 @@ def validate(state, questions, label=None):
     """Refuse before the network does: the shape every transport checks the same way."""
     if not isinstance(questions, dict) or not questions:
         raise JudgeError("invalid", "questions must be a non-empty map of id -> question")
-    if len(questions) > MAX_QUESTIONS:
-        raise JudgeError("invalid", f"at most {MAX_QUESTIONS} questions in one call")
     for qid, q in questions.items():
         if not isinstance(qid, str) or not qid.strip():
             raise JudgeError("invalid", "every question id is a non-empty string")
@@ -406,8 +407,66 @@ def validate(state, questions, label=None):
         raise JudgeError("invalid", "state must be JSON")
     if size > MAX_STATE_CHARS:
         raise JudgeError("invalid", f"state is {size} characters; the limit is {MAX_STATE_CHARS}")
+    whole = size + chars(clean(questions))
+    if whole > MAX_CALL_CHARS:
+        raise JudgeError("invalid", f"the call is {whole} characters; the limit is {MAX_CALL_CHARS}")
     if label is not None and (not isinstance(label, str) or len(label) > MAX_LABEL):
         raise JudgeError("invalid", f"label is a string of at most {MAX_LABEL} characters")
+
+
+def chars(value):
+    """How many characters `value` is as a call sends it (JSON)."""
+    return len(json.dumps(value, default=str))
+
+
+def split(state, questions):
+    """`questions` as few calls as fit beside `state` (MAX_CALL_CHARS), every question in exactly one, each part in
+    the questions' own order: one call whenever they all fit, which is nearly always. Past that they are packed largest
+    first, each into the first call with room for it (first-fit decreasing: the fewest calls for questions of about one
+    size, such as one per bot or per rule, and within a call or so of it for any mix). A question too big to fit beside
+    the state on its own gets a call of its own, which `validate` then refuses."""
+    if not isinstance(questions, dict) or not questions:
+        return [questions]
+    room = MAX_CALL_CHARS - chars(state)
+    # A map's JSON is exactly the sum of its one-entry maps' (each entry's braces become its ", " or the outer braces).
+    sizes = {qid: chars({qid: q}) for qid, q in clean(questions).items()}
+    if sum(sizes.values()) <= room:
+        return [questions]
+    calls = []  # [room left, {qid: question}]
+    for qid in sorted(questions, key=lambda q: -sizes[q]):
+        call = next((c for c in calls if c[0] >= sizes[qid]), None)
+        if call is None:
+            call = [room, {}]
+            calls.append(call)
+        call[0] -= sizes[qid]
+        call[1][qid] = questions[qid]
+    return [{qid: q for qid, q in questions.items() if qid in part} for _, part in calls]
+
+
+def fits(state, questions):
+    """Whether one call can carry `state` and `questions`: `validate`'s size limits."""
+    size = chars(state)
+    return size <= MAX_STATE_CHARS and size + chars(clean(questions)) <= MAX_CALL_CHARS
+
+
+def pack(items, build):
+    """[(items, questions, state)]: `items` in as few calls as fit, in order, when each item puts its own part in the
+    state as well as its questions (a rule's text, a recipient's profile). `build(items)` is (questions, state) for a
+    call about those items. One call, unless they do not fit in one; None when a single item does not fit on its own."""
+    whole = build(items)
+    if fits(whole[1], whole[0]):
+        return [(items, *whole)]
+    groups, group = [], []
+    for item in items:
+        if group:
+            questions, state = build(group + [item])
+            if not fits(state, questions):
+                groups.append(group)
+                group = []
+        group.append(item)
+    groups.append(group)
+    built = [(group, *build(group)) for group in groups]
+    return built if all(fits(state, questions) for _, questions, state in built) else None
 
 
 def clean(questions):

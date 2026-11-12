@@ -370,22 +370,24 @@ def question_set(settings):
 
 
 def score(engine, qset, item, team):
-    """(learnable, {id: relevance}) for one item, asking only about the recipients it may reach."""
+    """(learnable, {id: relevance}) for one item, asking only about the recipients it may reach: every recipient in one
+    call, so the item's text is read once; more calls only when the recipients' profiles do not fit beside it in one
+    (`J.pack`), with `learnable` asked in the first."""
     audience = [s for s in team if item["audience"] is None or s in item["audience"]]
     if not audience:
         return None, {}
     learnable_q = qset["questions"]["learnable"]
-    chunks, room = [], J.MAX_QUESTIONS - 1
-    for start in range(0, len(audience), room):
-        chunks.append(audience[start : start + room])
-    learnable, scores = None, {}
-    for n, chunk in enumerate(chunks):
-        questions = {"learnable": learnable_q} if n == 0 else {}
+    text = {"source": item["source"], "label": item["label"], "text": item["text"]}
+
+    def build(chunk, first=True):
+        questions = {"learnable": learnable_q} if first else {}
         questions.update({"rel_" + s: {"type": "noul", "instructions": REL + team[s]["profile"]} for s in chunk})
-        state = {
-            "item": {"source": item["source"], "label": item["label"], "text": item["text"]},
-            "roster": {s: team[s]["profile"] for s in chunk},
-        }
+        return questions, {"item": text, "roster": {s: team[s]["profile"] for s in chunk}}
+
+    calls = J.pack(audience, build) or [(audience, *build(audience))]  # too big even alone: the call refuses it
+    learnable, scores = None, {}
+    for n, (chunk, _, _) in enumerate(calls):
+        questions, state = build(chunk, first=n == 0)
         answers = engine(state, questions, qset["label"])["answers"]
         if n == 0:
             learnable = J.noul(answers, "learnable")

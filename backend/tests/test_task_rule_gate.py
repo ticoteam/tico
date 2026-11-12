@@ -292,7 +292,7 @@ def test_a_rule_past_what_one_call_judges_still_holds_the_write(ruled, monkeypat
     api, judge = ruled
     from clients import judge as J
 
-    monkeypatch.setattr(J, "MAX_QUESTIONS", 2)
+    monkeypatch.setattr(J, "fits", lambda state, questions: len(questions) <= 2)  # two rules per call fit
     for n in range(4):  # made first: the rules matched are read oldest first
         rule(api, {"kind": "internal", "text": f"Keep note {n} short.", "who": {"bots": ["ops"]}})
     color_rule(api)

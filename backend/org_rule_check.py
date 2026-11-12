@@ -577,21 +577,25 @@ def check_as(
                     "call": hit[1],
                     **({"unchecked_rules": unchecked} if unchecked else {}),
                 }
-            # Every matching rule is judged: one call per MAX_QUESTIONS rules, never silently the first ones only.
-            batches = []
-            for at in range(0, len(rules), J.MAX_QUESTIONS):
-                batch = rules[at : at + J.MAX_QUESTIONS]
-                state = {
-                    "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
-                    "operation": OPERATIONS.get(operation, operation),
-                    "output": output,
-                    "from": _names(c, [author])[0],
-                    "to": _names(c, recipients),
-                    "context": context or {},
-                }
-                if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
-                    return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
-                batches.append((batch, _questions(qset, batch), state))
+            # Every matching rule is judged, all in one call: more only when the rules do not fit beside the output in
+            # one (`J.pack`), never silently the first ones only.
+            sender_name, recipient_names = _names(c, [author])[0], _names(c, recipients)
+            batches = J.pack(
+                rules,
+                lambda batch: (
+                    _questions(qset, batch),
+                    {
+                        "rules": [{"id": f"r{n}", "text": r["text"]} for n, r in enumerate(batch, 1)],
+                        "operation": OPERATIONS.get(operation, operation),
+                        "output": output,
+                        "from": sender_name,
+                        "to": recipient_names,
+                        "context": context or {},
+                    },
+                ),
+            )
+            if batches is None:
+                return {**verdict, "outcome": "too_large", "broken": [r["id"] for r in rules]}
             engine = B.server_engine(store, c, primary)
             if engine is None:
                 capped = B.over_spend_cap(c, store.settings)
@@ -1047,8 +1051,6 @@ def outside_edition(store, primary, output, to=""):
                 return result("pass", "no_rules")
             if not on(c):
                 return result("held", "checks_off")
-            if len(rules) > J.MAX_QUESTIONS:
-                return result("held", "too_many_rules")
             level = RULE_LEVEL
             qset = J.load_set(QUESTION_SET)
             key = digest("outside_edition", "", [to], output, "", rules, qset["label"], level)
@@ -1065,7 +1067,7 @@ def outside_edition(store, primary, output, to=""):
                 "to": [to] if to else [],
                 "context": {},
             }
-            if len(json.dumps(state, default=str)) > J.MAX_STATE_CHARS:
+            if not J.fits(state, questions):  # every rule in one call, however many there are
                 return result("held", "too_large")
             engine = B.server_engine(store, c, primary)
             if engine is None:
@@ -1091,7 +1093,7 @@ def outside_edition(store, primary, output, to=""):
                     "questions": len(questions),
                     "operation": "outside_edition",
                     "level": level,
-                    "rules": [r["id"] for r in rules[: J.MAX_QUESTIONS]],
+                    "rules": [r["id"] for r in rules],
                     "broken": len(broken),
                     **B.audit_detail(answer),
                 },
