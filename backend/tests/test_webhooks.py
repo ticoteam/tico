@@ -383,6 +383,29 @@ def test_at_most_two_sends_to_one_host_are_in_flight_and_a_crashed_worker_gives_
     assert D.claim(store, H.now()) is not None and sends(api, other["id"])[0]["state"] == "sending"
 
 
+def test_a_saturated_host_with_a_long_backlog_does_not_hold_up_a_due_send_to_another_host(api, net):
+    busy, other = make(api), make(api, "https://other.acme.example/tico")
+    for n in range(D.PER_HOST):
+        post(api, f"webhooks/{busy['id']}/send", {"type": f"custom.n{n}"})
+    post(api, f"webhooks/{other['id']}/send", {"type": "custom.z"})
+    store = api.app.state.store
+    now = H.now()
+    with store.transaction() as c:
+        c.execute("UPDATE webhook_sends SET state='sending', claimed_at=? WHERE webhook_id=?", (now, busy["id"]))
+        c.execute("UPDATE webhook_sends SET next_attempt_at=? WHERE webhook_id=?", (now, other["id"]))
+        # More ready sends to the busy host than one claim reads, every one older than the other host's.
+        for n in range(150):
+            c.execute(
+                "INSERT INTO webhook_sends (id, event_id, webhook_id, type, body, next_attempt_at, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (f"backlog-{n}", f"backlog-{n}", busy["id"], "custom.b", "{}", H.shift(now, seconds=-600 + n), now),
+            )
+    assert D.claim(store, now) is not None
+    assert sends(api, other["id"])[0]["state"] == "sending"
+    assert D.claim(store, now) is None  # the busy host still holds no more than PER_HOST
+    assert len([s for s in sends(api, busy["id"]) if s["state"] == "sending"]) == D.PER_HOST
+
+
 def test_an_hourly_rate_makes_sends_wait_and_never_drops_them(api, net):
     made = make(api, rate_per_hour=2)
     for n in range(3):
