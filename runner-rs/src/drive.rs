@@ -188,6 +188,11 @@ impl Runner {
         let (mut pause_ready, mut pause_at, mut clearing) = (false, Instant::now(), false);
         // By when this turn, asked to give the shared login up (YIELD_ASK), must have ended; past it, it is interrupted.
         let mut yielding: Option<Instant> = None;
+        // The hub is asked for this turn's inputs and goal on a notice for its bot, while the event stream is down
+        // (every step, as before), or at the slower recovery check (events.rs TURN_RECOVERY_S). `asked` is the notice
+        // count at the last ask, None before the first.
+        let mut asked: Option<u64> = None;
+        let mut recovery_at = Instant::now();
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -559,14 +564,22 @@ impl Runner {
                 earlier_tokens = Some(spent(&earlier_tokens, &tokens));
                 tokens = json!({});
             }
-            if last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            // Taken before any request, so a notice that lands while one is out is acted on at the next step.
+            let heard = self.events.heard(d.bot);
+            let noticed = asked != Some(heard);
+            if noticed || last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+                let ask = noticed || !self.events.live() || Instant::now() >= recovery_at;
+                if ask {
+                    asked = Some(heard);
+                    recovery_at = Instant::now() + self.events.turn_recovery();
+                }
                 let step: Result<(), Fail> = async {
                     host.poll_goal(thread);
                     self.flush(aid).await?;
                     if salvage.is_some() {
                         return Ok(()); // the hub refuses this attempt's goal and inputs now; its events and result it keeps
                     }
-                    if goal_running {
+                    if goal_running && ask {
                         let latest = self.client.get(&format!("attempts/{aid}/goal")).await?;
                         let latest = &latest["goal"];
                         if !latest.is_object()
@@ -600,7 +613,7 @@ impl Runner {
                             yielding = Some(Instant::now());
                         }
                     }
-                    if !complete && host.supports_steer() {
+                    if !complete && ask && host.supports_steer() {
                         let messages = self
                             .receive_inputs(aid, host, thread, &turn, carried)
                             .await?;
@@ -612,6 +625,7 @@ impl Runner {
                 }
                 .await;
                 if let Err(e) = step {
+                    recovery_at = Instant::now(); // an ask that failed is tried again at the next step
                     if e.api.as_ref().is_some_and(|a| a.code == "stale_lease") {
                         // Refused before the renewer heard: the same lost lease, read out the same way, from now: a
                         // harness found gone further down this pass is waited on, not given up (Dev 242 R1 delta).
@@ -687,14 +701,53 @@ mod tests {
     /// `lapsed_hub`, or with `stop_reason` a hub that answers each renewal with a Stop and that reason, the way it
     /// answers for a quarantined bot's turn (Dev 573); its inputs and goal reads are then answered too.
     async fn hub_renewing(stop_reason: Option<&'static str>) -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_answering(move |path, body| {
+            if let Some(why) = stop_reason.filter(|_| path.ends_with("/renew")) {
+                (
+                    "200 OK",
+                    json!({"lease_until": "x", "lease_seconds": 90, "stop": true, "stop_reason": why}),
+                )
+            } else if stop_reason.is_some()
+                && (path.ends_with("/inputs") || path.ends_with("/goal"))
+            {
+                ("200 OK", json!({"messages": []}))
+            } else if ["/renew", "/inputs", "/goal"]
+                .iter()
+                .any(|p| path.ends_with(p))
+                || path.contains("/inputs/")
+            {
+                (
+                    "409 Conflict",
+                    json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}),
+                )
+            } else {
+                events_taken(body)
+            }
+        })
+        .await
+    }
+
+    /// The hub's answer to an events upload: all of them taken.
+    fn events_taken(body: &Value) -> (&'static str, Value) {
+        (
+            "200 OK",
+            json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}),
+        )
+    }
+
+    /// A hub that keeps each request as "<path> <JSON body>" and answers it with `answer(path, body)`.
+    async fn hub_answering(
+        answer: impl Fn(&str, &Value) -> (&'static str, Value) + Send + Sync + 'static,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let answer = Arc::new(answer);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let seen = Arc::new(Mutex::new(vec![]));
         let kept = seen.clone();
         tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
-                let kept = kept.clone();
+                let (kept, answer) = (kept.clone(), answer.clone());
                 tokio::spawn(async move {
                     let (mut request, mut buffer) = (Vec::new(), [0u8; 8192]);
                     let head = loop {
@@ -734,32 +787,7 @@ mod tests {
                     let body: Value =
                         serde_json::from_slice(&request[head + 4..]).unwrap_or(Value::Null);
                     kept.lock().unwrap().push(format!("{path} {body}"));
-                    let (status, answer) = if let Some(why) =
-                        stop_reason.filter(|_| path.ends_with("/renew"))
-                    {
-                        (
-                            "200 OK",
-                            json!({"lease_until": "x", "lease_seconds": 90, "stop": true, "stop_reason": why}),
-                        )
-                    } else if stop_reason.is_some()
-                        && (path.ends_with("/inputs") || path.ends_with("/goal"))
-                    {
-                        ("200 OK", json!({"messages": []}))
-                    } else if ["/renew", "/inputs", "/goal"]
-                        .iter()
-                        .any(|p| path.ends_with(p))
-                        || path.contains("/inputs/")
-                    {
-                        (
-                            "409 Conflict",
-                            json!({"error": {"code": "stale_lease", "detail": "Execution ownership expired; stop this attempt", "retryable": false}}),
-                        )
-                    } else {
-                        (
-                            "200 OK",
-                            json!({"ack_seq": body["events"].as_array().and_then(|e| e.last()).map_or(json!(0), |l| l["seq"].clone())}),
-                        )
-                    };
+                    let (status, answer) = answer(&path, &body);
                     let answer = answer.to_string();
                     let response = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{answer}", answer.len());
                     let _ = socket.write_all(response.as_bytes()).await;
@@ -832,7 +860,27 @@ mod tests {
         thread: &str,
         runtime: &str,
         chat_goal: Option<Value>,
+        carried: BTreeMap<String, Value>,
+    ) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
+        let within = Duration::from_secs(10);
+        drive_within(
+            runner, host, rx, f, thread, runtime, chat_goal, carried, within,
+        )
+        .await
+    }
+
+    /// `drive_with`, for a turn that may run up to `within` (the test's own limit; the turn's is at least a minute).
+    #[allow(clippy::too_many_arguments)]
+    async fn drive_within(
+        runner: &Runner,
+        host: &Host,
+        rx: &mut UnboundedReceiver<Value>,
+        f: &Flags,
+        thread: &str,
+        runtime: &str,
+        chat_goal: Option<Value>,
         mut carried: BTreeMap<String, Value>,
+        within: Duration,
     ) -> (Result<Drove, Fail>, BTreeMap<String, Value>, GoalRun) {
         runner.state.record(&json!({"id": "acme-late"})).unwrap();
         let wake = Notify::new();
@@ -842,7 +890,7 @@ mod tests {
             host,
             thread,
             effort: None,
-            limit: Instant::now() + Duration::from_secs(60),
+            limit: Instant::now() + within.max(Duration::from_secs(60)),
             flags: f,
             wake: &wake,
             redactor: None,
@@ -868,7 +916,7 @@ mod tests {
         };
         let mut rejected = None;
         let drove = tokio::time::timeout(
-            Duration::from_secs(10),
+            within,
             runner.drive(
                 &d,
                 rx,
@@ -1248,6 +1296,185 @@ mod tests {
 
     fn acme_goal() -> Value {
         json!({"id": "g-1", "status": "active", "objective": "Finish the Acme renewal summary", "updated_at": "2026-10-21T04:00:00Z"})
+    }
+
+    /// A hub where a steerable turn's chat goal stays as it was and no input is pending: every inputs and goal read
+    /// is the empty answer a poll gets almost always.
+    async fn quiet_hub() -> (String, Arc<Mutex<Vec<String>>>) {
+        hub_answering(|path, body| {
+            if path.ends_with("/goal") {
+                ("200 OK", json!({"goal": acme_goal()}))
+            } else if path.ends_with("/inputs") {
+                ("200 OK", json!({"attempt_id": "acme-late", "messages": []}))
+            } else {
+                events_taken(body)
+            }
+        })
+        .await
+    }
+
+    /// (inputs requests, goal requests) the hub has seen.
+    fn asks(seen: &Arc<Mutex<Vec<String>>>) -> (usize, usize) {
+        let seen = seen.lock().unwrap();
+        let count = |end: &str| {
+            seen.iter()
+                .filter(|p| p.split(' ').next().is_some_and(|path| path.ends_with(end)))
+                .count()
+        };
+        (count("/inputs"), count("/goal"))
+    }
+
+    /// A steerable Claude turn with the Acme chat goal running on a quiet hub, with the event stream up (`live`) or
+    /// down. `during` runs beside it and gets the hub's log; the turn's answer comes once it returns.
+    async fn idle_turn<F, Fut>(
+        live: bool,
+        recovery: Option<Duration>,
+        within: Duration,
+        during: F,
+    ) -> (usize, usize)
+    where
+        F: FnOnce(Arc<crate::events::Events>, Arc<Mutex<Vec<String>>>) -> Fut,
+        Fut: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let (url, seen) = quiet_hub().await;
+        let (runner, dir) = runner_at(&url);
+        if live {
+            runner
+                .events
+                .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+            assert!(runner.events.live());
+        }
+        if let Some(every) = recovery {
+            runner.events.set_turn_recovery(every);
+        }
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        assert!(host.supports_steer());
+        let side = tokio::spawn(during(runner.events.clone(), seen.clone()));
+        let feed = tokio::spawn(async move {
+            side.await.unwrap();
+            for ev in answer_events("th-idle", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+        });
+        let f = flags(false);
+        let (drove, _, goal) = drive_within(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-idle",
+            "claude",
+            Some(acme_goal()),
+            BTreeMap::new(),
+            within,
+        )
+        .await;
+        feed.await.unwrap();
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(drove.outcome, "completed");
+        assert!(!goal.controlled, "the goal was read unchanged");
+        std::fs::remove_dir_all(dir).ok();
+        asks(&seen)
+    }
+
+    #[tokio::test]
+    async fn an_idle_turn_with_the_stream_up_asks_once_then_only_on_a_notice_for_its_own_bot() {
+        let counts = idle_turn(
+            true,
+            None,
+            Duration::from_secs(10),
+            |events, seen| async move {
+                tokio::time::sleep(Duration::from_millis(2500)).await;
+                assert_eq!(
+                    asks(&seen),
+                    (1, 1),
+                    "the first step asks; no notice, no more asks"
+                );
+                // Work for another bot on this computer is not this turn's.
+                events.dispatch(
+                    "runner",
+                    None,
+                    &json!({"kind": "work", "bots": ["cpo"]}),
+                    false,
+                );
+                // Neither is a change that names a channel the turn does not read.
+                events.dispatch(
+                    "runner",
+                    None,
+                    &json!({"kind": "logins", "bots": ["acme"]}),
+                    false,
+                );
+                tokio::time::sleep(Duration::from_millis(1300)).await;
+                assert_eq!(asks(&seen), (1, 1));
+                // A follow-up queued, or the chat goal changed, for this bot: both are asked for within a second.
+                events.dispatch(
+                    "runner",
+                    None,
+                    &json!({"kind": "work", "bots": ["cpo", "acme"]}),
+                    false,
+                );
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                assert_eq!(asks(&seen), (2, 2));
+                // Anything that means "read everything again" asks too: a reset after a gap.
+                events.dispatch("reset", None, &json!({}), false);
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                assert_eq!(asks(&seen), (3, 3));
+            },
+        )
+        .await;
+        assert_eq!(counts, (3, 3));
+    }
+
+    #[tokio::test]
+    async fn an_idle_turn_with_the_stream_down_asks_every_second_as_before() {
+        let (inputs, goals) = idle_turn(false, None, Duration::from_secs(10), |_, _| async move {
+            tokio::time::sleep(Duration::from_millis(3500)).await;
+        })
+        .await;
+        assert!(
+            (4..=5).contains(&inputs) && inputs == goals,
+            "{inputs} inputs, {goals} goal reads"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missed_notice_is_caught_by_the_recovery_check() {
+        // TURN_RECOVERY_S shortened to 1.5 s (1.2 to 1.8 s with its jitter), checked at the next 1 s step: no notice
+        // comes, yet the hub is still asked at 0, 2 and 4 s, where a turn with the stream down asks five times.
+        let (inputs, goals) = idle_turn(
+            true,
+            Some(Duration::from_millis(1500)),
+            Duration::from_secs(10),
+            |_, _| async move {
+                tokio::time::sleep(Duration::from_millis(4500)).await;
+            },
+        )
+        .await;
+        assert!(
+            (2..=3).contains(&inputs) && inputs == goals,
+            "{inputs} inputs, {goals} goal reads"
+        );
+    }
+
+    /// Bench, not run by CI (spec #140 Measure 1): one idle steerable turn with a running chat goal for 60 s, with
+    /// the event stream up and down. `cargo test --release bench_idle_turn -- --ignored --nocapture`.
+    #[tokio::test]
+    #[ignore]
+    async fn bench_idle_turn_requests_for_60_s() {
+        for live in [false, true] {
+            let (inputs, goals) =
+                idle_turn(live, None, Duration::from_secs(75), |_, _| async move {
+                    tokio::time::sleep(Duration::from_secs(60)).await;
+                })
+                .await;
+            println!(
+                "event stream {}: {inputs} inputs requests, {goals} goal requests in 60 s",
+                if live { "up" } else { "down" }
+            );
+        }
     }
 
     /// Goal continuations that reach the no-progress cap, then the turn's answer.

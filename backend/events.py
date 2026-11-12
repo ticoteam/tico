@@ -844,6 +844,18 @@ RUNNER_TRIGGERS = [
         _bot_runner("work", "NEW.bot"),
     ),
     ("changes_runner_bot_control_delete", "DELETE", "bot_control", None, _bot_runner("work", "OLD.bot")),
+    # A chat goal set, replaced, paused, stopped or edited: the bot's running turn reads its goal again at once
+    # (runner-rs/src/drive.rs compares the id and updated_at). `work` naming the bot, the notice that also tells a running
+    # turn a follow-up was queued for it; a runner too old to read the bot asks for new work, not for everything.
+    ("changes_runner_chat_goals_insert", "INSERT", "chat_goals", None, _bot_runner("work", "NEW.bot")),
+    (
+        "changes_runner_chat_goals_update",
+        "UPDATE",
+        "chat_goals",
+        _changed("id", "updated_at", "status"),
+        _bot_runner("work", "NEW.bot"),
+    ),
+    ("changes_runner_chat_goals_delete", "DELETE", "chat_goals", None, _bot_runner("work", "OLD.bot")),
     # Which bots it runs, and how they are configured (runners/assignments carries the config).
     (
         "changes_runner_assignments_insert",
