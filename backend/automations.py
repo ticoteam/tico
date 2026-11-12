@@ -42,7 +42,6 @@ import contextvars
 import hashlib
 import json
 import logging
-import secrets
 import threading
 import weakref
 from typing import NamedTuple
@@ -61,7 +60,7 @@ from . import task_models
 from . import task_run_models
 from .migrations import renames
 from .models import Contract
-from . import audit_log, cloud_access, listening
+from . import audit_log, cloud_access, listening, outbox
 from .store import H, Problem
 from . import sources as SRC
 
@@ -2706,7 +2705,7 @@ class Hub:
             queued.close()  # the write below must not run under a read still open on the table
             if pick is None:
                 return None
-            token = secrets.token_urlsafe(16)
+            token = outbox.new_token()
             c.execute(
                 "UPDATE automation_runs SET status='running',claimed_at=?,claim_token=? WHERE id=? AND status='queued'",
                 (H.now(), token, pick),

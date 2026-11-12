@@ -178,3 +178,24 @@ def test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run(
         before["saved_state"],
         new.token,
     )
+
+
+def test_a_worker_whose_run_was_taken_back_before_it_started_does_not_run_it(api):
+    """The take-back clears the claim's token: a worker that stalled between its claim and its first step finds the
+    run queued again under no claim, and neither advances nor settles it (status alone would not tell it apart:
+    the run is queued, and the old token would otherwise still match)."""
+    rid = queued(api, make_automation(api, NOTE))
+    store = api.app.state.store
+    hub = store.automations
+    old = hub.claim()
+    A.tick(store, later(A.STALE_MINUTES + 1), drain=False)
+    calls = []
+
+    def advance(flow, state, services):
+        calls.append(services.token)
+        return {**state, "status": "ok", "cost": 9.0, "threads": [], "steps": []}
+
+    with patch.object(A.E, "advance", advance):
+        assert hub.go(old) is False
+    after = run_row(api, rid)
+    assert calls == [] and (after["status"], after["cost"], after["claim_token"]) == ("queued", 0, None)

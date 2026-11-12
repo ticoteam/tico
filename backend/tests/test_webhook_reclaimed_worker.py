@@ -38,8 +38,6 @@ def test_an_old_webhook_failure_after_reclaim_cannot_reset_the_send_or_cause_a_r
     answers = [(row_a, 503), (row_b, 200)] if old_first else [(row_b, 200), (row_a, 503)]
     won = [D.record(store, row, 0, status, "", "", False, 1) for row, status in answers]
     assert won == ([False, True] if old_first else [True, False])
-    if old_first:
-        pass
     send = sends(api, hook["id"])[0]
     assert (send["state"], send["attempts"], send["last_status"], send["claim_token"]) == ("delivered", 1, 200, None)
     with store.read() as c:
