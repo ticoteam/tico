@@ -1,6 +1,7 @@
 """Meeting search narrows its candidates before loading transcripts, and answers exactly as it did before (I37)."""
 
 import itertools
+from pathlib import Path
 
 import pytest
 
@@ -145,3 +146,9 @@ def test_candidates_walk_the_newest_index_and_the_day_index_without_sorting_the_
             plan = " | ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + query))
         assert f"USING INDEX {index}" in plan, plan
         assert index != "meetings_newest" or "TEMP B-TREE" not in plan, plan
+
+
+def test_the_day_index_is_on_the_expression_the_search_queries():
+    # SQLite serves an expression index only for the same expression, and INDEXED BY fails without it.
+    migration = Path(__file__).parents[1] / "migrations/20261112080700_meeting_search_indexes.sql"
+    assert f"ON meetings(({context_search.RECORDED_DAY}))" in migration.read_text()
