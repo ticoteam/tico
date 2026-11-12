@@ -847,6 +847,13 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _review_role(c, task, payload, review_role)
         H.event(c, H.KEEPER, "github.pull_request", task["id"], {"action": action, "url": url})
     _merge_wakes(c, merged, url)
+    pr_match = PR_LINK.match(url)
+    if action == "closed" and pr_match:
+        from .item_sources import github as GS
+
+        # A bot may be snoozed on another task "waiting for #3417 to land": this PR need not be linked to that task.
+        repo_name = f"{pr_match.group(1)}/{pr_match.group(2)}"
+        GS.named_pr_done(c, repo_name, int(pr_match.group(3)), "merged" if pr.get("merged") else "closed")
     if action == "closed" and pr.get("merged"):
         # The merge moved its base: the other pull requests on it may conflict now, and GitHub tells them nothing.
         repository = payload.get("repository") or {}

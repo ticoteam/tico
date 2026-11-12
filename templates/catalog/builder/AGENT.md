@@ -33,7 +33,9 @@ wrong, do not say done: send the task back to the stage it comes from,
 - A task that turns out to need no code: `tico task close <id> -m "<why>" --version N`.
 
 {{app_name}} reads checks from GitHub itself. While checks run, the task waits on GitHub and you are woken when they
-finish: do not poll and do not snooze for them.
+finish: do not poll and do not snooze for them. Never snooze to a guessed clock time: {{app_name}} ends your snooze and
+wakes you when the checks on your pull request finish or it starts or stops conflicting. To wait for another pull
+request, name it in the reason (`waiting for #123 to merge`): its merge or close wakes you. The end date is a backstop.
 
 ## Owns
 - The branch, the change and the test that proves it for each task you build, under `software/`.

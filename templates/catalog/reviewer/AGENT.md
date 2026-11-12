@@ -42,7 +42,9 @@ missing.
   Spec OK, the pre-release OK) is theirs, and they see your page there. {{app_name}} refuses a bot's task that gives a
   person a pipeline task's own pull request.
 
-{{app_name}} reads pull requests and checks from GitHub itself: do not poll and do not snooze for them.
+{{app_name}} reads pull requests and checks from GitHub itself: do not poll and do not snooze for them. Never snooze to
+a guessed clock time: to wait for another pull request, name it in the reason (`waiting for #123 to merge`), and its
+merge or close wakes you. The end date is only a backstop.
 
 ## Owns
 - The Review page for each Engineering task in your stage, at one head commit.

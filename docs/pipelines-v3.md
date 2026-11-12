@@ -428,6 +428,11 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   in the repository the company's Tico server runs, ends when that server starts on another release, and the owner is
   woken with it. A bot waits for a release, never for a guessed release time. *Added Nov 11: Tico Team's Product Owner
   slept three tasks to "the next release window" while the release they waited for landed minutes later.*
+- A bot's snooze in any stage ends, and whoever has the turn is woken once with the reason, when the checks on the
+  newest commit of the task's PR finish, the PR starts or stops conflicting, or a PR the reason names ("waiting for
+  #3417 to land") merges or closes. Merge adds its own news (see Engineering, Merge). A person's snooze stays, and the
+  bot's snooze count is as it was. *Added Nov 12: Tico Team's Builder slept in Fixes 1 to 08:00 waiting for #3417,
+  which merged at 03:01.*
 - Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
@@ -792,11 +797,10 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
   when the fault needs the Builder. A bot queues a new commit only when it changes the same lines as the one the task
   came into Merge with; otherwise it sends the task back to Fixes 2, where Reviewer 2 reads it and the person's OK
-  comes back with the task (C22). A person may queue any commit. A bot's snooze in Merge ends, and whoever has the
-  turn is woken once with the reason, when the checks on the PR's newest commit finish, the PR starts or stops
-  conflicting, GitHub takes it out of the queue or merges it, or its base branch moves (once per base commit; a snooze
-  whose reason names a PR, "waiting for #3417 to merge", waits for that one's merge). Not while the PR is queued or its
-  checks run. A person's snooze stays. *Added Nov 11: Tico Team's Release Owner slept to guessed clock times, up to 90
+  comes back with the task (C22). A person may queue any commit. Besides what ends a bot's snooze in any stage (see
+  Snooze), a bot's snooze in Merge ends when GitHub takes the PR out of the queue or merges it, or its base branch
+  moves (once per base commit; not while the PR is queued or its checks run, nor when the reason names a PR to wait
+  for). Only in Merge: before it, every merge into main would wake the bot. A person's snooze stays. *Added Nov 11: Tico Team's Release Owner slept to guessed clock times, up to 90
   minutes past the merge it waited for.*
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).

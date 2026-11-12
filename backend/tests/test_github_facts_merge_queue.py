@@ -1417,7 +1417,7 @@ def test_a_move_of_main_ends_a_bots_snooze_once_per_commit_and_a_named_pr_waits_
         assert E.task(c, task_id)["snooze"] and news(c, task_id) == []
         G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)
         ((key, body),) = news(c, task_id)
-        assert E.task(c, task_id)["snooze"] is None and f"{REPO}#3417 merged into main." in body
+        assert E.task(c, task_id)["snooze"] is None and f"{REPO}#3417 merged." in body
 
         snoozed(c, task_id, "re-queue once main has the fix")
         G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)  # the same merge again
@@ -1477,3 +1477,101 @@ def test_a_removal_a_conflict_and_a_merge_end_a_bots_snooze(company):
     F.refresh(company, gh, later(20))
     with company.transaction() as c:
         assert stage(c, task_id) == "Release" and E.task(c, task_id)["version"] > version
+
+
+# ----------------------------------------------------------------------------- a snooze before Merge waits for GitHub too
+def failing_in_build(company, gh):
+    """A task in Build whose PR's checks failed: the Builder's turn."""
+    with company.transaction() as c:
+        engineering(c)
+        task_id = new(c, 1)
+        gh.set_checks(REPO, gh.open_pr(REPO, 1), "failure")
+        seen(c, gh)
+        assert stage(c, task_id) == "Build"
+    return task_id
+
+
+def builder_news(c, task_id):
+    return [(k, b) for k, b in owner_wakes(c, task_id, B) if f":{MQ.WAKE_NEWS}:" in k]
+
+
+def bot_snoozes(c, task_id):
+    return int(E.task(c, task_id)["visit"].get("bot_snoozes") or 0)
+
+
+def merged_hook(c, number, merged=True):
+    """GitHub's webhook for a PR no task links being closed, merged or not."""
+    pr = {"number": number, "html_url": f"https://github.com/{REPO}/pull/{number}", "state": "closed"}
+    pr |= {"merged": merged, "merge_commit_sha": "f" * 40 if merged else None, "base": {"ref": "main"}}
+    repository = {"full_name": REPO, "default_branch": "main"}
+    G.pull_request(c, {"action": "closed", "pull_request": pr, "repository": repository})
+
+
+def test_a_snooze_before_merge_that_names_a_pr_ends_when_that_pr_merges(company):
+    """Tico Team, Nov 12: the Builder snoozed in Fixes 1 "until 08:00Z, waiting for #3417 to land, then rerun checks";
+    #3417 merged at 03:01 and nothing woke it for five hours. On any stage a bot's snooze that names a PR ends when that
+    PR merges or closes, once; a move of main that names no PR wakes nobody before Merge, and the snooze count stays."""
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "until 08:00Z, waiting for #3417 to land, then rerun checks", by=B)
+        count = bot_snoozes(c, task_id)
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main")  # a push: on Build it is noise
+        merged_hook(c, 3400)  # a PR the snooze does not name
+        assert E.task(c, task_id)["snooze"] and builder_news(c, task_id) == []
+        merged_hook(c, 3417)
+        ((key, body),) = builder_news(c, task_id)
+        assert key.endswith(f"named:{REPO}#3417:merged") and f"{REPO}#3417 merged." in body
+        assert "waiting for #3417 to land" in body
+        assert E.task(c, task_id)["snooze"] is None and bot_snoozes(c, task_id) == count
+        snoozed(c, task_id, "still waiting for #3417 to land", by=B)
+        merged_hook(c, 3417)  # the webhook delivered again
+        G.merged_by_tico(c, REPO, 3417)
+        assert E.task(c, task_id)["snooze"] and len(builder_news(c, task_id)) == 1
+        merged_hook(c, 3418, merged=False)  # nor does a close of a PR it does not name end it
+        assert E.task(c, task_id)["snooze"]
+
+
+def test_checks_finishing_before_merge_end_a_bots_snooze_once(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "rerun checks at 05:00", by=B)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        ((key, body),) = builder_news(c, task_id)
+        assert key.endswith(f"checks:{REF}:{head}:failure") and f"Checks failed on {REF}" in body
+        assert E.task(c, task_id)["snooze"] is None
+        snoozed(c, task_id, "rerun checks at 06:00", by=B)
+        seen(c, gh)  # read again, as a sweep does
+        assert E.task(c, task_id)["snooze"] and len(builder_news(c, task_id)) == 1
+
+
+def test_a_persons_snooze_before_merge_is_never_ended_by_github(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "hold until #3417 lands", by=X.ANA)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        merged_hook(c, 3417)
+        assert E.task(c, task_id)["snooze"]["by_id"] == X.ANA and builder_news(c, task_id) == []
+
+
+def test_a_conflict_before_merge_ends_a_bots_snooze_so_its_wake_is_not_held(company):
+    gh = FakeGitHub()
+    task_id = failing_in_build(company, gh)
+    with company.transaction() as c:
+        X.settled(c)
+        before = len(X.wakes(c, task_id, B))
+        snoozed(c, task_id, "rebase after lunch", by=B)
+        pr = {"number": 1, "html_url": f"https://github.com/{REPO}/pull/1", "state": "open", "mergeable": False}
+        pr["head"] = {"sha": gh.prs[(REPO, 1)]["head_sha"], "ref": "feature"}
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)
+        assert E.task(c, task_id)["snooze"] is None and len(X.wakes(c, task_id, B)) == before + 1
