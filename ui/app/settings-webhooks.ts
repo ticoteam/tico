@@ -349,7 +349,7 @@ function whSigningDialog(t: WebhookTrigger) {
   });
   const off = dialog.querySelector<HTMLElement>('[data-wh-sign-off]');
   if (off) off.onclick = async () => {
-    if (!(await askConfirm('Turn signing off? Anyone with the address can call it.'))) return;
+    if (!(await askConfirm('Turn signing off? Anyone with the address can call it.', off))) return;
     try { await post(path, {off: true}); if (WH.shown?.id === t.id) delete WH.shown.signing; dialog.close(); void whRender(); }
     catch (e) { const error = dialog.querySelector('[data-wh-error]'); if (error) error.textContent = errorMessage(e, ''); }
   };
@@ -658,8 +658,8 @@ async function whGateway(el: HTMLElement, run: number) {
   }; });
   el.querySelectorAll<HTMLButtonElement>('[data-wh-relay-do]').forEach(b => { b.onclick = async () => {
     const id = b.closest<HTMLElement>('[data-wh-relay]')!.dataset.whRelay!, what = b.dataset.whRelayDo, path = `/v2/triggers/${encodeURIComponent(id)}/relay`;
-    if (what === 'delete' && !(await askConfirm('Remove the Gateway address? Calls to it stop at once.'))) return;
-    if (what === 'rotate' && !(await askConfirm('Make a new Gateway address? The current one stops working at once.'))) return;
+    if (what === 'delete' && !(await askConfirm('Remove the Gateway address? Calls to it stop at once.', b))) return;
+    if (what === 'rotate' && !(await askConfirm('Make a new Gateway address? The current one stops working at once.', b))) return;
     b.disabled = true;
     try {
       const r: import('../types/api').WebhookRelayAddress['relay'] = (await post(what === 'make' ? path : `${path}/${what}`, {})).relay;

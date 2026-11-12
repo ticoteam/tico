@@ -123,7 +123,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
         const label = el.closest('.msrc-row')?.querySelector('b');
         if (!label) throw new Error('Source row has no name');
         const name = label.textContent;
-        if (!(await askConfirm(`Remove ${name}?`))) return;
+        if (!(await askConfirm(`Remove ${name}?`, el))) return;
         el.disabled = true;
         try { await post('/v2/meeting-importers/' + encodeURIComponent(id), {enabled: false, runner_id: ''}); }
         catch (error) { el.disabled = false; toast(errorMessage(error, 'Could not remove the source'), true); return; }

@@ -639,7 +639,7 @@ interface Window { mountGoogleConnect: (host: GoogleConnectHost | null, options?
   async function disconnectPersonal(host: GoogleConnectHost, button: GoogleConnectControl) {
     const personal = host._googleState?.personal;
     if (!personal) return;
-    if (!(await askConfirm(`Disconnect ${personal.mailbox}? Tico's access is revoked at Google, and your message bot stops reading this inbox.`))) return;
+    if (!(await askConfirm(`Disconnect ${personal.mailbox}? Tico's access is revoked at Google, and your message bot stops reading this inbox.`, button))) return;
     const status = host.querySelector('[data-google-status]');
     button.disabled = true;
     try {

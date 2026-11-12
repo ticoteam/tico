@@ -581,7 +581,7 @@ function callCardHTML(m: ThvMessage): string {
 }
 // End on a card: whoever started the Google Meet ends it for everyone (the server asks Google to end it too).
 async function callCardEnd(id: string, button: HTMLButtonElement): Promise<void> {
-  if (!(await askConfirm('End the call for everyone?'))) return;
+  if (!(await askConfirm('End the call for everyone?', button))) return;
   button.disabled = true;
   try { await post(callPath(id) + '/end', {}); void callViewRead(id); }
   catch (e) { button.disabled = false; toast(errorMessage(e, 'Could not end the call'), true); }

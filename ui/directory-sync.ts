@@ -191,8 +191,8 @@ window.mountDirectorySync = async function (host: Element | null, onChange?: () 
       toast?.('Directory saved'); onChange ? onChange() : window.mountDirectorySync?.(host);
     } catch (error) { status.textContent = errorMessage(error, ''); }
   };
-  $in<HTMLButtonElement>('[data-ds-token]').onclick = async () => {
-    if (view.scim.enabled && !(await askConfirm('Replace the SCIM token? The identity provider stops working until you give it the new one.'))) return;
+  $in<HTMLButtonElement>('[data-ds-token]').onclick = async event => {
+    if (view.scim.enabled && !(await askConfirm('Replace the SCIM token? The identity provider stops working until you give it the new one.', eventElement(event)))) return;
     try {
       const {token}: {token?: string} = await post('/v2/directory/scim-token', {});
       $in('[data-ds-token-out]').innerHTML = `Token (copy it now): <code data-ds-token-value>${text(token)}</code>`;

@@ -153,10 +153,15 @@ void (async () => {
 
   // Every question in the UI goes through askConfirm and is awaited (TypeScript flags `if (askConfirm(...))`, but not
   // `!askConfirm(...)`, which is the usual guard, so this reads the sources).
-  const sources = [
-    ...fs.readdirSync(path.join(root, 'ui')).filter(f => f.endsWith('.ts')).map(f => `ui/${f}`),
-    ...fs.readdirSync(path.join(root, 'ui/app')).filter(f => f.endsWith('.ts')).map(f => `ui/app/${f}`),
-  ].filter(f => f !== 'ui/app/confirm.ts' && f !== 'ui/sw.ts');
+  // Every UI script in every folder, so a new folder cannot slip past; tests, vendored and generated code aside.
+  const skip = new Set(['ui/tests', 'ui/vendor', 'ui/types', 'ui/assets', 'ui/node_modules', 'ui/app/confirm.ts', 'ui/sw.ts']);
+  const walk = (dir: string): string[] => fs.readdirSync(path.join(root, dir), {withFileTypes: true}).flatMap(entry => {
+    const rel = `${dir}/${entry.name}`;
+    if (skip.has(rel)) return [];
+    if (entry.isDirectory()) return walk(rel);
+    return /\.(ts|js)$/.test(entry.name) ? [rel] : [];
+  });
+  const sources = walk('ui');
   const bad: string[] = [];
   for (const file of sources) {
     read(file).split('\n').forEach((line, i) => {

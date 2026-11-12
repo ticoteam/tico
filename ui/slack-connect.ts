@@ -28,7 +28,7 @@ window.mountSlackConnect = async function (host) {
       <p role="status" data-slack-status></p>`;
     const disconnect = slackEl<HTMLButtonElement>(host, '[data-slack-disconnect]');
     disconnect.onclick = async () => {
-      if (!(await askConfirm('Forget the Slack tokens?'))) return;
+      if (!(await askConfirm('Forget the Slack tokens?', disconnect))) return;
       disconnect.disabled = true;
       try { await post('/v2/slack/disconnect', {}); window.mountSlackConnect(host); }
       catch (error) { slackEl<HTMLElement>(host, '[data-slack-status]').textContent = errorMessage(error, ''); disconnect.disabled = false; }

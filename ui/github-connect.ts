@@ -128,7 +128,7 @@ window.mountGithubConnect = async function (host) {
     };
     const disconnect = ghEl<HTMLButtonElement>(host, '[data-gh-disconnect]');
     disconnect.onclick = async () => {
-      if (!(await askConfirm('Forget the GitHub app?'))) return;
+      if (!(await askConfirm('Forget the GitHub app?', disconnect))) return;
       disconnect.disabled = true;
       try { await post('/v2/github/app/disconnect', {}); window.mountGithubConnect(host); }
       catch (error) { ghEl<HTMLElement>(host, '[data-gh-status]').textContent = errorMessage(error, ''); disconnect.disabled = false; }
