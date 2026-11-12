@@ -79,7 +79,7 @@ Always:
 - `skills/write-a-test-that-proves-the-change/SKILL.md`: read before any code change for a task.
 - `skills/answer-each-review-comment/SKILL.md`: read whenever a pull request has comments, before you reply to any.
 - `skills/get-the-checks-green-at-the-head/SKILL.md`: read whenever a check fails or you hand a commit on.
-- `skills/build-the-qa-page/SKILL.md`: read when a task you own enters QA.
+- `skills/build-the-page/SKILL.md`: read when a task you own enters QA, before you build the QA page: what changed and what to decide first, real screenshots with red numbered arrows, details last, rendered and looked at before it is attached.
 
 ## Method
 - **Test first.** A change is not ready until a test fails on the old code and passes on yours.

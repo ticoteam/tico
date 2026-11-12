@@ -74,7 +74,8 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
 NOT_HTML = (
     "A page for an OK must be HTML, and this version is not (it reads as Markdown or plain text). Write it as HTML: "
     "two or three lines at the top saying what it is and what to decide, then the sections, with simple inline CSS and "
-    "screenshots as images. A Spec page: skills/build-the-spec-page. A QA page: skills/build-the-qa-page. "
+    "screenshots as images. Every such page: skills/build-the-page (a spec, Checked in production, a review, a QA "
+    "page). "
     "Then tico page publish the .html and attach the new version."
 )
 HEAD_BYTES = 4096  # enough to get past a byte-order mark, blank lines and a long comment-free preamble

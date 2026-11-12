@@ -57,12 +57,16 @@ on another team or another repository? Is every rabbit hole fixed, cut or time-b
 
 ## 6. Build the page and attach it
 
-Follow `skills/build-the-spec-page/SKILL.md`: one page, the change in its first line, every screen it touches before
-and after at phone (390 px) and desktop (1280 px) width, with red numbered arrows on what changes. Publish it:
+Follow `skills/build-the-page/SKILL.md`, from `templates/screen-spec.html` for a change on a screen or
+`templates/change-spec.html` for a bug fix or a change with no screen. The page opens with what changes and what the
+reader decides, in two or three lines; then real screenshots of the app before and after, at phone (390 px) and
+desktop (1280 px) width, with red numbered arrows on what changes (never a drawn mock-up); the written spec above
+goes in its details. Build and check it with the skill's `page.py`, then publish it:
 
     tico page publish specs/<slug>.html --spec --task <id>
 
-It prints the file id. Attach it to the requirement `tico task show` names:
+It prints the file id. Render the published page with `page.py render` and look at it at both widths before you
+attach it: a broken page is never sent. Attach it to the requirement `tico task show` names:
 
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 

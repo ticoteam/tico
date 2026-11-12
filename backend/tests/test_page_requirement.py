@@ -1231,7 +1231,7 @@ def test_a_page_for_an_ok_must_be_html_and_one_that_is_not_is_refused_in_the_sam
     fid, _ = _page(c, store, "## What was built\n\n- **Retry** on a failed paste\n")
     with _refused("lint") as refused:
         _attach(c, row, f"page:{fid}@1")
-    assert refused.value.detail == P.NOT_HTML and "build-the-spec-page" in P.NOT_HTML
+    assert refused.value.detail == P.NOT_HTML and "build-the-page" in P.NOT_HTML
     assert P.current(c, row["visit"]["id"], _standing(c, row).requirement["id"]) is None
     assert "page_attached" not in X.events(c, row["id"])
     _page(c, store, "\ufeff\n  <!doctype html><title>Built</title><p>Retry on a failed paste.</p>", fid=fid)
