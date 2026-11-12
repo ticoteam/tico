@@ -228,7 +228,9 @@ A stage with no requirements passes a task straight on when the next stage has r
 never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
 Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
 next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
-stage owned by each task's assignee (Growth's Ideas): every task there rests.
+stage owned by each task's assignee when `requests_move_on` is off (Growth's Ideas, Watching): every task there rests.
+With it on (Product's Ideas pointed at the assignee, one Product Owner per area), C10 wakes the owner of the task that
+has waited longest there.
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
