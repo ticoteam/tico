@@ -53,12 +53,10 @@ declare var taskCodeHTML: (task: Record<string, unknown>) => string;
 declare var taskWorktreeRepo: (link: Record<string, unknown>, links: Record<string, unknown>[]) => string;
 declare var taskModalOpen: (id: string) => Promise<unknown>;
 declare var commentLineHTML: (line: unknown, index: number, all: unknown[]) => string;
-declare var v2Get: (path: string) => Promise<unknown>;
-declare var v2Done: string[];
 declare var BOT: unknown;
 declare var TASKS_ST: unknown;
 declare var S: {route: string};
-declare const window: Window & typeof globalThis & {copied: string[]; botBefore: unknown; botWorkBefore: Element | null; v2Done: string[]; v2Get: typeof v2Get};
+declare const window: Window & typeof globalThis & {copied: string[]; botBefore: unknown; botWorkBefore: Element | null};
 
 const now = new Date().toISOString();
 const worktreeError = 'This bot needs write access to the attached repository. Literal <b>diagnostic</b>: /workspace/' + 'nested-directory-'.repeat(24) + '/checkout';
@@ -497,7 +495,8 @@ async function member(browser: Browser) {
 }
 
 // Only the latest open can show; a late detail response cannot bring a task back on another page.
-// The earlier detail is held until the test lets it go; v2Done notes each answer the app has taken in.
+// The earlier detail is held until the test lets it go; lateDone waits for its answer to finish and the app's next
+// frames, so it has been taken in. The app reads it through api.ts `get` (a const), so the network is counted.
 async function lateOpen(browser: Browser) {
   const {page, errors} = await open(browser);
   const modal = page.locator('#task-modal');
@@ -513,8 +512,13 @@ async function lateOpen(browser: Browser) {
     held.splice(0).forEach(release => release());
   };
   await page.route('**/api/v2/tasks/t-checkout', route => new Promise(release => held.push(release)).then(() => route.fallback()));
-  await page.evaluate(() => { const get = v2Get; window.v2Done = []; window.v2Get = async path => { try { return await get(path); } finally { v2Done.push(path); } }; });
-  const lateDone = (n: number) => page.waitForFunction(n => v2Done.filter(p => p === '/v2/tasks/t-checkout').length === n, n);
+  let finished = 0;
+  page.on('requestfinished', request => { if (new URL(request.url()).pathname === '/api/v2/tasks/t-checkout') finished++; });
+  const lateDone = async (n: number) => {
+    for (const end = Date.now() + t(10000); finished < n && Date.now() < end;) await new Promise(r => setTimeout(r, 50));
+    assert.equal(finished, n, 'the held detail answered');
+    await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+  };
   await page.evaluate(() => { void taskModalOpen('t-checkout'); void taskModalOpen('t-none'); });
   await modal.locator('.tmodal-title', {hasText: 'Write the release notes'}).waitFor();
   await releaseHeld(); await lateDone(1);
