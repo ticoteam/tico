@@ -286,16 +286,17 @@ async function modelsTab(browser: Browser) {
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
     ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Sign in again'],
     ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
-    ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+    ['Claude Max (Dee)', 'Claude plan', '', '1', 'Computer offline: Cloud · Video Owner · Bring it online.']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
+  assert.match(await pane.locator('[data-subs-row=s6] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
   // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
   assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
-  // A reading of 0% still draws its bar, and a plan with no reading says why in muted text.
+  // A reading of 0% still draws its bar; an offline computer gets a diagnosis instead of a usage placeholder.
   assert.equal(await pane.locator('[data-subs-row=s5] .subs-bar b').getAttribute('style'), 'width:0%');
   assert.equal(await pane.locator('[data-subs-row=s6] .subs-bar').count(), 0);
-  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage.muted').count(), 1);
+  assert.equal(await pane.locator('[data-subs-row=s6] .subs-use .subs-usage').innerText(), 'Computer offline: Cloud · Video Owner · Bring it online.');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count').getAttribute('title'), 'Tico Team box, Cloud · shared, Cloud · Video Owner');
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-count .nav-icon').count(), 1);
   // The Gateway is one toggle; the key, address and spend wait behind Advanced. No four-way choice, no provider boxes.

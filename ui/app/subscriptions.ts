@@ -121,6 +121,11 @@ function subsStatusHTML(sub: SubsRow) {
   }
   const computers = sub.computers || [];
   if (!computers.length && subsOwned(sub.kind)) return `<span class="subs-diagnosis">No computer assigned</span>${subsMayEdit() ? ' <span class="muted">Assign this plan to a computer in Settings → Computers.</span>' : ''}`;
+  const offline = computers.map(id => {
+    const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof id === 'string' ? id : id.runner_id));
+    return machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) ? subsComputerLabel(id) : '';
+  }).filter(Boolean);
+  if (offline.length === computers.length && offline.length) return `<span class="subs-usage">Computer offline: ${esc(offline.join(', '))} · Bring it online.</span>`;
   if (sub.status && sub.status !== 'working') {
     const names = computers.map(subsComputerLabel).filter(Boolean).join(', ');
     return `<span class="subs-diagnosis">Connection unavailable${names ? ` on ${esc(names)}` : ''}</span>`;
