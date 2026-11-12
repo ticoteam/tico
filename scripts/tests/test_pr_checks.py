@@ -524,6 +524,27 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
 
 
+PHONE_SCRIPTS = {
+    f"phone-dead-ends-{state}" for state in ("bot-waiting", "no-computer", "no-credit", "setup-halfway", "sign-off")
+}
+
+
+def test_a_ui_app_or_style_change_runs_the_phone_dead_end_scripts_and_a_backend_change_does_not(tmp_path):
+    # A fix in ui/app/ or ui/styles/ removes a KNOWN phone break, and its dead-end script fails until the line goes: such a
+    # change runs all five scripts, and so does their rules file. A backend change runs none of them.
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/styles/x.css", ".x { color: red; }\n")
+    source(tmp_path, "ui/app/x.ts", "export const x = 1;\n")
+    source(tmp_path, "ui/tests/support/phone-rules.cts", "// the phone rules\n")
+    for name in PHONE_SCRIPTS:
+        source(tmp_path, f"ui/tests/{name}.cts", "require('./support/phone-rules.cts');\n")
+    source(tmp_path, "backend/health.py", "")
+    for changed in (["ui/styles/x.css"], ["ui/app/x.ts"], ["ui/tests/support/phone-rules.cts"]):
+        plan = checks.selection(changed, root=tmp_path, core=[])
+        assert PHONE_SCRIPTS <= set(plan["browser_direct"]) and PHONE_SCRIPTS <= set(plan["browser"]), changed
+    assert not PHONE_SCRIPTS & set(checks.selection(["backend/health.py"], root=tmp_path, core=[])["browser"])
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # CHANGELOG.md and docs/openapi/v2.json are gone; pytest.ini is a tracked file a test reads.
     for read, reader in (("pytest.ini", "backend/tests/test_ddl_guard.py"),):

@@ -855,6 +855,11 @@ UI_RUNNER = "scripts/ui-tests.cts"
 # scripts, a helper most scripts run), the change runs every script the release check runs, about four VMs.
 SUPPORT = "ui/tests/support/"
 BROWSER_ALL_OVER = 40
+# The phone dead-end scripts (release-only) fail when a KNOWN break stops happening, so a fix in the app's own files
+# (ui/app/, ui/styles/) breaks them until their KNOWN line goes. Rule 6 runs all of them for such a change, and for their
+# rules file; no other change runs them, and the smoke set does not carry them.
+PHONE_SCOPE = ("ui/app/", "ui/styles/", "ui/tests/support/phone-rules.cts")
+PHONE_PREFIX = "phone-dead-ends-"
 
 
 def runnable_scripts(root=ROOT):
@@ -1058,9 +1063,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
     6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
-       changed or gone helper under ui/tests/support/, and the scripts named after UI source outside UI_MAP. More than
-       BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull
-       request keeps them.
+       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, and every
+       phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
+       `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1195,7 +1200,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     direct = set()
     if any(n.startswith("ui/") for n in names):  # rule 6
         runnable = set(runnable_scripts(root))
+        phone = {s for s in runnable if s.startswith(PHONE_PREFIX)}
         for name in names:
+            if name.startswith(PHONE_SCOPE):
+                direct |= phone
             if is_browser(name) and name in live:
                 direct.add(Path(name).stem)
             elif name.startswith(SUPPORT):
