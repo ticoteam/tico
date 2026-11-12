@@ -24,7 +24,9 @@ READERS = (
     Identity("bot:finance", "bot"),
 )
 IDENTITY_COLUMNS = ("blob_id", "poster_blob_id", "thumb_blob_id", "digest", "source_digest")
-WHOLE = re.compile(r"\bSCAN (?:bot_file_versions|bot_files|pages|page_identities|[vfp])\b(?! USING)")
+WHOLE = re.compile(
+    r"\bSCAN (?:bot_file_versions|bot_files|pages|page_identities|[vfp])\b"
+)  # a full index scan reads every entry too
 TABLES = re.compile(r"\b(?:bot_file_versions|bot_files|pages|page_identities)\b")
 
 
@@ -367,3 +369,26 @@ def test_a_failed_lookup_is_not_remembered_as_allowed(api, monkeypatch):
         assert set(files.restricted_page_rows(c, [restricted, gone])) == {restricted}
         assert files.deleted_page_refs(c, [restricted, gone]) == {gone}
         assert set(files.page_rows(c, [restricted, gone])) == {restricted, gone}
+
+
+def test_a_task_scoped_page_without_a_task_id_still_hides_its_title(api):
+    """A page whose scope names the task but whose task_id is empty is still the task's page, as the whole-graph rule
+    (`task_id == tid or scope == "task:" + tid`) had it: its title stays hidden from a reader it denies."""
+    pages, _, task, _ = company(api)
+    fid = pages["restricted"]
+    with api.app.state.store.transaction() as c:
+        title, scope = c.execute("SELECT title, scope FROM bot_files WHERE id=?", (fid,)).fetchone()
+        assert scope == "task:" + task
+        c.execute("UPDATE bot_files SET task_id=NULL WHERE id=?", (fid,))
+        # Only the scope ties it to the task: no attachment and no pin.
+        c.execute(
+            "DELETE FROM task_assets WHERE blob_id IN (SELECT blob_id FROM bot_file_versions WHERE file_id=?)", (fid,)
+        )
+        c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
+    question = {"questions": [{"id": "q", "options": [{"label": title}, {"label": "Other"}]}]}
+    with api.app.state.store.read() as c:
+        auth = api.app.state.auth
+        shown = files.readable_page_refs(c, auth, Identity("human:cara", "human"), question, task_id=task)
+        allowed = files.readable_page_refs(c, auth, Identity("human:ben", "human"), question, task_id=task)
+    assert title not in json.dumps(shown)
+    assert title in json.dumps(allowed)

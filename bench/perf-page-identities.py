@@ -34,7 +34,9 @@ from backend.tests.helpers.task_privacy_reads import traced
 
 PAGES, VERSIONS = int(os.environ.get("PAGES", 3000)), int(os.environ.get("VERSIONS", 20))
 RUNS = int(os.environ.get("RUNS", 15))
-WHOLE = re.compile(r"\bSCAN (?:bot_file_versions|bot_files|pages|page_identities|[vfp])\b(?! USING)")
+WHOLE = re.compile(
+    r"\bSCAN (?:bot_file_versions|bot_files|pages|page_identities|[vfp])\b"
+)  # a full index scan reads every entry too
 TABLES = re.compile(r"\b(?:bot_file_versions|bot_files|pages|page_identities)\b")
 
 
@@ -103,6 +105,10 @@ def whole_table_reads(db_path, statements):
     """The statements whose plan reads every row of one of the page tables."""
     found = []
     with sqlite3.connect(db_path) as c:
+        # A partial index holds only the rows its WHERE names (the media worker's pending queue), not every row.
+        partial = {
+            r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='index' AND sql LIKE '% WHERE %'")
+        }
         for q in statements:
             if not TABLES.search(q) or not q.lstrip().upper().startswith(("SELECT", "WITH")):
                 continue
@@ -112,7 +118,13 @@ def whole_table_reads(db_path, statements):
                 continue
             # A subquery the statement names itself (CO-ROUTINE p) is not the pages table.
             own = set(re.findall(r"(?:CO-ROUTINE|MATERIALIZE) (\w+)", plan))
-            if any(m.group(0).split()[1] not in own for m in WHOLE.finditer(plan)):
+            if any(
+                m.group(0).split()[1] not in own
+                and not re.match(
+                    rf"\s+USING (?:COVERING )?INDEX ({'|'.join(map(re.escape, partial)) or '$^'})\b", plan[m.end() :]
+                )
+                for m in WHOLE.finditer(plan)
+            ):
                 found.append((q[:140], plan[:200]))
     return found
 
