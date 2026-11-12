@@ -368,12 +368,13 @@ async function shot(page: Page, name: string) {
       for (const [hash, h1] of [['#/overview', 'Company'], ['#/team/eng', 'Engineering']] as const) {
         await page.evaluate(to => { location.hash = to; }, hash);
         await page.waitForFunction(want => document.querySelector('#main h1')?.textContent === want, h1);
-        const stats = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Tasks by status'})}).locator('.dash-stat');
+        const statsGrid = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Tasks by status'})}).locator('.dash-stats');
+        const stats = statsGrid.locator('.dash-stat');
         await stats.first().waitFor();
         const where = `${hash} at ${viewport.width}`;
         assert.deepEqual(await stats.locator('span').allInnerTexts(), ['Open', 'Done this week'], 'no Doing or Waiting column, ' + where);
         assert.deepEqual(await stats.locator('strong').allInnerTexts(), ['4', '7'], 'no dash, ' + where);
-        const [grid, ...cells] = await page.locator('#dash-grid .dash-stats').first().evaluate(el => [el, ...el.children].map(c => c.getBoundingClientRect().width));
+        const [grid, ...cells] = await statsGrid.evaluate(el => [el, ...el.children].map(c => c.getBoundingClientRect().width));
         assert.ok(cells.every(w => w > grid! * 0.4), `the two numbers share the card's width, not half of it, ${where}: ${cells} of ${grid}`);
         assert.equal(await sideways(page), false, 'no sideways scroll, ' + where);
       }
