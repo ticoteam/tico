@@ -34,6 +34,7 @@ class Practice:
         self.sessions = set()
         self.logs = []
         self.inputs = {}
+        self.clicks = 0
         self.slow_entered = threading.Event()
         self.slow_release = threading.Event()
         self.lock = threading.Lock()
@@ -139,6 +140,13 @@ class Practice:
                             '<form method="post" action="/person"><button autofocus>Complete check</button></form>',
                         ),
                     )
+                if path == "/click-test":
+                    return self.send(
+                        200,
+                        page(
+                            "Click check", '<form method="post" action="/clicked"><button>Record click</button></form>'
+                        ),
+                    )
                 if path == "/file":
                     return self.send(
                         200,
@@ -151,6 +159,9 @@ class Practice:
             def do_POST(self):
                 path = urllib.parse.urlsplit(self.path).path
                 raw = self.rfile.read(min(int(self.headers.get("Content-Length", 0)), 100_000))
+                if path == "/clicked":
+                    practice.clicks += 1
+                    return self.send(200, page("Click recorded", "Finished"))
                 if path == "/upload":
                     message = BytesParser().parsebytes(
                         (

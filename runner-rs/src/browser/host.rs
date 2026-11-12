@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, oneshot, Notify};
+use tokio::sync::{mpsc, oneshot, Mutex as AsyncMutex, Notify};
 
 use super::verbs::{failed, Answer, Done, Session};
 use super::{fill, launch};
@@ -164,6 +164,7 @@ async fn poll_loop(host: Arc<Host>) {
         }
         let began = Instant::now();
         let query = [("wait", "25".to_string())];
+
         let asked = host.poll.get_query("runner-browser-commands", &query);
         let answer = tokio::select! {
             a = asked => a,
@@ -187,8 +188,6 @@ async fn poll_loop(host: Arc<Host>) {
             }
             // A hub from before website tools.
             Err(e) if e.status == 404 => Duration::from_secs(300),
-            // Not the browser host and no own session here: asked again soon, as either can change.
-            Err(e) if e.status == 403 || e.status == 409 => Duration::from_secs(10),
             Err(e) => {
                 if backoff == 1 {
                     log(&format!(
@@ -266,22 +265,24 @@ async fn worker(host: Arc<Host>, profile: String, mut rx: mpsc::UnboundedReceive
                     .await;
                     continue;
                 }
+
                 let done = match tokio::time::timeout(left, run(&host, &mut session, &cmd)).await {
                     Ok(done) => done,
                     Err(_) => {
-                        if let Some(s) = session.take() {
-                            s.abort().await;
-                        }
+                        close(&mut session, &profile).await;
                         Err(failed(
                             "browser_timeout",
                             "This browser command expired; read the page before trying again.",
                         ))
                     }
                 };
+
                 if let Some(s) = &session {
                     s.release().await;
                 }
+
                 report(&host, &cmd, done, session.as_mut()).await;
+
                 mark(&profile, session.is_some());
             }
             Some(Msg::Close(done)) => {
@@ -303,24 +304,62 @@ async fn close(session: &mut Option<Session>, profile: &str) {
     mark(profile, false);
 }
 
-/// Before a Chrome starts: with `MOST_OPEN` open, the least recently used one closes.
-async fn make_room(profile: &str) {
+fn starts() -> &'static AsyncMutex<()> {
+    static STARTS: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    STARTS.get_or_init(|| AsyncMutex::new(()))
+}
+
+/// Reserve a browser slot before launching: two accounts cannot evict the same oldest browser and both take its
+/// one place. A reservation counts as open until either launch fails or that account closes.
+async fn reserve(
+    all: &Mutex<HashMap<String, Slot>>,
+    gate: &AsyncMutex<()>,
+    profile: &str,
+) -> Done<()> {
+    let _guard = gate.lock().await;
     let oldest = {
-        let all = slots().lock().unwrap();
-        if all.values().filter(|s| s.open).count() < MOST_OPEN {
-            return;
+        let slots = all.lock().unwrap();
+        if slots.values().filter(|s| s.open).count() < MOST_OPEN {
+            None
+        } else {
+            slots
+                .iter()
+                .filter(|(p, s)| s.open && p.as_str() != profile)
+                .min_by_key(|(_, s)| s.used)
+                .map(|(_, s)| s.tx.clone())
         }
-        all.iter()
-            .filter(|(p, s)| s.open && p.as_str() != profile)
-            .min_by_key(|(_, s)| s.used)
-            .map(|(_, s)| s.tx.clone())
     };
     if let Some(tx) = oldest {
         let (done, wait) = oneshot::channel();
-        if tx.send(Msg::Close(done)).is_ok() {
-            let _ = tokio::time::timeout(Duration::from_secs(20), wait).await;
+        let sent = tx.send(Msg::Close(done)).is_ok();
+        if !sent
+            || !matches!(
+                tokio::time::timeout(Duration::from_secs(20), wait).await,
+                Ok(Ok(()))
+            )
+        {
+            return Err(failed(
+                "browser_timeout",
+                "The oldest browser did not close; open this website again.",
+            ));
         }
     }
+    let mut slots = all.lock().unwrap();
+    if slots.values().filter(|s| s.open).count() >= MOST_OPEN {
+        return Err(failed(
+            "browser_timeout",
+            "No browser slot is available; open this website again.",
+        ));
+    }
+    let slot = slots.get_mut(profile).ok_or_else(|| {
+        failed(
+            "browser_failed",
+            "This browser worker stopped; open the website again.",
+        )
+    })?;
+    slot.open = true;
+    slot.used = Instant::now();
+    Ok(())
 }
 
 /// The session for `cmd`, started (or restarted after a crash, or for another Browse-through proxy) as needed.
@@ -341,7 +380,7 @@ async fn ready<'a>(
     let mut typed = None;
     if stale {
         if let Some(s) = session.take() {
-            typed = Some((s.typed.clone(), s.filled_values.clone()));
+            typed = Some(s.typed.clone());
             if !s.alive() {
                 log(&format!(
                     "Tico runner: a browser session stopped ({}); it starts again",
@@ -354,12 +393,18 @@ async fn ready<'a>(
     if session.is_none() {
         let exe = launch::chrome()
             .ok_or_else(|| failed("no_chrome", "Google Chrome is not on this computer."))?;
-        make_room(&cmd.profile).await;
+
+        reserve(slots(), starts(), &cmd.profile).await?;
+
         let dir = host.state.join(&cmd.profile);
-        let launched = launch::launch(&exe, &dir.join("profile"), proxy.as_deref())
-            .await
-            .map_err(|e| failed("browser_failed", e))?;
-        mark(&cmd.profile, true);
+        let launched = match launch::launch(&exe, &dir.join("profile"), proxy.as_deref()).await {
+            Ok(launched) => launched,
+            Err(e) => {
+                mark(&cmd.profile, false);
+                return Err(failed("browser_failed", e));
+            }
+        };
+
         log(&format!(
             "Tico runner: Chrome {} started for a website session",
             launched.version
@@ -367,10 +412,10 @@ async fn ready<'a>(
         let started = Session::start(launched, proxy, dir.join("files")).await;
         match started {
             Ok(mut s) => {
-                if let Some((t, values)) = typed {
+                if let Some(t) = typed {
                     s.typed = t;
-                    s.filled_values = values;
                 }
+
                 *session = Some(s)
             }
             Err(e) => {
@@ -392,7 +437,9 @@ async fn run(host: &Host, session: &mut Option<Session>, cmd: &Command) -> Done<
         let field = cmd.arg("field");
         let code = field == "code";
         if !value.is_empty()
-            && (field == "password" || code || value.chars().count() >= crate::redact::MIN_LENGTH)
+            && (field == "password"
+                || code
+                || value.chars().count() >= crate::redact::LOGIN_MIN_LENGTH)
         {
             crate::redact::hide_everywhere(value, code);
         }
@@ -401,14 +448,22 @@ async fn run(host: &Host, session: &mut Option<Session>, cmd: &Command) -> Done<
         }
     }
     if verb == "close" {
-        if let Some(s) = session.take() {
-            s.close().await;
-        }
+        close(session, &cmd.profile).await;
         return Ok(Answer::default());
     }
     let s = ready(host, session, cmd).await?;
+
+    if verb != "open" && !s.opened {
+        return Err(failed(
+            "session_lost",
+            "This browser session was lost; open the website again.",
+        ));
+    }
     match verb {
-        "open" => s.open(&cmd.arg("url"), &cmd.sites).await,
+        "open" => {
+            s.open(&cmd.arg("url"), &cmd.sites, cmd.args["keep"] == true)
+                .await
+        }
         "read" => s.read().await,
         "click" => s.click(&cmd.arg("ref")).await,
         "type" => {
@@ -441,14 +496,10 @@ async fn run(host: &Host, session: &mut Option<Session>, cmd: &Command) -> Done<
             // covered too.
             if field == "code" {
                 s.typed.add_codes(&[value.to_string()]);
-            } else if field == "password" || value.chars().count() >= crate::redact::MIN_LENGTH {
+            } else if field == "password"
+                || value.chars().count() >= crate::redact::LOGIN_MIN_LENGTH
+            {
                 s.typed.add_login(&[value.to_string()]);
-            }
-            if !value.is_empty() && !s.filled_values.iter().any(|v| v == value) {
-                if s.filled_values.len() >= 128 {
-                    s.filled_values.remove(0);
-                }
-                s.filled_values.push(value.to_string());
             }
             fill::fill(s, &cmd.sites, &field, r, value)
                 .await
@@ -545,6 +596,68 @@ async fn report(host: &Host, cmd: &Command, done: Done<Answer>, session: Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn two_starts_at_the_limit_each_reserve_a_different_place() {
+        let pool = Arc::new(Mutex::new(HashMap::<String, Slot>::new()));
+        let closed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut workers = vec![];
+        for n in 0..MOST_OPEN {
+            let name = format!("old-{n}");
+            let (tx, mut rx) = mpsc::unbounded_channel();
+            pool.lock().unwrap().insert(
+                name.clone(),
+                Slot {
+                    tx,
+                    used: Instant::now() - Duration::from_secs(10),
+                    open: true,
+                },
+            );
+            let pool = pool.clone();
+            let closed = closed.clone();
+            workers.push(tokio::spawn(async move {
+                while let Some(Msg::Close(done)) = rx.recv().await {
+                    // Both starts reach the limit before the first close can finish without the reservation gate.
+                    tokio::task::yield_now().await;
+                    pool.lock().unwrap().get_mut(&name).unwrap().open = false;
+                    closed.fetch_add(1, Ordering::SeqCst);
+                    let _ = done.send(());
+                }
+            }));
+        }
+        for name in ["new-a", "new-b"] {
+            let (tx, _rx) = mpsc::unbounded_channel();
+            pool.lock().unwrap().insert(
+                name.into(),
+                Slot {
+                    tx,
+                    used: Instant::now(),
+                    open: false,
+                },
+            );
+        }
+        let gate = AsyncMutex::new(());
+        let (a, b) = tokio::time::timeout(Duration::from_secs(3), async {
+            tokio::join!(
+                reserve(&pool, &gate, "new-a"),
+                reserve(&pool, &gate, "new-b")
+            )
+        })
+        .await
+        .unwrap();
+        a.unwrap();
+        b.unwrap();
+        {
+            let slots = pool.lock().unwrap();
+            assert_eq!(slots.values().filter(|s| s.open).count(), MOST_OPEN);
+            assert!(slots["new-a"].open && slots["new-b"].open);
+        }
+        assert_eq!(closed.load(Ordering::SeqCst), 2);
+        for worker in workers {
+            worker.abort();
+            let _ = worker.await;
+        }
+    }
 
     #[test]
     fn a_report_carries_the_result_and_never_the_value() {

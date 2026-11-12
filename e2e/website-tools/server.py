@@ -38,6 +38,22 @@ def main():
         store.close()
     app = create_app(settings)
 
+    @app.get("/api/v2/live-browser-queued")
+    def queued(account: str):
+        from backend.browser_commands import MAILBOX
+
+        # A count makes the live control race deterministic without revealing or changing any command payload.
+        with MAILBOX.lock:
+            return {
+                "click": sum(
+                    cmd.verb == "click" and cmd.account_id == account
+                    for queue in MAILBOX.queues.values()
+                    for cmd in queue
+                )
+            }
+
+    app.router.routes.insert(0, app.router.routes.pop())
+
     uvicorn.run(app, host="127.0.0.1", port=port, access_log=False, log_level="warning")
 
 

@@ -254,6 +254,13 @@ impl Redactor {
         self.inner.read().unwrap().values.clone()
     }
 
+    /// Login values and codes used to find replaced browser fields before taking a picture.
+    pub fn browser_values(&self) -> Vec<String> {
+        let mut values = self.values();
+        values.extend(self.codes.read().unwrap().iter().cloned());
+        values
+    }
+
     pub fn add(&self, secrets: &[String]) {
         let mut inner = self.inner.write().unwrap();
         let fresh: Vec<String> = values(secrets)
@@ -871,6 +878,27 @@ pub fn scrub_log(line: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_values_include_codes_without_changing_their_text_matching() {
+        let redactor = Redactor::new(&[]);
+        let login: String = std::iter::repeat_n('x', LOGIN_MIN_LENGTH).collect();
+        let code = format!("{:06}", 123 * 456);
+        redactor.add_login(std::slice::from_ref(&login));
+        redactor.add_codes(std::slice::from_ref(&code));
+        let values = redactor.browser_values();
+        assert!(values.contains(&login), "login values are included");
+        assert!(values.contains(&code), "codes are included");
+        assert!(
+            redactor.scrub_text(&code).as_ref() != code,
+            "a code is covered"
+        );
+        let longer = format!("1{code}1");
+        assert!(
+            redactor.scrub_text(&longer) == longer,
+            "a code is still masked only as a whole number"
+        );
+    }
 
     #[test]
     fn a_secret_is_masked_in_every_form_and_short_or_common_values_are_not() {

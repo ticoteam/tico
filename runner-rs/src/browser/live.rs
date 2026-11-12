@@ -84,11 +84,11 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
         .unwrap();
     let here = vec![format!("http://127.0.0.1:{port}")];
 
-    s.open(&format!("http://127.0.0.1:{port}/login"), &here)
+    s.open(&format!("http://127.0.0.1:{port}/login"), &here, false)
         .await
         .unwrap();
     assert_eq!(
-        s.open("https://example.com/", &here)
+        s.open("https://example.com/", &here, false)
             .await
             .err()
             .map(|f| f.code),
@@ -166,7 +166,7 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
         format!("http://127.0.0.1:{port}"),
         format!("http://localhost:{port}"),
     ];
-    s.open(&format!("http://localhost:{port}/login"), &both)
+    s.open(&format!("http://localhost:{port}/login"), &both, false)
         .await
         .unwrap();
     let text = s.read().await.unwrap().text.unwrap();

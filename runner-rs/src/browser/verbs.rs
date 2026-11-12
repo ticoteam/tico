@@ -211,8 +211,8 @@ pub struct Session {
     /// The login values typed in this session: what it reports back (text, url, title) is scrubbed of them. Kept
     /// when Chrome restarts for the same account.
     pub typed: Arc<crate::redact::Redactor>,
-    /// Values used to re-find replaced login fields before a screenshot. Never logged.
-    pub filled_values: Vec<String>,
+    /// A browser restarted or evicted must be opened before it accepts another bot action.
+    pub opened: bool,
 }
 
 impl Session {
@@ -247,7 +247,7 @@ impl Session {
             world: None,
             dir,
             typed: Arc::new(crate::redact::Redactor::new(&[])),
-            filled_values: vec![],
+            opened: false,
         };
         s.prepare().await;
         Ok(s)
@@ -273,13 +273,6 @@ impl Session {
 
     pub fn page_session(&self) -> &str {
         &self.session
-    }
-
-    /// An expired action cannot keep running in Chrome after its future is cancelled.
-    pub async fn abort(mut self) {
-        let _ = self.launched.child.start_kill();
-        let _ = self.launched.child.wait().await;
-        let _ = std::fs::remove_dir_all(self.dir.join("uploads"));
     }
 
     /// Close Chrome cleanly and drop this session's files.
@@ -476,9 +469,10 @@ impl Session {
 
     // ---- the verbs ----
 
-    pub async fn open(&mut self, url: &str, sites: &[String]) -> Done<Answer> {
-        if url.trim().is_empty() {
+    pub async fn open(&mut self, url: &str, sites: &[String], keep: bool) -> Done<Answer> {
+        if url.trim().is_empty() || keep && super::fill::page_allowed(&self.url().await, sites) {
             self.call("Page.bringToFront", json!({})).await?;
+            self.opened = true;
             return Ok(Answer::default());
         }
         let url = url.trim().to_string();
@@ -499,6 +493,7 @@ impl Session {
         }
         self.world = None;
         self.wait_load(LOAD_WAIT).await;
+        self.opened = true;
         Ok(Answer::default())
     }
 
@@ -684,7 +679,7 @@ impl Session {
     fn mask_script(&self) -> String {
         format!(
             "globalThis.__ticoValues = {}; {}",
-            json!(self.filled_values),
+            json!(self.typed.browser_values()),
             MASK
         )
     }

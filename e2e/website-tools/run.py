@@ -241,10 +241,14 @@ class Live:
         self.start_runner(self.own)
         self.select_host(self.host)
 
-    def account(self, name, twofa=False, shared=False):
+    def account(self, name, twofa=False, shared=False, short=False):
         self.phase = name
         alphabet = "abcdefghkmnprstwxyz"
-        username = "user" + "".join(secrets.choice(alphabet) for _ in range(10))
+        username = (
+            "".join(secrets.choice("jkqv") for _ in range(4))
+            if short
+            else "user" + "".join(secrets.choice(alphabet) for _ in range(10))
+        )
         password = "pass" + "".join(secrets.choice(alphabet) for _ in range(10))
         key = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=") if twofa else ""
         self.canaries.update((username, password))
@@ -326,25 +330,39 @@ class Live:
     def routing(self):
         a = self.account("Routing")
         require(self.api(f"website-tools/{a['site']}")["host"]["online"], "accepted heartbeat did not make host online")
+        self.phase = "Routing online host"
         require(self.open(a, "/login")["where"] == "central", "online host was not chosen")
         self.browser(a, "close")
         host_proc = self.runs[self.host["runner_id"]]
         self.stop(host_proc)
-        self.sql(
-            "UPDATE runner_states SET last_seen_at='2000-01-01T00:00:00Z' WHERE runner_id=?", (self.host["runner_id"],)
+        until(
+            lambda: not self.api(f"website-tools/{a['site']}")["host"]["online"],
+            "stopped browser host stayed online",
+            60,
         )
+        self.phase = "Routing offline host"
         require(self.open(a, "/login")["where"] == "own", "offline host did not fall back")
         self.browser(a, "close")
         self.api(f"website-tools/{a['site']}", {"central_only": True}, method="PATCH")
         self.open(a, "/login", expect="browser_host_offline")
         self.api(f"website-tools/{a['site']}", {"central_only": False}, method="PATCH")
-        self.beat(self.host, capabilities=())
-        require(self.open(a, "/login")["where"] == "own", "missing Chrome did not fall back")
-        self.browser(a, "close")
+        self.start_runner(self.host)
+        host_proc = self.runs[self.host["runner_id"]]
+        os.kill(host_proc.pid, signal.SIGSTOP)
+        try:
+            # Freeze this real runner while simulating its missing capability, so its next heartbeat cannot undo it.
+            self.beat(self.host, capabilities=())
+            self.phase = "Routing missing Chrome"
+            require(self.api(f"website-tools/{a['site']}")["host"]["online"], "missing-Chrome host was not reachable")
+            require(self.open(a, "/login")["where"] == "own", "missing Chrome did not fall back")
+            self.browser(a, "close")
+        finally:
+            os.kill(host_proc.pid, signal.SIGCONT)
+            self.beat(self.host)
         self.api(f"runners/{self.host['runner_id']}/browser-host", {"on": False})
+        self.phase = "Routing revoked host"
         require(self.open(a, "/login")["where"] == "own", "revoked host did not fall back")
         self.browser(a, "close")
-        self.start_runner(self.host)
         self.select_host(self.host)
 
     def ended_attempt(self):
@@ -397,7 +415,16 @@ class Live:
         self.practice.slow_release.set()
         self.finish(pending, expect="unavailable")
         self.start_server()
-        self.open(a, "/login")
+        until(
+            lambda: self.api(f"website-tools/{a['site']}")["host"]["online"],
+            "browser transport did not reconnect after server restart",
+            60,
+        )
+        refused = self.browser(a, "read", expect="browser_host_offline")
+        require(
+            "open the website again" in refused.get("detail", ""), "server restart refusal gives no recovery action"
+        )
+        self.sign_in(a)
         _, pid = self.chrome(a)
         self.practice.slow_entered.clear()
         self.practice.slow_release.clear()
@@ -405,15 +432,16 @@ class Live:
         require(self.practice.slow_entered.wait(10), "expiring navigation did not start")
         try:
             self.finish(pending, expect="browser_timeout")
-            until(lambda: exited(pid), "expired command left Chrome acting after the deadline", 5)
+            until(lambda: exited(pid), "expired command did not finish closing Chrome", 18)
         finally:
             self.practice.slow_release.set()
-        self.open(a, "/login")
+        self.open(a, "/home")
+        require("Signed in" in self.read(a), "timeout close did not preserve the sign-in")
         self.browser(a, "close")
 
     def forms(self):
         for variant in ("plain", "spa", "show", "trap"):
-            a = self.account("Form " + variant)
+            a = self.account("Form " + variant, short=variant == "plain")
             self.open(a, "/login?variant=" + variant)
             text = self.read(a)
             if variant == "spa":
@@ -422,6 +450,9 @@ class Live:
                 self.fill(a, "password", old, expect="stale_ref")
                 text = self.read(a)
             self.fill(a, "username", self.ref(text, "Username"))
+            if variant == "plain":
+                self.read(a)
+                self.picture(a)
             if variant == "trap":
                 self.fill(a, "password", self.ref(text, "Password"), expect="focus_changed")
             else:
@@ -574,6 +605,68 @@ class Live:
         self.read(a)
         self.browser(a, "close")
         self.browser(b, "close")
+        self.queued_control()
+        self.evicted_views()
+
+    def evicted_views(self):
+        accounts = [self.account(f"Eviction {n}") for n in range(10)]
+        for account in accounts[:8]:
+            self.open(account, "/login")
+        first_pid = self.chrome(accounts[0])[1]
+        second_pid = self.chrome(accounts[1])[1]
+        with ThreadPoolExecutor(2) as pool:
+            futures = [pool.submit(self.open, account, "/login") for account in accounts[8:]]
+            for future in futures:
+                future.result()
+        until(lambda: exited(first_pid) and exited(second_pid), "two starts did not evict the two oldest browsers")
+        folder = self.host["config"].parent / f"state-{self.host['runner_id']}" / "browsers"
+        pids = []
+        for lock in folder.glob("*/profile/SingletonLock"):
+            try:
+                pid = int(os.readlink(lock).rsplit("-", 1)[-1])
+            except (FileNotFoundError, ValueError):
+                continue
+            if not exited(pid):
+                pids.append(pid)
+        require(len(pids) == 8, "simultaneous starts exceeded the eight-browser cap")
+        # The person's request itself launches an evicted browser, so keep=true must navigate a fresh tab.
+        account = accounts[1]
+        base = f"website-tools/{account['site']}/accounts/{account['id']}/browser"
+        self.api(base, {})
+        self.frame(base, "ana-test")
+        require("Practice sign in" in self.read(account), "person's wake did not land on the site")
+        account = accounts[0]
+        self.browser(account, "read", expect="session_lost")
+        base = f"website-tools/{account['site']}/accounts/{account['id']}/browser"
+        self.api(base, {})
+        require("Practice sign in" in self.read(account), "person's wake did not recover a lost session")
+        for account in accounts:
+            self.browser(account, "close")
+
+    def queued_control(self):
+        account = self.account("Queued control")
+        self.open(account, "/click-test")
+        ref = self.ref(self.read(account), "Record click")
+        runner = self.runs[self.host["runner_id"]]
+        before = self.practice.clicks
+        os.kill(runner.pid, signal.SIGSTOP)
+        try:
+            # Supersede the stopped runner's outstanding poll before the bot queues its click.
+            self.api("runner-browser-commands?wait=0", token=self.host["token"])
+            pending = self.browser(account, "click", ref, asynchronous=True)
+            until(
+                lambda: self.api("live-browser-queued?account=" + account["id"])["click"] == 1,
+                "bot click did not queue",
+            )
+            base = f"website-tools/{account['site']}/accounts/{account['id']}/browser"
+            self.api(base + "/control", {"take": True})
+            self.finish(pending, expect="person_in_control")
+        finally:
+            os.kill(runner.pid, signal.SIGCONT)
+        self.api(base + "/control", {"take": False})
+        self.read(account)
+        require(self.practice.clicks == before, "a click queued before person control ran afterward")
+        self.browser(account, "close")
 
     def chrome(self, account):
         profile = (
