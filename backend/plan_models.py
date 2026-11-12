@@ -1,3 +1,4 @@
+# pyright: strict
 """The models bots run on follow the company's Claude and ChatGPT plans.
 
 A company that connects only a ChatGPT plan must not keep its bots on Claude models: with no Claude sign-in, every turn
@@ -18,11 +19,18 @@ this table existed onto it. With no plan, nothing moves: a bot keeps its model a
 """
 
 import json
+import sqlite3
+from typing import Any
 
-from . import bot_settings as BS, model_login, pipeline_seats, providers
-from .execution import lift_after_model_change, model_choice, reset_bot_sessions
-from .harnesses import harnesses_for_runtime, resolve_harness, runtime_of
-from .store import H
+from . import bot_settings, execution, harnesses, model_login, pipeline_seats, providers, store
+
+# The helpers this module calls are untyped; each is used through Any.
+BS: Any = bot_settings
+EX: Any = execution
+HN: Any = harnesses
+ML: Any = model_login
+P: Any = providers
+H: Any = store.H
 
 CLAUDE, CHATGPT, BOTH = "claude", "chatgpt", "both"
 # The plans a runtime's subscription stands for (model_subscriptions.KINDS `runtime`).
@@ -35,7 +43,7 @@ LIGHT_TEMPLATES = frozenset(("librarian", "rules-owner", "updates-owner", "autom
 # role -> {plans connected: (model, effort)}. Heavy is every role not named: the Builder, Reviewer 1, the managers, the
 # spec and plan writers, the Assistant. Reviewer 2 always runs another model than Reviewer 1 (D12), and with both plans
 # another provider. With both, the light roles run on the ChatGPT plan so the Claude plan's limit goes to heavy work.
-SETS = {
+SETS: dict[str, dict[str, tuple[str, str]]] = {
     HEAVY: {
         CLAUDE: ("claude-opus-5-5", "medium"),
         CHATGPT: ("gpt-6.1-sol", "high"),
@@ -54,47 +62,51 @@ SETS = {
 }
 
 
-def connected(c):
+def connected(c: sqlite3.Connection) -> str:
     """CLAUDE, CHATGPT, BOTH or '' : the plans the company has that work (a subscription, not an API key, that does not
     need reconnecting; one at its usage limit still counts)."""
-    from .model_subscriptions import KINDS
+    from . import model_subscriptions
 
+    MS: Any = model_subscriptions
+    KINDS: dict[str, dict[str, str]] = MS.KINDS
     kinds = [kind for kind, spec in KINDS.items() if spec.get("billing") == "subscription"]
     have = {
-        PLAN_OF_RUNTIME.get(KINDS[r[0]]["runtime"])
+        PLAN_OF_RUNTIME.get(KINDS[str(r[0])]["runtime"], "")
         for r in c.execute(
             f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
             "AND status<>'needs_reconnect'",
             kinds,
         )
-    } - {None}
+    } - {""}
     return BOTH if len(have) > 1 else next(iter(have), "")
 
 
-def _offered(model):
-    row = providers.MODEL_BY_ID.get(model) or {}
+def _offered(model: str) -> bool:
+    row: dict[str, Any] = P.MODEL_BY_ID.get(model) or {}
     return bool(row) and not row.get("deprecated") and not row.get("held")
 
 
-def pick(role, plans):
+def pick(role: str, plans: str) -> tuple[str, str]:
     """(model, effort) for `role` with `plans` connected. A model the catalog does not offer yet gives the set's first
     offered pick on the same tool, so a bot never moves onto a model it cannot be set to, nor onto the other plan."""
     model, effort = SETS[role][plans]
     if not _offered(model):
-        runtime = (providers.MODEL_BY_ID.get(model) or {}).get("runtime")
+        found: dict[str, Any] = P.MODEL_BY_ID.get(model) or {}
+        runtime = found.get("runtime")
         model, effort = next(
             (
                 SETS[r][plans]
                 for r in (HEAVY, REVIEWER_2, LIGHT)
-                if _offered(SETS[r][plans][0]) and providers.MODEL_BY_ID[SETS[r][plans][0]]["runtime"] == runtime
+                if _offered(SETS[r][plans][0]) and P.MODEL_BY_ID[SETS[r][plans][0]]["runtime"] == runtime
             ),
             SETS[HEAVY][plans],
         )
-    row = providers.MODEL_BY_ID[model]
-    return model, effort if effort in tuple(row.get("efforts") or ()) else row.get("default_effort") or ""
+    row: dict[str, Any] = P.MODEL_BY_ID[model]
+    efforts = [str(e) for e in row.get("efforts") or ()]
+    return model, effort if effort in efforts else str(row.get("default_effort") or "")
 
 
-def set_by_person(c, bot):
+def set_by_person(c: sqlite3.Connection, bot: str) -> bool:
     return (
         c.execute(
             "SELECT 1 FROM settings_changes WHERE bot=? AND field='model' AND undone_at IS NULL LIMIT 1", (bot,)
@@ -103,12 +115,14 @@ def set_by_person(c, bot):
     )
 
 
-def _reviewer_2(c):
+def _reviewer_2(c: sqlite3.Connection) -> str:
     found = pipeline_seats.resolve(c).get(pipeline_seats.REVIEWER_2) or ""
     return found.removeprefix("bot:")
 
 
-def follow(c, settings, actor, bots=None):
+def follow(
+    c: sqlite3.Connection, settings: Any, actor: str, bots: set[str] | None = None
+) -> list[tuple[str, str, str]]:
     """Move each bot that follows the plans (module doc) onto its pick for the plans connected now; `bots` limits it to
     those ids. Returns [(bot, model, effort)] for each bot moved."""
     plans = connected(c)
@@ -119,31 +133,31 @@ def follow(c, settings, actor, bots=None):
         "WHERE COALESCE(s.template,'')<>'' AND COALESCE(b.state,'active')<>'archived' ORDER BY b.id"
     ).fetchall()
     second = _reviewer_2(c)
-    moved = []
-    for bot, template in ((r[0], r[1]) for r in rows):
+    moved: list[tuple[str, str, str]] = []
+    for bot, template in ((str(r[0]), str(r[1])) for r in rows):
         if bots is not None and bot not in bots:
             continue
         row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
         if not row:
             continue
-        config = json.loads(row["config"] or "{}")
+        config: dict[str, Any] = json.loads(row["config"] or "{}")
         if config.get("shared_from") or set_by_person(c, bot):
             continue
         role = REVIEWER_2 if bot == second else LIGHT if template in LIGHT_TEMPLATES else HEAVY
         model, effort = pick(role, plans)
-        runtime = providers.MODEL_BY_ID[model]["runtime"]
+        runtime = str(P.MODEL_BY_ID[model]["runtime"])
         if config.get("model") == model and config.get("reasoning_effort") == effort:
             continue
-        old_harness = resolve_harness(config, config.get("runtime"))
-        harness = old_harness if runtime_of(old_harness) == runtime else harnesses_for_runtime(runtime)[0]
-        was = model_choice(c, settings, bot)
+        old_harness = str(HN.resolve_harness(config, config.get("runtime")))
+        harness = old_harness if HN.runtime_of(old_harness) == runtime else str(HN.harnesses_for_runtime(runtime)[0])
+        was = EX.model_choice(c, settings, bot)
         before = config.get("model") or ""
         config.update({"model": model, "runtime": runtime, "harness": harness, "reasoning_effort": effort})
         BS.write(c, bot, config)
         c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (bot,))
         c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, bot))
-        lift_after_model_change(c, settings, actor, bot, was)
-        reset = reset_bot_sessions(c, bot)
+        EX.lift_after_model_change(c, settings, actor, bot, was)
+        reset = EX.reset_bot_sessions(c, bot)
         H.event(
             c,
             actor,
@@ -162,5 +176,5 @@ def follow(c, settings, actor, bots=None):
         )
         moved.append((bot, model, effort))
     if moved:
-        model_login.hold_removals(c, settings)
+        ML.hold_removals(c, settings)
     return moved
