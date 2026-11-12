@@ -257,8 +257,6 @@ def _requests(conn: "sqlite3.Connection") -> int:
     return moved
 
 
-
-
 def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:
     """SAVEPOINT or RELEASE inside the pass's transaction: neither changes a row nor starts a snapshot, but a pooled
     connection empties its read cache on both (store._pooled). What the pass read ahead stays: the cache is set aside
