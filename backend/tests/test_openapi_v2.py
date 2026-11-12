@@ -85,11 +85,11 @@ def test_the_declared_answers_match_the_live_ones(api):
         )
 
     def call(operation, method, path, **kw):
-        declared = by_id[operation].get("parameters", [])
-        if method == "put" and any(p["name"] == "Idempotency-Key" and p["required"] for p in declared):
-            keyless = {"Authorization": headers()["Authorization"]}
-            refused = getattr(api, method)(path, headers=keyless, **kw)
-            assert (refused.status_code, refused.json()["error"]["code"]) == (422, "idempotency_key"), path
+        declared = [p for p in by_id[operation].get("parameters", []) if p["name"] == "Idempotency-Key"]
+        if method == "put" and declared:  # the published flag is what the server does without the key
+            keyless = getattr(api, method)(path, headers={"Authorization": headers()["Authorization"]}, **kw)
+            refused = keyless.status_code == 422 and keyless.json()["error"]["code"] == "idempotency_key"
+            assert refused is declared[0]["required"], (path, keyless.text[:200])
         response = getattr(api, method)(path, headers=headers(), **kw)
         assert response.status_code == 200, (path, response.text)
         check(operation, response)
@@ -278,6 +278,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     )
     call("getHeartbeat", "get", "/api/v2/heartbeat")
     call("saveHeartbeat", "put", "/api/v2/heartbeat", json={"interval_s": 15})
+    call("setPostalMailSettings", "put", "/api/v2/postal/settings", json={"legal_bot_id": None})
     call("listToolIndex", "get", "/api/v2/tool-index")
     setup_vault(api)
     tool = api.post("/api/v2/api-tools", json={"name": "Close CRM"}, headers=headers()).json()
