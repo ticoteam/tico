@@ -2084,6 +2084,12 @@ class BotManagesReports(Contract):
     expected_revision: int = Field(ge=1)
 
 
+# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
+CompactAt = Literal[
+    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
+]
+
+
 class BotTaskChoice(Contract):
     """What a bot's tasks run on. Each part is optional on its own: no model is the bot's own model, so this can set
     only the task effort or only the task context length (backend/task_models.py)."""
@@ -2091,7 +2097,7 @@ class BotTaskChoice(Contract):
     harness: ID | None = None
     model: ID | None = None
     effort: ID | None = None
-    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000] | None = None
+    compact_at: CompactAt | None = None
 
 
 class BotTaskModel(Contract):
@@ -2104,7 +2110,7 @@ class BotTaskModel(Contract):
 
 
 class BotCompactAt(Contract):
-    compact_at: Literal[100_000, 150_000, 250_000, 400_000, 600_000, 1_000_000]
+    compact_at: CompactAt
     expected_revision: int = Field(ge=1)
 
 

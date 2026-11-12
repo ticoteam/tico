@@ -2090,10 +2090,16 @@ def parser():
     )
     s.add_argument("bot")
     s.set_defaults(fn="bot release")
-    s = bot.add_parser("model", help="list the models, or change this bot's (BotOps)")
+    s = bot.add_parser("model", help="list the models, or change this bot's model or where it compacts (BotOps)")
     s.add_argument("bot")
     s.add_argument("model", nargs="?", help="a model id or name; leave out to list")
     s.add_argument("--effort")
+    s.add_argument(
+        "--compact-at",
+        type=int,
+        help="where its conversation compacts, in tokens: 100000, 150000, 200000, 250000, 300000, 400000, 500000, "
+        "600000, 700000, 800000, 900000 or 1000000",
+    )
     s.add_argument("--on-behalf-of", help="the open task a person asked you for, when something else started this run")
     s.set_defaults(fn="bot model")
     s = bot.add_parser(

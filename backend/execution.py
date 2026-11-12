@@ -5179,6 +5179,8 @@ class Execution:
             record, here, models_preset.main_config(record, here, config, tier), tier
         )
         config = models_preset.with_gateway_inputs(config)
+        # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
+        config = providers.with_compact_default(config)
         # A bot delivered through a desktop app: who it is in the app, beside `app_delivery` (backend/app_delivery.py).
         config = app_delivery.job_config(config)
         if held:

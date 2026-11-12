@@ -456,6 +456,49 @@ class _ById(dict):
 
 MODEL_BY_ID = _ById((row["id"], row) for row in MODEL_CATALOG)
 
+# Where a bot's conversation compacts, in tokens: the sizes a person or agent may choose (backend/models.py CompactAt),
+# and the default for a bot, task or run with none saved. The default follows the model's family (Opus 400k, Haiku
+# 150k, any other 250k) and never passes the model's own window. The runner's DEFAULT_COMPACT_AT
+# (runner-rs/src/hosts/mod.rs) is only the last resort for a turn that arrives without one.
+COMPACT_SIZES = (
+    100_000,
+    150_000,
+    200_000,
+    250_000,
+    300_000,
+    400_000,
+    500_000,
+    600_000,
+    700_000,
+    800_000,
+    900_000,
+    1_000_000,
+)
+DEFAULT_COMPACT_AT = 250_000
+COMPACT_DEFAULTS = (("opus", 400_000), ("haiku", 150_000))
+
+
+def fit_compact_at(size, window):
+    """`size`, lowered to the largest size that fits a model of `window` tokens (unknown: no limit)."""
+    if not window or size <= window:
+        return size
+    return max((s for s in COMPACT_SIZES if s <= window), default=COMPACT_SIZES[0])
+
+
+def compact_default(model):
+    """Where a bot on `model` compacts when nothing is saved for it."""
+    row = MODEL_BY_ID.get(model or "") or {}
+    family = next((size for name, size in COMPACT_DEFAULTS if name in str(model or "")), DEFAULT_COMPACT_AT)
+    return fit_compact_at(family, row.get("context_tokens"))
+
+
+def with_compact_default(config):
+    """A turn's `config` with its model's default compaction size when it carries none of its own."""
+    if config.get("compact_at"):
+        return config
+    return {**config, "compact_at": compact_default(config.get("model"))}
+
+
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,
 # output). The one exception is gpt-6.1-terra, Tico's approved rate (its row says so). Usage (backend/usage.py) multiplies a run's token counts by these to estimate spend, so a
 # model missing here shows its tokens and no cost. Standard tier, prompts under the long-context

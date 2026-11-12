@@ -880,6 +880,8 @@ ENTRIES = TEAM_RULES + [
         "compact_at",
         "int",
         _card("bots"),
+        words="compact compaction autocompact context window tokens sizes 100000 150000 200000 250000 300000 400000 "
+        "500000 600000 700000 800000 900000 1000000",
     ),
     S(
         "bot.manages_reports",
