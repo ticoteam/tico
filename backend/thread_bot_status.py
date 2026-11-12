@@ -185,34 +185,113 @@ def _outside(c, actor, seen):
     return seen[actor]
 
 
+_STEP_SQL = (
+    "SELECT e.seq, e.kind, b.brief, CASE WHEN b.brief IS NULL THEN e.payload END FROM attempt_events e "
+    "LEFT JOIN attempt_event_briefs b ON b.attempt_id=e.attempt_id AND b.seq=e.seq "
+    "WHERE e.attempt_id=? AND e.kind IN ('delta','message','tool') ORDER BY e.seq DESC LIMIT ?"
+)
+
+
 def _step(c, attempt_id):
     """The run's current step in a person's words: its latest progress line or tool, else that it is writing, thinking or
-    starting."""
-    from .turns import reply_parts
+    starting.
+
+    The same word as turns.reply_parts over the run's newest STEP_EVENTS events, without decoding a big event: one with a
+    brief (step_briefs) is read from it, any other from its payload. Only the newest piece decides the word."""
+    from . import step_briefs
 
     rows = []
-    for kind, payload, created in c.execute(
-        "SELECT kind, payload, created_at FROM attempt_events WHERE attempt_id=? AND kind IN ('delta','message','tool') "
-        "ORDER BY seq DESC LIMIT ?",
-        (attempt_id, STEP_EVENTS),
-    ):
+    for seq, kind, brief, payload in c.execute(_STEP_SQL, (attempt_id, STEP_EVENTS)):
+        if brief is not None:
+            rows.append((seq, kind, json.loads(brief)))
+            continue
         try:
             value = json.loads(payload)
         except (TypeError, ValueError):
             value = {}
-        rows.append((kind, value if isinstance(value, dict) else {}, created))
+        value = value if isinstance(value, dict) else {}
+        # A tool whose item id or label is too odd to keep is read as the replay reads it.
+        rows.append((seq, kind, step_briefs.info(kind, value, keep_text=True) or {"raw": value}))
     # A run whose newest event is a thought is thinking now, whatever it did before; one with nothing yet is starting.
-    newest = rows[0] if rows else None
-    if newest and newest[0] == "delta" and newest[1].get("delta_kind") == "thought":
+    if rows and rows[0][1] == "delta" and rows[0][2].get("t"):
         return THINKING
-    parts = reply_parts(list(reversed(rows)))
-    if not parts:
+    last = _last_piece(c, attempt_id, list(reversed(rows)))
+    if last is None:
         return STARTING
-    last = parts[-1]
     if last["kind"] == "reply":
         return "Writing a reply"
-    text = " ".join(str(last["text"]).split())
+    text = " ".join(last["label"].split())
     return text if len(text) <= STEP_CHARS else text[: STEP_CHARS - 1] + "…"
+
+
+def _last_piece(c, attempt_id, rows):
+    """turns.reply_parts's newest piece, from (seq, kind, step_briefs.info) rows, oldest first: a reply piece keeps the
+    events that hold its text, a tool piece its label. A piece's text is blank when each of its events' is, and two
+    texts compare by their stripped digest; only a piece typed across several events, one of them big, is read again
+    to compare (a closing message that repeats it after a tool call)."""
+    from .turns import TOOL_ENDED, tool_label
+
+    pieces, typing, called = [], None, set()
+    for seq, kind, row in rows:
+        if "raw" in row:
+            value = row["raw"]
+            status = str(value.get("status") or value.get("state") or value.get("phase") or "").lower()
+            row = {"s": status, "i": value.get("item_id"), "l": tool_label(value), "p": value.get("parent_id")}
+        if kind == "delta":
+            if row.get("t"):
+                continue
+            if typing is None:
+                typing = {"kind": "reply", "events": [], "blank": True}
+                pieces.append(typing)
+            typing["events"].append((seq, row))
+            typing["blank"] = typing["blank"] and bool(row["b"])
+        elif kind == "message":
+            if typing is not None:
+                if not row["b"]:
+                    typing.update(events=[(seq, row)], blank=False)
+                typing = None
+            elif not row["b"]:
+                last = next((p for p in reversed(pieces) if p["kind"] != "tool"), None)
+                if (
+                    not last
+                    or last["blank"]
+                    or _digest(c, attempt_id, last["events"]) != _digest(c, attempt_id, [(seq, row)])
+                ):
+                    pieces.append({"kind": "reply", "events": [(seq, row)], "blank": False})
+        elif kind == "tool":
+            key = row.get("i")
+            if row["s"] in TOOL_ENDED or (key and key in called) or row.get("p"):
+                continue  # a subagent's own calls are its work, not the reply's
+            called.add(key)
+            typing = None
+            pieces.append({"kind": "tool", "label": row["l"], "blank": not row["l"].strip()})
+    return next((p for p in reversed(pieces) if not p["blank"]), None)
+
+
+def _digest(c, attempt_id, events):
+    """The stripped digest of a reply piece's text from its [(seq, info)] events, reading again only the big events of
+    a piece typed across several.
+
+    That re-read is the one place the status line can decode more than 64 KiB: a piece typed across several big
+    deltas, ended by a tool call and then repeated by a closing message. Streamed deltas are small, so it stays rare."""
+    from . import step_briefs
+
+    if len(events) == 1:
+        one = events[0][1]
+        return one["h"] if "h" in one else step_briefs.digest(one.get("x", ""))
+    missing = [seq for seq, one in events if "x" not in one]
+    texts = {}
+    if missing:
+        for seq, payload in c.execute(
+            "SELECT seq, payload FROM attempt_events WHERE attempt_id=? AND seq IN (%s)" % ",".join("?" * len(missing)),
+            (attempt_id, *missing),
+        ):
+            try:
+                value = json.loads(payload)
+            except (TypeError, ValueError):
+                value = {}
+            texts[seq] = str((value if isinstance(value, dict) else {}).get("text", ""))
+    return step_briefs.digest("".join(one["x"] if "x" in one else texts.get(seq, "") for seq, one in events))
 
 
 def _elsewhere(c, v, bot_id, root_id):

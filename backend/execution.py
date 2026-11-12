@@ -47,6 +47,7 @@ from . import (
     runner_states,
     runner_wire,
     runs,
+    step_briefs,
     task_quarantine,
     thread_bot_digest,
     turn_budgets,
@@ -6482,7 +6483,7 @@ class Execution:
                 (aid, *(event.seq for event in body.events)),
             )
         }
-        inserts, goals = [], []
+        inserts, goals, briefs = [], [], []
         last_event = None
         now = H.now()
         for event in body.events:
@@ -6499,11 +6500,14 @@ class Execution:
                 raise Problem("terminal", "Cannot append new output to a completed attempt", 409)
             existing_events[event.seq] = (event.kind, payload)
             inserts.append((aid, event.seq, event.kind, payload, now))
+            briefs.append((event.seq, event.kind, payload, clean))
             last_event = (event.kind, clean)
             if not revoked and event.kind == "goal" and row["lease_until"] > now and row["state"] != "expired":
                 goals.append(event.payload)
             seq = event.seq
         c.executemany("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,?,?,?)", inserts)
+        # A big output's few fields the status line reads, so it never decodes the output (backend/step_briefs.py).
+        step_briefs.record(c, aid, briefs)
         # Managed workers report waits through start-place. Their delayed status stream cannot revoke a grant.
         # Legacy workers use the same latest-event predicate here as on restart, including clears and opt-outs.
         if row["state"] == "leased" and row["lease_until"] > now and not start_places.managed(c, aid):
