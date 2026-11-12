@@ -30,6 +30,7 @@ const CAL_HUES = [152, 214, 278, 28, 338, 188, 52, 0, 248, 104];
 const CAL_WORDS: [string, string][] = [['with:', 'with:'], ['bot:', 'bot:'], ['kind:', 'kind:'], ['before:', 'before:'], ['after:', 'after:'],
   ['has:transcript', 'has:transcript'], ['automation:', 'automation:'], ['trigger:', 'trigger:'], ['longer:', 'longer:10m']];
 const CAL_KINDS_KEY = 'tico.calendar.kinds';
+const CAL_WHO_MAX = 20;           // the server reads at most this many calendars at once (calendar_api.py WHO_MAX)
 const CAL_HOUR = 44;              // px per hour in Day and Week
 const CAL_SHORT_RUN = 10;         // runs shorter than this that touch group into one block (spec §9)
 let CALP: CalPage | null = null;
@@ -56,7 +57,7 @@ function calParse(r: string): Pick<CalPage, 'who' | 'view' | 'date' | 'q' | 'ope
   const who = (q.get('who') || '').split(',').map(s => s.trim()).filter(Boolean).map(calNorm);
   const view = CAL_VIEWS.some(([v]) => v === q.get('view')) ? q.get('view') as CalViewName : calPhone() ? 'list' : 'week';
   const date = /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') || '' : calDay(new Date());
-  return {who: who.length ? [...new Set(who)] : [calMe()], view, date, q: q.get('q') || '', open: q.get('open') || ''};
+  return {who: who.length ? [...new Set(who)].slice(0, CAL_WHO_MAX) : [calMe()], view, date, q: q.get('q') || '', open: q.get('open') || ''};
 }
 function calHref(p: CalPage): string {
   const q = new URLSearchParams();
@@ -192,7 +193,9 @@ function calHead(): void {
   set('[data-cal-range]', esc(calTitle(p)));
   const views = p.data?.calendars?.length ? p.data.calendars : p.who.map(ref => ({ref, type: ref.split(':')[0] || '', id: ref.split(':')[1] || '', name: calRefName(ref)}));
   set('[data-cal-chips]', views.map(c => `<span class="cal-chip" style="--h:${calHue(c.ref)}" data-cal-chip="${esc(c.ref)}"><span class="cal-chip-n">${esc(c.name || calRefName(c.ref))}</span>${
-    views.length > 1 || c.ref !== calMe() ? `<button type="button" data-cal-rm="${esc(c.ref)}" aria-label="Remove ${esc(c.name)}">×</button>` : ''}</span>`).join(''));
+    views.length > 1 || c.ref !== calMe() ? `<button type="button" data-cal-rm="${esc(c.ref)}" aria-label="Remove ${esc(c.name)}">×</button>` : ''}</span>`).join('')
+    + '<button type="button" class="cal-chip cal-chip-more" data-cal-chips-more aria-label="More calendars in view" hidden></button>');
+  calChipsFit();
   calAddDraw();
   // Phone: a week strip over the list.
   const [s] = calWindow('week', p.date);
@@ -211,6 +214,21 @@ function calMenuDraw(): void {
   const b = document.querySelector<HTMLElement>('#cal-root [data-cal-record]');
   if (b) b.setAttribute('aria-checked', String(calRecordOn()));
 }
+
+// Chips past the header's one line fold into "+N", which opens Add (where each can be unticked). A phone scrolls them.
+function calChipsFit(): void {
+  const box = document.querySelector<HTMLElement>('#cal-root [data-cal-chips]'), more = box?.querySelector<HTMLElement>('[data-cal-chips-more]');
+  if (!box || !more) return;
+  const chips = [...box.querySelectorAll<HTMLElement>('[data-cal-chip]')];
+  for (const c of chips) c.hidden = false;
+  more.hidden = true;
+  if (calPhone() || box.scrollWidth <= box.clientWidth) return;
+  more.hidden = false; more.textContent = '+' + chips.length;      // its widest, so the room is kept for it
+  let hidden = 0;
+  for (let i = chips.length - 1; i > 0 && box.scrollWidth > box.clientWidth; i--) { chips[i]!.hidden = true; hidden++; }
+  more.textContent = '+' + hidden;
+}
+window.addEventListener('resize', () => { if (CALP) calChipsFit(); });
 
 // ----------------------------------------------------------------- Add: people, bots and what to show
 // The bots that report to the viewer directly, as refs (the rule the server used to apply to "Me" on its own).
@@ -248,14 +266,16 @@ function calAddOpen(open: boolean): void {
 }
 function calAddDraw(): void {
   const p = CALP, host = document.querySelector<HTMLElement>('#cal-root [data-cal-addrows]'); if (!p || !host || !p.add.open) return;
-  const words = p.add.q.trim().toLowerCase(), mine = calMyBots(), on = calKinds();
-  const rows = calAddList(p).filter(c => !words || c.name.toLowerCase().split(/\s+/).some(w => w.startsWith(words)) || c.name.toLowerCase().startsWith(words));
+  const words = p.add.q.trim().toLowerCase(), mine = calMyBots(), on = calKinds(), everyone = calAddList(p);
+  const full = p.who.length >= CAL_WHO_MAX, tooMany = everyone.length > CAL_WHO_MAX;
+  const rows = everyone.filter(c => !words || c.name.toLowerCase().split(/\s+/).some(w => w.startsWith(words)) || c.name.toLowerCase().startsWith(words));
   const quick = words ? '' : `<div class="cal-addm-quick">
-      <button type="button" data-cal-quick="mine"${mine.length ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">smart_toy</span><span class="l">Bots that report to me</span><span class="n" data-cal-quick-n>${mine.length}</span></button>
-      <button type="button" data-cal-quick="all"><span class="nav-icon" aria-hidden="true">groups</span><span class="l">Everyone</span></button></div>`;
+      <button type="button" data-cal-quick="mine"${mine.some(r => !p.who.includes(r)) && !full ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">smart_toy</span><span class="l">Bots that report to me</span><span class="n" data-cal-quick-n>${mine.length}</span></button>
+      <button type="button" data-cal-quick="all"${tooMany || full ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">groups</span><span class="l">Everyone</span></button>
+      ${tooMany || full ? `<p class="cal-addm-note">At most ${CAL_WHO_MAX} calendars show at a time${full ? ': untick one to add another' : ''}.</p>` : ''}</div>`;
   const list = rows.map(c => {
     const ticked = p.who.includes(c.ref);
-    return `<label class="cal-addm-row"><input type="checkbox" data-cal-pick="${esc(c.ref)}"${ticked ? ' checked' : ''}><i class="cal-cd${ticked ? '' : ' off'}" style="--h:${calHue(c.ref)}" aria-hidden="true"></i><span class="l">${esc(c.ref === calMe() ? `${c.name} (me)` : c.name)}</span>${c.type === 'bot' ? '<span class="m">Bot</span>' : ''}</label>`;
+    return `<label class="cal-addm-row"><input type="checkbox" data-cal-pick="${esc(c.ref)}"${ticked ? ' checked' : full ? ' disabled' : ''}><i class="cal-cd${ticked ? '' : ' off'}" style="--h:${calHue(c.ref)}" aria-hidden="true"></i><span class="l">${esc(c.ref === calMe() ? `${c.name} (me)` : c.name)}</span>${c.type === 'bot' ? '<span class="m">Bot</span>' : ''}</label>`;
   }).join('') || '<p class="cal-addm-none">No one by that name</p>';
   const show = `<div class="cal-addm-h">Show</div><div class="cal-lays" role="group" aria-label="Show">${CAL_TOGGLES.map(([k, label]) =>
     `<button type="button" aria-pressed="${on[k]}" data-cal-lay="${k}"><i class="cal-gl ${k}" aria-hidden="true"></i>${label}</button>`).join('')}</div>`;
@@ -270,18 +290,18 @@ function calAddDraw(): void {
 }
 // Add these calendars to the view (or, for one unticked, take it away), then read again.
 function calWhoSet(p: CalPage, who: string[]): void {
-  p.who = who.length ? [...new Set(who)] : [calMe()];
+  p.who = who.length ? [...new Set(who)].slice(0, CAL_WHO_MAX) : [calMe()];
   calCardClose(); calWrite(p); calHead(); void calLoad();
 }
 // Search folds to an icon; the icon and "/" open the same box with the cursor in it.
 function calFindOpen(focus = true): void {
   const sr = document.querySelector<HTMLElement>('#cal-root .cal-sr'); if (!sr) return;
-  sr.classList.add('open');
+  sr.classList.add('open'); calChipsFit();
   if (focus) document.querySelector<HTMLInputElement>('#cal-q')?.focus();
 }
 function calFindFold(): void {
   const input = document.querySelector<HTMLInputElement>('#cal-q');
-  if (input && !input.value.trim() && document.activeElement !== input) document.querySelector('#cal-root .cal-sr')?.classList.remove('open');
+  if (input && !input.value.trim() && document.activeElement !== input) { document.querySelector('#cal-root .cal-sr')?.classList.remove('open'); calChipsFit(); }
 }
 
 // ----------------------------------------------------------------- what is drawn
@@ -645,15 +665,14 @@ async function calDropTake(btn: HTMLElement): Promise<void> {
   const p = CALP, input = document.querySelector<HTMLInputElement>('#cal-q'); if (!p || !input) return;
   if (btn.dataset.ddCal) {
     const ref = btn.dataset.ddCal;
-    if (!p.who.includes(ref)) p.who = [...p.who, ref];
     input.value = ''; p.q = ''; p.drop.open = false; calDropDraw();
-    calWrite(p); calHead(); void calLoad();
+    calWhoSet(p, [...p.who, ref]);      // a 21st calendar is left out (the server reads 20)
     return;
   }
   if (btn.dataset.ddEv) {
     const o = p.drop.events.find(x => x.occurrence_id === btn.dataset.ddEv); if (!o) return;
     p.drop.open = false; calDropDraw();
-    if (!p.who.includes(o.calendar.ref) && o.calendar.ref !== calMe() && o.kind !== 'run') p.who = [...p.who, o.calendar.ref];
+    if (!p.who.includes(o.calendar.ref) && o.calendar.ref !== calMe() && o.kind !== 'run' && p.who.length < CAL_WHO_MAX) p.who = [...p.who, o.calendar.ref];
     p.date = calDay(calWhen(o.start)); p.open = o.occurrence_id;
     if (p.view === 'month') p.view = 'week';
     calWrite(p); calHead(); void calLoad();
@@ -713,6 +732,7 @@ function calBind(): void {
     const view = at('[data-cal-view]'), step = at('[data-cal-step]'), date = at('[data-cal-date]'), rm = at('[data-cal-rm]');
     const lay = at('[data-cal-lay]'), more = at('[data-cal-more]'), item = at('[data-cal-item]'), quick = at('[data-cal-quick]');
     if (at('[data-cal-add]')) { calAddOpen(!p.add.open); return; }
+    if (at('[data-cal-chips-more]')) { calAddOpen(true); return; }
     if (quick) {
       const all = quick.dataset.calQuick === 'all' ? calAddList(p).map(c => c.ref) : calMyBots();
       calWhoSet(p, [...p.who, ...all]); return;
@@ -761,7 +781,7 @@ document.addEventListener('click', ev => {
   if (child) { const it = CALP.items.get(child.dataset.calChild || ''); if (it) calCard(it, card); return; }
   if (t.closest('#cal-card [data-cal-x]')) { calCardClose(); return; }
   if (card && !card.contains(t) && !t.closest('[data-cal-item]')) calCardClose();
-  if (CALP.add.open && !t.closest('.cal-add') && t.isConnected) calAddOpen(false);
+  if (CALP.add.open && !t.closest('.cal-add, [data-cal-chips-more]') && t.isConnected) calAddOpen(false);
   const menu = document.querySelector<HTMLElement>('#cal-root [data-cal-menu]');
   if (menu && !menu.hidden && !t.closest('.cal-more')) { menu.hidden = true; document.querySelector('#cal-root [data-cal-more]')?.setAttribute('aria-expanded', 'false'); }
 });

@@ -47,7 +47,13 @@ const ANA_OCC = [
 const BEN_OCC = [{...event('ev-pricing', 'Pricing review', at(11, 11), at(11, 11, 30), {meeting_url: MEET}), calendar: cal(BEN)},
   {...event('ev-ben-1', '1:1 Dana', at(12, 10), at(12, 10, 30)), calendar: cal(BEN)}];
 
-interface World { reads: URLSearchParams[]; settings: unknown[]; }
+// `many`: the team has 25 more people, so Add lists more calendars than the server reads at once.
+interface World { reads: URLSearchParams[]; settings: unknown[]; many?: boolean; }
+const MANY = Array.from({length: 25}, (_, i) => {
+  const id = `p${String(i + 1).padStart(2, '0')}`;
+  return {ref: 'human:' + id, type: 'human', id, name: `Person ${i + 1}`, work_starts: '09:00', work_ends: '17:00', work_days: 'mon,tue,wed,thu,fri'};
+});
+const WHO_MAX = 20;        // backend/calendar_api.py WHO_MAX
 async function open(browser: Browser, viewport: {width: number; height: number}, w: World, theme: 'light' | 'dark') {
   const phone = viewport.width < 760;
   const context = await browser.newContext({viewport, serviceWorkers: 'block', hasTouch: phone, isMobile: phone, colorScheme: theme, locale: 'en-US'});
@@ -74,7 +80,9 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/api/v2/calendar/events') {
       const q = url.searchParams; w.reads.push(q);
       const who = (q.get('who') || 'me').split(','), from = new Date(q.get('from') || 0).getTime(), to = new Date(q.get('to') || 0).getTime();
-      const views = who.map(r => r === 'me' || r === 'human:ana' ? ANA : r === 'human:ben' ? BEN : r === 'bot:ops' ? OPS : null).filter(Boolean);
+      // As the server answers: more than WHO_MAX calendars is refused.
+      if (who.length > WHO_MAX) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'validation', detail: `At most ${WHO_MAX} calendars at a time`}})});
+      const views = who.map(r => r === 'me' || r === 'human:ana' ? ANA : r === 'human:ben' ? BEN : r === 'bot:ops' ? OPS : MANY.find(m => m.ref === r) || null).filter(Boolean);
       const kinds = q.get('kinds')?.split(',');
       // As the server answers: a bot's runs only when that bot is in `who`, never for the person it reports to.
       const occ = [...ANA_OCC, ...(who.includes('human:ben') ? BEN_OCC : []), ...(who.includes('bot:ops') ? OPS_OCC : [])]
@@ -83,7 +91,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     }
     if (p === '/api/v2/calendar/calendars') {
       const q = (url.searchParams.get('q') || '').toLowerCase();
-      return json({calendars: [{...ANA, kind: 'person'}, {...BEN, kind: 'person'}, {...OPS, kind: 'bot'}].filter(c => c.name.toLowerCase().startsWith(q) && (q || c.ref !== 'human:ana'))});
+      return json({calendars: [{...ANA, kind: 'person'}, {...BEN, kind: 'person'}, {...OPS, kind: 'bot'}, ...(w.many ? MANY.map(m => ({...m, kind: 'person'})) : [])].filter(c => c.name.toLowerCase().startsWith(q) && (q || c.ref !== 'human:ana'))});
     }
     if (p === '/api/v2/calendar/search') {
       const q = (url.searchParams.get('q') || '').toLowerCase();
@@ -274,7 +282,7 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await page.locator('.cal-ev.dim', {hasText: 'Standup'}).count(), 1, `${where}: the rest fades while words are in the box`);
       await shot(page, `page-search-${theme}`);
       await q.press('Enter');
-      await page.locator('[data-cal-chip="human:ben"]').waitFor();
+      await page.locator('[data-cal-chip="human:ben"]').waitFor({state: 'attached'});      // folded into +1 while search is open
       assert.equal(await q.inputValue(), '', `${where}: the box clears`);
       await page.waitForFunction(() => document.querySelectorAll('#cal-root .cal-ev.event').length >= 4);
       assert.ok(w.reads.some(r => r.get('who') === 'me,bot:ops,human:ben'), `${where}: Ben's calendar is read`);
@@ -287,6 +295,7 @@ async function shot(page: Page, name: string, clip?: string) {
       await page.locator('[data-cal-range]').click();
       await page.waitForFunction(() => !document.querySelector('#cal-root .cal-sr.open'));
       assert.equal(await headerLines(page), 1, `${where}: Today, arrows, range, chips, Add, search, views and ⋯ on one line`);
+      assert.equal(await page.locator('[data-cal-chip="human:ben"]').isVisible(), true, `${where}: three chips fit once search folds`);
       await shot(page, `page-header-${theme}`, '#cal-root .cal-h');
 
       // 3 days: today and the next two on one hour grid; › moves by three days (AC-6).
@@ -345,6 +354,37 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `phone-${theme}: no sideways scroll with three chips`);
       await shot(page, `phone-${theme}`);
       assert.deepEqual(errors, [], `phone-${theme}`);
+      await context.close();
+    }
+
+    // More people and bots than the server reads at once (20): "Everyone" is off and says why, "Bots that report to me"
+    // still adds; ticking stops at 20; an address naming more opens on the first 20; chips past the line fold into "+N".
+    {
+      const w: World = {reads: [], settings: [], many: true};
+      const {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, 'light');
+      const tooMany = ['me', 'bot:ops', 'human:ben', ...MANY.map(m => m.ref)].join(',');
+      await page.goto('https://tico-ui.test/#/calendar?who=' + tooMany);
+      await page.locator('#cal-root .cal-ev.event').first().waitFor();
+      assert.equal(await page.locator('#cal-root .err').count(), 0, 'many: an address with 28 calendars still answers');
+      assert.equal(w.reads.at(-1)?.get('who')?.split(',').length, WHO_MAX, 'many: it reads the first 20');
+      assert.equal(await headerLines(page), 1, 'many: still one header line');
+      const more = page.locator('[data-cal-chips-more]');
+      assert.equal(await more.isVisible(), true, 'many: the chips past the line fold into +N');
+      const shown = await page.locator('[data-cal-chip]:visible').count();
+      assert.equal(await more.innerText(), `+${WHO_MAX - shown}`, 'many: +N counts the hidden chips');
+      await more.click();
+      await page.locator('[data-cal-addm] [data-cal-pick]').first().waitFor();
+      assert.equal(await page.locator('[data-cal-quick="all"]').isDisabled(), true, 'many: Everyone is off over 20');
+      assert.match(await page.locator('[data-cal-addm]').innerText(), /at most 20/i, 'many: and says why');
+      assert.equal(await page.locator('[data-cal-addm] [data-cal-pick]:not(:checked)').first().isDisabled(), true, 'many: no 21st tick');
+      // Take two away: two rows free up, and ticking one more stays within 20.
+      await page.locator('[data-cal-addm] [data-cal-pick="human:p01"]').uncheck();
+      await page.locator('[data-cal-addm] [data-cal-pick="human:p02"]').uncheck();
+      await page.waitForFunction(() => !!document.querySelector('[data-cal-addm] [data-cal-pick]:not(:checked):not(:disabled)'));
+      await page.locator('[data-cal-addm] [data-cal-pick="human:p01"]').check();
+      await page.waitForFunction(() => document.querySelectorAll('[data-cal-chip]').length === 19);
+      assert.equal(await page.locator('#cal-root .err').count(), 0, 'many: no error after ticking');
+      assert.deepEqual(errors, [], 'many');
       await context.close();
     }
 

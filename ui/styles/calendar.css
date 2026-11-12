@@ -85,6 +85,10 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-addm-row input{margin:0;accent-color:var(--ink)}
 .cal-cd.off{background:var(--g5)}
 .cal-addm-none{margin:6px 8px;color:var(--muted)}
+.cal-addm-note{margin:2px 8px 4px;color:var(--muted)}
+.cal-addm-row:has(input:disabled){color:var(--muted);cursor:default}
+.cal-chip[hidden]{display:none}
+.cal-chip-more{padding:0 10px;border:0;background:var(--surface2);color:var(--ink);font:inherit;font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .cal-addm-h{padding:6px 8px 2px;color:var(--muted);font-weight:600}
 .cal-lays{display:flex;flex-wrap:wrap;gap:2px}
 .cal-lays button{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 9px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);cursor:pointer}
