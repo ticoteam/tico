@@ -487,12 +487,21 @@ def gateway_connected(c: sqlite3.Connection, settings: object) -> bool:
     return bool(cast(Any, gateway_connection).connected(c, settings))
 
 
-def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tuple[str, str]:
-    """(key, base URL) for a call to the Gateway; key '' when none is set. Never logged."""
+def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tuple[str, str, str]:
+    """(key, base URL, the target's fingerprint) for a call to the Gateway; key '' when none is set. The key is never
+    logged; the fingerprint names which key and address without it (`gateway_fingerprint`)."""
     from ... import gateway_connection
 
-    secret, base, _ = cast(tuple[str, str, object], cast(Any, gateway_connection).target(c, vault, settings))
-    return str(secret or ""), str(base or "")
+    secret, base, fingerprint = cast(tuple[str, str, object], cast(Any, gateway_connection).target(c, vault, settings))
+    return str(secret or ""), str(base or ""), str(fingerprint or "")
+
+
+def gateway_fingerprint(c: sqlite3.Connection, settings: object) -> str:
+    """Which Gateway key and address a call would use now, without unsealing the key: the saved connection's revision
+    (every key or URL save, clear and rotation adds one), or a digest of the environment's key and URL."""
+    from ... import gateway_connection
+
+    return str(cast(Any, gateway_connection).fingerprint(c, settings) or "")
 
 
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:

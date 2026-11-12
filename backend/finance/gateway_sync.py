@@ -7,10 +7,19 @@ The Gateway's caps are on its own list cost, not on Tico's price, so a budget is
 services cutoff the self cap is set to the key's spend so far (`spent_usd`), which refuses every further charged call;
 when the budget is raised above what it has used, or a new budget month starts, the self cap is cleared. A 404 means
 the Gateway does not have the route yet: the worker tries again an hour later and says nothing. A rehearsal copy sends
-nothing: what would be sent is recorded as withheld. Nothing runs without a Gateway connection."""
+nothing: what would be sent is recorded as withheld. Nothing runs without a Gateway connection.
+
+A self cap belongs to one key at one address: each result keeps the connection's target fingerprint (`for`: the saved
+revision, or a digest of the environment's key and URL), and a result for another target says nothing about the
+current one. After a key or URL change, a rotation or a new environment key, the cap is unknown and is set again: a cut
+is made on the new key, and a clear is sent to it once Tico has cut any key here (an earlier key that comes back may
+still hold Tico's cut). A key that stops being current keeps its self cap: Tico no longer holds it to change it, and a
+cut left on a key nothing uses only refuses spending. A retry's wait (`tried_for`) holds only the target that failed,
+for the cap and the meter alike; the meter's months already read are kept across keys."""
 
 import json
 import logging
+import secrets
 import threading
 import urllib.error
 import urllib.parse
@@ -118,13 +127,15 @@ def cap_step(
             return "none"
         want, month = jobs.cap_wanted(c, now)
         state = jobs.cap_state(c)
-    if not _needs(state, want, month):
+        target = tico.gateway_fingerprint(c, settings)
+    if not _needs(state, want, month, target):
         return "steady"
-    if str(state.get("next_try_at") or "") > now:
+    if _waits(state, target, now):
         return "waiting"
     with store.transaction() as c:
         state = jobs.cap_state(c)
-        if not _needs(state, want, month) or str(state.get("claimed_at") or "") > _after(now, -CLAIM_STALE):
+        target = tico.gateway_fingerprint(c, settings)
+        if not _needs(state, want, month, target) or str(state.get("claimed_at") or "") > _after(now, -CLAIM_STALE):
             return "steady"
         if rehearsal:
             jobs.cap_record(
@@ -135,17 +146,24 @@ def cap_step(
                     "want": want,
                     "month_wanted": month,
                     "next_try_at": _after(now, NOT_DEPLOYED_RETRY),
+                    "tried_for": target,
                     "at": now,
                 },
                 now,
             )
             return "withheld"
-        jobs.cap_record(c, {**state, "claimed_at": now}, now)
+        claim = secrets.token_hex(8)
+        jobs.cap_record(c, {**state, "claimed_at": now, "claim": claim}, now)
     with store.read() as c:
-        key, base = tico.gateway_target(c, vault, settings)
+        key, base, target = tico.gateway_target(c, vault, settings)
     status, answer, spent = _push(want, key, base, opener)
     with store.transaction() as c:
-        state = {k: v for k, v in jobs.cap_state(c).items() if k != "claimed_at"}
+        current = jobs.cap_state(c)
+        if current.get("claim") != claim:
+            # This claim went stale and a newer one took over: its result stands, whatever this late reply says.
+            log.info("Set aside a late Gateway self cap reply (claim %s, %s)", claim, status or "unreachable")
+            return "stale"
+        state = {k: v for k, v in current.items() if k not in ("claimed_at", "claim")}
         if status is not None and 200 <= status < 300:
             standing = {
                 k: str(answer[k])
@@ -157,6 +175,7 @@ def cap_step(
                 {
                     "pushed": want,
                     "month": month,
+                    "for": target,
                     "status": "ok",
                     "at": now,
                     "tries": 0,
@@ -168,10 +187,18 @@ def cap_step(
             return "pushed"
         if status == 404:
             jobs.cap_record(
-                c, {**state, "status": "not_deployed", "next_try_at": _after(now, NOT_DEPLOYED_RETRY), "at": now}, now
+                c,
+                {
+                    **state,
+                    "status": "not_deployed",
+                    "next_try_at": _after(now, NOT_DEPLOYED_RETRY),
+                    "tried_for": target,
+                    "at": now,
+                },
+                now,
             )
             return "not_deployed"
-        tries = int(str(state.get("tries") or 0)) + 1
+        tries = _tries(state, target) + 1
         if tries == 1:
             log.warning("Could not set the Gateway self cap (%s)", status or "unreachable")
         jobs.cap_record(
@@ -182,6 +209,7 @@ def cap_step(
                 "error": str(status or "unreachable"),
                 "tries": tries,
                 "next_try_at": _after(now, RETRY[min(tries, len(RETRY)) - 1]),
+                "tried_for": target,
                 "at": now,
             },
             now,
@@ -189,11 +217,25 @@ def cap_step(
         return "failed"
 
 
-def _needs(state: Mapping[str, object], want: str, month: str) -> bool:
+def _needs(state: Mapping[str, object], want: str, month: str, target: str) -> bool:
+    """Whether the current target's self cap may be out of step. A result made for another target is no evidence
+    (module doc): a cut is made again, and a clear is sent once any cut was ever pushed here (`pushed` set)."""
     pushed, pushed_month = state.get("pushed"), state.get("month")
+    if state.get("for") != target:
+        return want == "cut" or pushed is not None
     if want == "cut":
         return not (pushed == "cut" and pushed_month == month)
     return pushed == "cut"
+
+
+def _waits(state: Mapping[str, object], target: str | None, now: str) -> bool:
+    """A retry's wait holds the target that failed, not one that replaced it. `target` None: whichever."""
+    return str(state.get("next_try_at") or "") > now and (target is None or state.get("tried_for") == target)
+
+
+def _tries(state: Mapping[str, object], target: str) -> int:
+    """Failed tries in a row on this target; another target starts again from none."""
+    return int(str(state.get("tries") or 0)) if state.get("tried_for") == target else 0
 
 
 def _push(want: str, key: str, base: str, opener: Opener | None) -> tuple[int | None, dict[str, Any], Decimal | None]:
@@ -216,10 +258,11 @@ def _push(want: str, key: str, base: str, opener: Opener | None) -> tuple[int | 
 
 
 # ------------------------------------------------------------------------------------------------ the meter
-def due_months(c: Any, at: str) -> list[str]:
-    """The months whose meter was last read more than FETCH_EVERY_HOURS ago, unless a 404 or failure says wait."""
+def due_months(c: Any, at: str, target: str | None = None) -> list[str]:
+    """The months whose meter was last read more than FETCH_EVERY_HOURS ago, unless a 404 or failure on `target` (the
+    connection's fingerprint; None: any) says wait."""
     state = fetch_state(c)
-    if str(state.get("next_try_at") or "") > at:
+    if _waits(state, target, at):
         return []
     last = cast(dict[str, str], state.get("months") or {})
     cutoff = _after(at, -FETCH_EVERY_HOURS * 3600)
@@ -246,8 +289,8 @@ def usage_step(
     with store.read() as c:
         if not is_set_up(c) or not tico.gateway_connected(c, settings):
             return "none"
-        months = due_months(c, now)
-        key, base = tico.gateway_target(c, vault, settings)
+        key, base, target = tico.gateway_target(c, vault, settings)
+        months = due_months(c, now, target)
     if not months:
         return "steady"
     if rehearsal or not key:
@@ -260,6 +303,7 @@ def usage_step(
                     **state,
                     "status": "withheld" if rehearsal else "no_key",
                     "next_try_at": _after(now, NOT_DEPLOYED_RETRY),
+                    "tried_for": target,
                 },
                 "keeper",
                 now,
@@ -280,12 +324,17 @@ def usage_step(
                 SL.set_setting(
                     c,
                     FETCH_KEY,
-                    {**state, "status": "not_deployed", "next_try_at": _after(now, NOT_DEPLOYED_RETRY)},
+                    {
+                        **state,
+                        "status": "not_deployed",
+                        "next_try_at": _after(now, NOT_DEPLOYED_RETRY),
+                        "tried_for": target,
+                    },
                     "keeper",
                     now,
                 )
                 return "not_deployed"
-            tries = int(str(state.get("tries") or 0)) + 1
+            tries = _tries(state, target) + 1
             if tries == 1:
                 log.warning("Could not read the Gateway usage meter (%s)", status or "unreachable")
             SL.set_setting(
@@ -297,6 +346,7 @@ def usage_step(
                     "error": str(status or "unreachable"),
                     "tries": tries,
                     "next_try_at": _after(now, RETRY[min(tries, len(RETRY)) - 1]),
+                    "tried_for": target,
                 },
                 "keeper",
                 now,

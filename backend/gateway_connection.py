@@ -210,6 +210,12 @@ def _fingerprint(c, settings=None, record=None):
     return f"{where}:{record.get('revision', 0)}" if where else ""
 
 
+def fingerprint(c, settings=None):
+    """`target`'s fingerprint without unsealing the key: what a result about the key in use (a check, Finance's self
+    cap) is kept for."""
+    return _fingerprint(c, settings)
+
+
 def key_id(c, settings=None, record=None):
     """A non-secret id of the gateway key in use, for usage records: the Gateway's own id of an automatic key (`gk_`),
     else `_fingerprint`. Never the key; '' with none."""

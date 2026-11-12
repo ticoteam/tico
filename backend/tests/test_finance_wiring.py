@@ -216,7 +216,10 @@ class _Gateway:
 
 def test_the_cap_worker_withholds_in_rehearsal_and_waits_out_a_404(books, monkeypatch):
     monkeypatch.setattr(finance_tico, "gateway_connected", lambda c, settings: True)
-    monkeypatch.setattr(finance_tico, "gateway_target", lambda c, vault, settings: ("gk_test", "http://127.0.0.1:9"))
+    monkeypatch.setattr(
+        finance_tico, "gateway_target", lambda c, vault, settings: ("gk_test", "http://127.0.0.1:9", "settings:1")
+    )
+    monkeypatch.setattr(finance_tico, "gateway_fingerprint", lambda c, settings: "settings:1")
     with books.transaction() as c:
         ai = budget(c, "AI services")
         act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})

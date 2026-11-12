@@ -59,6 +59,9 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
   pauses no bot (a run need not make images); at its limit new images are refused for whoever it covers. A new team's budgets start with no amount,
   so nothing is cut off until a person sets one; the team's monthly limit here is separate and does not set a budget.
   Its hold log identifies the budget and its period end (or that it must be raised), without amounts.
+  At the cutoff Finance also sets the Gateway key's own spending cap, and clears it when the budget is raised. The cap
+  follows the key in use: a new, rotated or environment key, or a new Gateway URL, is capped or cleared within a few
+  minutes. A key that is no longer in use keeps the cap it had; if it comes back, Finance sets its cap again.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
 
