@@ -40,6 +40,16 @@ def test_semver_comparison():
     assert not releases.newer("0.2.0", "dev") and not releases.newer("latest", "0.1.0")
 
 
+def test_a_server_on_a_newer_prerelease_is_not_shown_an_older_release_as_the_latest():
+    """Tico Team ran 0.6.0-rc.8 and Health said the latest was 0.5.216: the check reads the newest stable release."""
+    checker = releases.Checker()
+    checker.checked = checker.clock()  # fresh: no background read
+    checker.release = {**RELEASE, "tag": "v0.5.216", "url": "u", "name": "n"}
+    seen = checker.view("0.6.0-rc.8")
+    assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
+    assert checker.view("0.5.200")["latest"] == "0.5.216" and checker.view("0.5.200")["available"]
+
+
 def test_update_is_owner_only(environment):
     api = environment()
     person = as_person(api, "riley")

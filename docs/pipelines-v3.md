@@ -422,6 +422,11 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 - A bot's snooze on a task that waits on tasks it filed ends when the last of them ends, and the owner is woken with how
   each ended. A person's snooze stays. *Changed Nov 11: Initech's SEO Owner slept a week after the person said the
   change was applied.*
+- A bot's snooze in a stage that checks the release production runs (Product's Validate), on a task whose filed work is
+  in the repository the company's Tico server runs, ends when that server starts on another release, and the owner is
+  woken with it. A bot waits for a release, never for a guessed release time. *Added Nov 11: Tico Team's Product Owner
+  slept three tasks to "the next release window" while the release they waited for landed minutes later.*
+- Run now on a snoozed task ends the snooze, in the name of whoever pressed it, as Wake does.
 - A bot should give an end date. With none, the task shows "On ice" and the manager bot is told once (C1).
 - After 3 snoozes by a bot in one stage, the next goes to the manager bot. A bot can't put a task off forever.
 

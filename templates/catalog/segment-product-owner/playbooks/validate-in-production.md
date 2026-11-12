@@ -18,8 +18,13 @@ not run it: go to step 2's snooze.
 ## 2. Check the version production runs
 
 Find the version production runs now, from the release record or the product's own version line. If it is older than
-the release that carries this change, production does not run it yet: snooze to the next release date,
-`tico task snooze <id> --until <date> -m "production runs <version>; the change ships in <release>" --version N`, and stop.
+the release that carries this change, production does not run it yet. Wait for the release, not for a clock time: a
+guessed release window or hour leaves the task asleep after the release lands. Snooze with the release in the reason and
+a backstop date a day or two out,
+`tico task snooze <id> --until <date> -m "waiting for <release>: production runs <version>" --version N`, and stop.
+When production is the Tico server your company runs on (the change is in its own repository), its update to a new
+release ends the snooze and wakes you at once. Check again then; if production still runs an older release than the
+one that carries the change, snooze again the same way.
 
 ## 3. Check each criterion in production
 

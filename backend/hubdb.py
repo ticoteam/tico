@@ -6790,6 +6790,15 @@ def task_run_now(conn, actor, task_id):
         refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(conn, actor, row)}")
     if why := setup_hold(conn, row["owner_id"]):
         raise Refused("run-now", why)  # not a refused write: nothing to count against the caller
+    if (
+        row.get("pipeline_id")
+        and conn.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()
+    ):
+        # Run now asks for the work now: like the task's Wake button it ends the snooze, in the presser's name. Left
+        # snoozed, the engine holds the run it queues (task_wakes.may_start) and Run now did nothing.
+        from . import task_engine
+
+        task_engine.unsnooze(conn, task_id, actor, "Run now")
     waiting = None
     try:
         waiting = _one(
