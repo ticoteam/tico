@@ -142,8 +142,10 @@ function peReqHTML(state: PeState, req: PipelineReqRec, si: number, ri: number):
     + (answer ? peAnswerHTML(req, at) : '')
     + (needs === 'in_release' ? peF('Release repo', `<input data-pe-rf="release_repo" ${at} maxlength="200" value="${esc(String(req.settings['release_repo'] ?? ''))}" placeholder="owner/repo" autocomplete="off">`)
       + peF('Release with', `<input data-pe-rf="release_with" ${at} maxlength="120" value="${esc(String(req.settings['release_with'] ?? ''))}" placeholder="workflow:release.yml or tag" autocomplete="off">`) : '')
-    + '<div class="pe-req-foot">' + (PE_SWITCHES[needs] ?? []).map(([key, label]) =>
-      `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${req.settings[key] === true ? ' checked' : ''}> ${esc(label)}</label>`).join('')
+    + '<div class="pe-req-foot">' + (PE_SWITCHES[needs] ?? []).map(([key, label]) => {
+      const on = needs === 'in_release' && key === 'prereleases' ? req.settings[key] !== false : req.settings[key] === true;
+      return `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rs="${key}" ${at}${on ? ' checked' : ''}> ${esc(label)}</label>`;
+    }).join('')
     + `<label class="pe-check"><input type="checkbox" role="switch" data-pe-rf="can_push_past" ${at}${req.can_push_past && !never ? ' checked' : ''}${never ? ' disabled' : ''}> Can be pushed past</label>`
     + `<button type="button" class="ghost pe-req-x" data-pe-req-x ${at}>Remove</button></div></div></details>`;
 }
@@ -269,7 +271,12 @@ function peInput(state: PeState, el: HTMLInputElement | HTMLSelectElement): void
   }
   const req = stage.requirements[peIndex(el, 'peRi')];
   const rs = el.dataset['peRs'];
-  if (req && rs) { req.settings = peSetting(req.settings, rs, checked || null); return; }
+  if (req && rs) {
+    // Omission enables prereleases; the off position must keep an explicit opt-out.
+    const value = peNeeds(req) === 'in_release' && rs === 'prereleases' ? checked : checked || null;
+    req.settings = peSetting(req.settings, rs, value);
+    return;
+  }
   const rf = el.dataset['peRf'];
   if (!req || !rf) return;
   if (rf === 'line') {

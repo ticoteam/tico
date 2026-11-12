@@ -1158,7 +1158,7 @@ def _release_way(settings: object) -> tuple[str, bool, str]:
     found = _as_dict(_loads(settings)) or {}
     return (
         str(found.get("release_with") or "").strip(),
-        bool(found.get("prereleases")),
+        found.get("prereleases", True) is not False,
         str(found.get("release_repo") or "").strip().lower(),
     )
 

@@ -2,10 +2,12 @@ import type {Route} from 'playwright';
 // Offline browser check of a stage's typed answer in the pipeline editor (docs/pipelines-v3.md kind 6, C30): Answer is
 // under Responses in Needs; its name follows its title; a number keeps its Min and Max, a choice its choices (Yes / No
 // in one click). A save sends them as the record stores them (kind answer, settings name/type/min/max/question,
-// choices), and the editor opened again on the saved record shows the same fields.
+// choices), and the editor opened again on the saved record shows the same fields. The release switch defaults on;
+// an explicit opt-out survives save/reload, and can be enabled again on desktop and phone.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
@@ -107,7 +109,42 @@ const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager
     assert.deepEqual(await at(2, 'choice').evaluateAll(els => els.map(e => (e as HTMLInputElement).value)), ['Yes', 'No']);
     assert.deepEqual(await dialog.locator('.pe-req-name').allInnerTexts(), ['Owner says done', 'Confidence', 'Risky']);
 
+    // A release requirement counts RCs by default; switching it off must survive save and reopening on either width.
+    const shot = async (ri: number, name: string) => {
+      const dir = process.env.TICO_UI_SHOTS;
+      if (!dir) return;
+      fs.mkdirSync(dir, {recursive: true});
+      await dialog.locator(`.pe-req[data-pe-ri="${ri}"]`).screenshot({path: path.join(dir, name + '.png')});
+    };
+    for (const [i, width] of [1200, 390].entries()) {
+      await page.setViewportSize({width, height: 900});
+      const ri = 3 + i;
+      await dialog.locator('[data-pe-req-add]').click();
+      await at(ri, 'kind').selectOption('in_release');
+      const prereleases = dialog.locator(`[data-pe-si="0"][data-pe-ri="${ri}"][data-pe-rs="prereleases"]`);
+      assert.equal(await prereleases.isChecked(), true, `${width}: an omitted setting counts prereleases`);
+      await shot(ri, `prereleases-${width}-default`);
+      await prereleases.uncheck();
+      const count = saves.length;
+      await dialog.locator('[data-pe-save]').click();
+      await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+      assert.equal(saves.length, count + 1);
+      assert.deepEqual(saves[count]!.stages[0]!.requirements[ri]!['settings'], {prereleases: false}, `${width}: save the opt-out`);
+      await dialog.locator('[data-pe-close]').click();
+      await dialog.waitFor({state: 'detached'});
+      await page.reload();
+      await page.locator('#task-pipeline-edit').click();
+      await dialog.locator('.pe-stage > summary').click();
+      await dialog.locator(`[data-pe-ri="${ri}"].pe-req > summary`).click();
+      assert.equal(await prereleases.isChecked(), false, `${width}: the saved opt-out reloads as off`);
+      await shot(ri, `prereleases-${width}-opt-out`);
+      await prereleases.check();
+      await dialog.locator('[data-pe-save]').click();
+      await page.waitForFunction(() => document.querySelector('#pe-dialog [data-pe-save]:not([disabled])'));
+      assert.deepEqual(saves[count + 1]!.stages[0]!.requirements[ri]!['settings'], {prereleases: true}, `${width}: counting can be enabled again`);
+    }
+
     assert.deepEqual(errors, []);
-    console.log('PASS: a stage asks a number and a choice; the editor saves them and shows them again.');
+    console.log('PASS: typed answers and release opt-outs survive editor saves and reloads on desktop and phone.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -156,7 +156,7 @@ const factories = (async () => {
   const release = ctx.peReqHTML(state, state.draft.stages[1]!.requirements[0]!, 1, 0);
   assert.match(release, /data-pe-rf="release_repo"/);
   assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
-  assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
+  assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
@@ -170,6 +170,11 @@ const factories = (async () => {
     {prereleases: true, release_repo: 'ticoteam/tico', release_with: 'workflow:release.yml'});
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', false));
+  const saved = plain(ctx.peOut(state.draft));
+  assert.equal(saved.stages[1]!.requirements[0]!.settings.prereleases, false, 'an opt-out is explicit in the save payload');
+  assert.doesNotMatch(ctx.peReqHTML({...state, draft: saved}, saved.stages[1]!.requirements[0]!, 1, 0),
+    /data-pe-rs="prereleases"[^>]* checked/, 'the saved opt-out renders off');
 
   const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
   assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,
