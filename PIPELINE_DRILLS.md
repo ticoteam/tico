@@ -8,3 +8,4 @@
 - drill B5: Build ends when a pull request is open and its checks pass.
 - drill B7: Merge hands the pull request to the merge queue and waits for it to land.
 - drill B6: Review 1 reads the change against its spec before anyone fixes anything.
+- drill B8: Release ends when the merged change ships in a tagged release.
