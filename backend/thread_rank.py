@@ -236,7 +236,7 @@ def run_pass(store, at=None, engine=None, clock=time.monotonic):
                         route = route_of(call.result)
                         summary["routes"][route] = summary["routes"].get(route, 0) + 1
                     H.event(c, H.KEEPER, "judge.call", label, detail)
-                for n, reply in zip(run, replies):
+                for n, reply in zip(run, replies, strict=True):
                     row = rows[n][0]
                     level = None
                     if not isinstance(reply, BaseException):

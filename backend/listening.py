@@ -734,7 +734,7 @@ def score(store, row, flow, now, primary=None, left=None):
                     H.event(c, H.KEEPER, "judge.call", label, DG.audit_row(call, label, automation=aid))
                 # Turned off or deleted while the call ran: no result is written, the posts stay `new`.
                 still = on(c)
-                for n, reply in zip(run, replies):
+                for n, reply in zip(run, replies, strict=True):
                     item = waiting[n][1]
                     if isinstance(reply, BaseException):  # one post's failure is that post's; the pass goes on
                         code = J.error_code(reply) if isinstance(reply, J.JudgeError) else type(reply).__name__

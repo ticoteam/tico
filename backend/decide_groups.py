@@ -140,7 +140,7 @@ def ask(engine: Callable[..., Any], items, label=None, size=MOST) -> tuple[list[
     replies: list[Reply | None] = [None] * len(items)
     calls: list[Call] = []
     for run in packs(items, size):
-        for place, reply in zip(run, ask_run(engine, [items[p] for p in run], label, calls, run)):
+        for place, reply in zip(run, ask_run(engine, [items[p] for p in run], label, calls, run), strict=True):
             replies[place] = reply
     return [r if r is not None else J.JudgeError("shape", "no reply") for r in replies], calls
 
@@ -163,7 +163,7 @@ def ask_run(engine, items, label=None, calls=None, places=None) -> list[Reply]:
         fine.append(n)
     if len(fine) == 1:
         n = fine[0]
-        replies[n] = _alone(engine, *items[n], label, places[n], calls)
+        replies[n] = _alone(engine, items[n][0], items[n][1], label, places[n], calls)
     elif fine:
         state, questions, ids = grouped([items[n] for n in fine])
         result, error, sent = None, None, True
@@ -186,7 +186,7 @@ def ask_run(engine, items, label=None, calls=None, places=None) -> list[Reply]:
             if sent:
                 calls.append(Call([places[n] for n in fine], len(questions), error=error))
             for n in fine:
-                replies[n] = _alone(engine, *items[n], label, places[n], calls)
+                replies[n] = _alone(engine, items[n][0], items[n][1], label, places[n], calls)
         else:
             assert result is not None
             answers = result.get("answers") if isinstance(result.get("answers"), dict) else {}
@@ -195,7 +195,7 @@ def ask_run(engine, items, label=None, calls=None, places=None) -> list[Reply]:
             call = Call([], len(questions), result=result)
             calls.append(call)
             again = []
-            for n, mine in zip(fine, ids):
+            for n, mine in zip(fine, ids, strict=True):
                 own = _own(answers, mine)
                 try:
                     own = J.check_answers(own, items[n][1])
@@ -206,7 +206,7 @@ def ask_run(engine, items, label=None, calls=None, places=None) -> list[Reply]:
                 call.answers.append(own)
                 replies[n] = {**meta, "answers": own, "cost_usd": share, "grouped": len(fine)}
             for n in again:
-                replies[n] = _alone(engine, *items[n], label, places[n], calls)
+                replies[n] = _alone(engine, items[n][0], items[n][1], label, places[n], calls)
             if not call.items:  # every item asked again: the call still happened and was paid
                 call.items = [places[n] for n in fine]
                 call.answers = [{} for _ in fine]
