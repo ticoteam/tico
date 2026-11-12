@@ -324,6 +324,8 @@ def unsigned(conn: "sqlite3.Connection", row: Row) -> str | None:
             "ORDER BY entered_at DESC, rowid DESC LIMIT 1",
             (row["id"], stage["id"]),
         ).fetchone()
+        if not visit and _signed_where_it_was(conn, row["id"], work[: work.index(stage)]):
+            return None
         answers = R.newest_answers(conn, str(visit[0])) if visit else {}
         for requirement in needed:
             answer = answers.get(requirement["id"]) or {}
@@ -331,6 +333,33 @@ def unsigned(conn: "sqlite3.Connection", row: Row) -> str | None:
                 return str(stage["name"])
         return None
     return "no stage"
+
+
+def _signed_where_it_was(conn: "sqlite3.Connection", task_id: str, earlier: list[Row]) -> bool:
+    """A task that never visited the stage holding the sign-off, signed off where the sign-off was before it moved: a
+    person's `ok` (or push past) on a people-only requirement since withdrawn from an earlier stage, in that stage's
+    newest visit. An
+    Engineering pipeline made before QA had a stage of its own had the page a person OKs on Fixes 2
+    (pipeline_settings._add_qa moves it), and a task past Fixes 2 when it moved keeps that OK for its release."""
+    from .. import task_engine as E
+    from .. import task_requirements as R
+
+    for stage in reversed(earlier):
+        rows = _rows(conn, "SELECT * FROM requirements WHERE stage_id=? AND withdrawn_at IS NOT NULL", (stage["id"],))
+        gone = [r for r in rows if R.people_only(r)]
+        if not gone:
+            continue
+        visit = conn.execute(
+            "SELECT id FROM visits WHERE task_id=? AND stage_id=? AND left_at IS NOT NULL "
+            "ORDER BY entered_at DESC, rowid DESC LIMIT 1",
+            (task_id, stage["id"]),
+        ).fetchone()
+        if not visit:
+            continue
+        answers = R.newest_answers(conn, str(visit[0]))
+        oks = [answers.get(r["id"]) or {} for r in gone]
+        return any(ok.get("answer") in ("ok", "pushed_past") and E.is_human(ok.get("by_id")) for ok in oks)
+    return False
 
 
 def cut(

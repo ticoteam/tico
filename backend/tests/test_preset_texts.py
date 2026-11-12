@@ -268,6 +268,31 @@ def test_a_task_waiting_in_fixes_2_on_the_old_page_moves_on_to_qa_once_the_build
     assert N.rules_hold(c) == []
 
 
+def test_a_task_past_fixes_2_when_qa_is_added_keeps_the_persons_ok_for_its_release(c):
+    """A task a person OK'd in Fixes 2 and in Release when QA is added never visits QA: its OK on the page that moved
+    still lets the Release Owner cut its release. A task with no such OK is still refused, named for QA."""
+    from backend.item_sources import github_release as GR
+
+    _before_qa(c)
+    # Merge's PR merged can't be pushed past: taken off, so the tasks can be moved to Release.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE kind='item' AND stage_id LIKE 'engineering-%'", (H.now(),))
+    page = c.execute("SELECT id FROM requirements WHERE stage_id='engineering-fixes-2' AND kind='page'").fetchone()[0]
+    row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="engineering", lint=False)
+    row = E.move(c, row["id"], "engineering-fixes-2", ANA, "Reviewed")
+    c.execute(
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, created_at) VALUES (?,?,?,?,?,?,?)",
+        (H.new_id(), row["visit"]["id"], page, ANA, "ok", "Ship it", H.now()),
+    )
+    oked = E.move(c, row["id"], "engineering-release", ANA, "Merged")["id"]
+    # Moved over Fixes 2 from On deck: never signed off anywhere.
+    row = H.task_create(c, ANA, "Guest checkout", "Let a guest pay.", ANA, pipeline="engineering", lint=False)
+    never = E.move(c, row["id"], "engineering-release", ANA, "Merged")["id"]
+    tasks = [oked, never]
+    assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "Fixes 2"]
+    PS.ensure_presets(c)
+    assert [GR.unsigned(c, E.task(c, t)) for t in tasks] == [None, "QA"]
+
+
 def _write():
     """Record the texts the presets ship with now, once every changed line's old text is in EARLIER."""
     now = _now()
