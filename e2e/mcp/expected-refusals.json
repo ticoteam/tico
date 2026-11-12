@@ -245,6 +245,7 @@
  "tico_support_send": "404 not_found",
  "tico_tag_show": "404 not_found",
  "tico_tag_update": "404 not_found",
+ "tico_task_after": "404 not_found",
  "tico_task_answer": "usage",
  "tico_task_approve": "usage",
  "tico_task_ask": "usage",
