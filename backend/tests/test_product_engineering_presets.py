@@ -425,7 +425,8 @@ def _owned_by_a_bot_that_lost_write_access(c):
     _writes(c, "pm")
     eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
     assert eng["owner_id"] == "bot:pm"
-    c.execute("DELETE FROM bot_repo_access WHERE bot='pm'")
+    # Read-only now, as the Product Owner in the stress run was: a read grant is not enough to build.
+    c.execute("UPDATE bot_repo_access SET access='read' WHERE bot='pm'")
     return eng
 
 
@@ -514,6 +515,20 @@ def test_a_bot_that_cannot_push_does_not_snooze_its_engineering_task_out_of_sigh
     E.reassign(c, eng["id"], "bot:builder", ANA, "Builder takes it", out["version"])
     row = E.task(c, eng["id"])
     assert E.snooze(c, eng["id"], "bot:builder", "Waiting for #12 to merge", None, row["version"]).get("snooze")
+
+
+def test_a_refused_snooze_leaves_a_task_a_person_has_with_that_person(c):
+    """Once the ladder has handed the task to a person, the owner that cannot build trying to snooze it does not hand
+    it back to the manager bot, and the note says a person has it."""
+    _assignee_owned_engineering(c)
+    eng = _owned_by_a_bot_that_lost_write_access(c)
+    c.execute("UPDATE visits SET level='person', person_id=? WHERE task_id=? AND left_at IS NULL", (ANA, eng["id"]))
+    row = E.task(c, eng["id"])
+    out = E.snooze(c, eng["id"], "bot:pm", "Needs the Builder", "2026-11-14T08:00:00.000000Z", row["version"])
+    assert out.get("snooze") is None
+    assert out["visit"]["level"] == "person"
+    assert out["note"].endswith("A person has it now, to give it to someone who can.")
+    assert _queued_wakes(c, eng["id"]) == []
 
 
 def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):

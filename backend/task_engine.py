@@ -1509,9 +1509,7 @@ def snooze(
         tried = f"{unable}, and it tried to snooze the task" + (f" ({why})" if why else "") + "."
         _event(conn, task_id, by, "snooze_refused", None, None, why, {"owner_cannot_work": unable})
         if never_stuck.to_manager(conn, task_id, f"{tried} Reassign it to a builder."):
-            out = _task(conn, task_id)
-            out["note"] = f"{unable}. The manager has it now, to give it to someone who can."
-            return out
+            return _unable_note(_task(conn, task_id), unable)
     if unable or (is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES):
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
@@ -1522,11 +1520,9 @@ def snooze(
         if not unable:
             _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
         out = _task(conn, task_id)
-        out["note"] = (
-            f"{unable}. The manager has it now, to give it to someone who can."
-            if unable
-            else f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
-        )
+        if unable:
+            return _unable_note(out, unable)
+        out["note"] = f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
         return out
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)
@@ -1541,6 +1537,15 @@ def snooze(
     out = _task(conn, task_id)
     if not until and is_bot(by):
         _tell_manager(conn, out, f"On ice, with no end date: {why}", f"on_ice:{out['snooze']['id']}")
+    return out
+
+
+def _unable_note(out: Row, unable: str) -> Row:
+    """The refused snooze's result, its `note` saying who has the task now: the manager bot, or a person when the
+    ladder had already reached one or the visit's runs were used up."""
+    level = _part(out, "visit").get("level")
+    whom = "A person has it now" if level == "person" else "The manager has it now"
+    out["note"] = f"{unable}. {whom}, to give it to someone who can."
     return out
 
 
