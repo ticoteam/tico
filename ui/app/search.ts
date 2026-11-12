@@ -30,6 +30,7 @@ function searchEntries(): SearchEntry[] {
     // data-alias: a page's old name still finds it (Company was Overview).
     out.push({kind: 'page', label, alias: a.dataset.alias || '', href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
+  out.push({kind: 'page', label: 'Contacts', alias: 'Directory', href: DIR_ROUTE, icon: 'contact_page'});   // an icon on the Team header, not a row
   if (cpAllowed()) out.push({kind: 'page', label: 'Share', href: OVERVIEW_COMPANY, icon: 'newspaper'});   // a tab of Company, with no link of its own
   for (const e of shownEmps()) {
     // label is the plain name for matching and sorting; html is the same name as shown elsewhere, flag and all

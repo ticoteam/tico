@@ -1,9 +1,10 @@
 """Reach (docs/reach.md): who each teammate may reach, how often, and the rules they follow.
 
 - Parties: `*` (Everyone), `group:<id>`, `human:<id>`, `bot:<id>`, the hub's actor strings.
-- `reach_settings`: one row per party that sets anything (`mode`, `chats_per_day`, `tasks_per_day`, each nullable: null
-  takes it from above). `effective` resolves a party's value from itself, its team and the teams above it (nearest
-  first, `people.group_chain`), then Everyone, then DEFAULTS.
+- `reach_settings`: one row per party that sets anything (`mode`, `chats_per_day`, `tasks_per_day`, `book`, each nullable:
+  null takes it from above). `effective` resolves a party's value from itself, its team and the teams above it (nearest
+  first, `people.group_chain`), then Everyone, then DEFAULTS. `book` (who a bot may book on the calendar) is checked by
+  `may_book`, not by `decide`.
 - `reach_lines`: one line per sender and receiver, with `per_day` (null, 0 or N) and the id of its internal org rule
   (Who = sender, With = receiver, if broken = warn), made, edited and retired through backend/org_rules.py.
 - Who changes what: the owner and admins every party; a team lead its teams (and those nested under them) and the
@@ -36,10 +37,11 @@ from .models import Contract
 from .store import Problem
 
 MAX = 100_000
-FIELDS = ("mode", "chats_per_day", "tasks_per_day")
+FIELDS = ("mode", "chats_per_day", "tasks_per_day", "book")
 # With no mode set anywhere in its chain a bot (and so a team and Everyone, which bots inherit from) reaches only its
-# org-chart neighbors. A person reads open: nothing a person does is limited.
-DEFAULTS = {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999}
+# org-chart neighbors. A person reads open: nothing a person does is limited. `book` is who a bot may book on the
+# calendar (may_book), and anyone until a company narrows it.
+DEFAULTS = {"mode": "nearby", "chats_per_day": 999, "tasks_per_day": 999, "book": "anyone"}
 
 
 def bot_mode():
@@ -51,6 +53,8 @@ def bot_mode():
 
 PERSON_MODE = "open"
 MODES = ("open", "nearby", "closed")
+BOOKS = ("anyone", "nearby", "none")
+BOOK_WORDS = {"anyone": "Anyone", "nearby": "Nearby", "none": "No one"}
 LINES_MAX = 2000  # the lines one company keeps; the map answers them all at once
 
 
@@ -219,6 +223,7 @@ def _setting_view(row):
         "mode": row["mode"],
         "chats_per_day": row["chats_per_day"],
         "tasks_per_day": row["tasks_per_day"],
+        "book": row["book"],
         "updated_at": row["updated_at"],
         "updated_by": row["updated_by_id"],
     }
@@ -304,7 +309,9 @@ def save_setting(c, auth, who, party_value, changes):
     for field, value in changes.items():
         if field == "mode" and value is not None and value not in MODES:
             raise Problem("validation", "Mode is open, nearby or closed", 422)
-        if field != "mode" and value is not None and not (0 <= int(value) <= MAX):
+        if field == "book" and value is not None and value not in BOOKS:
+            raise Problem("validation", "Who bots may book is anyone, nearby or none", 422)
+        if field in ("chats_per_day", "tasks_per_day") and value is not None and not (0 <= int(value) <= MAX):
             raise Problem("validation", f"{field} is 0 to {MAX}", 422)
     before = ctx["settings"].get(party)
     after = {f: (before or {}).get(f) for f in FIELDS}
@@ -314,15 +321,25 @@ def save_setting(c, auth, who, party_value, changes):
         c.execute("DELETE FROM reach_settings WHERE party_id=?", (party,))
     elif before:
         c.execute(
-            "UPDATE reach_settings SET mode=?, chats_per_day=?, tasks_per_day=?, updated_at=?, updated_by_id=? "
+            "UPDATE reach_settings SET mode=?, chats_per_day=?, tasks_per_day=?, book=?, updated_at=?, updated_by_id=? "
             "WHERE party_id=?",
-            (after["mode"], after["chats_per_day"], after["tasks_per_day"], now, who.actor, party),
+            (after["mode"], after["chats_per_day"], after["tasks_per_day"], after["book"], now, who.actor, party),
         )
     else:
         c.execute(
-            "INSERT INTO reach_settings(id, party_id, mode, chats_per_day, tasks_per_day, created_at, updated_at, "
-            "updated_by_id) VALUES(?,?,?,?,?,?,?,?)",
-            (H.new_id(), party, after["mode"], after["chats_per_day"], after["tasks_per_day"], now, now, who.actor),
+            "INSERT INTO reach_settings(id, party_id, mode, chats_per_day, tasks_per_day, book, created_at, updated_at, "
+            "updated_by_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                H.new_id(),
+                party,
+                after["mode"],
+                after["chats_per_day"],
+                after["tasks_per_day"],
+                after["book"],
+                now,
+                now,
+                who.actor,
+            ),
         )
     core_before = {"party": party, **{f: before[f] for f in FIELDS}} if before else None
     core_after = None if all(after[f] is None for f in FIELDS) else {"party": party, **after}
@@ -736,6 +753,36 @@ def _refused(ctx, code, sender, receiver, mode, line=None, cap=None, unseen=froz
         )
     again = " Do not retry: sending it again is refused the same way."
     return Decision(False, code, head + " Nothing was sent." + step + again, via, tuple(reached))
+
+
+def may_book(c, actor, target, ctx=None):
+    """Whether `actor` may book `target` on the calendar (decision 11), and why. Only a bot is limited: a person, the
+    hub and the built-in helpers (the Assistant among them) never are, nor is a bot booking itself. `book` resolves as
+    `mode` does: the bot, its team, the teams above it, Everyone, then the default (anyone). `anyone` allows all, `none`
+    refuses, and `nearby` allows what the nearby reach mode allows: its neighbors, and whoever a line from it names
+    unless that line blocks them (per_day 0). The reason names the setting and where it was set."""
+    actor, target = str(actor or ""), str(target or "")
+    ctx = ctx or context(c)
+    if not H.is_bot(actor):
+        return True, "Only bots are limited by who bots may book."
+    if actor == target or is_helper(ctx, actor) or is_helper(ctx, target):
+        return True, "Built-in helpers are never limited by who bots may book."
+    found = effective(ctx, actor)
+    value, came = found["book"], found["from"]["book"]
+    where = "by default" if came is None else "for " + name(ctx, came)
+    setting = f"Who bots may book is {BOOK_WORDS.get(value, value)} {where}"
+    if value == "anyone":
+        return True, setting
+    if value == "nearby":
+        line = line_for(ctx, actor, target)
+        allowed = (line["per_day"] != 0) if line is not None else (target in nearby(ctx, actor))
+        if allowed:
+            return True, setting
+        return False, (
+            f"{setting}: {name(ctx, actor)} may book only who is near it, and {name(ctx, target)} is not. "
+            "Nothing was booked."
+        )
+    return False, f"{setting}, so {name(ctx, actor)} may not book {name(ctx, target)}. Nothing was booked."
 
 
 # ----------------------------------------------------------------------------------------------- the write's facts
@@ -1176,11 +1223,12 @@ def check_delivered(c, who, message_id, task_id=None, conversation_id=None, in_r
 
 # ----------------------------------------------------------------------------------------------- HTTP
 class ReachSetting(Contract):
-    """Any of the three; null clears it (the party takes it from above again)."""
+    """Any of the four; null clears it (the party takes it from above again)."""
 
     mode: Literal["open", "nearby", "closed"] | None = None
     chats_per_day: int | None = Field(default=None, ge=0, le=MAX)
     tasks_per_day: int | None = Field(default=None, ge=0, le=MAX)
+    book: Literal["anyone", "nearby", "none"] | None = None
 
 
 class ReachLine(Contract):
@@ -1219,7 +1267,7 @@ def install(app, store, auth, mutate):
 
     @app.put("/api/v2/reach/settings/{party}")
     def reach_setting(request: Request, party: str, body: ReachSetting):
-        """Set any of mode, chats_per_day and tasks_per_day for one party; null clears a field."""
+        """Set any of mode, chats_per_day, tasks_per_day and book for one party; null clears a field."""
         who = request.state.identity
         auth.domain(who)
         changes = {k: getattr(body, k) for k in FIELDS if k in body.model_fields_set}
@@ -1273,6 +1321,7 @@ __all__ = [
     "effective",
     "install",
     "listing",
+    "may_book",
     "nearby",
     "precheck",
 ]

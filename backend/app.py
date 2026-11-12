@@ -5400,6 +5400,9 @@ def create_app(settings=None):
     from .connectors import install_connectors
 
     install_connectors(app, store, execution, mutate)
+    from .calendar_api import install_calendar
+
+    install_calendar(app, store, mutate)
     from .imports import install_imports
 
     install_imports(app, store, auth, execution, mutate)
@@ -5425,6 +5428,9 @@ def create_app(settings=None):
     from .google_workspace import install as install_google_workspace
 
     install_google_workspace(app, store)
+    from . import web_push
+
+    web_push.install(app, store)  # after install_credentials: the VAPID key is sealed with the vault
     from .mailboxes import install as install_mailboxes
 
     install_mailboxes(app, store)

@@ -835,3 +835,20 @@ fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() 
     assert!(end.last().unwrap().ends_with("watch ended"));
     assert!(end.iter().any(|l| l.contains("polls in com.google.Chrome")));
 }
+
+#[test]
+fn who_is_in_the_meet_window_is_kept_for_its_recording_only() {
+    let observed = Observation {
+        participants: vec!["Ana Ruiz".into(), "ana ruiz".into(), "Ben Ito".into()],
+        self_names: vec!["Chris".into()],
+        ..Default::default()
+    };
+    note_present("rec-1", &observed);
+    assert_eq!(
+        present("rec-1"),
+        Some(vec!["Chris".into(), "Ana Ruiz".into(), "Ben Ito".into()])
+    );
+    assert_eq!(present("rec-2"), None, "another recording's window");
+    note_present("rec-1", &Observation::default());
+    assert_eq!(present("rec-1"), None, "nobody seen");
+}

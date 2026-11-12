@@ -2623,9 +2623,14 @@ def cmd_upcoming(args):
     ctx = Ctx(args, "calendar_read", mailbox=args.for_mailbox)
     now = datetime.now(zone("UTC"))
     include_private = bool(getattr(args, "include_private", False))
-    events = ctx.calendar.upcoming(
-        now - timedelta(minutes=2), now + timedelta(hours=max(1, min(args.hours, 168))), include_private=include_private
-    )
+    days = getattr(args, "days", None)
+    if days:
+        # The Calendar page's copy for a personal connection: from the start of this computer's today.
+        today = now.astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+        start, end = today, today + timedelta(days=max(1, min(days, 31)))
+    else:
+        start, end = now - timedelta(minutes=2), now + timedelta(hours=max(1, min(args.hours, 168)))
+    events = ctx.calendar.upcoming(start, end, include_private=include_private)
     # This endpoint is background-polled. It exposes no message body or event description, and
     # deliberately does not add one audit row per poll.
     body = [f"# Upcoming meetings on {ctx.mailbox}", ""]
@@ -3547,6 +3552,9 @@ def build_parser():
         "--for", dest="for_mailbox", required=True, metavar="ADDR", help="the roster mailbox whose calendars to read"
     )
     up.add_argument("--hours", type=int, default=24, help="look-ahead window, clamped to 1-168 hours")
+    up.add_argument(
+        "--days", type=int, default=None, help="from the start of today for this many days (1-31), instead of --hours"
+    )
     up.add_argument("--include-private", action="store_true", help="include private holds and solo calendar events")
     up.set_defaults(func=cmd_upcoming)
 

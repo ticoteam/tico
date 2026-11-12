@@ -94,7 +94,8 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     }
     if (!keep && !options.legacy) assert.equal(after.threads, null, name + ': the other thread words are gone from storage at sign-in');
     if (keep) assert.ok(after.threads?.includes('Ana thread words'), name + ': the thread words stay for their account');
-    assert.deepEqual(posts, [], name + ': restoring sends nothing');
+    // Opening the Assistant marks its chat read (assistant-page.ts assistantRead): a read, not a restored send.
+    assert.deepEqual(posts.filter(p => !p.endsWith('/read-all')), [], name + ': restoring sends nothing');
     assert.deepEqual(errors, [], name + ': no page errors');
   } finally { await context.close(); }
   console.log('ok -', name);

@@ -105,6 +105,10 @@ ASSISTANT_WRITES = {
     "tico_settings_set",
     "tico_rules_read",
     "tico_rules_ask",
+    # People view; the Assistant books for them (decision 13).
+    "tico_calendar_add",
+    "tico_calendar_move",
+    "tico_calendar_cancel",
 }
 
 

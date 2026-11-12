@@ -18,6 +18,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_MAP = {
+    "ui/app/calendar.js": ["calendar-page"],
+    "ui/app/calendar-row.js": ["calendar-page", "sidebar-first-paint"],
     "ui/app/chat.js": ["chat", "imported-history"],
     "ui/app/chat-outline.js": ["chat", "imported-history"],
     "ui/app/visual-cards.js": ["visual-cards", "visual-fallback", "visual-hosted"],

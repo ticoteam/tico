@@ -417,6 +417,10 @@ class HubParser(argparse.ArgumentParser):
         self.exit(2, f"{self.prog}: error: {message}{hint}\n")
 
 
+# A repeated event's edit: this one occurrence, it and the later ones, or the whole series.
+CALENDAR_SCOPES = ("this", "following", "all")
+
+
 def parser():
     p = HubParser(
         prog=PROG,
@@ -1735,10 +1739,52 @@ def parser():
     s.add_argument("--file", required=True, help="the JSON body tico_external_sync takes")
     s.set_defaults(fn="external sync")
 
-    calendar = sub.add_parser("calendar", help="read or schedule company appointments").add_subparsers(dest="sub")
-    s = calendar.add_parser("list", help="appointments on a company calendar")
+    calendar = sub.add_parser("calendar", help="events, free times and bookings on calendars").add_subparsers(
+        dest="sub"
+    )
+    s = calendar.add_parser("list", help="events on calendars (--who), or a company calendar's appointments")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
+    s.add_argument("--who", help="comma-separated people or bots, refs or emails; default you")
+    s.add_argument("--from", dest="from_", metavar="ISO", help="window start: ISO time, or YYYY-MM-DD")
+    s.add_argument("--to", metavar="ISO", help="window end, exclusive; at most 62 days after --from")
+    s.add_argument("--kinds", help="comma-separated: event, run, due, away (default all)")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
     s.set_defaults(fn="calendar list")
+    s = calendar.add_parser("free", help="times when people are free, within their working hours")
+    s.add_argument("--who", help="comma-separated people or bots; default you")
+    s.add_argument("--minutes", type=int, default=30, help="length of the free slot (default 30)")
+    s.add_argument("--within", metavar="DURATION", help="how far ahead to look, such as 5d")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar free")
+    s = calendar.add_parser("add", help="book an event; a bot or the Assistant may book anyone a rule allows")
+    s.add_argument("--title", required=True)
+    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD with --all-day")
+    s.add_argument("--end", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD (exclusive) with --all-day")
+    s.add_argument("--who", help="comma-separated attendees, refs or emails")
+    s.add_argument("--repeat", help='words or an RRULE, such as "weekly on mon,wed" or "daily until 2026-12-31"')
+    s.add_argument("--calendar", help="whose calendar: a ref such as human:ana, or an email; default you")
+    s.add_argument("--all-day", action="store_true", help="start and end are dates")
+    s.add_argument("--notes", help="description for attendees")
+    s.add_argument("--no-meet", action="store_true", help="no Google Meet link")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar add")
+    s = calendar.add_parser("move", help="move one occurrence, or a repeated event from it on with --scope")
+    s.add_argument("occurrence", help="occurrence id from calendar list or search")
+    s.add_argument("--start", required=True, help="ISO-8601 time with zone, or YYYY-MM-DD for all day")
+    s.add_argument("--end", help="same form as --start")
+    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar move")
+    s = calendar.add_parser("cancel", help="cancel one occurrence, or a repeated event from it on with --scope")
+    s.add_argument("occurrence", help="occurrence id from calendar list or search")
+    s.add_argument("--scope", choices=CALENDAR_SCOPES, help="for a repeated event: this, following or all")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar cancel")
+    s = calendar.add_parser("search", help="find events by words, with tokens such as with:ben or before:2026-12-01")
+    s.add_argument("q", metavar="words")
+    s.add_argument("--who", help="comma-separated calendars to search; default you")
+    s.add_argument("--json", action="store_true", help="print the API response as JSON")
+    s.set_defaults(fn="calendar search")
     s = calendar.add_parser("schedule", help="queue one calendar appointment")
     s.add_argument("--calendar", default="", help="roster email; default the company owner's")
     s.add_argument("--title", required=True)

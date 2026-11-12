@@ -213,27 +213,36 @@ impl Tico {
         if let Some(visibility) = visibility {
             body["visibility"] = json!(visibility);
         }
-        // Tico refuses unknown fields. Before v0.5.0 it has no `client` (the meeting is just not
-        // labelled "From Tico Recorder"); before v0.4.10 no `visibility`, so a private meeting is
-        // never opened to the team.
-        let reply = self
-            .call(
+        if !context.calendar_event.is_empty() {
+            body["calendar_event"] = json!(context.calendar_event);
+        }
+        // Tico refuses unknown fields. An older Tico has no `calendar_event` (the meeting is then not linked to
+        // its calendar event, and a refused event id is dropped the same way); before v0.5.0 no `client` (the
+        // meeting is just not labelled "From Tico Recorder"); before v0.4.10 no `visibility`, so a private meeting
+        // is never opened to the team.
+        let mut attempts = vec![(body.clone(), "")];
+        if body.get("calendar_event").is_some() {
+            let mut unlinked = body.clone();
+            unlinked
+                .as_object_mut()
+                .map(|fields| fields.remove("calendar_event"));
+            attempts.push((unlinked, ":unlinked"));
+        }
+        let mut older = attempts[attempts.len() - 1].0.clone();
+        older.as_object_mut().map(|fields| fields.remove("client"));
+        attempts.push((older, ":unlabelled"));
+        let mut answer = Err(anyhow::anyhow!("Tico was not asked"));
+        for (body, suffix) in attempts {
+            answer = self.call(
                 "/api/v2/live-meetings",
                 Some(&body),
-                &format!("recorder:{id}:live:connect"),
-            )
-            .or_else(|error| {
-                if !format!("{error:#}").contains("HTTP 422") {
-                    return Err(error);
-                }
-                let mut older = body.clone();
-                older.as_object_mut().map(|fields| fields.remove("client"));
-                self.call(
-                    "/api/v2/live-meetings",
-                    Some(&older),
-                    &format!("recorder:{id}:live:connect:unlabelled"),
-                )
-            })
+                &format!("recorder:{id}:live:connect{suffix}"),
+            );
+            if !matches!(&answer, Err(error) if format!("{error:#}").contains("HTTP 422")) {
+                break;
+            }
+        }
+        let reply = answer
             .map_err(|error| {
                 if visibility.is_some() && format!("{error:#}").contains("HTTP 422") {
                     anyhow::anyhow!(
@@ -271,13 +280,52 @@ impl Tico {
         note_state(store, id, &view)?;
         Ok(view)
     }
+    /// Reads the meeting back without sharing anything (the sync worker shares), and notes if it was paused,
+    /// resumed or ended there. A call's recording watches for its call's end this way.
+    pub fn read_live(&self, store: &Store, id: &str) -> Result<Value> {
+        let _guard = store.live_lock();
+        let context = store.context(id)?;
+        ensure!(
+            context.live_destination == self.destination.id && !context.live_id.is_empty(),
+            "Connect this meeting to Tico first"
+        );
+        let view = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
+        note_state(store, id, &view)?;
+        Ok(view)
+    }
     /// Shares streamed turns and finished chunks as new transcript text while the meeting is
     /// live, and corrections of streamed turns while it is live or paused.
     pub fn push_live(&self, store: &Store, id: &str) -> Result<()> {
         let _guard = store.live_lock();
         self.push_live_inner(store, id)
     }
+    /// A call's recording writes to the call's meeting only while it holds the call's source and the call is live:
+    /// Tico refusing a write (403, or 409 for an ended meeting) means read the meeting's state now, not retry.
     fn push_live_inner(&self, store: &Store, id: &str) -> Result<()> {
+        let pushed = self.push_live_once(store, id);
+        let Err(error) = &pushed else {
+            return pushed;
+        };
+        let text = format!("{error:#}");
+        let context = store.context(id)?;
+        if context.call_id.is_empty()
+            || !(text.contains("HTTP 403 (") || text.contains("HTTP 409 ("))
+        {
+            return pushed;
+        }
+        let view = self.call(
+            &format!("/api/v2/live-meetings/{}", context.live_id),
+            None,
+            "",
+        )?;
+        note_state(store, id, &view)?;
+        Ok(())
+    }
+    fn push_live_once(&self, store: &Store, id: &str) -> Result<()> {
         let record = store.get(id)?;
         let context = store.context(id)?;
         ensure!(

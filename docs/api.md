@@ -52,7 +52,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Changelog | Product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
-| Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |
+| Calls | Calls in a thread ([guide](meet.md)): a Google Meet, or a Tico Meet call with audio and screen share, a live transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for audio and screen share only, never a camera; joining a Google Meet hands back its link. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
@@ -91,6 +91,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Email sending | One sending policy and durable undo queue for bots, automations and people acting through Tico. |
 | Alerts | Personal phone verification, consent and opt-in paging, paid by the company at $1 per accepted alert. |
 | Skills | The company's approved skills: proposals and approval, screening state, and installs for bots and people ([guide](skills.md)). |
+| Calendar | Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time away merged into one list of occurrences ([guide](dev/calendar-contract.md)). |
 <!-- api-tags:end -->
 
 Internal developer tutorials: [Listening](listening.md#read-and-save) and [Needs you batches](needs-you-batches.md).
@@ -290,6 +291,19 @@ Threads have their own routes under `/api/v2/threads`: list and search, create, 
 follow and read marks, with `PATCH` and `DELETE` on `/api/v2/messages/{id}` for edits and deletes. Lists are paged by
 `cursor` and `limit` and capped in bytes. The audiences, the rules for who may read what, and the CLI and MCP tools are
 in [Threads](threads.md).
+
+## Calendar
+
+`/api/v2/calendar` is one way in for every calendar: `GET /events?who=&from=&to=&kinds=` merges Google (read live as
+the viewer, stored nowhere), Tico events, bot runs, due dates and time away into one list of occurrences, at most 62
+days at a time; a calendar that could not be read is listed in `errors`, never shown as free. `GET /calendars`,
+`/search?q=` (Google has 3 seconds, then the answer is `partial`) and `/free?who=&minutes=&within=` find calendars,
+events and open times. `POST /events`, `PATCH` and `DELETE /events/{occurrence_id}` and `POST
+/events/{occurrence_id}/response` write: bots and the Assistant write, people view (except their own Tico calendar
+when they have no Google), and a bot booking a person passes that person's book rule (`403 book_rule`).
+`GET`/`PUT /settings`, `POST /shared`, `PUT /shared/{id}/access` and `POST /absences` hold the rest. Changes stream
+on the `calendar` topic of `GET /api/v2/events`. The shapes and rules are in the
+[calendar contract](dev/calendar-contract.md).
 
 ## Incoming webhooks
 

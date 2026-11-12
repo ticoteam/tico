@@ -145,8 +145,8 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 15), ['overview', 'Company pages', 'strategy', 'growth', 'updates', 'tasks', 'automations', 'listening', 'tools',
-          'library', 'Library pages', 'docs', 'files', 'skills', 'meetings'], tag + ': the order, from the first paint');
+        assert.deepEqual(keys.slice(0, 15), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'strategy', 'growth',
+          'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent!.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');
@@ -169,7 +169,7 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
         same(again, tag + ', Finance kept');
         assert.equal(shows(again.painted, 'finance'), true, tag + ': Finance from the first paint');
         const order = again.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(order.slice(0, 5), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
+        assert.deepEqual(order.slice(4, 9), ['overview', 'Company pages', 'strategy', 'finance', 'growth'], tag + ': Finance between Strategy and Growth');
         assert.deepEqual(again.errors, []);
         await again.page.close();
       }
@@ -308,7 +308,6 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
       await context.addInitScript(() => {
         localStorage.setItem('tico.nav.company', 'closed');
         localStorage.setItem('tico.nav.library', 'closed');
-        localStorage.setItem('tico.nav.rules', 'open');
         localStorage.setItem('hub.nav.collapsed', JSON.stringify(['organisation']));
       });
       const first = await visit(context, {onboarding: true});
@@ -316,7 +315,7 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
       assert.equal(shows(first.painted, 'docs'), false, 'Library folded from the first paint');
       assert.equal(shows(first.painted, 'strategy'), false, 'Company folded from the first paint');
       assert.equal(shows(first.painted, 'overview'), true, 'its own row stays');
-      assert.equal(shows(first.painted, 'rules-due'), true, 'Rules open from the first paint');
+      assert.equal(shows(first.painted, 'rules'), false, 'Rules folds with Company');
       assert.equal(await first.page.locator('#nav-organisation').isVisible(), false, 'Team folded');
       await first.page.close();
       const again = await visit(context, {onboarding: true});

@@ -1,0 +1,61 @@
+/* Calls (ui/app/thread-call.ts, ui/app/call-ring.ts): the header's phone and live pill, the call card, the rail's
+   green phone, and the ring (a card at the top right, a sheet at the bottom on a phone). */
+.call-ic{display:block;flex:none}
+
+/* the header: a phone; a green pill with who is in it while a call is live */
+.thv-call{display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;height:28px;min-width:28px;padding:0 7px;border:0;border-radius:var(--r-ctl);background:transparent;color:var(--g7);font:inherit;font-size:var(--t-base);cursor:pointer}
+.thv-call:hover{background:var(--hover);color:var(--ink)}
+.thv-call.on{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent);font-weight:600}
+.thv-call.on:hover{background:color-mix(in srgb,var(--accent) 24%,transparent);color:var(--accent)}
+.thv-call:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+
+/* the card a call posts in its thread */
+.call-card{display:flex;align-items:center;gap:10px;margin:4px 0 2px;min-height:44px;max-width:380px;box-sizing:border-box;padding:6px 10px 6px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.call-card.on{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.call-card-ic{display:inline-flex;color:var(--muted)}
+.call-card-ic.on{color:var(--accent)}
+.call-card-ic.missed{color:var(--fail)}
+.call-card-t{font-weight:600}
+.call-card-ppl{display:inline-flex;align-items:center}
+.call-card-ppl>span{display:inline-flex;border-radius:50%;box-shadow:0 0 0 2px var(--surface)}
+.call-card-ppl>span+span{margin-left:-6px}
+.call-card-n{font-size:var(--t-base)}
+.call-card .spacer{flex:1}
+.call-card-join,.call-card-end{flex:none}
+.call-card-link{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+.call-rec{flex:none;width:8px;height:8px;border-radius:50%;background:var(--fail)}
+
+/* the rail: a green phone at the end of a row whose thread has a live call */
+.tr-call{flex:none;display:inline-flex;color:var(--accent)}
+.tr-call .call-ic{width:14px;height:14px}
+
+/* the ring: over any page, top right */
+.call-ring{position:fixed;z-index:60;top:14px;right:14px;display:flex;flex-direction:column;gap:8px;width:300px;max-width:calc(100vw - 32px);pointer-events:none}
+.call-ring:empty{display:none}
+.call-ring-card{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:10px 10px 10px 12px;border:1px solid var(--g4);border-radius:12px;background:var(--raised);color:var(--ink);box-shadow:0 16px 40px rgba(0,0,0,.28)}
+.call-ring-who{flex:1;min-width:0;display:flex;align-items:center;gap:10px}
+.call-ring-name{min-width:0;display:flex;flex-direction:column}
+.call-ring-name b{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.call-ring-name .muted{font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.call-ring-name .tr-mark{margin-right:3px}
+.call-ring-name .tr-mark svg{display:inline;vertical-align:-1px}
+.call-ring-acts{flex:none;display:flex;align-items:center;gap:4px}
+.call-ring-dismiss{display:none}
+.call-ring-x{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;background:transparent;color:var(--muted)}
+.call-ring-x:hover{background:var(--hover);color:var(--ink)}
+.call-ring-join{height:28px;padding:0 12px}
+.call-recorder-link{display:none}
+
+/* a phone: a sheet at the bottom, Dismiss and Join side by side */
+@media (max-width:760px){
+  .thv-call{min-width:36px;height:36px}
+  .call-card{max-width:none}
+  .call-ring{top:auto;right:0;left:0;bottom:0;width:auto;max-width:none;gap:0}
+  .call-ring-card{flex-direction:column;align-items:stretch;gap:12px;padding:14px 14px max(18px,env(safe-area-inset-bottom));border-width:1px 0 0;border-radius:16px 16px 0 0;background:var(--surface2);box-shadow:0 -12px 30px rgba(0,0,0,.22)}
+  .call-ring-card+.call-ring-card{display:none}
+  .call-ring-name b{font-size:15px}
+  .call-ring-acts{gap:8px}
+  .call-ring-x{display:none}
+  .call-ring-dismiss{display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--g4)}
+  .call-ring-dismiss,.call-ring-join{flex:1;height:44px;font-size:var(--t-md)}
+}

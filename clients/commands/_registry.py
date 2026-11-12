@@ -55,6 +55,7 @@ CLI_TOOL_ALIASES = {
     "tico_general_manager_bot": ("tico_general_manager_set",),
     "tico_maintenance_status": ("tico_maintenance",),
     "tico_task_show": ("tico_task_show", "tico_task_show_many"),  # `tico task show a b c` is one read
+    "tico_calendar_list": ("tico_calendar_list", "tico_calendar_events"),  # `tico calendar list --who` reads events
     "tico_market_size_accept": ("tico_market_size_decide",),
     "tico_market_size_reject": ("tico_market_size_decide",),
     "tico_market_size_params": ("tico_market_size_decide",),

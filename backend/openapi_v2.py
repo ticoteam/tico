@@ -37,8 +37,9 @@ TAGS = {
     "Changelog": "Product announcements and the signed-in person's read state (docs/updates.md).",
     "Needs you": "What is waiting on the signed-in person: questions, tasks, approvals.",
     "Meetings": "Recorded meetings.",
-    "Calls": "Tico Meet calls (docs/meet.md): audio and screen share in a thread, a live transcript posted to it when it "
-    "ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera.",
+    "Calls": "Calls in a thread (docs/meet.md): a Google Meet, or a Tico Meet call with audio and screen share, a live "
+    "transcript posted to the thread when it ends, and bots that listen. Joining a Tico Meet call hands back a token for "
+    "audio and screen share only, never a camera; joining a Google Meet hands back its link.",
     "Files": "What a bot creates, revises or delivers, listed on its page (docs/files.md).",
     "Pages": "HTML pages bots publish and keep current (docs/pages.md): a file with a cadence, a data date and a status line.",
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
@@ -85,6 +86,8 @@ EVENTS_DESCRIPTION = (
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
+    "- `calendar`: `calendar` (the calendar row id, `human:<id>` for time away, `google:<id>` for a Google write), "
+    "`id` and `kind` (event, away, google); refetch the calendar window on screen.\n"
     "- `letters`: `id` and `letter` (as `GET /api/v2/letters/{id}` shows it), only to readers of that record. Patch this row without rereading the list.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
@@ -9321,6 +9324,12 @@ SCHEMAS.update(
                     "description": "Its root is pinned for everyone "
                     "who reads it; `me.pinned` is whether it is pinned for the viewer",
                 },
+                "live_call": {
+                    "type": ["object", "null"],
+                    "description": "The thread's live call, or null",
+                    "properties": {"id": {"type": "string"}, "live_count": {"type": "integer"}},
+                    "required": ["id", "live_count"],
+                },
             },
             required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq", "pinned_for_everyone"],
         ),
@@ -9368,6 +9377,16 @@ SCHEMAS.update(
         ),
         "ThreadBrowse": obj(
             {"threads": items({"allOf": [ref("ThreadView"), obj({"member_count": "i"})]}), "next_cursor": "n"}
+        ),
+        "ThreadMatch": obj(
+            {
+                "threads": items(ref("ThreadView")),
+                "dm": {
+                    "type": ["string", "null"],
+                    "description": "The viewer's open DM with the one person or bot named, or null",
+                },
+            },
+            required=["threads", "dm"],
         ),
         "ThreadCatchUp": obj(
             {
@@ -9579,6 +9598,16 @@ STABLE.extend(
             "Company and team threads the viewer may read and is not in, newest activity first; `q` matches the title. "
             "Following one puts it in the rail",
             "ThreadBrowse",
+        ),
+        (
+            "/api/v2/threads/match",
+            "get",
+            "Threads",
+            "matchThreads",
+            "New message: the open threads the viewer may read whose members, the viewer left out, are exactly the "
+            "`actor` teammates (human:<id>, bot:<slug>, group:<id>), newest activity first, at most 5; `dm` is the "
+            "viewer's open DM with the one person or bot named, or null",
+            "ThreadMatch",
         ),
         (
             "/api/v2/threads/archived",
@@ -9832,7 +9861,8 @@ STABLE.extend(
         ),
     ]
 )
-# Tico Meet calls (docs/meet.md): a call belongs to a thread. Joining hands back a token for audio and screen share only.
+# Calls (docs/meet.md): a call belongs to a thread. Joining a Tico Meet call hands back a token for audio and screen share
+# only; joining a Google Meet hands back its link.
 STABLE.extend(
     [
         (
@@ -9848,8 +9878,17 @@ STABLE.extend(
             "post",
             "Calls",
             "startCall",
-            "Start a call in a thread you can write to",
+            "Start a call in a thread you can write to: provider auto (Google Meet when your Workspace mailbox has it, "
+            "else Tico Meet), google_meet or tico. A Google Meet start makes the space, posts the call's card and rings",
             "Call",
+        ),
+        (
+            "/api/v2/calls/ringing",
+            "get",
+            "Calls",
+            "listRingingCalls",
+            "The live calls ringing you now, in threads you can read",
+            "CallRinging",
         ),
         (
             "/api/v2/calls/{call_id}",
@@ -9864,7 +9903,8 @@ STABLE.extend(
             "post",
             "Calls",
             "joinCall",
-            "Join a call: its media URL and a token good for 5 minutes",
+            "Join a call. Tico Meet: its media URL and a token good for 5 minutes. Google Meet: the Meet link as you "
+            "open it, no token",
             "CallJoin",
         ),
         (
@@ -9872,7 +9912,7 @@ STABLE.extend(
             "post",
             "Calls",
             "refreshCallToken",
-            "A fresh token for a call you have joined",
+            "A fresh token for a Tico Meet call you have joined; 409 not_tico_meet for a Google Meet",
             "CallToken",
         ),
         ("/api/v2/calls/{call_id}/leave", "post", "Calls", "leaveCall", "Leave a call you joined", "Call"),
@@ -9901,27 +9941,74 @@ STABLE.extend(
             "Call",
         ),
         ("/api/v2/calls/{call_id}/bots/{bot}", "delete", "Calls", "detachCallBot", "Take a bot out of a call", "Call"),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "post",
+            "Calls",
+            "claimCallRecorder",
+            "Make your Tico Recorder a live Google Meet call's recording source: the first claim wins, if you are in the call",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/recorder",
+            "delete",
+            "Calls",
+            "releaseCallRecorder",
+            "Stop your Recorder being the call's recording source",
+            "CallRecorderSource",
+        ),
+        (
+            "/api/v2/calls/{call_id}/presence",
+            "post",
+            "Calls",
+            "reportCallPresence",
+            "The recording source's Recorder reports the names in the Meet; kept only while Google gives no status",
+            "Call",
+        ),
     ]
 )
 SCHEMAS.update(
     {
-        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n"}),
+        "CallParticipant": obj({"actor": "s", "joined_at": "s", "left_at": "n", "removed_at": "n", "in_call": "b"}),
+        "CallProvider": obj(
+            {
+                "provider": {"enum": ["tico", "google_meet"]},
+                "meet_uri": {"type": ["string", "null"], "description": "The Google Meet link Google gave"},
+                "join_url": {
+                    "type": ["string", "null"],
+                    "description": "The Meet link with authuser=<your Google address> when known; null for Tico Meet",
+                },
+                "live_count": {"type": "integer", "description": "People in the call now, as its status source says"},
+                "status_source": {"enum": ["google", "recorder", None], "description": "Where live status comes from"},
+                "seen_at": {"type": ["string", "null"], "description": "When anyone was first seen in the Meet"},
+                "duration_s": {"type": ["integer", "null"], "description": "An ended call's length"},
+                "ring": {"type": "boolean", "description": "The call rings you: rung, not joined, still live"},
+                "card_message_id": "n",
+                "transcript_message_id": "n",
+                "recorder": obj({"source": "n", "installed": "b"}),
+            }
+        ),
         "CallHold": obj(
             {"kind": {"enum": ["transcript", "action_items"]}, "reason": "s", "detail": "s", "created_at": "s"}
         ),
-        "CallSummary": obj(
-            {
-                "id": "s",
-                "thread_id": "s",
-                "title": "s",
-                "state": {"enum": ["live", "ended"]},
-                "connector": "s",
-                "started_at": "s",
-                "ended_at": "n",
-                "end_reason": "n",
-            }
-        ),
-        "Call": obj(
+        "CallSummary": {
+            "allOf": [
+                obj(
+                    {
+                        "id": "s",
+                        "thread_id": "s",
+                        "title": "s",
+                        "state": {"enum": ["live", "ended"]},
+                        "connector": "s",
+                        "started_at": "s",
+                        "ended_at": "n",
+                        "end_reason": "n",
+                    }
+                ),
+                ref("CallProvider"),
+            ]
+        },
+        "CallBase": obj(
             {
                 "id": "s",
                 "thread_id": "s",
@@ -9946,8 +10033,23 @@ SCHEMAS.update(
                 "on this call; off unless the call asked. Spoken replies are not sent yet",
             },
         ),
-        "CallList": obj({"calls": items(ref("CallSummary")), "next_before": "n", "available": "b"}),
-        "CallJoin": obj({"call": ref("Call"), "url": "s", "expires_in": "i", "token": "s"}),
+        "Call": {"allOf": [ref("CallBase"), ref("CallProvider")]},
+        "CallList": obj(
+            {
+                "calls": items(ref("CallSummary")),
+                "next_before": "n",
+                "available": "b",
+                "providers": items({"enum": ["google_meet", "tico"]}),
+            }
+        ),
+        "CallRinging": obj({"calls": items(ref("Call"))}),
+        "CallRecorderSource": obj(
+            {"source": "b", "meeting_id": "s", "title": "s", "source_actor": "n", "has_transcript": "b"}
+        ),
+        "CallJoin": obj(
+            {"call": ref("Call"), "url": "n", "expires_in": "i", "token": "s"},
+            required=["call", "url"],
+        ),
         "CallToken": obj({"url": "s", "expires_in": "i", "token": "s"}),
     }
 )
@@ -12003,6 +12105,199 @@ STABLE.extend(
             "Skills",
             "installSkillForTargets",
             "Install a skill for several bots or people at once, all or nothing",
+            None,
+        ),
+    ]
+)
+
+
+# Calendar (docs/dev/calendar-contract.md, HTTP): one way in for Google, Tico and derived calendars.
+TAGS["Calendar"] = (
+    "Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time "
+    "away merged into one list of occurrences (docs/dev/calendar-contract.md)."
+)
+_CAL_OBJ = obj({"ref": "s", "type": "s", "id": "s", "name": "s"})
+_CAL_ERRORS = items(obj({"ref": "s", "reason": "s"}))
+SCHEMAS.update(
+    {
+        "CalendarOccurrence": obj(
+            {
+                "occurrence_id": "s",
+                "event_id": "n",
+                "calendar": _CAL_OBJ,
+                "home": {"type": "string", "enum": ["google", "tico", "derived"]},
+                "kind": {"type": "string", "enum": ["event", "run", "due", "away"]},
+                "title": "s",
+                "start": "s",
+                "end": "s",
+                "all_day": "b",
+                "time_zone": "n",
+                "attendees": "a",
+                "response": "n",
+                "busy_only": "b",
+                "recurring": "b",
+                "status": "s",
+                "meeting_url": "n",
+                "open_url": "n",
+                "links": obj({"thread": "n", "meeting": "n", "task": "n", "automation": "n", "attempt": "n"}),
+                "can": obj({"join": "b", "edit": "b"}),
+            }
+        ),
+        "CalendarView": obj(
+            {
+                "ref": "s",
+                "type": "s",
+                "id": "s",
+                "name": "s",
+                "home": "n",
+                "time_zone": "n",
+                "work_starts": "n",
+                "work_ends": "n",
+                "work_days": "n",
+                "can_write": "b",
+            }
+        ),
+        "CalendarEvents": obj(
+            {
+                "from": "s",
+                "to": "s",
+                "calendars": items(ref("CalendarView")),
+                "occurrences": items(ref("CalendarOccurrence")),
+                "errors": _CAL_ERRORS,
+            },
+            month_counts=items(obj({"bot_id": "s", "date": "s", "count": "i"})),
+        ),
+        "CalendarList": obj({"calendars": items(ref("CalendarView")), "errors": _CAL_ERRORS}),
+        "CalendarSearch": obj({"occurrences": items(ref("CalendarOccurrence")), "partial": "b", "errors": _CAL_ERRORS}),
+        "CalendarFree": obj({"slots": items(obj({"start": "s", "end": "s"})), "errors": _CAL_ERRORS}),
+        "CalendarSettingsView": obj(
+            {
+                "time_zone": "s",
+                "time_zone_set": "b",
+                "work_starts": "s",
+                "work_ends": "s",
+                "work_days": "s",
+                "record_on_join": "b",
+            }
+        ),
+    }
+)
+STABLE.extend(
+    [
+        (
+            "/api/v2/calendar/events",
+            "get",
+            "Calendar",
+            "listCalendarEvents",
+            "Occurrences on the calendars in `who` (default you) from `from` to `to`, at most 62 days; `kinds` "
+            "narrows to event, run, due, away. Over 7 days runs come as `month_counts`. A calendar that could not be "
+            "read is in `errors`, never shown as free",
+            "CalendarEvents",
+        ),
+        (
+            "/api/v2/calendar/events",
+            "post",
+            "Calendar",
+            "createCalendarEvent",
+            "Add an event (bots and the Assistant; a person only on their own Tico calendar). A bot booking a "
+            "person needs their book rule; a connected person on it puts it on Google",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "get",
+            "Calendar",
+            "getCalendarEvent",
+            "One event as the caller sees it (404 when they cannot see it)",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "patch",
+            "Calendar",
+            "changeCalendarEvent",
+            "Change an event: `scope` this, following (Tico only) or all",
+            "CalendarOccurrence",
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}",
+            "delete",
+            "Calendar",
+            "cancelCalendarEvent",
+            "Cancel an event (`scope` query: this, following or all)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/events/{occurrence_id}/response",
+            "post",
+            "Calendar",
+            "respondToCalendarEvent",
+            "Accept, decline or tentatively accept an event you attend",
+            None,
+        ),
+        (
+            "/api/v2/calendar/calendars",
+            "get",
+            "Calendar",
+            "listCalendars",
+            "Every calendar you can open: people, bots, shared, teams and your other Google calendars (`q` narrows)",
+            "CalendarList",
+        ),
+        (
+            "/api/v2/calendar/search",
+            "get",
+            "Calendar",
+            "searchCalendar",
+            "Search events, runs and recorded meetings (`q` with with:, bot:, kind:, before:, after:, "
+            "has:transcript, automation:, trigger:, longer:); Google has 3 seconds, past that the answer is `partial`",
+            "CalendarSearch",
+        ),
+        (
+            "/api/v2/calendar/free",
+            "get",
+            "Calendar",
+            "findCalendarFreeTimes",
+            "Times everyone in `who` is free for `minutes` within `within` (such as 5d), in working hours",
+            "CalendarFree",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "get",
+            "Calendar",
+            "getCalendarSettings",
+            "Your zone, hours and recording",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/settings",
+            "put",
+            "Calendar",
+            "setCalendarSettings",
+            "Change your zone, working hours or Record calls I join (send only what changes)",
+            "CalendarSettingsView",
+        ),
+        (
+            "/api/v2/calendar/shared",
+            "post",
+            "Calendar",
+            "createSharedCalendar",
+            "Make a shared calendar (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/shared/{calendar_id}/access",
+            "put",
+            "Calendar",
+            "setSharedCalendarAccess",
+            "Give a person, bot or team read or read_write on a shared calendar, or take it away (admins)",
+            None,
+        ),
+        (
+            "/api/v2/calendar/absences",
+            "post",
+            "Calendar",
+            "addAbsence",
+            "Record days away (yours; admins anyone's)",
             None,
         ),
     ]

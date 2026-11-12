@@ -16,6 +16,7 @@ Each party may set, each field optional (`null` = take it from above):
 | `mode` | `open` (can reach anyone), `nearby` (its part of the chart) or `closed` (only who's listed) | `nearby`; a person's own: `open` |
 | `chats_per_day` | 0–100000 | 999 |
 | `tasks_per_day` | 0–100000 | 999 |
+| `book` | `anyone`, `nearby` or `none`: who a bot may book on the calendar (below) | `anyone` |
 
 A person or bot takes each unset field from its team, then the teams above it (nearest first), then Everyone, then the
 default. A team takes it from the teams above it, then Everyone. Everyone, teams and bots default to `nearby`; a person
@@ -33,6 +34,15 @@ A bot with no manager on the chart (none set, or one archived or gone) counts as
 reaches the owner, and the other bots with no manager, and the owner's own reports, are its peers. A bot that reaches no
 one would go silent. Otherwise the owner is reached like anyone else: only a bot that reports to them, or is near them,
 or has a line to them, reaches them.
+
+## Who bots may book
+
+`book` is who a bot may book on the calendar: a bot's event with a person on it is refused unless `may_book` allows
+that person (`backend/reach.py`). It resolves like `mode`: the bot, its team, the teams above it, Everyone, then the
+default. `anyone` allows everyone; `none` no one; `nearby` the people the nearby mode reaches, its part of the chart and
+whoever a line from it names (unless that line blocks them with `per_day` 0). Only bots are limited: a person, the hub
+and the built-in helpers (the Assistant among them) never are. The refusal names the setting and where it was set.
+Messages and tasks follow `mode`, not `book`.
 
 ## Lines
 
@@ -135,10 +145,10 @@ routes read and write lines.
 
 ## API
 
-- `GET /api/v2/reach` → `{defaults: {mode, chats_per_day, tasks_per_day, person_mode}, settings: [{party, mode, chats_per_day, tasks_per_day}], effective: {party: {mode,
-  chats_per_day, tasks_per_day, from: {field: party}}}, lines: [{id, sender, receiver, per_day, rule: {id, text} | null,
+- `GET /api/v2/reach` → `{defaults: {mode, chats_per_day, tasks_per_day, book, person_mode}, settings: [{party, mode,
+  chats_per_day, tasks_per_day, book}], effective: {party: {mode, chats_per_day, tasks_per_day, book, from: {field: party}}}, lines: [{id, sender, receiver, per_day, rule: {id, text} | null,
   may_edit}], may_edit: [party]}`
-- `PUT /api/v2/reach/settings/{party}` with any of `mode`, `chats_per_day`, `tasks_per_day` (`null` clears).
+- `PUT /api/v2/reach/settings/{party}` with any of `mode`, `chats_per_day`, `tasks_per_day`, `book` (`null` clears).
 - `POST /api/v2/reach/lines` `{sender, receiver, per_day, rule}`; `POST /api/v2/reach/lines/{id}` to change one;
   `DELETE /api/v2/reach/lines/{id}`. One line per sender and receiver.
 
