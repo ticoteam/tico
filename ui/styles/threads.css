@@ -165,6 +165,8 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 /* the bot chat's pill (meetings.css .p-pill): one frame, no margin under it; the goal's bar sits above the thread */
 .thv-composer .ask{margin:0}
 .thv-composer .p-chips:empty{display:none}
+/* files waiting to be sent sit above the box (#138) */
+.thv-composer .p-chips:not(:empty){padding:0 4px 8px}
 .thv-goal{flex:none}
 /* "Message <bot>" stays on its one line, cut short */
 .thv-ask .p-text::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
