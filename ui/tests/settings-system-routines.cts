@@ -51,7 +51,7 @@ function system(role: string) {
   ];
   const words: Record<string, string> = {stale_review: 'stale done close suggest checks that suggest', approval_expiry: 'approval expire close done', due_reminders: 'due remind'};
   for (const j of jobs) j.search = [j.name, j.what, ...j.when, ...j.then, j.department.name, j.group, words[j.key] || ''].join(' ').toLowerCase();
-  return {now: new Date().toISOString(), departments: ['Engineering'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], jobs};
+  return {now: new Date().toISOString(), departments: ['Engineering', 'Marketing'], task_rule_departments: [{id: 'engineering', name: 'Engineering'}, {id: 'marketing', name: 'Marketing'}], jobs};
 }
 
 async function open(browser: import('playwright').Browser, role: string) {
