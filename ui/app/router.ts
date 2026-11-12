@@ -20,6 +20,7 @@ function route(hash: string = location.hash): void {
   if (hash === DECIDE || hash.startsWith(DECIDE + '?')) {
     const q = new URLSearchParams(hash.split('?')[1] || '');
     DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
+    DECIDE_STAGE = DECIDE_WANT ? '' : q.get('stage') || '';
     location.replace(NEEDS_YOU); return;
   }
   overviewStop(); graphStop(); DASH = null;

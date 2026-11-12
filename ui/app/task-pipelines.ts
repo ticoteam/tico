@@ -2,7 +2,8 @@
    columns, one per work stage, or as a list grouped by stage in the same order; on a phone, one stage at a time under a
    row of stage tabs. Done and Closed are not columns: they sit behind the page's archive button with Snoozed.
    A stage's header is its name and its number ("Build 2/3" where it has a limit); tapping it opens the stage's settings
-   for whoever may change the pipeline. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
+   for whoever may change the pipeline. Beside it, ▶ and how many items in the stage wait on the person opens the
+   stage's review (decide.ts decideStageOpen); there is no ▶ where none wait. On a phone it sits beside the stage tabs. The page (tasks-page.ts) owns the header, loading the pipeline and its tasks,
    search, filter, the archive and opening a task (any [data-task] element); it calls the hooks set at the end of this
    file. Moving a task between columns is task-board.ts; a refused move shows the engine's reason above the stages.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -72,6 +73,14 @@ function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
     : `<span class="pv-stage-h">${inner}</span>`;
 }
 
+/** ▶ n: the stage's review, with how many of its items wait on the person; '' when none do. */
+function pvPlayHTML(stage: PipelineStageRec): string {
+  const n = stage.id ? needsStageCount(stage.id) : 0;
+  if (!n) return '';
+  return `<button type="button" class="pv-play" data-pv-play="${esc(stage.id ?? '')}" aria-label="${esc(`Review ${stage.name}: ${n} ${n === 1 ? 'waits' : 'wait'} on you`)}" title="Review ${esc(stage.name)}">`
+    + `<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg><span class="tnum">${n}</span></button>`;
+}
+
 /** The tasks of one stage that the search and the filters let through, in the order the page gave them. */
 function pvInStage(state: PvState, stageId: string): TaskAny[] {
   return state.tasks.map(t => pvShown(state, t))
@@ -84,7 +93,7 @@ function pvColumnsHTML(state: PvState): string {
   const cols = state.rec.stages.map(stage => {
     const id = stage.id ?? '';
     const cards = pvInStage(state, id).map(t => taskCardHTML(t)).join('');
-    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}</header>
+    return `<section class="pv-col" data-pv-col="${esc(id)}" aria-label="${esc(stage.name)}"><header class="pv-col-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}</header>
       <div class="pv-col-body">${cards}</div></section>`;
   }).join('');
   return `<div class="pv-cols" data-pv-drag>${cols}</div>`;
@@ -95,7 +104,7 @@ function pvListHTML(state: PvState): string {
   const groups = state.rec.stages.map(stage => {
     const rows = pvInStage(state, stage.id ?? '');
     if (!rows.length && searching) return '';
-    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}</h2>
+    return `<section class="pv-group" aria-label="${esc(stage.name)}"><h2 class="pv-group-head">${pvStageHeadHTML(state, stage)}${pvPlayHTML(stage)}</h2>
       <div class="pv-rows">${rows.map(t => taskRowHTML(t, {look: 'list'})).join('')}</div></section>`;
   }).join('');
   return groups || '<p class="pv-empty muted">Nothing found</p>';
@@ -112,7 +121,8 @@ function pvPhoneHTML(state: PvState): string {
       + `${esc(stage.name)} <span class="tnum">${esc(pvStageCount(state, stage))}</span></button>`;
   }).join('');
   const rows = pvInStage(state, shown).map(t => taskRowHTML(t, {look: 'list'})).join('');
-  return `<div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div><div class="pv-rows pv-phone">${rows}</div>`;
+  const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${play}</div><div class="pv-rows pv-phone">${rows}</div>`;
 }
 
 function pvBarHTML(bar: PvBar | null): string {
@@ -150,6 +160,8 @@ function pvClick(state: PvState, ev: MouseEvent): void {
   if (!target) return;
   const settings = target.closest<HTMLElement>('[data-pv-settings]');
   if (settings) { void openPipelineEditor(state.rec.id, settings.dataset['pvSettings'] ?? ''); return; }
+  const play = target.closest<HTMLElement>('[data-pv-play]');
+  if (play) { void decideStageOpen(play.dataset['pvPlay'] ?? ''); return; }
   const tab = target.closest<HTMLElement>('[data-pv-tab]');
   if (tab) { pvStageShow(state, tab.dataset['pvTab'] ?? ''); return; }
   if (target.closest('[data-pv-bar-x]')) { state.bar = null; pvDraw(state); }

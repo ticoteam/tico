@@ -382,6 +382,8 @@ interface V2State {
   needsCount?: number;
   needsNext?: string | null;
   needsBots?: Record<string, number> | null;
+  /** The server's count of asks, tasks and mentions per stage id over the whole list (a page's `stages`). */
+  needsStages?: Record<string, number> | null;
   needsPlateCount?: number | null;
   needsByKind?: Record<string, number> | null;
   needsFoldedIds?: string[] | null;
