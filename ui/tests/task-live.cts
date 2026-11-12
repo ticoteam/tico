@@ -24,6 +24,29 @@ type Gate = ReturnType<typeof gate>;
  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
  const pages: Page[] = [];
  try {
+  // The details editor opens from the padded edge of its phone target, including the layout breakpoint.
+  for (const width of [400, 560, 760, 761, 1440]) {
+   const phone = width <= 760;
+   const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: phone});
+   try {
+    const {page, errors} = await open({newPage: () => context.newPage()}, {viewport: {width, height: 900}});
+    const edit = page.getByRole('button', {name: 'Edit details', exact: true});
+    await page.locator('details.task-orig').filter({has: edit}).evaluateAll(rows => rows.forEach(el => { (el as HTMLDetailsElement).open = true; }));
+    await edit.waitFor();
+    const box = (await edit.boundingBox())!;
+    if (phone) {
+     assert.ok(box.height >= 40 && box.width >= 40, `Edit details needs a 40 px target at ${width} px; got ${box.width}x${box.height}`);
+     await edit.tap({position: {x: box.width / 2, y: box.height - 2}});
+    } else {
+     assert.ok(box.height < 40, 'desktop Edit details stays compact');
+     await edit.click();
+    }
+    const details = page.getByRole('textbox', {name: 'Details', exact: true});
+    await details.waitFor();
+    assert.equal(await details.evaluate(el => document.activeElement === el), true, 'opening details focuses its editor');
+    assert.deepEqual(errors, []);
+   } finally { await context.close(); }
+  }
   for (const width of [390, 1440]) {
    let readHold!: Gate | null, readStarted!: Gate, task!: TaskCode.Fixture['tasks'][number], events: Record<string, unknown>[] = [], sessions = new Map<string, string>(), writes: {viewer: string; patch: Record<string, unknown>}[] = [], hold!: Gate | null, fail = false, deny = false, inflight = 0, max = 0;
    const viewers: Page[] = [], viewerErrors: string[][] = [];
