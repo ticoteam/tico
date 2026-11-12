@@ -255,16 +255,19 @@ def restricted_page_rows(c, ids):
         return {i: whole[i] for i in ids if i in whole}
     memo = _memo(c, "restricted_page_rows")
     if wanted := _missing(memo, ids):
-        memo.update(dict.fromkeys(wanted))
+        found = {}
         try:
             for r in c.execute(
                 "SELECT f.*,p.audience FROM pages p JOIN bot_files f ON f.id=p.file_id "
                 f"WHERE p.audience IS NOT NULL AND p.file_id IN {ANY_OF}",
                 (json.dumps(wanted),),
             ):
-                memo[r["id"]] = dict(r)
+                found[r["id"]] = dict(r)
         except sqlite3.OperationalError as exc:
             _no_table(exc, "no such column: p.audience")
+        # Only a finished read says "not restricted": a failed one leaves these ids to be read again.
+        memo.update(dict.fromkeys(wanted))
+        memo.update(found)
     return {i: memo[i] for i in ids if isinstance(i, str) and memo.get(i)}
 
 
@@ -350,15 +353,17 @@ def page_rows(c, ids):
     the rest of this snapshot. Nothing about a reader is kept."""
     memo = _memo(c, "page_rows")
     if wanted := _missing(memo, ids):
-        memo.update(dict.fromkeys(wanted))
+        found = {}
         try:
             for r in c.execute(
                 f"SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id WHERE f.id IN {ANY_OF}",
                 (json.dumps(wanted),),
             ):
-                memo[r["id"]] = dict(r)
+                found[r["id"]] = dict(r)
         except sqlite3.OperationalError as exc:
             _no_table(exc)
+        memo.update(dict.fromkeys(wanted))
+        memo.update(found)
     return {i: memo[i] for i in ids if isinstance(i, str) and memo.get(i)}
 
 
@@ -440,6 +445,7 @@ def page_graph(c):
     rows, identities, deleted = _memo(c, "page_rows"), _memo(c, "page_identities"), _memo(c, "deleted_page_refs")
     if identities.get(WHOLE):
         return
+    restricted_pages(c)  # so restricted_page_rows answers from the whole set too
     try:
         rows.update({r["id"]: dict(r) for r in c.execute("SELECT f.* FROM bot_files f JOIN pages p ON p.file_id=f.id")})
     except sqlite3.OperationalError as exc:
@@ -588,8 +594,7 @@ def deleted_page_refs(c, ids):
     primary key for only these ids, and kept for the rest of this snapshot."""
     memo = _memo(c, "deleted_page_refs")
     if wanted := _missing(memo, ids):
-        memo.update(dict.fromkeys(wanted, False))
-        arg = json.dumps(wanted)
+        arg, found = json.dumps(wanted), set()
         try:
             for r in c.execute(
                 f"SELECT file_id FROM pages WHERE deleted_at IS NOT NULL AND file_id IN {ANY_OF} "
@@ -597,9 +602,12 @@ def deleted_page_refs(c, ids):
                 f"AND id IN {ANY_OF}",
                 (arg, arg),
             ):
-                memo[r[0]] = True
+                found.add(r[0])
         except sqlite3.OperationalError as exc:
             _no_table(exc, "no such column")
+        # Only a finished read says "not a tombstone": a failed one leaves these ids to be read again.
+        memo.update(dict.fromkeys(wanted, False))
+        memo.update(dict.fromkeys(found, True))
     return {i for i in ids if isinstance(i, str) and memo.get(i)}
 
 

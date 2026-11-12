@@ -340,3 +340,30 @@ def test_a_message_list_looks_its_pages_up_once(api):
         c.set_trace_callback(None)
         assert read_cache.cache(c) is not None
     assert len(lookups) == 1, lookups
+
+
+def test_a_failed_lookup_is_not_remembered_as_allowed(api, monkeypatch):
+    """A read that fails part way must not leave its ids marked "not restricted" or "not a tombstone" for a retry in
+    the same snapshot."""
+    pages, _, _, _ = company(api)
+    restricted, gone = pages["restricted"], pages["gone_alone"]
+
+    class Broken:
+        @staticmethod
+        def dumps(value):
+            raise RuntimeError("the lookup failed")
+
+    with api.app.state.store.read() as c:
+        monkeypatch.setattr(files, "json", Broken)
+        for lookup in (files.restricted_page_rows, files.deleted_page_refs, files.page_rows):
+            try:
+                lookup(c, [restricted, gone])
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError(f"{lookup.__name__} did not fail")
+        monkeypatch.setattr(files, "json", json)
+        assert read_cache.cache(c) is not None
+        assert set(files.restricted_page_rows(c, [restricted, gone])) == {restricted}
+        assert files.deleted_page_refs(c, [restricted, gone]) == {gone}
+        assert set(files.page_rows(c, [restricted, gone])) == {restricted, gone}
