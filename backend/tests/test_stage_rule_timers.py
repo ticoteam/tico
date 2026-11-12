@@ -90,11 +90,13 @@ def _rule(c, **fields):
         "updated_at": H.now(),
     }
     assert not fields
-    c.execute(f"INSERT INTO stage_rules ({', '.join(rule)}) VALUES ({', '.join('?' * len(rule))})", tuple(rule.values()))
+    c.execute(
+        f"INSERT INTO stage_rules ({', '.join(rule)}) VALUES ({', '.join('?' * len(rule))})", tuple(rule.values())
+    )
 
 
 def test_quiet_bot_tasks_tells_each_manager_once_for_all_its_tasks_with_no_model_call(c, time_machine, jev_calls):
-    assert SR.QUIET_BOT_TASKS in SR.ensure_defaults(c)
+    assert SR.get(c, SR.QUIET_BOT_TASKS)["status"] == "active"  # seeded at start, as every default rule
     eng = [_task(c, "eng", "Build", "bot:builder", f"Eng {n}") for n in range(5)]
     ops = [_task(c, "ops", "Build", "bot:fixer", f"Ops {n}") for n in range(2)]
     persons_turn = _task(c, "eng", "Review", "bot:builder", "Waits on Ana's OK")
@@ -134,19 +136,17 @@ def test_quiet_bot_tasks_tells_each_manager_once_for_all_its_tasks_with_no_model
 
 
 def test_a_task_already_listed_as_late_is_not_listed_again(c, time_machine):
-    SR.ensure_defaults(c)
     late = _task(c, "eng", "Build", "bot:builder", "Already Late")
     quiet = _task(c, "eng", "Build", "bot:builder", "Only quiet")
     c.execute("UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), late))
     time_machine.shift(timedelta(hours=6))
     T.sweep(c)
-    (who, body), = _told(c)
+    ((who, body),) = _told(c)
     assert who == "bot:lead" and body.startswith("Stage rules: 1 task.")
     assert _title(c, quiet) in body and _title(c, late) not in body
 
 
 def test_matches_in_the_same_hour_wait_for_the_managers_next_wake(c, time_machine):
-    SR.ensure_defaults(c)
     first = _task(c, "eng", "Build", "bot:builder", "First")
     time_machine.shift(timedelta(minutes=20))
     second = _task(c, "eng", "Build", "bot:builder", "Second")
@@ -164,7 +164,6 @@ def test_matches_in_the_same_hour_wait_for_the_managers_next_wake(c, time_machin
 
 
 def test_a_comment_starts_the_quiet_timer_again(c, time_machine):
-    SR.ensure_defaults(c)
     task_id = _task(c, "eng", "Build", "bot:builder", "Talked about")
     time_machine.shift(timedelta(hours=5))
     conv = H.conversation(c, H.task(c, task_id)["conversation_id"])
@@ -177,9 +176,8 @@ def test_a_comment_starts_the_quiet_timer_again(c, time_machine):
     assert len(_told(c)) == 1
 
 
-def test_move_back_puts_the_task_in_on_deck_with_no_owner_tells_the_manager_and_sets_off_no_other_rule(
-    c, time_machine
-):
+def test_move_back_puts_the_task_in_on_deck_with_no_owner_tells_the_manager_and_sets_off_no_other_rule(c, time_machine):
+    c.execute("UPDATE stage_rules SET retired_at=? WHERE id=?", (H.now(), SR.QUIET_BOT_TASKS))  # this rule alone
     _rule(
         c,
         name="Quiet in Build",
@@ -210,7 +208,7 @@ def test_move_back_puts_the_task_in_on_deck_with_no_owner_tells_the_manager_and_
         r[0] for r in c.execute("SELECT note FROM history_events WHERE subject_id=? AND kind='stage_rule'", (task_id,))
     ]
     assert notes[0].startswith("Rule Quiet in Build:")
-    (who, body), = _told(c)
+    ((who, body),) = _told(c)
     assert who == "bot:lead" and _title(c, task_id) in body
     assert _ran(c, task_id) == 1  # and not on the rule's move
     assert c.execute("SELECT count(*) FROM events WHERE action='stage_rule.moved_back'").fetchone()[0] == 1
