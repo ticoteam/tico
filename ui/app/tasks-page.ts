@@ -550,6 +550,12 @@ function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFil
   if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];
   if (k === 'late') return [{value: '1', label: 'Late'}];
   const rows = tasksFilterRows(state);
+  if (k === 'pushed') return rows.some(t => t.pushed_past) ? [{value: '1', label: 'Pushed past'}] : [];
+  if (k === 'tag') {
+    // List rows carry their labels (GET /api/v2/tasks?brief=1), though TaskBrief does not name them.
+    const tags = new Set(rows.flatMap(t => (t as {labels?: string[]}).labels || []));
+    return [...tags].map(v => ({value: v, label: v})).sort((a, b) => a.label.localeCompare(b.label));
+  }
   const of = (t: TaskBriefV3): string | null => k === 'owner' ? t.owner_id : k === 'waiting_on' ? t.turn?.who ?? null
     : k === 'stage' ? t.stage_id : k === 'asked_by' ? t.requester_id : null;
   const values = [...new Set(rows.map(of).filter((v): v is string => !!v))];
@@ -576,7 +582,7 @@ function tasksFieldMenu(state: TasksPageState, anchor: HTMLElement) {
 }
 function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HTMLElement | null | undefined, toggle = true) {
   const name = TASK_FILTER_NAMES.find(([f]) => f === k)?.[1] || k;
-  const opts = tasksFilterValues(state, k), one = k === 'due' || k === 'late';
+  const opts = tasksFilterValues(state, k), one = k === 'due' || k === 'late' || k === 'pushed';
   const cur = state.filters[k];
   const chosen = new Set(Array.isArray(cur) ? cur : cur === true ? ['1'] : typeof cur === 'string' ? [cur] : []);
   const html = `<div class="tl-menu" role="group" aria-label="${esc(name)}">
@@ -589,9 +595,9 @@ function tasksFilterMenu(state: TasksPageState, k: keyof TaskFilters, anchor: HT
     if (q) q.oninput = () => { for (const o of pop.querySelectorAll<HTMLElement>('.tl-opt')) o.hidden = !(o.dataset.label || '').includes(q.value.trim().toLowerCase()); };
     pop.onchange = () => {
       const picked = [...pop.querySelectorAll<HTMLInputElement>(`input[name="tl-${k}"]:checked`)].map(i => i.value);
-      if (k === 'late') state.filters.late = picked.length > 0;
+      if (k === 'late' || k === 'pushed') state.filters[k] = picked.length > 0;
       else if (k === 'due') { const v = picked[0]; if (v === 'overdue' || v === 'week' || v === 'any') state.filters.due = v; else delete state.filters.due; }
-      else if (k !== 'pushed') state.filters[k] = picked;
+      else state.filters[k] = picked;
       tasksRender(state);
       state.menuAnchor = $(`[data-chip-edit="${k}"]`) || $('#task-filter');
       tasksMenuPlace(pop, state.menuAnchor);
