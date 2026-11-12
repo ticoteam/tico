@@ -181,3 +181,43 @@ def test_runs_and_gmail_actions_share_one_budget_and_take_turns_going_first(api,
     second = drains.Budget(0.75)
     assert hub(api).drain(budget=second) == 2 and second.spent  # runs first, then Gmail gets no fresh budget
     assert seen == [("mail", True), ("mail", False)]
+
+
+def test_a_pass_that_raises_partway_still_wakes_the_workers(api, monkeypatch):
+    scheduler = Scheduler(api.app.state.store, api.app.state.execution)
+    scheduler.tick()
+    woken = []
+
+    class Workers:
+        def take_failures(self):
+            return []
+
+        def wake(self):
+            woken.append(1)
+
+    scheduler.drains = Workers()
+
+    def boom(*a, **k):
+        raise RuntimeError("a step before the wake")
+
+    monkeypatch.setattr(scheduler, "_pass", boom)
+    try:
+        scheduler.tick()
+    except RuntimeError:
+        pass
+    assert woken == [1], "email and the queue still get their pass when the tick fails early"
+
+
+def test_a_shutdown_waits_one_deadline_for_all_workers_not_one_each(api):
+    workers = drains.Drains(api.app.state.store, api.app.state.auth)
+    release = threading.Event()
+    workers.threads = [threading.Thread(target=release.wait, args=(5,), daemon=True) for _ in range(3)]
+    for thread in workers.threads:
+        thread.start()
+    try:
+        begun = time.monotonic()
+        workers.stop(0.6)
+        took = time.monotonic() - begun
+    finally:
+        release.set()
+    assert took < 1.2, f"three stuck workers waited {took:.1f}s, one deadline is 0.6 s"

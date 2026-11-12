@@ -2652,7 +2652,9 @@ class Hub:
         self._app, self.store, self.settings = weakref.ref(app), store, store.settings
         self.lock = threading.Lock()
         self.worker = None  # the queue's drain worker (backend/drains.py) while the server runs one
-        self.mail_first = False  # which half of a budgeted pass goes first; they take turns
+        # Which half of a budgeted pass goes first. They take turns on every budgeted pass, the re-pass after a spent
+        # budget included, so neither half waits behind the other for more than one pass: fairness over time.
+        self.mail_first = False
 
     @property
     def app(self):

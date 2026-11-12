@@ -536,6 +536,10 @@ class Scheduler:
             ctx.failures.append({"scheduler": type(exc).__name__})
             raise
         finally:
+            if self.drains is not None:
+                # Each worker is asked for its pass (one more after a pass still running, never two at once), even
+                # when a step of this pass raised: the workers have no timer of their own.
+                self.drains.wake()
             # Written once the whole pass has run, so every job's failure in it is on the row.
             self._record_health(ctx, started)
 
@@ -611,10 +615,8 @@ class Scheduler:
         except Exception as exc:
             failures.append({"automations": type(exc).__name__})
         if self.drains is not None:
-            # The drains' failures since the last pass go on this pass's health row, as when they ran in it; then each
-            # worker is asked for its pass (one more after a pass still running, never two at once).
+            # The drains' failures since the last pass go on this pass's health row, as when they ran in it.
             failures.extend(self.drains.take_failures())
-            self.drains.wake()
         with SR.recording(self.store, "screening", failures) as run:
             from . import screening
 

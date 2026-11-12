@@ -1019,7 +1019,9 @@ def server_sends(c, mailbox):
     return google_workspace.authority(c, mailbox) == "workspace"
 
 
-_SERVED = {}  # inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first
+# inbox -> when the drain last reached it (monotonic): the inbox waiting longest goes first. One small entry per
+# Workspace inbox the process has sent from, so it is never pruned; it only orders inboxes, never decides a send.
+_SERVED = {}
 
 
 def drain(store, auth, limit=20, budget=None):

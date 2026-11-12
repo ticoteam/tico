@@ -275,5 +275,7 @@ class Drains:
             self.hub.worker = None
         for worker in self.all:
             worker.halt()
+        end = None if timeout is None else time.monotonic() + timeout
         for thread in getattr(self, "threads", ()):
-            thread.join(timeout)
+            # One deadline for all three: a shutdown waits at most `timeout`, not `timeout` per worker.
+            thread.join(None if end is None else max(0.0, end - time.monotonic()))
