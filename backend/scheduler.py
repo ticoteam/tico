@@ -18,6 +18,7 @@ from . import sources as SRC
 
 if TYPE_CHECKING:
     from .heartbeat import Context
+    from .drains import Drains
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -441,7 +442,7 @@ class Scheduler:
         self.step_marks = {}  # a Heartbeat step's last start in this process (backend/heartbeat.py `_due`)
         # The server's drain workers (backend/drains.py) while it runs them: the automation queue, its email sends and
         # the Workspace key check run on them, beside this pass; without them the tick drains the queue itself.
-        self.drains = None
+        self.drains: "Drains | None" = None
 
     def finance_due(self, key, at, every):
         last = self.finance_checked.get(key)

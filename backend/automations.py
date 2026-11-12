@@ -2700,7 +2700,7 @@ class Hub:
             done += 1
         mail = budget.again() if budget else None
         drain_workspace_mail(self.store, budget=mail)
-        if mail and mail.spent:
+        if budget and mail and mail.spent:
             budget.spent = True  # work is left for the next pass
         return done
 

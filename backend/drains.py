@@ -33,7 +33,7 @@ class Budget:
     """A pass's elapsed-time budget: `left()` is False once `seconds` have gone by or the server is stopping. None
     seconds is no limit (an inline drain, as before). `spent` says whether the budget, not the queue, ended the pass."""
 
-    def __init__(self, seconds=None, stop=None):
+    def __init__(self, seconds: float | None = None, stop=None):
         self.seconds, self.stop = seconds, stop
         self.until = None if seconds is None else time.monotonic() + seconds
         self.spent = False
@@ -59,7 +59,7 @@ def left(budget):
 class Worker:
     """One drain on one thread. `work(budget)` is one pass; it returns how many rows it did (or None)."""
 
-    def __init__(self, name, work, *, store=None, budget=BUDGET, on_error=None, stopping=None):
+    def __init__(self, name, work, *, store=None, budget: float | None = BUDGET, on_error=None, stopping=None):
         self.name, self.work, self.store, self.budget, self.on_error = name, work, store, budget, on_error
         self.stopping = stopping  # the server's own stop, read as well as `stop` (an asyncio.Event's is_set)
         self._wake = threading.Event()
@@ -71,7 +71,7 @@ class Worker:
         self._failed = False  # whether that row shows a failure (the next pass clears it)
         self.stop = threading.Event()
         self.passes = 0
-        self.last = None  # the last pass: started, ms, done, spent, failure
+        self.last: dict = {}  # the last pass: started, ms, done, spent, failure
 
     def wake(self):
         """Ask for a pass; returns a ticket for `wait`. While a pass runs, this is the one more pass after it."""
@@ -119,15 +119,15 @@ class Worker:
                 self._failures.append({self.name: failure})
             self._covered = max(self._covered, covers)
             self._cond.notify_all()
-        self._health()
+        self._health(self.last)
         return self.last
 
-    def _health(self):
+    def _health(self, last):
         """This drain's last pass on its own service_health row (`drain:<name>`): when, how long, how much, and its
         failure. A quiet pass (nothing done, nothing failed) rewrites it at most once a minute."""
         if self.store is None:
             return
-        last, now = self.last, time.monotonic()
+        now = time.monotonic()
         quiet = not last["done"] and not last["failure"] and not self._failed
         if quiet and self._written and now - self._written < QUIET_HEALTH:
             return
