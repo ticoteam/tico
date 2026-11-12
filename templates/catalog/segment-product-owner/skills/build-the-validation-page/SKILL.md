@@ -47,10 +47,11 @@ version is the point.
 
 Open production in the read-only view, signed in as yourself:
 
-    tico bot app-shot --help
+    tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-390.png
+    tico bot app-shot /#/<screen> --width 1280 --out shots/<screen>-1280.png
 
-It names the options: the screen to open, the width (390 for phone, 1280 for desktop) and the file to write. Take
-each screen a criterion touches at both widths. The view is read-only: it sees only what you can already read, and
+Take each screen a criterion touches at both widths. The address is the app's own (`/#/tasks`, `/#/task/<id>`);
+`--full` takes the whole page, not only the first screen. The view is read-only: it sees only what you can already read, and
 nothing in it writes. A screen only another person can see is checked on your own view or a test account; say which.
 
 A size criterion ("at least 40 px tall") is measured, not guessed: read it from the screenshot at the width you set
@@ -58,7 +59,7 @@ A size criterion ("at least 40 px tall") is measured, not guessed: read it from 
 
 If the command is refused (the bot's "Can view the app (read only)" setting is off) or is not there yet, check what
 you can another way (the release's code, its tests, the pull request's checks, an export) and list the rest under
-"Could not check" with "no read-only view of the app". Put "Turn on Can view the app (read only) for this bot" in
+"Could not check" with "no read-only view of the app". Put "Turn on Can view the app (read only) for this bot (`tico bot app-view <bot> on`, an owner or admin)" in
 the note on the task for the bot's owner. Never ask a person to test it, look at it or send a screenshot.
 
 ## A change with no screen

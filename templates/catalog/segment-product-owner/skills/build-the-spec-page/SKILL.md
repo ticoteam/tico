@@ -39,15 +39,15 @@ holds it: Jev checks it, then a person OKs it; nothing else does.
 
 Take each before picture of production as it is today, signed in as yourself in the read-only view:
 
-    tico bot app-shot --help
+    tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-before-390.png
+    tico bot app-shot /#/<screen> --width 1280 --out shots/<screen>-before-1280.png
 
-It names the options: the screen to open, the width (390 for phone, 1280 for desktop) and the file to write. Take
-each screen at both widths. The view is read-only: it sees only what you can already read, and nothing you do in it
+The address is the app's own (`/#/tasks`, `/#/task/<id>`); `--full` takes the whole page, not only the first screen. The view is read-only: it sees only what you can already read, and nothing you do in it
 changes anything.
 
 If the command is refused (the bot's "Can view the app (read only)" setting is off) or is not there yet, do not ask a
 person for a screenshot. Draw the before as a mockup from the code that ships today, label it "Drawn from the code,
-not a screenshot", and put "Turn on Can view the app (read only) for this bot" in the note on the task for the bot's
+not a screenshot", and put "Turn on Can view the app (read only) for this bot (`tico bot app-view <bot> on`, an owner or admin)" in the note on the task for the bot's
 owner. A screen only another person can see is drawn from the bot's own view or a test account; never one person's
 real data.
 
