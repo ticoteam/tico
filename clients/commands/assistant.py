@@ -320,6 +320,8 @@ def write_fixture(found, parent):
     }
     if found.get("stderr_tail"):
         files["stderr.log"] = found["stderr_tail"].rstrip("\n") + "\n"
+    if found.get("failed_tools"):
+        files["failed_tools.json"] = json.dumps(found["failed_tools"], indent=2, ensure_ascii=False) + "\n"
     for name, text in files.items():
         (folder / name).write_text(text, encoding="utf-8")
     return [str(folder / name) for name in files]

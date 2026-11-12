@@ -40,6 +40,11 @@ SECRET = re.compile(
 )
 
 
+# A failed tool call's text fields and their caps, as the model allows them.
+FAILED_TEXT = {'item_id': 200, 'tool': 200, 'command': 4000, 'output_tail': 8192}
+FAILED_KEPT = 20
+
+
 def scrub(text):
     return SECRET.sub('[redacted]', str(text or ''))
 
@@ -67,13 +72,54 @@ def touch(c, aid, kind=None, payload=None):
         c.execute('UPDATE attempt_diagnostics SET heartbeat_at=?,stalled_at=NULL WHERE attempt_id=?', (H.now(), aid))
 
 
-def keep_stderr(c, row: AttemptRow, text):
-    ensure(c, row['id'])
-    if (
+def keep(c, row: AttemptRow, body):
+    """A runner's diagnostics for its run (`body` is models.AttemptStderr): its stderr tail, its failed tool calls, or
+    both."""
+    kept: dict[str, object] = dict(keep_stderr(c, row, body.tail)) if body.tail is not None else {'kept': False}
+    if body.failed_tools:
+        kept['failed_tools'] = keep_failed_tools(c, row, [t.model_dump() for t in body.failed_tools])
+    return kept
+
+
+def _closed(c, row: AttemptRow):
+    """Over a week old, or a secret was taken out while it ran: nothing more is kept for it."""
+    return bool(
         row['finished_at']
         and row['finished_at'] < H.shift(H.now(), days=-7)
         or c.execute('SELECT 1 FROM attempt_capture_drops WHERE attempt_id=?', (row['id'],)).fetchone()
-    ):
+    )
+
+
+def keep_failed_tools(c, row: AttemptRow, calls):
+    """A run's failed tool calls, merged by call with the newest FAILED_KEPT kept: what each ran and the end of what it
+    printed, scrubbed again here. Read through the run's capture (stream_capture.export), never a list or an event."""
+    ensure(c, row['id'])
+    if _closed(c, row):
+        return 0
+    found = c.execute('SELECT failed_tools FROM attempt_diagnostics WHERE attempt_id=?', (row['id'],)).fetchone()
+    merged = {t['item_id']: t for t in json.loads(found[0] or '[]')} if found else {}
+    for call in calls:
+        merged.pop(call['item_id'], None)
+        merged[call['item_id']] = {k: (scrub(v)[: FAILED_TEXT[k]] if k in FAILED_TEXT else v) for k, v in call.items()}
+    kept = list(merged.values())[-FAILED_KEPT:]
+    c.execute(
+        'UPDATE attempt_diagnostics SET failed_tools=?,failed_tools_at=? WHERE attempt_id=?',
+        (json.dumps(kept), H.now(), row['id']),
+    )
+    return len(kept)
+
+
+def failed_tools(c, aid, since):
+    """The run's failed tool calls kept since `since`, oldest first."""
+    found = c.execute(
+        'SELECT failed_tools FROM attempt_diagnostics WHERE attempt_id=? AND failed_tools_at>=?', (aid, since)
+    ).fetchone()
+    return json.loads(found[0] or '[]') if found else []
+
+
+def keep_stderr(c, row: AttemptRow, text):
+    ensure(c, row['id'])
+    if _closed(c, row):
         return {'kept': False}
     value = tail(text)
     c.execute(
@@ -218,6 +264,10 @@ def sweep(c, at=None, listening_since=None):
     cap(c, at, listening_since)
     c.execute(
         'UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE stderr_at<?', (H.shift(at, days=-7),)
+    )
+    c.execute(
+        'UPDATE attempt_diagnostics SET failed_tools=NULL,failed_tools_at=NULL WHERE failed_tools_at<?',
+        (H.shift(at, days=-7),),
     )
 
 

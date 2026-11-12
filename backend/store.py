@@ -192,7 +192,8 @@ CREATE TABLE IF NOT EXISTS attempts(
         AND state IS NOT NULL AND lease_until IS NOT NULL)));
 CREATE TABLE IF NOT EXISTS attempt_diagnostics(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
- end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT,
+ failed_tools TEXT, failed_tools_at TEXT);
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
 -- Bound history reads by time before evaluating their visibility gates.
