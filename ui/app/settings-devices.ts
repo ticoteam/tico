@@ -163,31 +163,56 @@ function settingsAgentPair(slug: string) {
   close.onclick = () => dialog.close();
   const preview = dialog.querySelector('[data-pair-preview]');
   if (!preview) return;
-  let previewCode = '', pendingPreview: number | undefined;
-  const loadPreview = async () => {
-    const code = form.code.value.trim();
-    if (code.replace(/[^a-z0-9]/gi, '').length !== 8) { preview.textContent = ''; previewCode = ''; return; }
-    const shown = await get<{profile?: string; host?: string; harness?: string}>(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`);
-    if (form.code.value.trim() !== code) return;
-    previewCode = code;
+  // The same phases as Upload statement (finance-statement-upload.ts): Pair approves only the code whose preview is shown
+  // (phase 'reviewed'), as captured then. Each preview request takes the next revision; an edit or a newer request makes
+  // an older reply stale, and a stale reply shows nothing and approves nothing. The code box is read-only while pairing.
+  let phase: 'empty' | 'previewing' | 'reviewed' | 'pairing' | 'error' = 'empty', revision = 0, reviewed = '';
+  let pendingPreview: number | undefined;
+  const forget = (): number => { clearTimeout(pendingPreview); reviewed = ''; preview.textContent = ''; phase = 'empty'; return ++revision; };
+  // Shows the preview of `code`; true when it is now the reviewed code.
+  const loadPreview = async (code: string): Promise<boolean> => {
+    const mine = forget();
+    if (code.replace(/[^a-z0-9]/gi, '').length !== 8) return false;
+    phase = 'previewing';
+    let shown: {profile?: string; host?: string; harness?: string};
+    try { shown = await get(`/v2/agents/pairing-preview?code=${encodeURIComponent(code)}`); }
+    catch (error) { if (mine === revision) { phase = 'error'; preview.textContent = errorMessage(error, ''); } return false; }
+    if (mine !== revision) return false;
+    reviewed = code; phase = 'reviewed';
     preview.textContent = `${shown.profile || 'Profile'} · ${shown.host || 'Computer'} · ${settingsHarnessName(shown.harness) || shown.harness}${e.agent?.credential ? ' · replaces current credential' : ''}`;
+    return true;
   };
   form.code.oninput = () => {
-    clearTimeout(pendingPreview); previewCode = '';
-    pendingPreview = setTimeout(() => void loadPreview().catch(error => { preview.textContent = error.message; }), 250);
+    if (phase === 'pairing') return;
+    forget();
+    pendingPreview = setTimeout(() => void loadPreview(form.code.value.trim()), 250);
   };
   form.onsubmit = async event => {
     event.preventDefault();
-    const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button) return;
-    button.disabled = true; status.textContent = 'Pairing…';
+    const button = form.querySelector<HTMLButtonElement>('button[type=submit]'); if (!button || phase === 'pairing') return;
+    const code = form.code.value.trim();
+    status.textContent = '';
+    if (phase !== 'reviewed' || reviewed !== code) {
+      // Nothing shown for this code yet: show it, and Pair again approves it.
+      button.disabled = true;
+      const shown = await loadPreview(code);
+      button.disabled = false;
+      if (shown) status.textContent = 'Check the profile above, then Pair.';
+      else if (phase !== 'error' && form.code.value.trim() === code) status.innerHTML = '<span class="err">Type the 8-character code the profile printed.</span>';
+      return;
+    }
+    phase = 'pairing'; button.disabled = true; form.code.readOnly = true; status.textContent = 'Pairing…';
     try {
-      if (previewCode !== form.code.value.trim()) await loadPreview();
-      const done: {profile?: string; host?: string} = await post('/v2/agents/pairings/approve', {code: form.code.value.trim(), bot: slug});
+      const done: {profile?: string; host?: string} = await post('/v2/agents/pairings/approve', {code, bot: slug});
       toast(`Paired ${done.profile || 'the profile'}${done.host ? ` on ${done.host}` : ''}`);
       dialog.close();
-    } catch (error) { status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`; button.disabled = false; }
+    } catch (error) {
+      // The code stays reviewed: Pair again sends the same approval.
+      phase = 'reviewed'; form.code.readOnly = false; button.disabled = false;
+      status.innerHTML = `<span class="err">${esc(errorMessage(error, ''))}</span>`;
+    }
   };
-  dialog.onclose = () => { clearTimeout(pendingPreview); dialog.remove(); void loadSettings(); };
+  dialog.onclose = () => { forget(); dialog.remove(); void loadSettings(); };
   document.body.appendChild(dialog); dialog.showModal(); form.code.focus();
 }
 async function settingsAgentCredential(slug: string) {
