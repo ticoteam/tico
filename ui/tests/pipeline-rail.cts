@@ -84,6 +84,11 @@ const box = (page: Page, sel: string) => page.locator(sel).evaluate(el => {
       assert.deepEqual(await opened(), ['t-4'], 'Space on a focused Log line opens it');
       await page.locator('#task-rail .pm-tab[data-pm-tab="tasks"]').click();
       assert.deepEqual(await opened(), [], 'a tab is not a task');
+      const row = page.locator('#task-rail .pm-body .tk-row[data-task]').first();
+      await row.waitFor();
+      const want = await row.getAttribute('data-task');
+      await row.click();
+      assert.deepEqual(await opened(), [want], 'a row in the Tasks tab opens its task');
       assert.deepEqual(errors, []);
       await page.close();
     }
