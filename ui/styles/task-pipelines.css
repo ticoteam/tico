@@ -9,8 +9,9 @@ button.pv-stage-h{cursor:pointer}
 button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
-/* "15 wait on a person": tasks in a limited stage that hold no slot (they wait only on a person's OK or answer). */
-.pv-stage-person{padding:1px 7px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:500;white-space:nowrap}
+/* A person mark and a count: tasks in a limited stage that hold no slot (they wait only on a person's OK or answer). */
+.pv-stage-person{display:inline-flex;align-items:center;gap:3px;align-self:center;padding:1px 7px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:500;white-space:nowrap}
+.pv-stage-person svg{flex:none}
 
 /* Columns: one per work stage, side by side, sharing the width (200px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
