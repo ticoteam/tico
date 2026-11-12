@@ -57,7 +57,6 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
   '6 | a "OK to give': {states: ['sign-off'], what: 'Home, Needs attention: the sign-off is a 19 px text link'},
   '6 | a "Which GitHub': {states: ['bot-waiting'], what: 'Home, Needs attention: the question is a 19 px text link'},
   '6 | a.dash-big': {states: ALL, what: 'Home cards: the count is 31 px'},
-  '6 | button#account': {states: ALL, what: 'the account row in the drawer is 29 px'},
   '6 | a "Tools"': {states: ALL, what: 'Tools > GitHub: the Tools crumb is 17 px'},
   '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
   '6 | button.prop-add': {states: SET_UP, what: 'a task: the + of Links, Sessions, Related, Files and Ask someone is 16 to 20 px'},
