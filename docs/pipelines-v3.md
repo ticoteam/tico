@@ -783,6 +783,13 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).
 
+A review finding on a task's own PR (a bug, a security flaw, a risky path) goes back through the review: blocking on the
+Review page, or a send back in Fixes 2, so the task goes to Fixes and the Builder fixes it. It never becomes a task for
+a person; what only a person decides (the Spec OK, the pre-release OK) is asked on the task itself. Tico refuses
+(`review_route`) a bot that gives a person a General task linking or naming a PR an open pipeline task links, with the
+task it belongs on. Seen live: Reviewer 2 sent a real bug on its task's PR "privately" through the Engineering Manager
+to a person's Needs you.
+
 Also:
 
 - An Engineering task that turns out to need no code is closed with a reason.

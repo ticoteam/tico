@@ -5376,6 +5376,48 @@ def task_comment_delete(conn, actor, task_id, message_id):
     return deleted
 
 
+PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", re.IGNORECASE)
+
+
+def review_finding_route(conn, actor, task_id, target):
+    """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
+    task's own pull request goes back to that task's Builder through its review (docs/pipelines-v3.md, Engineering),
+    and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
+    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    if not is_bot(actor) or not is_human(target):
+        return
+    row = task(conn, task_id)
+    if not row or row.get("pipeline_id") != GENERAL_PIPELINE:
+        return
+    prs = {
+        (str(repo).lower(), int(number))
+        for repo, number in conn.execute(
+            "SELECT repo, number FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+            "AND number IS NOT NULL",
+            (task_id,),
+        )
+    }
+    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
+    for repo, number in sorted(prs):
+        own = conn.execute(
+            "SELECT t.title, s.name FROM task_links l JOIN tasks t ON t.id=l.task_id JOIN stages s ON s.id=t.stage_id "
+            "WHERE l.kind='pr' AND lower(l.repo)=? AND l.number=? AND t.id<>? AND t.status='open' "
+            "AND t.pipeline_id IS NOT NULL AND t.pipeline_id<>? ORDER BY t.created_at LIMIT 1",
+            (repo, number, task_id, GENERAL_PIPELINE),
+        ).fetchone()
+        if own:
+            refuse(
+                conn,
+                actor,
+                "review_route",
+                f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
+                "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
+                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
+            )
+
+
 def task_create(
     conn,
     actor,

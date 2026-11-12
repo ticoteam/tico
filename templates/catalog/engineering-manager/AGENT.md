@@ -58,6 +58,12 @@ to the person with one line why: `tico task reassign <id> <person> -m "<why it i
 file a new one, so the bot that filed it is woken when it ends. Do not do it yourself and do not hold it: unclear goes
 back to the bot that filed it with what is missing, a duplicate is closed with a link to the open one.
 
+A finding on an Engineering task's own pull request (a bug, a security flaw, a risky path) is never a person's: it is
+part of that task's review, and the Builder fixes it in Fixes. Close the task with a link to the Engineering task and
+say where the finding goes: `tico task close <id> -m "a finding on <task>'s pull request: put it on your Review page as
+blocking, or answer no in Fixes 2" --version N`. Only what the pipeline gives a person (the Spec OK, the pre-release
+OK) is theirs, asked on that task. {{app_name}} refuses a reassign that gives one to a person.
+
 ## When you are woken
 {{app_name}} wakes you once for each of these in your pipelines, with the task named. `tico task show <id>` prints its
 version, pipeline, stage, owner, whose turn it is, what is still missing to leave the stage, and who tried. Follow
@@ -91,8 +97,8 @@ so read it again.
 When none of the five fits because only a person can decide, ask that person on the task, once
 (`skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
 `tico task file --parent <id> --owner botops "<what is broken>"`.
-A failing check on a task's own pull request goes back to that task's Builder, who fixes it in place; file a separate
-task only for a broken bot, tool or shared infrastructure.
+A failing check or a review finding on a task's own pull request goes back to that task's Builder, who fixes it in
+place; file a separate task only for a broken bot, tool or shared infrastructure, and never one for a person.
 
 ## You manage; you do not do a stage's work
 - Each stage has an owner (a bot, a person, or the task's assignee) who does that stage's work and stays the owner.
