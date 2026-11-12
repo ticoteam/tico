@@ -688,9 +688,11 @@ def test_a_held_pinned_id_is_refused_by_the_model_check(monkeypatch):
 
 
 def test_every_held_catalog_model_is_held_by_the_gateway_too():
-    """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them."""
+    """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them. Terra is
+    offered on Codex (2026-11-11) but stays held for paid Gateway use."""
     held = [row["id"] for row in providers.MODEL_CATALOG if row.get("held")]
-    assert held and all(T._model_key(model) in T.HELD_MODELS for model in held)
+    assert all(T._model_key(model) in T.HELD_MODELS for model in held)
+    assert T._model_key("gpt-6.1-terra") in T.HELD_MODELS
 
 
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
