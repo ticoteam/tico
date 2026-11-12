@@ -85,9 +85,12 @@ function billingStatement(s: BillingStatement): string {
     `<tr${i === 0 || i === lines.length - 1 ? ' class="billing-total"' : ''}><td>${esc(label)}</td><td class="num">${billingCents(micros)}</td></tr>`).join('')}</tbody></table>`;
 }
 const BILLING_NO_CREDIT = 'No credit yet. Tico models and Hosting start once credit is added.';
+// The gateway key lives on the Tico Gateway card in Settings › Models; #/settings/gateway opens Models at that card.
+const BILLING_GATEWAY_LINK = '<a class="link" href="#/settings/gateway" data-billing-gateway>Settings › Models</a>';
+// HTML: fixed text and the link above, nothing from the server.
 const BILLING_EMPTY: Record<string, string> = {
-  no_gateway: 'Billing shows here once this install is connected to Tico AI Gateway (Settings › Computers).',
-  refused: 'Tico HQ did not accept this install’s gateway key. Check it in Settings › Computers.',
+  no_gateway: `Billing shows here once this install is connected to the Tico Gateway (${BILLING_GATEWAY_LINK}).`,
+  refused: `Tico HQ did not accept this install’s gateway key. Check it on the Tico Gateway card in ${BILLING_GATEWAY_LINK}.`,
   unreachable: 'Tico HQ did not answer. Try again in a minute.',
 };
 async function renderSettingsBilling(): Promise<void> {
@@ -99,7 +102,7 @@ async function renderSettingsBilling(): Promise<void> {
   try { v = await get('/v2/billing' + (BILLING_MONTH ? `?month=${encodeURIComponent(BILLING_MONTH)}` : '')); }
   catch (e) { if (asked === BILLING_ASKED) host.innerHTML = `<div class="empty">${esc(errorMessage(e, ''))}</div>`; return; }
   if (asked !== BILLING_ASKED) return;
-  if (BILLING_EMPTY[v.state]) { host.innerHTML = `<div class="empty">${esc(BILLING_EMPTY[v.state])}</div>`; return; }
+  if (BILLING_EMPTY[v.state]) { host.innerHTML = `<div class="empty">${BILLING_EMPTY[v.state]}</div>`; return; }
   const talk = (url: string | null | undefined): string => url ? `<a class="primary btn" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-billing-talk>Talk to us to add credit</a>`
     : '<button class="primary" type="button" disabled data-billing-talk title="Tico has not set up its booking link yet">Talk to us to add credit</button>';
   // No account at HQ yet: the empty state alone. An account with no credit still shows its balance and status (staff
@@ -140,7 +143,7 @@ function billingBind(host: HTMLElement): void {
     try {
       const r: BillingHoursView = await get(`/v2/billing/usage?day=${encodeURIComponent(day.dataset.billingDay ?? '')}`);
       // HQ refused or did not answer: say so, and ask again the next time the day opens.
-      if (r.state !== 'ok') { hours.innerHTML = `<p class="muted">${esc(BILLING_EMPTY[r.state] || BILLING_EMPTY.unreachable)}</p>`; delete hours.dataset.loaded; return; }
+      if (r.state !== 'ok') { hours.innerHTML = `<p class="muted">${BILLING_EMPTY[r.state] || BILLING_EMPTY.unreachable}</p>`; delete hours.dataset.loaded; return; }
       hours.innerHTML = r.hours?.length ? `<h4>By hour</h4>${r.hours.map(h => `<div class="billing-hour"><div class="billing-hour-head"><span>${esc(h.period.slice(11))}:00 UTC</span><span class="num">${billingCents(h.total_micros)}</span></div>
         <table class="billing-table"><tbody>${billingSplit(h.lines)}</tbody></table></div>`).join('')}` : '<p class="muted">No hours to show.</p>';
     } catch (e) { hours.innerHTML = `<p class="muted">${esc(errorMessage(e, ''))}</p>`; delete hours.dataset.loaded; }
