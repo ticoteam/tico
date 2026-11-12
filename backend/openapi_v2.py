@@ -4554,8 +4554,8 @@ SCHEMAS = {
             "cached_tokens": {"type": "integer", "description": "Input tokens read from the provider's cache"},
             "cache_write_tokens": {
                 "type": "integer",
-                "description": "Input tokens written to the provider's prompt cache (Claude); 0 for runtimes that "
-                "report none (Codex, Gemini, Cursor, pi) and for runs from before they were counted apart",
+                "description": "Input tokens written to the provider's prompt cache (Claude, Cursor, pi); 0 for runtimes "
+                "that report none (Codex, Gemini, Antigravity, Muse Code) and for runs from before they were counted apart",
             },
             "output_tokens": "i",
             "est_cost_usd": {

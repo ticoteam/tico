@@ -125,8 +125,8 @@ impl From<String> for Fail {
 pub(crate) struct Meter {
     input: i64,
     cached: i64,
-    /// The part of `input` written to the prompt cache (Claude's `cache_creation_input_tokens`); 0 from a host that
-    /// reports none (Codex, Gemini, Cursor, pi, ...).
+    /// The part of `input` written to the prompt cache (Claude, Cursor and pi report it); 0 from a host that reports
+    /// none (Codex, Gemini, Antigravity, Muse Code).
     cache_write: i64,
     output: i64,
     model: String,

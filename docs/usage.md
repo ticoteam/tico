@@ -12,9 +12,10 @@ from the old `turns` table by migration 0072) and prices them
 from `providers.PRICES`, in USD per million tokens, dated by `providers.PRICES_AS_OF`. A cache write counts as input; batch, priority and
 regional premiums are not modelled. A model with no price keeps its tokens and shows a dash for the cost.
 
-Cache writes are counted apart: a Claude run's `cache_creation_input_tokens` go to `cache_write_tokens` (on `attempts` and
-`usage_facts`) and are left out of `input_tokens`, which is then the uncached input only. They are still priced as input. A
-runtime that writes no prompt cache, or does not report it (Codex, Gemini, Cursor, pi, Muse Code), records 0. A run recorded
+Cache writes are counted apart: the cache writes a run's harness reports (Claude's `cache_creation_input_tokens`, Cursor's
+`cacheWriteTokens`, pi's `cacheWrite`) go to `cache_write_tokens` (on `attempts` and `usage_facts`) and are left out of
+`input_tokens`, which is then the uncached input only. They are still priced as input. A runtime that reports no cache
+writes (Codex, Gemini, Antigravity, Muse Code) records 0. A run recorded
 before they were counted apart, or by a runner too old to send them, has NULL there and its `input_tokens` include them.
 
 Some models charge more for a request with a long prompt (`providers.LONG_PROMPT`, dated by `LONG_PROMPT_AS_OF`; today Claude Haiku

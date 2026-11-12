@@ -51,6 +51,12 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64, i64) {
     (inp, out, inp + out)
 }
 
+/// A result's usage for the meter: input counts cache reads and writes, which also go to `cached` and `cache_write`.
+pub fn usage_increment(usage: &Value) -> Value {
+    json!({"input": usage_tokens(usage).0, "cached": int_of(&usage["cacheReadTokens"]),
+           "cache_write": int_of(&usage["cacheWriteTokens"]), "output": int_of(&usage["outputTokens"])})
+}
+
 fn message_text(message: &Value) -> String {
     match &message["content"] {
         Value::String(s) => s.clone(),
@@ -159,8 +165,7 @@ impl Wire for Cursor {
                 }
                 let (inp, out, total) = usage_tokens(&msg["usage"]);
                 if total != 0 {
-                    let cached = int_of(&msg["usage"]["cacheReadTokens"]);
-                    turn.emit("tokens", json!({"input": inp, "output": out, "total": total, "usage": {"input": inp, "cached": cached, "output": out}}));
+                    turn.emit("tokens", json!({"input": inp, "output": out, "total": total, "usage": usage_increment(&msg["usage"])}));
                 }
             }
             _ => {}
@@ -306,6 +311,25 @@ mod tests {
                 &json!({"inputTokens": 10, "cacheReadTokens": 4, "cacheWriteTokens": 1, "outputTokens": 2})
             ),
             (15, 2, 17)
+        );
+        let usage = usage_increment(
+            &json!({"inputTokens": 10, "cacheReadTokens": 4, "cacheWriteTokens": 1, "outputTokens": 2}),
+        );
+        assert_eq!(
+            usage,
+            json!({"input": 15, "cached": 4, "cache_write": 1, "output": 2})
+        );
+        let mut meter = crate::execute::Meter::default();
+        meter.add(&json!({ "usage": usage }));
+        let r = meter.report("auto", "cursor", "subscription").unwrap();
+        assert_eq!(
+            (
+                &r["input_tokens"],
+                &r["cached_tokens"],
+                &r["cache_write_tokens"]
+            ),
+            (&json!(10), &json!(4), &json!(1)),
+            "the meter takes cache writes out of input"
         );
     }
 }
