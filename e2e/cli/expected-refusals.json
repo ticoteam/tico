@@ -57,7 +57,7 @@
  "gateway video-status": "ValueError: Use the job id tico_gateway_video returned",
  "goal checkin": "not_found",
  "goal checkin-list": "not_found",
- "goal read-back": "ValueError: changes must be a JSON array of 1 to 20 change objects",
+ "goal read-back": "ValueError: changes must be a JSON array of 1 to 500 change objects",
  "goal save": "ValueError: path must be a goal read-back save step",
  "goal show": "not_found",
  "goal status": "not_found",

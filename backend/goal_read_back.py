@@ -1,16 +1,21 @@
 """Goals agreed in words: the goal read-back (docs/goals-and-kpis.md; spec chat-first-goals.md).
 
-In the owner's own chat, their Assistant asks Tico to read back up to 20 changes to goals, their measures and the
-Strategy Owner's suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes and what
-is stored now, posts it as the Assistant's reply and stores the exact saves it stands for (event `goal.read_back` on the
-message): each change is one or more steps, a route, a body. A change the owner could not make by their own click here
-(a colour, done or dropped, archiving, a reading, the company Vision) is refused before anything is posted.
+In the owner's own chat, their Assistant asks Tico to read back the whole plan: every change to goals, their measures
+and the Strategy Owner's suggestions (`POST /api/v2/goals/read-back`). Tico writes the message itself, from the changes
+and what is stored now, posts it as the Assistant's reply and stores the exact saves it stands for (event
+`goal.read_back` on the message): each change is one or more steps, a route, a body. A change the owner could not make
+by their own click here (a colour, done or dropped, archiving, a reading, the company Vision) is refused before anything
+is posted.
 
-The goal, goal-KPI and suggestion routes then accept the owner's yes to it (`agreement`): their next message in the
-chat, with nothing from anyone in between and nothing after it, a plain yes ("yes", "ok", "go ahead", "save it") or a
-yes to some by number ("yes to 1 and 3", "yes except 2"), within 30 minutes of the read-back. Tico reads the numbers,
-not the bot. A save must be one stored step exactly, of a change the yes covers, saved once, and the goal must not have
-been changed by anyone since the read-back but these saves. Anything else is `403 not_agreed` and saves nothing. Each
+The goal, goal-KPI and suggestion routes then accept the owner's agreement to it (`agreement`), one yes per request
+(spec one-yes-per-request): a message of the owner's own, cited by their Assistant, after the newest read-back in the
+chat. The Assistant judges the words ("sure, go for it" agrees; it asks again when unsure); questions, answers and
+notices in between keep the plan, and a changed plan is a newer read-back, which replaces it. The plan has no size limit
+beyond a bound against runaway input (`MOST`) and does not expire. Tico still reads a yes to some by number ("yes to 1
+and 3", "yes except 2") and saves only those. After the yes, "thanks" changes nothing; a stop ("stop", "wait", "no")
+from the owner, or a newer read-back, halts the saves not yet made. A save must be one stored step exactly, of a change
+the yes covers, saved once, and the goal must not have been changed by anyone since the read-back but these saves.
+Anything else is `403 not_agreed` and saves nothing. Each
 save is recorded as the owner, via their Assistant, citing their yes and the read-back (`H.DELEGATION`)."""
 
 import json
@@ -23,13 +28,13 @@ from . import goals as G
 from . import kpis as K
 from .store import H, Problem
 
-TTL_S = 30 * 60
-MOST = 20
+# A bound against runaway input, not a plan size: a plan is read back whole and never cut short.
+MOST = 500
 EVENT = "goal.read_back"
 SAVED = "goal.read_back_save"
 NEW = "{new}"  # a step's goal is the one the change's first step created
-CLOSING_ONE = "Reply yes to save exactly this; any other reply saves nothing."
-CLOSING_MANY = "You can also say yes to some by number (like “yes to 1 and 3”).\n" + CLOSING_ONE
+CLOSING_ONE = "Shall I save it?"
+CLOSING_MANY = "Shall I save {n}?"
 
 # The routes a yes to a read-back saves through. Everything else on Goals stays a click or a card.
 _SAVING = [
@@ -129,13 +134,12 @@ def active():
 
 
 # ------------------------------------------------------------------ the owner's yes
-# Only the plain yes words the spec names: a refused yes is the safe failure (the owner says it again), a yes read
-# into words that meant something else is not.
-_YES = r"(?:yes|yep|yeah|ok|okay|go ahead|save it)"
+# The Assistant judges whether the owner's words agree. Tico still reads a yes to some by number, so a partial yes
+# never saves the rest, and a stop after the yes, so the saves not yet made halt.
+_YES = r"(?:yes|yep|yeah|ok|okay|sure|go ahead|save it)"
 _TAIL = r"[\s,.!]*(?:please|thanks|thank you)?[\s.!]*"
 _N = r"#?\d{1,2}"
 _NUMS = rf"{_N}(?:\s*(?:,\s*and|,|&|\+|and)\s*{_N})*"
-PLAIN = re.compile(rf"{_YES}(?:\s+to\s+(?:all|both))?{_TAIL}", re.I)
 SOME = re.compile(
     rf"{_YES}[\s,:]*(?:to\s+)?(?:numbers?\s+)?(?P<yes>{_NUMS})"
     rf"(?:\s*[,;.]?\s*(?:and\s+|but\s+)?(?:no|not)\s+(?:to\s+)?(?P<no>{_NUMS}))?{_TAIL}",
@@ -150,24 +154,26 @@ EXCEPT = re.compile(
 
 
 def agreed(words, count):
-    """The change numbers the owner's reply says yes to, or None when it is not a yes to the read-back as it stands:
-    "yes but make it 50", "wait", a number it does not have, or the same number both ways."""
+    """The change numbers the owner's agreement covers: those it names by number ("yes to 1 and 3", "yes except 2"),
+    else all of them. None when it names a number the plan does not have, or the same number both ways: the Assistant
+    asks again."""
     text = " ".join(str(words or "").split())
-    if not text or len(text) > 120:
-        return None
     numbers = lambda part: {int(n) for n in re.findall(r"\d+", part or "")}
-    if PLAIN.fullmatch(text):
-        return set(range(1, count + 1))
     if m := SOME.fullmatch(text):
         yes, no = numbers(m["yes"]), numbers(m["no"])
     elif m := EXCEPT.fullmatch(text):
         no = numbers(m["no"])
         yes = set(range(1, count + 1)) - no
     else:
-        return None
+        return set(range(1, count + 1))
     if not yes or yes & no or any(n < 1 or n > count for n in yes | no):
         return None
     return yes
+
+
+def halts(words):
+    """Whether the owner's message after their yes stops the saves not yet made (`_STOP`)."""
+    return bool(_STOP.match(" ".join(str(words or "").split())))
 
 
 def not_agreed(detail):
@@ -209,35 +215,37 @@ def saves(c, back_id):
     return out
 
 
+def _newest_read_back(c, room, sender, at, *, after=False):
+    return c.execute(
+        "SELECT m.id FROM messages m JOIN events e ON e.target=m.id AND e.action=? "
+        f"WHERE m.conversation_id=? AND m.sender_id=? AND m.created_at{'>' if after else '<='}? "
+        "AND m.deleted_at IS NULL ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+        (EVENT, room, sender, at),
+    ).fetchone()
+
+
 def answered(c, who, cited):
-    """The read-back the owner's cited message says yes to, with the numbers it covers. Their message must be the
-    very next one in the chat after the read-back (nothing from anyone in between, nothing from them since), and the
-    read-back no more than 30 minutes old."""
+    """The read-back the owner's cited message agrees to, with the numbers it covers: the newest read-back in the chat
+    before their message (anything said in between keeps it), as long as no newer read-back has replaced it and the
+    owner has not said stop since."""
     msg = H.message(c, cited) or {}
     room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
-    before = c.execute(
-        "SELECT id FROM messages WHERE conversation_id=? AND id<>? AND created_at<=? AND deleted_at IS NULL "
-        "ORDER BY created_at DESC, rowid DESC LIMIT 1",
-        (room, cited, at),
-    ).fetchone()
-    back = stored(c, before["id"]) if before else None
-    if not back or H.message(c, back["id"])["sender_id"] != who.task_actor:
-        raise not_agreed(
-            "The owner's message is not a reply to a goal read-back (anything said after the read-back "
-            "takes the yes back)"
-        )
-    later = c.execute(
-        "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
-        "AND deleted_at IS NULL LIMIT 1",
+    newest = msg.get("sender_id") == who.actor and _newest_read_back(c, room, who.task_actor, at)
+    back = stored(c, newest["id"]) if newest and newest["id"] != cited else None
+    if not back:
+        raise not_agreed("The owner's message is not a reply to a goal read-back")
+    if _newest_read_back(c, room, who.task_actor, at, after=True):
+        raise not_agreed("A newer read-back replaced the one the owner agreed to")
+    for later in c.execute(
+        "SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
+        "AND deleted_at IS NULL ORDER BY created_at",
         (room, who.actor, at, cited),
-    ).fetchone()
-    if later:
-        raise not_agreed("The owner wrote again after their yes")
-    if str(back["created_at"]) < H.shift(H.now(), seconds=-TTL_S):
-        raise not_agreed(f"The read-back is more than {TTL_S // 60} minutes old")
+    ):
+        if halts(later["body"]):
+            raise not_agreed("The owner said stop after their yes")
     yes = agreed(msg.get("body"), len(back["changes"]))
     if yes is None:
-        raise not_agreed("The owner's reply is not a plain yes to the read-back")
+        raise not_agreed("The owner's reply names a change the read-back does not have")
     return back, yes, " ".join(str(msg.get("body") or "").split())[:120]
 
 
@@ -258,6 +266,15 @@ _NO_OPENING = re.compile(
 _BARE_NO = re.compile(
     r"[\s,.!]*(?:no|nope|nah|no thanks|no thank you|leave it|leave that|skip it|skip that|not now|"
     r"not that|don'?t|do not)[\s,.!]*",
+    re.I,
+)
+
+
+# A stop from the owner after their yes: a safe failure when read too widely (the Assistant asks), so it is broad. A
+# reply that opens with "no" but means yes ("no problem", "no worries") is not one.
+_STOP = re.compile(
+    rf"\s*(?!{_NO_YES})(?:stop|halt|cancel|abort|pause|wait|hold\s+(?:on|off|it)|never\s*mind|nevermind|"
+    r"no|nope|nah|don'?t|do not)\b",
     re.I,
 )
 
@@ -519,7 +536,8 @@ def text(changes):
         head = "I'll save this goal:" if changes[0]["kind"] == "goal_create" else "I'll save this change:"
         return head + "\n" + changes[0]["text"] + "\n" + CLOSING_ONE
     lines = [f"{c['n']}. {c['text']}" for c in changes]
-    return f"I'll save these {len(changes)} changes:\n" + "\n".join(lines) + "\n" + CLOSING_MANY
+    closing = CLOSING_MANY.format(n="both" if len(changes) == 2 else f"all {len(changes)}")
+    return f"I'll save these {len(changes)} changes:\n" + "\n".join(lines) + "\n" + closing
 
 
 def click_reason(raw):

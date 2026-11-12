@@ -70,15 +70,20 @@ On the first start after the update, Confirm cards still waiting there move to t
 ### Goals, agreed in words
 
 For your own goals, measures and targets, and for the Strategy Owner's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
-in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
+in your chat as one numbered read-back of the whole plan, however many changes it has, with the exact steps. One yes
+saves all of it:
 
-- A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
+- A reply that agrees, in your own words, such as **yes** or **sure, go for it**, saves every change in it. The Assistant
+  judges your words, and asks once when a reply might not be a yes.
 - **Yes to 1 and 3** saves only changes 1 and 3.
 - **Yes except 2** saves every change but number 2.
 
-Your yes counts only if it is your very next message after the read-back, with nothing from anyone else in between and
-nothing else from you after it, and within 30 minutes of the read-back. Any other reply saves nothing. Ask again, and the
-Assistant reads it back again.
+A question or a "thanks" before your yes keeps the plan: the Assistant answers, and your later yes saves it without
+reading it back again. Asking for a change makes a new read-back, which replaces the old one; nothing is saved until you
+agree to the changed plan. The plan does not expire. Once you agree, everything agreed is saved and the Assistant replies
+once with links. A "thanks" while it saves changes nothing; **stop** (or wait, or no) halts the saves not yet made, and the
+Assistant says what was and wasn't saved. Tico saves only the exact changes the read-back showed, and only after a reply
+from you.
 
 Colour, done or dropped and archive are not agreed in words. They stay your click on the Goals page. If a read-back would
 include one, Tico refuses the whole read-back and saves nothing, and the Assistant says why in one sentence and leaves
@@ -94,8 +99,7 @@ message is kept as the reason, unless it is only a no. Another measure's card on
 waiting cards of the same kind are about the same measure on the same goal, nothing is turned down, and the Assistant
 asks which one you mean. With no waiting card, the no is still stored as a turned-down suggestion. A reply that opens
 with "no" but means yes, such as "No problem", is not a no and turns nothing down, unless it goes on to say to leave it,
-skip it, not or don't: "No problem, just leave it" is a no. A read-back takes only the yes forms above, so "No problem,
-save it" saves nothing. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
+skip it, not or don't: "No problem, just leave it" is a no. "No problem, save it" agrees to a read-back. A "no" to a Why line stays a click on its card. Only the owner's Assistant agrees goal changes
 in chat, so nobody else's yes or no in chat counts.
 
 ### BotOps
