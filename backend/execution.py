@@ -5034,7 +5034,12 @@ class Execution:
             from .live_meetings import claim_runner_turn
 
             meeting_claim = claim_runner_turn(
-                c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot_id"], auth=self.auth
+                c,
+                live_ref.get("meeting_id"),
+                live_ref.get("turn_id"),
+                row["bot_id"],
+                auth=self.auth,
+                job="job:" + row["id"],
             )
             if meeting_claim["status"] != "claimed":
                 return {"attempt": None}
