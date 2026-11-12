@@ -35,7 +35,8 @@ async function refresh(force = false): Promise<void> {
       if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
         REFRESH_SHOWN.roster = mine;
         S.emps = namedRoster(emps.value);
-        setPeople(people.value);
+        // /humans carries recruiting seats too: they never replace seats a later refresh already showed.
+        setPeople(mine > REFRESH_SHOWN.seats ? people.value : {...people.value, seats: undefined});
         S.overviewRosterFresh = true;
       } else S.overviewRosterFresh = false;
     }

@@ -24,7 +24,7 @@ function app() {
     document: {querySelectorAll: () => []}, $: () => null,
     get: (p: string, options: {fresh?: boolean}) => new Promise((resolve, reject) => reads.push({path: p, fresh: !!options?.fresh, resolve, reject})),
     v2Refresh: async () => {}, overviewLoadComputers: async () => {},
-    namedRoster: (emps: unknown) => emps, setPeople: (v: {people: unknown}) => { S.people = v.people; },
+    namedRoster: (emps: unknown) => emps, setPeople: (v: {people: unknown; seats?: unknown}) => { S.people = v.people; if (Array.isArray(v.seats)) S.seats = v.seats; },   // as sidebar.ts does
     cloudAccessFromStatus: nothing, overviewRefresh: nothing, renderTree: nothing, renderHeartbeat: nothing, pausedRender: nothing,
     botAvatarsSync: nothing, goalsFollowRoster: nothing, tipRefresh: nothing, botAlertDraw: nothing, isTasksRoute: () => false,
   });
@@ -38,7 +38,7 @@ function app() {
       async answer(name: string, fail: string[] = []) {
         for (const r of mine) {
           if (fail.includes(r.path)) r.reject(new Error('offline'));
-          else r.resolve(({'/status': {name}, '/employees': [{slug: name}], '/humans': {people: [{id: name}]}, '/v2/seats': {seats: [{id: name}]}} as Record<string, unknown>)[r.path]);
+          else r.resolve(({'/status': {name}, '/employees': [{slug: name}], '/humans': {people: [{id: name}], seats: [{id: `${name} (people)`}]}, '/v2/seats': {seats: [{id: name}]}} as Record<string, unknown>)[r.path]);
         }
         await done;
       },
@@ -78,6 +78,7 @@ const roster = (S: Shown) => ({status: (S.status as {name: string} | null)?.name
     const forced = begin(true), poll = begin(false);
     assert.ok(forced.reads.includes('/v2/seats') && !poll.reads.includes('/v2/seats'), 'only the forced refresh reads seats');
     await poll.answer('poll');
+    assert.equal(roster(S).seats, 'poll (people)', 'the people read carries seats too');
     await forced.answer('forced');
     assert.deepEqual(roster(S), {status: 'poll', emps: 'poll', people: 'poll', seats: 'forced'});
   }
