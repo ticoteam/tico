@@ -39,6 +39,7 @@ import json
 import re
 
 from backend import automation_flow as F
+from clients import judge as J
 
 READY, WAITING, DONE, FAILED = "ready", "waiting", "done", "failed"
 
@@ -331,9 +332,24 @@ def _act(services, do, args, values, step, key, producer=None):
 
 
 def _decide(flow, state, thread, step, services):
-    questions = step.get("questions") or services.question_set(step["set"])
     values = values_of(state, thread)
+    asked = thread.get("decided") or {}
+    questions = step.get("questions") or services.question_set(step["set"])
+    early = asked.pop(step["id"], None)
+    if early is not None and early["questions"] == questions:
+        # An earlier Decide step on the same object asked this step's questions in its call. Its answers stand only
+        # for the questions it asked: a flow edited while the run waited asks again.
+        thread["outputs"][step["out"]] = early["answers"]
+        _record(state, thread, step, "ok", early["answers"])
+        return
     judged = F.judge_state(values, services.state_fields(step["set"]) if step.get("set") else None)
+    later = _same_object(flow, thread, values, judged, services)
+    parts = {step["id"]: questions, **later}
+    merged = {f"{sid}:{qid}": q for sid, qs in parts.items() for qid, q in qs.items()}
+    if later and J.fits(judged, merged):  # one call asks every step's questions, each under its step's id
+        questions = merged
+    else:
+        later = {}
     result = services.judge(judged, questions, f"automation.{step['id']}")
     if result is None:
         # Decide is off (no decision model, or the month's cap): carry on as callers elsewhere do, with no answers,
@@ -342,8 +358,33 @@ def _decide(flow, state, thread, step, services):
         _record(state, thread, step, "skipped", {"off": True})
         return
     answers = result.get("answers") or {}
+    if later:
+        mine = {sid: {qid: answers.get(f"{sid}:{qid}") for qid in qs} for sid, qs in parts.items()}
+        mine = {sid: {qid: a for qid, a in got.items() if a is not None} for sid, got in mine.items()}
+        thread["decided"] = {**asked, **{sid: {"questions": later[sid], "answers": mine[sid]} for sid in later}}
+        answers = mine[step["id"]]
     thread["outputs"][step["out"]] = answers
     _record(state, thread, step, "ok", answers, float(result.get("cost_usd") or 0))
+
+
+def _same_object(flow, thread, values, judged, services):
+    """{step id: questions} for the Decide steps after this one in its list that judge the same object the same way, so
+    this step's call asks theirs too and the object is read once. The look stops at a step that could change the
+    object: a find (its items become the object), a fork (its paths are other lists), or a step whose output is named
+    like an object."""
+    out = {}
+    for later in steps_at(flow, thread["trail"])[thread["next"] :]:
+        if later["type"] in ("find", "paths") or later.get("out", later["id"]) in F.OBJECTS:
+            break
+        if later["type"] != "decide" or later.get("enabled", True) is False:
+            continue
+        try:
+            fields = services.state_fields(later["set"]) if later.get("set") else None
+            if F.judge_state(values, fields) == judged:
+                out[later["id"]] = later.get("questions") or services.question_set(later["set"])
+        except Exception:  # noqa: BLE001 - that step asks on its own when it runs, and fails there if it must
+            continue
+    return out
 
 
 def _turn_label(thread):

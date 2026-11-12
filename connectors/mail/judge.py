@@ -212,26 +212,71 @@ def judge_sets(msgs, set_ids, engine, mailbox="", conn=None):
     """What a `judge` rule condition reads (rules.py): for every set the rules name, judge every
     message from its listing fields and put `judgments[set] = {question: {value, confidence}}`
     on it. A failed call leaves `judge_errors[set]` instead, and the rule does not fire.
-    Returns one summary per set for the audit."""
-    stats = {}
-    for sid in set_ids:
-        chosen = J.load_set(sid)
+    Every set a message still needs is asked in one call about it (`_ask_sets`), so the message is
+    read once however many sets the rules name. Returns one summary per set for the audit."""
+    sets = {sid: J.load_set(sid) for sid in set_ids}
+    stats = {sid: {"label": chosen["label"], "count": 0, "errors": 0, "cached": 0} for sid, chosen in sets.items()}
+    todo = []  # (message, {set id: cache key}) for what is not cached yet
+    for m in msgs:
+        missing = {}
+        for sid, chosen in sets.items():
+            key = _cache_key(m, chosen, mailbox) if conn is not None else None
+            cached = db.get_judgment(conn, key) if key else None
+            if cached is None:
+                missing[sid] = key
+                continue
+            m.setdefault("judgments", {})[sid] = J.summary(cached)
+            stats[sid]["count"] += 1
+            stats[sid]["cached"] += 1
+        if missing:
+            todo.append((m, missing))
 
-        results = _run(msgs, chosen, engine, mailbox, conn)
-        errors = 0
-        for m, (result, error, _cached) in zip(msgs, results):
+    def one(entry):
+        m, missing = entry
+        return _ask_sets(engine, message_state(m, mailbox), {sid: sets[sid] for sid in missing})
+
+    fresh = []
+    if todo:
+        with ThreadPoolExecutor(min(PARALLEL, len(todo))) as pool:
+            fresh = list(pool.map(one, todo))
+    for (m, missing), answered in zip(todo, fresh):
+        for sid, key in missing.items():
+            answers, error = answered[sid]
             if error:
-                errors += 1
+                stats[sid]["errors"] += 1
                 m.setdefault("judge_errors", {})[sid] = error.code
-            else:
-                m.setdefault("judgments", {})[sid] = J.summary(result["answers"])
-        stats[sid] = {
-            "label": chosen["label"],
-            "count": len(results) - errors,
-            "errors": errors,
-            "cached": sum(cached for _result, _error, cached in results),
-        }
+                continue
+            m.setdefault("judgments", {})[sid] = J.summary(answers)
+            stats[sid]["count"] += 1
+            if key:
+                db.put_judgment(conn, key, answers)
     return stats
+
+
+def _ask_sets(engine, state, sets):
+    """{set id: (answers, None) or (None, JudgeError)}: every set's questions about one message, in one call, each
+    question under `<set id>/<question id>`; one call per set only when together they do not fit in one."""
+    if len(sets) > 1:
+        questions = {f"{sid}/{qid}": q for sid, chosen in sets.items() for qid, q in chosen["questions"].items()}
+        labels = "+".join(chosen["label"] for chosen in sets.values())
+        if J.fits(state, questions):
+            try:
+                label = labels if len(labels) <= J.MAX_LABEL else next(iter(sets.values()))["label"]
+                result = engine(state, questions, label)
+            except J.JudgeError as exc:
+                return {sid: (None, exc) for sid in sets}
+            answers = result["answers"]
+            return {
+                sid: ({qid: answers[f"{sid}/{qid}"] for qid in chosen["questions"]}, None)
+                for sid, chosen in sets.items()
+            }
+    out = {}
+    for sid, chosen in sets.items():
+        try:
+            out[sid] = (engine(state, chosen["questions"], chosen["label"])["answers"], None)
+        except J.JudgeError as exc:
+            out[sid] = (None, exc)
+    return out
 
 
 # ---------------------------------------------------------------- the draft
