@@ -43,8 +43,20 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
     text = str(document)
     assert all(ref in document["components"]["schemas"] for ref in re.findall(r"#/components/schemas/(\w+)", text))
     for path, ops in document["paths"].items():  # every write asks for an idempotency key
-        if path.startswith("/api/v2/") and "post" in ops:
-            assert "Idempotency-Key" in [p["name"] for p in ops["post"]["parameters"]], path
+        for method in openapi_v2.WRITE_METHODS:
+            if path.startswith("/api/v2/") and method in ops:
+                assert "Idempotency-Key" in [p["name"] for p in ops[method]["parameters"]], (method, path)
+
+
+def test_a_put_that_needs_an_idempotency_key_says_so():
+    """PUT goes through the same keyed write as POST; a client built from the operation alone must send the key."""
+    paths = openapi_v2.generate()["paths"]
+    puts = {path: ops["put"] for path, ops in paths.items() if path.startswith("/api/v2/") and "put" in ops}
+    assert puts and set(openapi_v2.PUT_WITHOUT_KEY) <= set(puts)
+    for path, op in puts.items():
+        key = [p for p in op.get("parameters", []) if (p["name"], p["in"]) == ("Idempotency-Key", "header")]
+        assert len(key) == 1, path
+        assert key[0]["required"] is (path not in openapi_v2.PUT_WITHOUT_KEY), path
 
 
 def test_a_schema_requires_only_what_it_declares():
@@ -73,6 +85,11 @@ def test_the_declared_answers_match_the_live_ones(api):
         )
 
     def call(operation, method, path, **kw):
+        declared = by_id[operation].get("parameters", [])
+        if method == "put" and any(p["name"] == "Idempotency-Key" and p["required"] for p in declared):
+            keyless = {"Authorization": headers()["Authorization"]}
+            refused = getattr(api, method)(path, headers=keyless, **kw)
+            assert (refused.status_code, refused.json()["error"]["code"]) == (422, "idempotency_key"), path
         response = getattr(api, method)(path, headers=headers(), **kw)
         assert response.status_code == 200, (path, response.text)
         check(operation, response)
