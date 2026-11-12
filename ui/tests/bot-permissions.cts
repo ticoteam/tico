@@ -244,7 +244,7 @@ async function roles(browser: import('playwright').Browser) {
     method: 'POST', path: '/api/v2/access/humans', body: {name: 'Sean', email: 'sean@example.test'}, diff: []};
   let accepts = false;
   // The runner keeps a limit of 2, as one that cannot take a raised Turns at once setting does.
-  let turnsAtOnce: number | null = null, holdTurns = false, heldTurns: import('playwright').Route | null = null;
+  let turnsAtOnce: number | null = null;
   const bot = (name: string, display_name: string, extra: Json = {}) => ({name, display_name, org_parent: '', host: 'keeper', status: 'active',
     state: 'active', can_chat: true, my_access: FULL, users: [{id: 'ana', name: 'Ana'}], owner_id: 'ana', revision: 1,
     can_manage: true, ...extra});
@@ -289,8 +289,6 @@ async function roles(browser: import('playwright').Browser) {
     }
     if (p === '/api/v2/computers/r1/turns-at-once' && method === 'POST') {
       posts.push(['turns-at-once', request.postDataJSON()]);
-      // A held save is answered by the test, so a change can land in the field while it is in flight.
-      if (holdTurns) { heldTurns = route; return; }
       turnsAtOnce = request.postDataJSON().turns_at_once;
       return json({turns_at_once: turnsAtOnce, turn_limit: 2});
     }

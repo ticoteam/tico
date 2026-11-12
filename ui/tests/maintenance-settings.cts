@@ -267,7 +267,7 @@ async function themed(page: Page, name: string) {
     }
 
     {
-      const {page, errors, writes, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true,
+      const {page, errors, db} = await openAutomations(browser, {viewport: DESKTOP, maintenance: true,
         hash: '#/automations/maintenance'});
       await page.waitForSelector('.mt-step');
       await page.getByRole('tab', {name: 'Runs'}).click();

@@ -5,12 +5,11 @@ const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm');
 const {spawnSync}: typeof import('node:child_process') = require('node:child_process');
-const os: typeof import('node:os') = require('node:os');
 const {EventEmitter}: typeof import('node:events') = require('node:events');
 // browser.cts is TypeScript: the vm below runs its source with the types stripped (Node's own stripper, as --require does).
 const {stripTypeScriptTypes}: typeof import('node:module') = require('node:module');
 type Emitter = import('node:events').EventEmitter;
-const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, typeScriptGuard} = require('../ui-tests.cts') as Api;
+const {resources, runScripts, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cts') as Api;
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
   const active = new Set<string>(), started: string[] = [], finished: string[] = [];
