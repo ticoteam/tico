@@ -264,3 +264,28 @@ def test_has_room_reads_no_waits_while_every_task_would_fit(c, store, monkeypatc
     _in_spec(c, "Importer spec")
     monkeypatch.setattr(W, "slots", lambda *_: pytest.fail("read waits with room to spare"))
     assert E.has_room(c, _spec(c))
+
+
+def test_saying_which_list_rows_wait_on_a_person_reads_nothing_per_row(c, store):
+    """`on_person` on list rows reads each task from the list's batch read (`waiting_on.prime`, the snapshot cache),
+    not once per row: beyond the waits themselves, eight rows waiting on a person cost what two do."""
+
+    def counted(read):
+        read()  # warm the snapshot's caches, as the list's own reads do
+        seen: list[str] = []
+        c.set_trace_callback(seen.append)
+        read()
+        c.set_trace_callback(None)
+        return len(seen)
+
+    def beyond_waits(rows):
+        ids = [row["id"] for row in rows]
+        assert all(row["on_person"] for row in task_reads.brief(c, [{"id": i} for i in ids]))
+        return counted(lambda: task_reads.brief(c, [{"id": i} for i in ids])) - counted(
+            lambda: W.waiting_on_many(c, ids)
+        )
+
+    rows = [_to_person(c, store, _in_spec(c, f"Spec {n}")) for n in range(2)]
+    few = beyond_waits(rows)
+    rows += [_to_person(c, store, _in_spec(c, f"Spec {n}")) for n in range(2, 8)]
+    assert beyond_waits(rows) <= few, few
