@@ -170,6 +170,8 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
         assert.ok(await hashSoon(page, to), `${tag}: ${from} lands on ${to}`);
       }
       await page.locator('#au-root.au-lst').waitFor({state: 'attached'});
+      // #au-root can still be the one #/automations drew a step before: wait for the row, not just the page.
+      await page.locator('#side a[data-nav="listening"].cur').waitFor({state: 'attached', timeout: 5000}).catch(() => {});
       assert.equal(await page.locator('#side a[data-nav="listening"].cur').count(), 1, tag + ': Listening is current');
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 0, tag + ': and Automations is not');
       await page.evaluate(() => { location.hash = '#/strategy/market'; });
