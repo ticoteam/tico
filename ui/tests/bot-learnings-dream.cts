@@ -190,6 +190,9 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     assert.ok(await page.locator('#bot-learn').evaluate(el => el.classList.contains('dreaming')), 'the brain shows it');
 
     // Stop on a running dream closes its task through the move route, with the version just read; the dream is over.
+    // The page clock is paused, so the panel's 4 s poll never fires: Stop itself must redraw the dream.
+    await page.clock.install({time: new Date('2026-11-02T13:01:00Z')});
+    await page.clock.pauseAt(new Date('2026-11-02T13:01:01Z'));
     await page.evaluate(() => {
       state.dream = {task: 't4', status: 'open', state: 'dreaming', questions: null, summary: null, closed_at: null,
                      started_at: '2026-11-02T13:00:00Z'};
