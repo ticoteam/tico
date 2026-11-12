@@ -248,7 +248,7 @@ def test_bot_status_goes_live_only_to_the_roots_readers(api):
     def sent(token):
         return [
             d
-            for _, topic, d in read_as(api, who(api, token), after, ("threads",))
+            for _, topic, d in read_as(api, who(api, token), after, ("threads",), (thread["id"],))
             if topic == "threads" and d.get("kind") == "bot_status"
         ]
 

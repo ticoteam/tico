@@ -541,7 +541,7 @@ first:
   carrying its computer), written only when the reason changes.
 
 SSE: a `threads` event `bot_status` `{"thread_id": <root>, "bots": [...]}`, rendered per viewer, to the root's readers
-whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
+(`bots` only to a stream whose `?thread=` is under that root; the others get the event without it) whenever a wake, job, attempt, refusal, bot state or drain changes for it; a run's steps send at most one per root
 every 5 s (`changes_bot_status`), and a step held back is sent by the scheduler's next tick
 (`thread_bot_status.send_trailing`).
 
@@ -680,8 +680,9 @@ narrower than its thread (`threads.message_narrower`: a legacy audience, a priva
              "created": "...", "edited_at": null}}
 {"seq": 813, ..., "id": "<message id>", "thread_id": "...", "root_id": "...", "deleted": true, "revision": 2}
 ```
-`?conversation=` and `?thread=` narrow `messages` to what is on screen (the union of the two) and `?conversation=`
-narrows `runs`. They do not narrow `threads`: the sidebar stays live while a thread is open.
+`?conversation=` and `?thread=` narrow `messages` and `runs` to what is on screen: the union of those conversations
+and those threads' subtrees. A stream naming neither keeps every readable run (task pages, the ask panel). They do not
+narrow `threads`: the sidebar stays live while a thread is open.
 
 `threads` topic (`changes.topic='threads'`, `subject_id` = thread id, `conversation_id` = thread id; its view is
 `_threads` in `backend/events.py`):
