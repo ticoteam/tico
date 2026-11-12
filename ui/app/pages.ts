@@ -180,7 +180,7 @@ function pageFullDraw(state: PageFullState) {
   if (!root || !state.page || !state.pinned) return;
   const pinned = state.pinned.map(x => `<a href="${esc(pagePlaceHref(x.place))}">${esc(x.label)}</a>`).join(' · ');
   root.innerHTML = `<header class="pg-head"></header><div class="pg-body"></div>${pinned ? `<p class="pg-pinned">Pinned to ${pinned}</p>` : ''}`;
-  root.onkeydown = (ev: KeyboardEvent) => pageFullKeys(state, ev);
+  root.onkeydown = pageMenuKeys;
   pageFullHead(state);
   pageFullBody(state);
 }
@@ -272,8 +272,8 @@ function pageMenuClose(state: PageFullState, focus = false) {
   if (focus) document.querySelector<HTMLElement>('#pg-view .pg-menu summary')?.focus();
   return true;
 }
-// Esc closes the ⋯ menu (focus back on ⋯), else What's changed?; the arrows move through the menu's items.
-function pageFullKeys(state: PageFullState, ev: KeyboardEvent) {
+// The arrows, Home and End move through the ⋯ menu's items (Esc: the document handler below).
+function pageMenuKeys(ev: KeyboardEvent) {
   const menu = eventElement(ev)?.closest('.pg-menu');
   if (!menu || !(menu as HTMLDetailsElement).open || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(ev.key)) return;
   ev.preventDefault();
