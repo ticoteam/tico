@@ -22,6 +22,8 @@ from urllib.parse import quote, urlsplit
 from fastapi import Query, Request
 from pydantic import Field, StringConstraints
 
+from clients import urlparts
+
 from . import docs_import_run
 from . import manual
 from . import models as M
@@ -85,13 +87,14 @@ def clean_path(raw):
 
 def clean_url(raw):
     url = str(raw or "").strip()
-    parts = urlsplit(url if re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I) else "https://" + url)
+    parts = urlparts.split(url if re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I) else "https://" + url)
     try:
-        host = parts.hostname or ""
+        host = (parts.hostname or "") if parts else ""
     except ValueError:
         host = ""
     if (
-        parts.scheme not in ("http", "https")
+        parts is None
+        or parts.scheme not in ("http", "https")
         or not host
         or "." not in host
         and host != "localhost"
