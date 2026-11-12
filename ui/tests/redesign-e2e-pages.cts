@@ -164,6 +164,13 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await page.waitForFunction(() => document.querySelector('#pg-view .pg-head .pg-status')?.textContent === 'v3 · an older version · Latest', null, {timeout: t(5000)})
     .catch(async () => assert.fail(`${tag}: v3's status line (${await status.innerText()})`));
   await page.waitForFunction(() => /Shipped 11/.test(document.querySelector<HTMLIFrameElement>('#pg-view iframe.html-view')?.srcdoc || ''), null, {timeout: t(5000)});
+  // The oldest version has nothing to compare with: no What's changed?, Version history still there.
+  await page.locator('#pg-view .pg-menu summary').click();
+  await page.locator('#pg-view [data-pg-act=history]').click();
+  await page.locator('#pg-view [data-pg-v="1"]').click();
+  await page.waitForFunction(() => document.querySelector('#pg-view .pg-head .pg-status')?.textContent === 'v1 · an older version · Latest', null, {timeout: t(5000)});
+  assert.equal(await page.locator('#pg-view [data-pg-act=diff]').count(), 0, `${tag}: no What's changed? on the oldest version`);
+  assert.equal(await page.locator('#pg-view [data-pg-act=history]').count(), 1, `${tag}: Version history on the oldest version`);
   await page.locator('#pg-view [data-pg-act=latest]').click();
   await page.waitForFunction(() => /· v5/.test(document.querySelector('#pg-view .pg-head .pg-status')?.textContent || ''), null, {timeout: t(5000)});
 

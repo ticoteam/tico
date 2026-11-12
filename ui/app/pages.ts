@@ -242,7 +242,8 @@ function pageFullMenuHTML(state: PageFullState) {
   const many = state.versions.length > 1;
   return [
     state.can.manage ? item('access', `<span class="pg-mi-name">Who can see it</span><span class="pg-mi-sub">${esc(pagesAudienceText(p.audience))}</span>`) : '',
-    many ? item('diff', "What's changed?") : '',
+    // The oldest version has nothing before it to compare with.
+    pageDiffBases(state).length ? item('diff', "What's changed?") : '',
     many ? item('history', 'Version history') : '',
     state.can.manage ? item('archive', p.archived ? 'Restore' : 'Archive') : '',
     `<a role="menuitem" href="${API}/v2/files/${encodeURIComponent(p.file_id)}?v=${state.shown}" download>Download</a>`,
@@ -365,7 +366,7 @@ async function pageDiffDraw(state: PageFullState) {
     const [a, b] = await Promise.all([from, state.shown].map(async v => pageText(await (await viewFile(p.file_id, p.title + '.html', v)).blob.text())));
     if (PG !== state || state.diff !== from || !out.isConnected) return;
     out.removeAttribute('aria-busy');
-    out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a ?? '', b ?? '');
+    out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a, b);
   } catch (e) { if (out.isConnected) { out.removeAttribute('aria-busy'); out.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; } }
 }
 // The diff's header: What's changed?, the version to compare from, → the one on screen, and Close.
