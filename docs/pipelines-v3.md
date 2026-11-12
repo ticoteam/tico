@@ -1641,6 +1641,14 @@ Rules:
 - A long sentence wraps on a phone.
 - On an ask the buttons stay at the bottom while the page scrolls.
 - A pipeline shows one stage at a time.
+- A pipeline has an Ask bar above the bottom bar, in place of the manager's rail: a line saying what goes with the
+  message ("Product › Spec · 3 tasks on screen"), a button for the manager (picked first) and one for the stage's
+  holder ("Spec · Product Owner"; none when the stage is held by whoever the task is for, once when it is the manager),
+  and the box, "Ask Product Manager…". The message goes to that bot's direct chat and carries the pipeline, the stage
+  and the ids of the tasks on screen (`refs.board`, at most 50, search and filter applied), shown as one card under it.
+  The chat opens over the board, the chat alone; ✕, Escape or a swipe down puts it away.
+- A card on a pipeline opens its task at its conversation, the box reading "Ask Builder about this task…"; Details
+  shows the rest.
 
 ### S18. What goes away
 

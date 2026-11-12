@@ -198,7 +198,14 @@ async function phonePolish(browser: Browser) {
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '${PHONE.height}px')`);
     await shot(page, '3-review');
     await page.locator('#need-card [data-dc="close"]').click();
+    // On a pipeline's board a card opens at its conversation (pipeline-ask.ts); Details shows the rest.
     await page.locator('.pv-rows .tk-row').first().click();
+    await page.locator('#task-modal[open] .tthread-title').waitFor();
+    await page.waitForTimeout(300);
+    r = await smallTargets(page, '#task-modal');
+    assert.deepEqual(r.small, [], 'a task\'s conversation: 44 px');
+    assert.ok(r.sideways <= 1, 'a task\'s conversation: no sideways scroll');
+    await page.locator('#task-modal [data-thread-details]').click();
     await page.locator('#task-modal[open] .tmodal-title').waitFor();
     await page.waitForTimeout(300);
     r = await smallTargets(page, '#task-modal');
