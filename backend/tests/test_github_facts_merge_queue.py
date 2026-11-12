@@ -369,6 +369,14 @@ def test_with_many_prs_the_first_unmet_in_link_order_gives_the_line(c):
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
 
 
+def test_a_failed_pr_is_the_line_before_an_earlier_pr_whose_checks_still_run(c):
+    engineering(c)
+    task_id = new(c, 1, 2)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": [{"name": "u", "state": "pending"}]}, 1)
+    F.save_pr(c, REPO, 2, {"state": "open", "head_sha": "b", "checks": [{"name": "e2e", "state": "failure"}]}, 1)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
+
+
 def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     engineering(c)
     task_id = new(c, 1)
