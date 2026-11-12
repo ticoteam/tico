@@ -294,7 +294,7 @@ interface TaskPagesSlot extends HTMLDivElement {
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
-const taskMakeDraftKey = (id: string) => 'tico.task.make-page.' + id;
+const taskMakeDraftKey = (id: string) => 'tico.task.make-page.' + encodeURIComponent(String(S.me?.id || '')) + '.' + id;
 // A live event the task's pages react to: a files change on the task, or a run of the page being made.
 interface TaskPagesLiveEvent { kind?: string; kinds?: string[]; id?: unknown; conversation_id?: string; }
 // A pin on a task's place: its page is the page as GET /api/v2/places/{place} lists it, with the replaced and archived flags.
