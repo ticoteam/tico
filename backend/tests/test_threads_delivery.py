@@ -563,6 +563,26 @@ def test_a_purge_runs_in_bounded_batches_and_the_next_run_goes_on(api, monkeypat
     )  # a run with nothing past its time writes nothing
 
 
+def test_a_busy_root_never_keeps_later_roots_waiting_run_after_run(api, monkeypatch):
+    store = api.app.state.store
+    monkeypatch.setattr(thread_retention, "_after", {"root": ""})
+    monkeypatch.setattr(thread_retention, "BATCH", 2)
+    monkeypatch.setattr(thread_retention, "MAX_BATCHES", 1)
+    busy, *quiet = sorted((new_thread(api, audience="company")["id"] for _ in range(3)))
+    for n in range(12):
+        say(api, busy, f"Busy {n}")
+    for thread_id in quiet:
+        say(api, thread_id, "Quiet")
+    for thread_id in (busy, *quiet):
+        patch(api, thread_id, {"retention_days": 1})
+        age(api, thread_id)
+    for _ in range(3):  # the busy root still has a backlog after every run
+        thread_retention.sweep(store)
+    for thread_id in quiet:
+        assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", thread_id) == []
+    assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", busy)
+
+
 def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_destination(api):
     store = api.app.state.store
     thread = new_thread(api, audience="company")
