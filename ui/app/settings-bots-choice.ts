@@ -172,7 +172,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
       rows.push({value: id || '', label: why ? `${name} (${why.short})` : name, on: id === picked.harness, off: !!why && id !== picked.harness, title: why?.reason}); });
     if (viaTier) { const why = block('tico');
       rows.push({value: 'tico', label: why ? `Tico AI Gateway (${why.short})` : 'Tico AI Gateway', on: picked.harness === 'tico', off: !!why && picked.harness !== 'tico', title: why?.reason}); }
-    off.filter(row => row.id !== picked.harness).forEach(row => rows.push({value: row.id, label: `${harnessWords(row.id)} (off)`, on: false, off: true}));
+    off.filter(row => row.id !== picked.harness).forEach(row => { rows.push({value: row.id, label: `${harnessWords(row.id)} (off)`, on: false, off: true}); });
     part('[data-choice-harness] .mp-seg').innerHTML = radios('h', rows);
     // The reason and its Sign in / Move line only in the open bot editor's picker: the table already marks the bot's
     // row, and every bot on that computer would repeat it.
@@ -211,7 +211,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     const list = efforts(), current = picked.effort, row = part('[data-choice-effort]');
     row.hidden = !!spec.noEffort || !picked.model;
     const rows: SettingsPanelRow[] = current && !list.includes(current) ? [{value: current, label: `${settingsEffortName(current)} (current)`, on: true, off: true}] : [];
-    list.forEach(id => rows.push({value: id, label: id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), on: id === current, off: list.length <= 1 && id !== current}));
+    list.forEach(id => { rows.push({value: id, label: id === 'as-configured' ? 'Managed by harness' : settingsEffortName(id), on: id === current, off: list.length <= 1 && id !== current}); });
     row.querySelector<HTMLElement>('.mp-seg')!.innerHTML = radios('e', rows);
   };
   const paintCompact = () => {
@@ -325,7 +325,8 @@ function settingsChoicePopover(anchor: HTMLElement) {
   let pop = document.getElementById('sb-choice-pop');
   if (pop?.matches(':popover-open')) { const same = SETTINGS_CHOICE_ANCHOR === anchor; pop.hidePopover(); if (same) return; }
   if (!pop) {
-    const made = pop = document.createElement('div');
+    const made = document.createElement('div');
+    pop = made;
     made.id = 'sb-choice-pop'; made.className = 'tl-pop sb-choice-pop'; made.popover = 'auto';
     made.setAttribute('role', 'dialog');
     made.addEventListener('toggle', (ev: ToggleEvent) => {
