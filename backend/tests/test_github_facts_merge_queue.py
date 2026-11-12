@@ -369,6 +369,14 @@ def test_with_many_prs_the_first_unmet_in_link_order_gives_the_line(c):
     assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
 
 
+def test_a_failed_pr_is_the_line_before_an_earlier_pr_whose_checks_still_run(c):
+    engineering(c)
+    task_id = new(c, 1, 2)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": [{"name": "u", "state": "pending"}]}, 1)
+    F.save_pr(c, REPO, 2, {"state": "open", "head_sha": "b", "checks": [{"name": "e2e", "state": "failure"}]}, 1)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "Checks failed on acme/app#2: e2e")
+
+
 def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     engineering(c)
     task_id = new(c, 1)
@@ -532,6 +540,36 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
     with company.transaction() as c:
         assert stage(c, task_id) == "Merge" and effects(c, task_id) == [("act", "done")]
         assert any(":changed_after_ok:" in key for key, _ in X.wakes(c, task_id, EM))
+
+
+def test_a_drop_of_one_pr_is_the_line_while_another_pr_of_the_task_is_still_queued(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1, 2)
+    MQ.run(company, gh)
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+    gh.push(REPO, 2)  # a new commit on the second-linked PR: GitHub takes it out; PR 1 stays queued
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
+        assert line(c, task_id, "pr_merged") == (
+            R.NOT_MET,
+            RM,
+            "Dropped from the merge queue: A new commit was pushed",
+        )
+        assert W.turns(c, E.task(c, task_id)) == {RM}
+
+
+def test_links_made_in_the_same_millisecond_keep_the_order_they_were_made_in(c):
+    engineering(c)
+    task_id = new(c, 9, 3)
+    same = "SELECT MIN(created_at) FROM task_links WHERE task_id=?"
+    c.execute(f"UPDATE task_links SET created_at=({same}) WHERE task_id=?", (task_id, task_id))
+    # Ids are random: make the first link's sort after the second's, as a tie broken by id may do
+    c.execute("UPDATE task_links SET id=CASE WHEN url LIKE '%/9' THEN 'z' ELSE 'a' END WHERE task_id=?", (task_id,))
+    assert [pr["number"] for pr in F.prs_of(c, task_id)] == [9, 3]
 
 
 def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_person(company):

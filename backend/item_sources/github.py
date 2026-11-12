@@ -2001,8 +2001,9 @@ def _prs(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[list[
 
 
 def _first(requirement: Row, found: list[Standing]) -> Standing:
-    """The first unmet standing of many PRs', else the first met one."""
-    return next((s for s in found if not s.met), found[0])
+    """The standing of many PRs' the task shows, in link order: the first that is someone's turn (a PR dropped from the
+    queue while another still waits in it), else the first that waits, else the first met one."""
+    return next((s for s in found if s.state == NOT_MET), None) or next((s for s in found if not s.met), found[0])
 
 
 def _reading(requirement: Row) -> Standing:
