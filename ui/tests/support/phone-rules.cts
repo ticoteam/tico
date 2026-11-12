@@ -53,7 +53,6 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Small tap targets that are the only control of their row or card.
   '6 | a "Tools"': {states: ALL, what: 'Tools > GitHub: the Tools crumb is 17 px'},
   '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
-  '6 | button.prop-add': {states: SET_UP, what: 'a task: the + of Links, Sessions, Related, Files and Ask someone is 16 to 20 px'},
   '6 | button.linkish "Edit details"': {states: SET_UP, what: 'a task: Edit details is 19 px'},
   '6 | a "BotOps"': {states: ['sign-off', 'bot-waiting'], what: 'Settings > Computers: an agent row\'s bot link is 16 px'},
   '6 | button.pv-tab.on': {states: ['setup-halfway'], what: 'a pipeline with one stage: its tab is 29 px'},
