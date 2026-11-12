@@ -30,10 +30,12 @@ function grBoardLinks(root: ParentNode) {
     if (href) a.setAttribute('href', href); else a.removeAttribute('href');
   });
 }
-// Reads the pipelines once per Growth page; a failed read shows no board link rather than a wrong one.
+// The board's pipeline among those read: undefined while none were read yet, null when none is Growth Experiments.
+const grBoardOf = (pipes: PipelineRec[] | null): string | null | undefined => pipes ? pipes.find(p => p.preset === GR_BOARD_PRESET)?.id ?? null : undefined;
+// Reads the pipelines once per Growth page (the list already read draws the links meanwhile); a failed read shows no board link rather than a wrong one.
 async function grBoardRead(load: number) {
   let pipe: string | null = null;
-  try { pipe = (await tasksPipelinesRead()).find(p => p.preset === GR_BOARD_PRESET)?.id ?? null; } catch { /* no link */ }
+  try { pipe = grBoardOf(await tasksPipelinesRead()) ?? null; } catch { /* no link */ }
   if (load !== GR_LOAD) return;   // G: another page opened meanwhile
   GR_BOARD_PIPE = pipe;
   if (DASH?.place === 'growth' && DASH.root) grBoardLinks(DASH.root);
@@ -192,7 +194,7 @@ function pageGrowth() {
   document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
   const load = ++GR_LOAD, m = new URLSearchParams(query || '').get('m') || '';
   GR = {load, sub, month: GR_MONTH_RE.test(m) ? m : '', data: null};
-  if (sub !== 'sources') { GR_BOARD_PIPE = undefined; void grBoardRead(load); void pageDashboard('growth', {month: GR.month}); return; }
+  if (sub !== 'sources') { GR_BOARD_PIPE = grBoardOf(TASK_PIPELINES); void grBoardRead(load); void pageDashboard('growth', {month: GR.month}); return; }
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = `<div class="strat-head rd-strat-head gr-head"><a class="gr-back" href="${GR_ROUTE}" data-gr-back>Growth</a><span class="muted" aria-hidden="true">/</span><h1>Sources</h1><span class="spacer"></span>

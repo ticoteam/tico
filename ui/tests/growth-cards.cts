@@ -379,6 +379,21 @@ async function shot(page: Page, name: string) {
       }
     }
     {
+      // Back on Growth, the pipelines already read draw the board link at once, before the fresh read answers.
+      const {page, errors} = await open(browser);
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      assert.deepEqual((await boardLinks(page))[0], [BOARD, true]);
+      await page.route('**/api/v2/pipelines', () => { /* never answers */ });
+      await page.evaluate(() => { location.hash = '#/growth/sources'; });
+      await page.locator('[data-gr-back]').waitFor();
+      await page.evaluate(() => { location.hash = '#/growth'; });
+      await page.locator('#dash-grid .grc-funnel').waitFor();
+      const head = page.locator('.dash-head [data-gr-board]');
+      assert.deepEqual([await head.getAttribute('href'), await head.isVisible()], [BOARD, true], 'the link from the pipelines already read');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    {
       // A bad month in the address falls back to the newest; old routes still arrive here.
       const {page, errors, fake} = await open(browser, {hash: '#/growth?m=2026-13'});
       await page.locator('#dash-grid .grc-funnel').waitFor();
