@@ -12,12 +12,12 @@ the page that counted on the nearest earlier stage with a page requirement (the 
 what each person said with their OK of it, marked as their notes on the spec (`sign_off_notes`). It is filed by the
 filing task's owner (the Product Owner), who is its requester. Where the target pipeline has a manager, the filed task
 has no assignee: a first stage owned by the task's assignee then has nobody, and that manager is woken to pick one
-(C25); a Product Owner is not a builder. A target with no manager (General) gets the filer as its assignee. When that is
-refused (the Product Owner is paused or still onboarding) the engine files it itself; one refused even then (the target
-was retired) files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed yet"),
-the owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a private task:
-the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on the filing
-task.
+(C25); a Product Owner is not a builder. General, and a target with no manager, get the filer as its assignee. When the
+filer is refused (the Product Owner is paused or still onboarding) the engine files it itself; one refused even then (the
+target was retired) files nothing and never fails the move: the stage then waits on its Linked work done ("No task filed
+yet"), the owner's turn, and the owner may file one by hand. The owner's one wake for the stage opens with why (a
+private task: the first stage's owner there cannot read it; the engine never adds a reader). History: `handoff_filed` on
+the filing task.
 
 A source's action (`{"act": "github.queue"}`, Engineering's Merge queues the task's PRs): owed on enter, owed back on
 undo (backend/source_actions.py).
@@ -149,8 +149,9 @@ def _file(conn: "sqlite3.Connection", task: Row, target: str, by: str) -> tuple[
     filer = _filer(conn, task, by)
     from . import task_engine
 
-    # Nobody to pick an owner where the target has no manager: there, the filer stays the assignee.
-    unassigned = bool((task_engine.pipeline(conn, target) or {}).get("manager_id"))
+    # A task given to someone in General is theirs, as on any General task; elsewhere nobody picks an owner where the
+    # target has no manager. In both, the filer stays the assignee.
+    unassigned = target != "general" and bool((task_engine.pipeline(conn, target) or {}).get("manager_id"))
     for actor in dict.fromkeys((filer, str(H.KEEPER))):
         conn.execute("SAVEPOINT stage_effects_file")
         try:

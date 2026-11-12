@@ -461,11 +461,14 @@ def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
     ops = PS.save(c, ANA, record)
     do, check = ops["stages"][1]["id"], ops["stages"][2]["id"]
     row = X.new_task(c, ANA, "Order chairs", ops["id"])
+    X.bot(c, "gm")
+    c.execute("UPDATE pipelines SET manager_id='bot:gm' WHERE id='general'")  # a team with a General Manager
     for n in (1, 2):
         E.move(c, row["id"], do, ANA, "Go")
         filed = _filed(c, row["id"])
         assert len(filed) == n
         child = E.task(c, filed[-1][0])
+        assert (child["assignee_id"], child["owner_id"]) == ("bot:pm", "bot:pm")  # General keeps the filer
         X.say_done(c, child)
         assert E.advance(c, child["id"])["status"] == "done"
         assert E.task(c, row["id"])["stage_id"] == check  # Linked work done moved it on
