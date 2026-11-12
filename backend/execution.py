@@ -2938,21 +2938,24 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         or filer_live(c, message)
     ):
         return "lane_held"
-    if turn_moved_on(c, job["bot_id"], task_id, refs):
+    if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):  # Health passes no live set: read it
         return "task_turn_out"
     if (until := handed_back_until(c, job)) and until > H.now():
         return "handed_back"
     return None
 
 
-def turn_moved_on(c, bot, task_id, refs):
+def turn_moved_on(c, bot, task_id, refs, live=None):
     """Whether this job, a turn the engine gave `bot` on a task (a `task_turn` wake), waits for another bot's turn on
     the same visit that is still out though the task no longer waits on that bot: the task was given to `bot` while the
     other's run was under way (task_engine.reassign asks that run to stop). One task has one turn of its work at a
     time, keyed on the task and its visit, not on the bot, so two bots never build one task at once (#171). A bot the
-    task still waits on (asked for an OK or an answer) has a turn of its own and holds nothing."""
+    task still waits on (asked for an OK or an answer) has a turn of its own and holds nothing. `live` is the claim's
+    live_tasks: with no other bot's turn out on the task there, nothing more is read."""
     visit = refs.get("visit")
     if not task_id or refs.get("wake") != "task_turn" or not visit:
+        return False
+    if not any(task == task_id and other != bot for other, task in (live_tasks(c) if live is None else live)):
         return False
     others = {
         str(row[0])
