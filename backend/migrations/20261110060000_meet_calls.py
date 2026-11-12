@@ -23,6 +23,7 @@ CALL_COLUMNS = (
     ("recorder_actor", "TEXT"),
     ("recorder_claimed_at", "TEXT"),
     ("transcript_message_id", "TEXT"),
+    ("meet_empty_at", "TEXT"),  # the first read that showed nobody in a Meet someone had been seen in
 )
 PARTICIPANT_COLUMNS = (("in_call", "INTEGER NOT NULL DEFAULT 0"),)
 

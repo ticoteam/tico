@@ -152,3 +152,5 @@ ALTER TABLE humans ADD COLUMN time_zone TEXT;
 ALTER TABLE humans ADD COLUMN work_starts TEXT;
 ALTER TABLE humans ADD COLUMN work_ends TEXT;
 ALTER TABLE humans ADD COLUMN work_days TEXT;
+-- A person's "Record calls I join" (Calendar, spec 12.5): null means on.
+ALTER TABLE humans ADD COLUMN record_on_join INTEGER CHECK (record_on_join IN (0, 1));

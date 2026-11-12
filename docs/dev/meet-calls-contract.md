@@ -34,7 +34,7 @@ push. Each track builds against this file; a change to it goes through the integ
 | `meet_conference TEXT` | the last active `conferenceRecords/<id>` seen |
 | `meet_seen_at TEXT` | first time a status source saw anyone in the Meet; the call's length counts from here |
 | `meet_active_at TEXT` | last time a status source saw anyone in the Meet; the call's length counts to here |
-| `meet_empty_at TEXT` | first successful read that showed nobody since someone was last seen (migration `20261110071554_meet_call_empty.py`); NULL while anyone is seen |
+| `meet_empty_at TEXT` | first successful read that showed nobody since someone was last seen (migration `20261110060000_meet_calls.py`); NULL while anyone is seen |
 | `meet_polled_at TEXT` | last successful status read |
 | `live_count INTEGER NOT NULL DEFAULT 0` | people in the Meet now, as the status source last said (unmatched guests included) |
 | `status_source TEXT` | `google`, `recorder` or NULL (no live status) |
