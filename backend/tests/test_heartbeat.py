@@ -43,6 +43,7 @@ ORDER = [
     "item_metadata",
     "source_actions",
     "jev_verdicts",
+    "idea_checks",
 ]
 
 

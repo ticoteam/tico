@@ -264,6 +264,10 @@ PRESETS["engineering"] = {
     "done": {"id": "engineering-done"},
     "closed": {"id": "engineering-closed"},
 }
+IDEAS_PURPOSE = (
+    "Ideas move on to Spec by themselves when Spec has room, oldest first. Snooze one to park it; a bot's own idea "
+    "starts snoozed."
+)
 PRESETS["product"] = {
     "id": "product",
     "name": "Product",
@@ -278,11 +282,9 @@ PRESETS["product"] = {
         _stage(
             "product-ideas",
             "Ideas",
-            "Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",
+            IDEAS_PURPOSE,
             None,
-            [],
-            by_hand=True,
-            requests_move_on=True,  # a person who files a request already picked it (never_stuck._requests)
+            [],  # nothing to approve: an idea moves on when Spec has room, unless snoozed (backend/idea_checks.py)
         ),
         _stage(
             "product-spec",
@@ -319,6 +321,7 @@ _REVIEW_RC3 = (
     "summary of the change."
 )
 EARLIER: dict[str, tuple[str, ...]] = {
+    "product-ideas/purpose": ("Ideas wait here. Move one to Spec when it is worth a spec. Snooze one to park it.",),
     "engineering-review-1/page/rubric": (_REVIEW_RC3,),
     "engineering-review-2/page/rubric": (_REVIEW_RC3,),
     "engineering-fixes-2/purpose": (

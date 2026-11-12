@@ -178,7 +178,6 @@ def check(
     _keeping_reads(conn, "SAVEPOINT never_stuck_room")
     try:
         done["moved"] += _requests(conn)
-        _handoffs(conn, at, done, seen)
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
             raise
@@ -258,49 +257,6 @@ def _requests(conn: "sqlite3.Connection") -> int:
     return moved
 
 
-# A task in a by-hand stage that moves requests on, owned by a bot that is not its requester, not snoozed: maybe a
-# hand-off (task_engine.handed_over), oldest first.
-_HANDOFFS = (
-    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
-    "JOIN stages s ON s.id = t.stage_id "
-    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL "
-    "AND s.requests_move_on=1 AND t.owner_id LIKE 'bot:%' AND t.owner_id IS NOT t.requester_id "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
-    "ORDER BY v.entered_at, v.id"
-)
-
-
-def _handoffs(conn: "sqlite3.Connection", at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
-    """Work someone else handed to its owner bot in Product's Ideas (task_engine.handed_over) is the owner's turn,
-    though the stage has no ladder: the owner gets the one wake its turn starts with (the same key as the one written
-    when it entered, so it is written once), and once the turn is due (task_engine.handover_due) the task is Late and
-    the pipeline's manager bot is woken once to look. Nothing else chases it: the owner still chooses."""
-    for (task_id,) in conn.execute(_HANDOFFS).fetchall():
-        row = E.task(conn, str(task_id))
-        if not row or not E.handed_over(conn, row):
-            continue
-        if E.wake_turn(conn, row):
-            done["woken"] += 1
-        visit = row["visit"]
-        if visit.get("late_told_at") or at < E.handover_due(conn, row):
-            continue
-        conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
-        _event(conn, row["id"], "late", None, None, {"expected_minutes": E.HANDED_OVER_S // 60})
-        done["late"] += 1
-        manager = _manager(conn, row, seen)
-        if not manager or manager == row.get("owner_id"):
-            continue
-        fresh = E.task(conn, row["id"]) or row
-        stage = row["stage"]["name"]
-        lead = (
-            f"Late: handed to {_name(conn, row.get('owner_id'))} in {stage} {_span(E.HANDED_OVER_S)} ago, and not "
-            "moved on or snoozed. Look once: move it on, reassign it, snooze it or close it."
-        )
-        key = f"{row['id']}:{visit['id']}:late"
-        if task_wakes.add(
-            conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
-        ):
-            done["woken"] += 1
 
 
 def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:
