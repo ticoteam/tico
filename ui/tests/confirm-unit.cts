@@ -52,6 +52,7 @@ function page(desktop: boolean) {
     post: async (p: string) => { writes.push({method: 'POST', path: p}); return {}; },
     patch: async (p: string) => { writes.push({method: 'PATCH', path: p}); return {}; },
     toast() {}, perfLoad: async () => {}, loadSettings: async () => {}, errorMessage: String,
+    pageMenuClose: () => false, // pageFullAct closes the page's ⋯ menu first; no menu is open here
     confirm: () => { assert.notEqual(browserAnswer, null, 'the browser was asked'); return browserAnswer; },
   };
   if (desktop) context.__TAURI__ = {core: {invoke: (name: string, body: Dialog['body']) =>
