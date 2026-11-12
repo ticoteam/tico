@@ -158,6 +158,9 @@ async function open(browser: Browser, me: Record<string, unknown>, branches = fa
       return json({description: body.redraft ? 'Keeps the books, closes each month and files the taxes.' : 'Keeps the books and closes each month.',
         source: 'catalog'});
     }
+    if (p === '/api/v2/models') return json({models: ['fixture-model', 'other-model'].map(id => ({id, label: id, runtime: 'claude', harnesses: ['claude'], provider: 'anthropic',
+      efforts: ['medium'], default_effort: 'medium', context_tokens: 1_000_000, compact_default: 400_000})),
+      harnesses: [{id: 'claude', label: 'Claude Code', runtime: 'claude', capabilities: {compaction: true}}], default: {runtime: 'claude', model: 'fixture-model'}});
     if (p === '/api/v2/computers') return json({computers: [{id: 'mac', label: 'Office Mac'}]});
     let s: RegExpMatchArray | null;
     if ((s = p.match(/^\/api\/v2\/seats\/([^/]+)(?:\/(recruit|hire))?$/))) {
@@ -737,7 +740,10 @@ async function teamAdd(browser: Browser) {
   await hireForm.locator('[name=name]').fill('Paymaster');
   await hireForm.locator('[name=reports_to]').selectOption('scout');
   await hireForm.locator('.rc-settings summary').click();
-  await hireForm.locator('[name=model]').selectOption('other-model');
+  await hireForm.locator('[data-hire-model] [data-choice-open]').click();
+  await page.locator('#sb-choice-pop [data-choice-harness] label:has(input[value="claude"])').click();
+  await page.locator('#sb-choice-pop [data-choice-model] label:has(input[value="other-model"])').click();
+  await page.locator('#sb-choice-pop [data-choice-apply]').click();
   await shot(page, 'team-add-bot-applicant');
   calls.length = 0;
   seatSave.hire = 403;
@@ -750,7 +756,7 @@ async function teamAdd(browser: Browser) {
   await page.waitForFunction(() => location.hash === '#/bot/paymaster');
   assert.deepEqual(calls.filter(c => c[0] === 'PATCH'), [['PATCH', 'seat2', {reports_to: 'scout'}]], 'the new manager is saved once');
   assert.deepEqual(calls.filter(c => c[1] === 'hire').map(c => c[3]),
-    [{template: 'controller', model: 'other-model', name: 'Paymaster'}, {template: 'controller', model: 'other-model', name: 'Paymaster'}]);
+    [1, 2].map(() => ({template: 'controller', model: 'other-model', harness: 'claude', effort: 'medium', name: 'Paymaster'})));
   assert.deepEqual(calls.find(c => c[0] === 'hired with')!, ['hired with', 'Runs payroll.']);
   calls.length = 0;
   await page.evaluate(() => { location.hash = '#/updates'; });
