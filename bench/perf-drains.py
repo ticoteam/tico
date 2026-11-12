@@ -102,10 +102,10 @@ def stub(monkeypatch, delay, over):
     def wait():
         over.wait(delay)
 
-    def go(self, rid):
+    def go(self, claimed):
         wait()
-        done["run:" + rid] += 1
-        return real_go(self, rid)
+        done["run:" + claimed.id] += 1
+        return real_go(self, claimed)
 
     def organize(store, row):
         wait()
