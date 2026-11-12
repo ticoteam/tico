@@ -4836,6 +4836,9 @@ def _timeline_rows(c, v, rows, thread_id, depth):
     hidden rows of one kind collapse into one; a row that stands for shared-room history the viewer's Home Read doesn't
     reach says so (`earlier`), the "Earlier messages" row."""
     known = v.known(c)
+    from .files import prime_page_references
+
+    prime_page_references(c, [_message_out(m) for m in rows])  # the pages every row names, in one lookup
     out, hidden_open = [], None
     for m in rows:
         shown = (
@@ -4977,6 +4980,9 @@ def _branches(c, v, tops):
         for b in found:
             b["mark"] = int(read.get(b["id"]) or 0)
         tails = _branch_tails(c, ids) if total < MAX_INLINE_ROWS and level < MAX_BRANCH_LEVELS else {}
+        from .files import prime_page_references
+
+        prime_page_references(c, [_message_out(m) for tail in tails.values() for m in tail])  # one per level
         below = {
             b["id"]: (tails[b["id"]][-1]["seq"] if tails.get(b["id"]) else int(b["last_seq"] or 0) + 1) for b in found
         }

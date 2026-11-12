@@ -1106,8 +1106,9 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
         index = ReadIndex(Source(), who, rooms=True)
         from .files import (
             page_audience_visible,
-            page_event_readable,
             page_blob_visible,
+            page_event_readable,
+            page_graph,
             restricted_pages,
             readable_page_refs,
         )
@@ -1135,7 +1136,8 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                 1,
                 lambda refs: privacy.page_message_readable(source, privacy.actor(who), H._json(refs, {}) or {}),
             ),
-            "page_refs": (1, lambda refs: readable_page_refs(source, auth, who, refs)),
+            # These run once per row of the whole query: read every page once rather than look up each row's.
+            "page_refs": (1, lambda refs: page_graph(source) or readable_page_refs(source, auth, who, refs)),
             "file": (1, visible_file),
             "page_manager": (1, manages_page),
             "message": (4, index.message),
@@ -1146,12 +1148,16 @@ def connect(path, c, auth, who, trace=None, seconds=None, statement=""):
                 4,
                 lambda target, actor, ts, detail: (
                     target not in unseen_targets
+                    and not page_graph(source)
                     and page_event_readable(source, auth, who, target, detail)
                     and index.event(target, actor, ts, detail)
                 ),
             ),
             "tag": (2, index.tag),
-            "blob": (1, lambda bid: index.blob(bid) and page_blob_visible(source, auth, who, bid)),
+            "blob": (
+                1,
+                lambda bid: index.blob(bid) and not page_graph(source) and page_blob_visible(source, auth, who, bid),
+            ),
             "task": (1, lambda tid: tid not in index.denied),
             "content": (-1, lambda *parts: index.content(list(parts))),
         }
