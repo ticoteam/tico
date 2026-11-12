@@ -78,6 +78,15 @@ class ScheduleZones(unittest.TestCase):
     def test_an_impossible_end_minute_is_a_finding_not_a_crash(self):
         res = lint(CLEAN + "\nSep 8, 1pm-2:99pm PT or Sep 9, 1pm PT.\n\nAna\n")
         self.assertNotIn("L065", ids(res))
+        (t,) = ln.parse_times("Sep 8, 1pm-2:99pm PT", now=NOW)
+        self.assertIsNone(t["end"])
+
+    def test_a_word_that_starts_like_a_zone_is_not_one(self):
+        for text in ("Sep 8, 1pm mtg with Ava", "Sep 8 at 1pm etc", "Sep 8, 1pm CTO sync"):
+            (t,) = ln.parse_times(text, now=NOW)
+            self.assertEqual((t["start"].hour, t["tz_named"]), (13, False), text)
+        (t,) = ln.parse_times("Can we meet" + " " * 38 + "Sep 8, 1pm?", now=NOW)
+        self.assertFalse(t["tz_named"])  # the window may begin inside "meet"
 
 
 if __name__ == "__main__":

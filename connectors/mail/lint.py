@@ -113,8 +113,8 @@ TIME_RE = re.compile(r"""(?ix)
     (?P<h>\d{1,2})(?=:\d{2}|\s*[ap]\.?m\.?\b)(?::(?P<min>\d{2}))?\s*(?P<ap>[ap]\.?m\.?)?
     (?:\s*(?:[-–—]|to)\s*
        (?P<h2>\d{1,2})(?::(?P<min2>\d{2}))?\s*(?P<ap2>[ap]\.?m\.?)?)?
-    \s*(?P<tz>PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|UTC|GMT|Pacific(?:\s+Time)?|
-        Eastern(?:\s+Time)?|America/Los_Angeles)?
+    \s*(?P<tz>(?:PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|UTC|GMT|Pacific(?:\s+Time)?|
+        Eastern(?:\s+Time)?|America/Los_Angeles)\b)?
 """)
 
 
@@ -202,8 +202,9 @@ def parse_times(text, now=None, tz_name=DEFAULT_TZ):
                 if end <= start:
                     end = start + timedelta(minutes=DEFAULT_MEETING_MINUTES)
         start, end = start.astimezone(tz), end and end.astimezone(tz)
-        near = (text or "")[max(0, m.start() - 40) : m.end() + 40]
-        named = bool(m.group("tz")) or bool(TZ_RE.search(near))
+        # Search the whole text from the window's start so a window that begins inside "meet" keeps its real word edge.
+        nearby = TZ_RE.search(text, max(0, m.start() - 40))
+        named = bool(m.group("tz")) or bool(nearby and nearby.start() < m.end() + 40)
         out.append({"text": " ".join(m.group(0).split()), "start": start, "end": end, "tz_named": named})
     return out
 
