@@ -252,6 +252,7 @@ class Rig:
         from backend import waiting_on as W
 
         failures: list[tuple[str, Exception]] = []
+        self.raw(Wd.settle_stopped)
         with self.w.tx() as c:
             done = NS.check(c, failures=failures)
         self.passes += 1
