@@ -29,6 +29,7 @@ interface SettingsChoiceKindSpec { name: string; of: (e: SettingsBot) => Setting
 interface SettingsBot extends CloudMachineBot {
   model?: string; runtime?: string; effort?: string; reasoning_effort?: string; resolved_model?: string; resolved_runtime?: string | null;
   fallback?: SettingsBotChoice | null; task_model?: SettingsTaskModel | null; task_model_warning?: string | null;
+  compact_at?: number | null;   // its chosen window; none: its model's default
   revision?: number; role?: string; description?: string; can_manage?: boolean;
   readiness?: { gateway?: string | null; problems?: string[] } | null;
   agent?: (BotAgent & { model?: string; harness?: string }) | null;
@@ -324,8 +325,7 @@ function renderSettingsBots() {
     if (!target) return;
     const restore = target.closest<HTMLButtonElement>('[data-bot-restore]');
     if (restore) { void settingsRestoreBot(String(restore.dataset.botRestore), restore, restore.dataset.label); return; }
-    const choice = target.closest<HTMLElement>('[data-choice-open]');
-    if (choice) { settingsChoicePopover(choice); return; }
+    if (target.closest('[data-choice-open]')) return;   // the picker opens itself (settings-bots-choice.ts)
     const task = target.closest<HTMLElement>('[data-task-open],[data-task-close]');
     if (task) {
       const slug = String(task.dataset.taskOpen || task.dataset.taskClose), open = SETTINGS_BOTS_VIEW.taskOpen;
@@ -401,7 +401,7 @@ function renderSettingsBots() {
     }
     const machine = target.closest<HTMLSelectElement>('[data-bot-machine]');
     if (machine) void settingsMoveBot(machine);
-    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort],[data-task-row] [data-task-context]');
+    const part = target.closest<HTMLSelectElement>('[data-task-row] [data-task-effort]');
     if (part) void settingsSaveTaskPart(part);
   };
   settingsWireCombos(el);

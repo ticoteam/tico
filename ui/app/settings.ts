@@ -8,7 +8,7 @@ type SettingsPerson = import('../types/api').Person & {hidden?: boolean; owner?:
 type SettingsMachine = {id: string; label?: string; owner_id?: string; revoked_at?: string | null; cloud_machine?: CloudMachineRow | null; screen?: string | null; screen_available?: boolean; online?: boolean; readiness?: MachineReadiness & DetailReadiness & DeviceReadiness};
 // A catalog row (backend/providers.py MODEL_CATALOG): every row has an id, a provider and a label.
 type SettingsModel = {id: string; provider: string; label: string; deprecated?: boolean; meeting?: boolean; harnesses?: string[]; runtime?: string;
-  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null};
+  efforts?: string[]; default_effort?: string; description?: string; context_tokens?: number | null; compact_default?: number};
 type SettingsService = {name?: string; service?: string; last_error?: string | null; last_succeeded_at?: string | null};
 type SettingsIssue = {kind?: string; title: string; detail: string; action?: string; bot?: string; restart?: unknown; machine?: unknown};
 type SettingsHistory = {changes: SettingsChange[]; transitions: SettingsTransition[]; transitions_truncated?: boolean; next_before?: string | null};
