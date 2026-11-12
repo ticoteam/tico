@@ -2,7 +2,7 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const isComposerInput = (element: Element | null | undefined) => element?.matches?.('.ask textarea');
+const isComposerInput = (element: Element | null | undefined) => element?.matches?.('.ask textarea, .pa-text');
 function chatViewport() {
   const viewport = window.visualViewport;
   // Safari pans as well as resizes the visual viewport when the keyboard opens.

@@ -148,7 +148,8 @@ function taskModalLoadFailed(id: string, error: unknown, d?: ModalDialog) {
   toast(errorMessage(error, 'The task did not load'), true, {label: 'Retry', run: () => taskModalOpen(id, d)}, opts);
 }
 // Opens a task by its id in the task's window.
-async function taskModalOpen(id: string, d?: ModalDialog) {
+// `opts` as taskModalShow takes them: a pipeline's board on a phone opens a task at its conversation, asking its owner.
+async function taskModalOpen(id: string, d?: ModalDialog, opts: {thread?: boolean; ask?: boolean} = {}) {
   const from = S.route, load = ++TASK_MODAL_LOAD;
   let detail: ModalDetail | null;
   try { detail = await get<ModalDetail>(`/v2/tasks/${encodeURIComponent(id)}`); }
@@ -157,7 +158,7 @@ async function taskModalOpen(id: string, d?: ModalDialog) {
     return;
   }
   if (S.route !== from || load !== TASK_MODAL_LOAD || !detail?.task) return;
-  void taskModalShow(detail.task, d, {detail});
+  void taskModalShow(detail.task, d, {...opts, detail});
 }
 // The runs section drawn for the open task, held across a redraw of that task (taskModalShow).
 const taskModalRuns = new WeakMap<ModalDialog, HTMLElement>();
@@ -167,7 +168,8 @@ function taskModalRunsKeep(d: ModalDialog, keep: TaskChatState | null) {
 }
 // The one way a task opens in full: from a list, from a link, from a chat card.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
-async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; detail?: ModalDetail} = {}) {
+// `opts.ask`: its box asks the task's owner ("Ask Product Owner about this task…"), as a pipeline's board on a phone opens it.
+async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail} = {}) {
   TASK_MODAL_LOAD++;
   if (!d) d = taskModal();
   const sameTask = d.open && String(d.dataset.task) === String(task.id);
@@ -177,6 +179,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     d.tpOff?.(); d.tpOff = null; d.tpEl = null;
     d.taskOpening = {pending: !d.open}; d.tfEl = null; d.tfOpen = null;
     d.classList.toggle('thread', !!opts.thread);     // a redraw of the same task keeps the view it had
+    d.dataset.ask = opts.ask ? '1' : '';
   }
   const opening = d.taskOpening, scroll = opts.detail && d.open ? d.scrollTop : 0;
   // A redraw of the open task (a property saved, the task changed) keeps its conversation and its runs as they are, as
@@ -302,6 +305,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   $('[data-modal-close]', d).onclick = dismiss;
   const back = $('[data-thread-back]', d), details = $('[data-thread-details]', d);
   if (back) back.onclick = dismiss;
+  if (back && d.dataset.ask) { back.setAttribute('aria-label', 'Back to the board'); back.title = 'Back to the board'; }
   if (details) details.onclick = () => { d.classList.remove('thread'); void taskModalShow(d.liveTask || task, d); };
   void taskGoalTitle(d);
   // Each change goes through the dialog's queue (taskSave), one at a time, each with the latest version.
@@ -886,6 +890,9 @@ function taskComposerToPaint(state: TaskChatState) {
   const hint = $('[data-task-chat-to]', state.host), box = $('textarea', state.host);
   // No line for the way Send shows: Reaches N says it. This line only holds the no-bot notice.
   if (hint) hint.textContent = taskDeliverySplit(state) ? '' : taskComposerTo(state.data?.comment_to, box?.value);
+  // Opened from a pipeline's board: the box asks the task's owner, and what is said stays in this task's conversation.
+  const owner = state.dialog.dataset.ask ? String(state.data?.task?.owner_id || '') : '';
+  if (box) box.placeholder = owner ? `Ask ${actorLabel(owner)} about this task…` : 'Message…';
   taskDeliveryPaint(state);
   taskFootPaint(state);
 }

@@ -690,6 +690,16 @@ function thvUpdateHTML(m: ThvMessage) {
   return `<a class="th-update" href="${UPDATES}?${q}"><span class="th-update-k">Update</span>
     <strong>${esc(title)}</strong></a>`;
 }
+// What a message asked from a pipeline's board carries (pipeline-ask.ts): one card under it, "Product › Spec · 3 tasks".
+// The bot reads the same refs.board as its context.
+function thvBoardHTML(m: ThvMessage): string {
+  const b = m.refs?.['board'] as {pipeline?: string; stage?: string; task_ids?: unknown[]; more?: number} | undefined;
+  if (!b || typeof b !== 'object' || !b.pipeline) return '';
+  const n = (Array.isArray(b.task_ids) ? b.task_ids.length : 0) + (Number(b.more) || 0);
+  const where = b.stage ? `${b.pipeline} › ${b.stage}` : b.pipeline;
+  return `<div class="th-board" role="note"><span class="th-board-where">${esc(where)}</span>`
+    + `<span class="th-board-n tnum">${n} ${n === 1 ? 'task' : 'tasks'}</span></div>`;
+}
 // Update cards are notices the server writes with refs.card 'update'; older rows may carry only refs.update.
 const thvIsUpdateCard = (m: ThvMessage) => m.refs?.card === 'update' || m.kind === 'update' || (!!m.refs?.update && m.kind === 'notice');
 function thvFilesHTML(m: ThvMessage) {
@@ -786,7 +796,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
     : relay ? avatar(assistantBot(), 32) : actorAvatar(m.sender_id, 32);
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}">
     <div class="th-av">${av}</div>
-    <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
+    <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvBoardHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
     ${m.deleted ? '' : thvMsgActsHTML(view, m)}
   </div>`;
 }
@@ -1553,16 +1563,18 @@ async function thvComposerSend(view: ThvView) {
 }
 // One message out: a "Checking…" row while the rules check runs, then the message, or a held row the author can
 // edit, discard or (when the server allows) send anyway. A reply goes to this thread too, naming what it answers.
-async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null}) {
+// `refs`: what the message carries besides its files (pipeline-ask.ts sends the board it was asked from as `board`).
+async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, replyTo = null, refs: more = null}: {text: string; files?: File[]; lib?: ThvLibFile[]; way?: object | null; replyTo?: ThvMessage | null; refs?: ThvRefs | null}) {
   const p: ThvPending = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
-  const refs = lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : null;
+  const refs = lib.length || more ? {...more, ...(lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : {})} : null;
   const body = {text, ...(refs ? {refs} : {}), ...(replyTo ? {in_reply_to: replyTo.id} : {}), ...(way || {})};
   try {
     let r: (ThvSendReply & ThvThread) | undefined;
-    // An upload goes to a thread, so a first message with files makes the DM before it sends.
-    if (!view.id && view.opts.dm && files.length) {
+    // An upload goes to a thread, so a first message with files makes the DM before it sends; so does one with refs,
+    // which only a post to the thread keeps (POST /v2/threads/dm takes the first message's words alone).
+    if (!view.id && view.opts.dm && (files.length || refs)) {
       const made: ThvThread & {thread?: ThvThread} = await post('/v2/threads/dm', {members: [view.opts.dm]});
       const t = made?.thread || made;
       if (t?.id) { view.thread = t; thvSetId(view, t.id); }

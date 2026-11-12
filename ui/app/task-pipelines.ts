@@ -208,6 +208,7 @@ function pvDraw(state: PvState): void {
   root.innerHTML = pvHTML(state);
   const next = root.querySelector<HTMLInputElement>('[data-pv-push] input[name="why"]');
   if (next) { next.value = text; if (typing) next.focus(); }
+  pipelineAskPaint();     // the Ask bar's stage and the tasks on screen follow the tab
 }
 
 // ---------------------------------------------------------------- what a person does here
@@ -329,5 +330,6 @@ TASK_PAGE_HOOKS.pipeline = {
     taskBoardBind(root);
   },
   rail(host, rec) { pipelineRailSync(host, rec); },
+  ask(host, rec, phone) { pipelineAskSync(host, rec, phone); },
   edit(rec) { void openPipelineEditor(rec.id); },
 };
