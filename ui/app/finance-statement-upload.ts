@@ -4,7 +4,8 @@
    post, finance.book) with the preview's token, so it posts what was shown. A gap in the tie-out is a warning: the post
    still goes through, and the account shows "Off by" until a reconciliation clears it. The server decides which way the
    file's amounts read (statement_files.py); the "shows positive" box turns that over and previews again, and the post
-   sends the same choice.
+   sends the same choice. Only the newest preview counts: a new file or sign choice drops the shown one at once, and a
+   reply to an older request is dropped. Post sends that preview's snapshot (file, signs, token) and nothing else.
    Reads and writes: POST /api/v2/finance/statements/preview; statement_post through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -27,8 +28,12 @@ interface FinStmtReview {
 }
 // How the file's amounts read: the server decides (auto), or the person turned it over.
 type FinStmtSigns = 'auto' | 'as_shown' | 'flipped';
-// The file being reviewed: its bytes as base64 (the server keeps none), the signs it was read with, and its preview.
-interface FinStmtState { file: File; data: string; signs: FinStmtSigns; review: FinStmtReview }
+// The file being reviewed: its bytes as base64 (the server keeps none), the signs it was read with, its preview, and the
+// key its post goes with (kept while a post's answer is lost, so Post again is the same action, never a second one).
+interface FinStmtState { file: File; data: string; signs: FinStmtSigns; review: FinStmtReview; op: string }
+// Where the dialog is: no preview yet, a preview on its way, a preview Post can send, a post on its way, or a failed
+// preview or post (Preview starts again).
+type FinStmtPhase = 'empty' | 'previewing' | 'reviewed' | 'posting' | 'error';
 
 // Money in cents, signed, two decimals: "−$59.99", "$4,212.80".
 const finStmtUsd = (c: number): string =>
@@ -88,18 +93,47 @@ function finStmtReset(form: HTMLFormElement): void {
 }
 
 // Upload statement for a money account: pick the file, Preview it, then Post its New rows. Cancel closes it. The signs box
-// previews the same file again read the other way.
+// previews the same file again read the other way. Each preview request takes the next revision; only the newest one may
+// show its reply, and Post works only on a shown preview (phase 'reviewed') with the snapshot that preview captured.
 function finStatementUpload(money: FinStmtMoney): void {
-  let state: FinStmtState | null = null;
+  let phase: FinStmtPhase = 'empty', revision = 0, state: FinStmtState | null = null;
+  // The newest preview request, so a press whose own preview went stale waits for it before the button comes back.
+  let latest: Promise<unknown> = Promise.resolve();
+  // Read through a function: a check made before an await says nothing about the phase after it.
+  const previewing = (): boolean => phase === 'previewing';
   const body = `<label>File<input type="file" name="file" accept=".csv,.ofx,.qfx,text/csv" required></label>
     <div class="fin-stmt" data-fin-stmt-review hidden></div>`;
+  const submit = (form: HTMLFormElement) => finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
+  // Drops the shown preview at once (a new file or sign choice, or the dialog closing): a reply still on its way is now
+  // an older revision's and is dropped when it lands.
+  const forget = (): number => { state = null; return ++revision; };
+  // The file picker and signs box stay as they are while a post is on its way.
+  const lock = (form: HTMLFormElement, on: boolean) => form.querySelectorAll<HTMLInputElement>('input').forEach(x => { x.disabled = on; });
   const review = async (form: HTMLFormElement, file: File, data: string, signs: FinStmtSigns): Promise<void> => {
-    const shown: FinStmtReview = await post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name, signs});
-    state = {file, data, signs, review: shown};
+    const mine = forget();
+    phase = 'previewing';
+    submit(form).disabled = true;
+    let shown: FinStmtReview;
+    try {
+      const asked: Promise<FinStmtReview> = post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name, signs});
+      latest = asked;
+      shown = await asked;
+    } catch (e) {
+      if (mine !== revision) return;
+      phase = 'error';
+      finStmtReset(form);
+      submit(form).disabled = false;
+      throw e;
+    }
+    if (mine !== revision) return;
+    state = {file, data, signs, review: shown, op: newRequestId()};
+    phase = 'reviewed';
     finStmtShow(form, money, shown);
+    submit(form).disabled = false;
     form.querySelector<HTMLInputElement>('[data-fin-stmt-flip]')?.addEventListener('change', ev => {
       const flipped = (ev.currentTarget as HTMLInputElement).checked;
       const err = form.querySelector<HTMLElement>('[data-error]');
+      if (err) err.hidden = true;
       review(form, file, data, flipped ? 'flipped' : 'as_shown').catch((e: unknown) => {
         if (err) { err.textContent = e instanceof Error ? e.message : 'Not read'; err.hidden = false; }
       });
@@ -110,28 +144,43 @@ function finStatementUpload(money: FinStmtMoney): void {
     const file = input.files?.[0];
     if (!file) throw new Error('Pick a CSV, OFX or QFX file');
     if (file.size > FIN_STMT_MAX_BYTES) throw new Error('A statement file is 1 MB at most');
-    if (!state || state.file !== file) {
+    if (phase === 'previewing' || phase === 'posting') throw new Error('Wait for the preview to finish');
+    const snap = state;
+    if (phase !== 'reviewed' || !snap || snap.file !== file) {
       await review(form, file, await finStmtBase64(file), 'auto');
+      // A newer preview took over while this one was on its way: keep the button busy until that one lands.
+      for (let waiting: Promise<unknown> | null = null; previewing() && waiting !== latest;) { waiting = latest; await waiting.catch(() => undefined); }
       return false;
     }
-    const {data, signs, review: shown} = state;
-    if (shown.new === 0) throw new Error('No new rows to post');
+    if (snap.review.new === 0) throw new Error('No new rows to post');
+    phase = 'posting';
+    lock(form, true);
     let done: {status?: string; result?: {new?: number}};
     try {
       done = await finAct('statement_post', {
-        money_account_id: money.id, file: data, file_name: file.name, preview_token: shown.token,
-        ...(signs === 'auto' ? {} : {signs}),
-      });
+        money_account_id: money.id, file: snap.data, file_name: snap.file.name, preview_token: snap.review.token,
+        ...(snap.signs === 'auto' ? {} : {signs: snap.signs}),
+      }, snap.op);
     } catch (e) {
+      lock(form, false);
+      // No answer came back, so it may have posted: keep this preview and its key, and Post again sends the same action.
+      if ((e as {unconfirmed?: boolean} | null)?.unconfirmed && state === snap) { phase = 'reviewed'; throw e; }
       // The preview may be stale (its token lapses after 30 minutes, or the books moved): the next Preview starts again.
-      state = null;
+      forget();
+      phase = 'error';
       finStmtReset(form);
       throw e;
     }
-    if (done.status === 'committed') toast(`Posted ${done.result?.new ?? shown.new} rows`);
+    if (done.status === 'committed') toast(`Posted ${done.result?.new ?? snap.review.new} rows`);
     void finSrcLoad();
     return true;
   });
   const form = finNeed(dlg.querySelector<HTMLFormElement>('form'), 'the upload form');
-  form.querySelector('input[type=file]')?.addEventListener('change', () => { state = null; finStmtReset(form); });
+  form.querySelector('input[type=file]')?.addEventListener('change', () => {
+    forget();
+    phase = 'empty';
+    finStmtReset(form);
+    submit(form).disabled = false;
+  });
+  dlg.addEventListener('close', () => { forget(); phase = 'empty'; });
 }
