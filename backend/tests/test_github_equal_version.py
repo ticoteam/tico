@@ -119,6 +119,21 @@ def test_same_time_close_and_reopen_end_at_githubs_state_in_either_order(company
         assert _row(c)["due_at"] is None
 
 
+def test_a_third_same_time_event_that_agrees_keeps_the_pr_due(company):
+    w = World(company)
+    _, head = _opened(w)
+    closed, reopened = _close_reopen(w, head, stamp := _stamp())
+    w.gh.close(REPO, 1)
+    labeled = pr_payload(w.gh, "labeled", updated_at=stamp)
+    w.gh.open_pr(REPO, 1, head=head)
+    with w.tx() as c:
+        Seam.webhook(c, "pull_request", reopened, delivery="reopen")
+        Seam.webhook(c, "pull_request", closed, delivery="late-close")
+        Seam.webhook(c, "pull_request", labeled, delivery="late-label")
+        assert _row(c)["due_at"] is not None
+        assert _due(c, minutes=0) == [(REPO, 1)]
+
+
 @pytest.mark.parametrize("order", ["newer_first", "older_first"])
 def test_same_time_head_change_ends_at_githubs_head_in_either_order(company, order):
     w = World(company)

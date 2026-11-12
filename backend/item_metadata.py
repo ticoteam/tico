@@ -8,11 +8,13 @@ type, item key). A task reaches its items through its `task_links` rows that nam
 - Newest wins. `metadata_version` is when the read or webhook that saw the metadata began, in ms. A save with an older
   version than the row's changes nothing, so a slow read can't undo a webhook that came after it began. Two saves at
   the same version that say different things cannot be ordered (two webhooks GitHub stamped in the same second may
-  arrive either way round): the second is saved and the item is marked due in the same write, so the next pass reads
-  the source and the saved metadata ends at what it says.
+  arrive either way round; two server processes may read in the same ms, though one process never repeats a version):
+  the second is saved and the item is marked due in the same write, so the next pass reads the source and the saved
+  metadata ends at what it says.
 - `read_at` is the last word from the source. `due_at` asks for a full read on the next pass whatever the item's age
-  (`mark_due`); a save clears it, except the tied save above. `final_at`: the item can never change again (a merged
-  PR), so it is not read again. An item that can still change (a closed PR can be reopened) is never final.
+  (`mark_due`); a save at a newer version clears it, one at the same version keeps it. `final_at`: the item can never
+  change again (a merged PR), so it is not read again. An item that can still change (a closed PR can be reopened) is
+  never final.
 
 Every function takes the caller's open write transaction and never commits, except `refresh`.
 """
@@ -81,7 +83,8 @@ def save(
     if old and int(old["metadata_version"]) > version:
         return False
     text = json.dumps(fields)
-    tied = not final and bool(old) and int(old["metadata_version"]) == version and old["fields"] != json.loads(text)
+    same = not final and bool(old) and int(old["metadata_version"]) == version
+    tied = same and old is not None and old["fields"] != json.loads(text)
     if tied:
         LOG.info("equal_version_conflict %s %s %s at %s: read again on the next pass", source, item_type, key, version)
     values = (title, text, version, now, (old or {}).get("final_at") or now if final else None, now)
@@ -89,7 +92,8 @@ def save(
         conn.execute(
             "UPDATE item_metadata SET title=COALESCE(?, title), fields=?, metadata_version=?, read_at=?, final_at=?, "
             "updated_at=?, due_at=? WHERE id=?",
-            (*values, now if tied else None, old["id"]),
+            # A later save at the same version that agrees with the tied one settles nothing: the due mark stays.
+            (*values, now if tied else old["due_at"] if same else None, old["id"]),
         )
     else:
         conn.execute(
