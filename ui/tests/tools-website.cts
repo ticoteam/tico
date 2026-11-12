@@ -44,10 +44,10 @@ const row = (i: number): Row => ({id: 'r' + i, at: at(i * 3), who: [COUNSEL, SUP
 function fake() {
   const tools: Record<string, Tool> = {
     w1: {tool: {id: 'w1', name: 'TIDY admin', kind: 'website', sites: ['c.tidy.com', 'admin.tidy.com'], central_only: false},
-      status: {label: 'Signed in', tone: 'ok'},
+      status: {label: 'In use', tone: 'ok'},
       accounts: [
         {id: 'a1', kind: 'shared', username: 'ops@tidy.com', has_totp: true, holder: null, access: [SUPPORT, OPS, BEN, CARA, COUNSEL],
-          session: session('signed_in'), can_use: true, can_manage: true},
+          session: session('in_use'), can_use: true, can_manage: true},
         {id: 'a2', kind: 'own', username: 'ana@tidy.com', has_totp: false, holder: ANA, access: [], session: session('needs_you'), can_use: true, can_manage: true},
         {id: 'a3', kind: 'own', username: 'counsel@bots.tidy.com', has_totp: false, holder: COUNSEL, access: [], session: session('unknown'), can_use: false, can_manage: true}],
       host: {runner_id: 'c1', label: 'Mac mini', online: true}, recent: [0, 1, 2, 3, 4].map(row), can_manage: true, private: false,
@@ -237,7 +237,7 @@ const last = (f: ReturnType<typeof fake>, method: string, pathStart: string) => 
         const root = page.locator('#tool-website');
         await root.locator('[data-tw-account="a1"]').waitFor();
         assert.equal(await root.locator('.tt-title h1').innerText(), 'TIDY admin');
-        assert.match(await root.locator('.tt-title .tt-status').innerText(), /Signed in/);
+        assert.match(await root.locator('.tt-title .tt-status').innerText(), /In use/);
         assert.deepEqual(await root.locator('.tw-acct').evaluateAll(r => r.map(x => [x.getAttribute('data-kind'), x.querySelector('.tw-acct-text')?.textContent])),
           [['shared', 'ops@tidy.com'], ['own', 'Ana'], ['own', 'Counsel']], `${tag}: accounts, a shared one by username, an own one by holder`);
         assert.equal(await root.locator('[data-tw-account="a1"] [data-tw-2fa]').count(), 1, `${tag}: 2FA mark`);

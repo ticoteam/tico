@@ -38,7 +38,7 @@ const TW_TONES: Record<string, string> = {ok: 'ok', waiting: 'wait', wait: 'wait
 const twPill = (s?: {label?: string; tone?: string}) => toolsPill({tone: TW_TONES[s?.tone || ''] || 'idle', text: s?.label || ''});
 const TW_VERBS: Record<string, string> = {open: 'opened', fill: 'filled', copy: 'copied', code: 'got code', needs_you: 'asked for you',
   control: 'took control', sign_in: 'signed in', download: 'downloaded', upload: 'uploaded'};
-const TW_SESSION: Record<string, string> = {signed_in: 'Signed in', signed_out: 'Signed out', needs_you: 'Needs you', in_use: 'In use'};
+const TW_SESSION: Record<string, string> = {needs_you: 'Needs you', in_use: 'In use'};
 const twVerb = (v: string) => TW_VERBS[v] || v;
 const twWhere = (r: TwRow) => [r.account === 'own' ? 'own' : r.account ? 'shared' : '', r.where === 'own' ? 'own browser' : r.where ? 'central' : ''].filter(Boolean).join(' · ');
 const twFace = (w: TwWho | null | undefined, size = 22) => w ? toolsFace({kind: w.kind === 'bot' ? 'bot' : 'person', id: w.id, name: w.name || w.id}, size) : '';

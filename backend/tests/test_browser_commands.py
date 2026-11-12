@@ -13,7 +13,7 @@ import types
 import pytest
 
 from backend import browser_commands as bc
-from backend.store import H, Problem
+from backend.store import Problem
 from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner
 
 PASSWORD = "canary-pw-7Q2x"
@@ -106,6 +106,8 @@ def setup(api, tools):
     for bot in ("ops", "finance"):
         tasks[bot] = post(api, "tasks", {"owner": bot, "title": f"Pull the {bot} report", "body": "Get it from Acme."})
     turns = {bot: claim(api, own, bot) for bot in ("ops", "finance")}
+    for computer in (host, own):
+        get(api, "runner-browser-commands?wait=0", token=computer["token"])
     facts = bc.MAILBOX.facts("acct1")
     facts.where, facts.runner_id, facts.computer = "central", host["runner_id"], "Host Mac"
     facts.tool_id, facts.sites = "tool1", ["acme.example"]
@@ -160,11 +162,7 @@ def serve(s, computer, **answer):
 
 
 def stale(s, computer):
-    with s.api.app.state.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-            (H.shift(H.now(), seconds=-bc.HOST_FRESH - 60), computer["runner_id"]),
-        )
+    bc.MAILBOX.polled_at[computer["runner_id"]] = time.monotonic() - bc.POLL_FRESH - 1
 
 
 def queued():
@@ -199,7 +197,6 @@ def test_host_offline_falls_back_to_the_callers_own_computer(setup, tools):
     s = setup
     stale(s, s.host)
     thread, box = call(s, s.ops, "open")
-    assert collect(s, s.host, wait=0) == []
     [cmd] = serve(s, s.own, text="Reports")
     r = done(thread, box)
     assert r.status_code == 200 and r.json()["where"] == "own"
@@ -219,7 +216,7 @@ def test_central_only_with_the_host_offline_is_refused(setup, tools):
     assert queued() == []
 
 
-def test_busy_for_a_second_bot_until_close_or_the_hold_ends(setup, tools, monkeypatch):
+def test_busy_for_a_second_bot_until_close_or_the_hold_ends(setup, tools):
     s = setup
     thread, box = call(s, s.ops, "open")
     serve(s, s.host)
@@ -234,11 +231,7 @@ def test_busy_for_a_second_bot_until_close_or_the_hold_ends(setup, tools, monkey
     assert done(thread, box).status_code == 200
     # finance holds it now; once its hold runs out ops gets it back without a close.
     assert now(s, s.ops, "read").json()["error"]["code"] == "busy"
-    monkeypatch.setattr(bc, "HOLD_SECONDS", 0.2)
-    thread, box = call(s, s.finance, "back")
-    serve(s, s.host)
-    assert done(thread, box).status_code == 200
-    time.sleep(0.3)
+    bc.MAILBOX.holds["acct1"].until = time.monotonic() - 1
     thread, box = call(s, s.ops, "read")
     serve(s, s.host, text="Page")
     assert done(thread, box).status_code == 200
@@ -458,7 +451,9 @@ def test_values_sent_earlier_are_scrubbed_from_every_later_answer_on_the_account
     r = done(thread, box)
     body = r.json()
     assert r.status_code == 200 and secret not in r.text and quote_plus(secret) not in r.text
-    assert quote(secret, safe="") not in r.text and body["text"] == f"Password {bc.MASK} for robot"  # 5 chars: kept
+    assert (
+        quote(secret, safe="") not in r.text and body["text"] == f"Password {bc.MASK} for robot"
+    )  # username not typed
     assert body["title"] == f"Hi {bc.MASK}"
     # A later refusal's detail, and the person's live view's page address.
     thread, box = call(s, s.ops, "click", {"ref": "e1"})
@@ -509,7 +504,7 @@ def test_needs_you_clears_on_done_on_giving_back_and_on_the_bots_next_command(se
     thread, box = call(s, s.ops, "read")
     serve(s, s.host, text="Page", signed_in=True)
     assert done(thread, box).status_code == 200
-    assert bc.session_view("acct1")["state"] == "in_use" and bc.MAILBOX.facts("acct1").state == "signed_in"
+    assert bc.session_view("acct1")["state"] == "in_use" and bc.MAILBOX.facts("acct1").state == "unknown"
 
 
 def test_a_bots_command_never_takes_a_persons_control_even_under_the_persons_id(setup, tools):

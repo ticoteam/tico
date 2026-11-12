@@ -8045,7 +8045,7 @@ SCHEMAS['WebsiteTool'] = obj(
                     'access': items(WEBSITE_WHO),
                     'session': obj(
                         {
-                            'state': {'enum': ['signed_in', 'signed_out', 'needs_you', 'in_use', 'unknown']},
+                            'state': {'enum': ['needs_you', 'in_use', 'unknown']},
                             'where': {'type': ['string', 'null'], 'enum': ['central', 'own', None]},
                             'computer': 'n',
                             'by': {'anyOf': [WEBSITE_WHO, {'type': 'null'}]},

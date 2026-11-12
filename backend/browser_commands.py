@@ -52,7 +52,7 @@ AUTH: Any = auth_module
 KEY = "browser-host"  # registry_metadata: the company's browser host, a runner id
 CAPABILITY = "browser_v1"
 TOOLS_MANAGER = "tools-manager"  # the one bot a browser host also takes
-HOST_FRESH = 90  # a computer that checked in this recently is online
+POLL_FRESH = 40.0  # the browser transport, rather than a task heartbeat, proves this computer is reachable
 HOLD_SECONDS = 120.0
 PERSON_IDLE = 300.0
 REPLY_WAIT = 30.0
@@ -65,7 +65,7 @@ RECENT_MAX = 256  # Idempotency-Keys remembered at once
 # Verbs whose answer is too big to keep for a retry: a retry of one that ran is refused (409 `already_ran`).
 UNKEPT = ("read", "screenshot", "download")
 SENT_KEEP = 600.0  # a login value sent for a fill or copy is scrubbed from every answer on its account this long
-SENT_MIN = {"username": 8, "password": 4, "code": 4}  # shorter values are too common to scrub
+SENT_MIN = {"username": 4, "password": 4, "code": 4}  # shorter values are too common to scrub
 MASK = "•••"
 GONE_CHECK = 2.0  # how often a waiting command checks that its caller is still there
 QUEUE_MAX = 64
@@ -228,9 +228,8 @@ class Hold:
 
 @dataclass
 class SessionFacts:
-    state: str = "unknown"  # signed_in, signed_out, needs_you, unknown
+    state: str = "unknown"  # needs_you or unknown; a browser cannot reliably infer sign-in
     ask: str | None = None  # the open "needs you" ask's requirement id, while state is needs_you
-    before: str = "unknown"  # the state needs_you replaced, back once it clears
     where: str | None = None
     runner_id: str | None = None
     computer: str | None = None
@@ -274,6 +273,7 @@ class Mailbox:
         self.inflight: dict[str, Command] = {}
         self.wakers: dict[str, asyncio.Event] = {}
         self.polls: dict[str, int] = {}
+        self.polled_at: dict[str, float] = {}
         self.holds: dict[str, Hold] = {}
         self.sessions: dict[str, SessionFacts] = {}
         self.frames: dict[str, Frame] = {}
@@ -342,6 +342,7 @@ class Mailbox:
         a command the restarted runner is waiting for. Wakes the older polls so they return at once."""
         with self.lock:
             mine = self.polls[runner_id] = self.polls.get(runner_id, 0) + 1
+            self.polled_at[runner_id] = time.monotonic()
         self.waker(runner_id).set()
         return mine
 
@@ -380,6 +381,14 @@ class Mailbox:
                         extra={"by": held.who},
                     )
             self.holds[account_id] = Hold(actor, who, person, now + (PERSON_IDLE if person else HOLD_SECONDS))
+        if person:
+            refused = Problem(
+                "person_in_control",
+                f"{who['name']} has control of this browser; wait until they give it back.",
+                409,
+                extra={"by": who},
+            )
+            self.soon(lambda: self.cancel_queued(account_id, lambda cmd: bool(cmd.attempt_id), refused))
 
     def release(self, account_id: str, actor: str, person: bool = False) -> bool:
         """End `actor`'s hold of the kind asked: a bot's close never ends its person's control, nor the reverse."""
@@ -387,8 +396,44 @@ class Mailbox:
             held = self.holds.get(account_id)
             if held and held.actor == actor and held.person == person:
                 del self.holds[account_id]
-                return True
-            return False
+            else:
+                return False
+        if person:
+            refused = Problem("no_control", "Control was returned; take control again before sending input.", 409)
+            self.soon(
+                lambda: self.cancel_queued(
+                    account_id,
+                    lambda cmd: cmd.verb.startswith("input_") and cmd.by is not None and cmd.by["subject"] == actor,
+                    refused,
+                )
+            )
+        return True
+
+    def cancel_queued(self, account_id: str, matches: Callable[[Command], bool], refused: Problem) -> None:
+        with self.lock:
+            pending = [
+                cmd for queue in self.queues.values() for cmd in queue if cmd.account_id == account_id and matches(cmd)
+            ]
+        for cmd in pending:
+            self.settle(cmd, refused)
+
+    def control_problem(self, cmd: Command) -> Problem | None:
+        if cmd.cleanup or cmd.identity is None or (cmd.verb == "close" and cmd.reply.done()):
+            return None
+        held = self.holder(cmd.account_id)
+        if cmd.attempt_id and cmd.verb != "copy":
+            if held is not None and held.person:
+                return Problem(
+                    "person_in_control",
+                    f"{held.who['name']} has control of this browser; wait until they give it back.",
+                    409,
+                    extra={"by": held.who},
+                )
+            if held is None or held.actor != cmd.identity.actor:
+                return Problem("busy", "This account's control changed; open the website again.", 409)
+        elif cmd.verb.startswith("input_") and (held is None or not held.person or held.actor != cmd.identity.actor):
+            return Problem("no_control", "Take control of the browser in Tico before sending input.", 409)
+        return None
 
     def holder(self, account_id: str) -> Hold | None:
         with self.lock:
@@ -420,7 +465,14 @@ class Mailbox:
     def hand_out(self, runner_id: str, ids: set[str]) -> list[Command]:
         with self.lock:
             queue = self.queues.get(runner_id, [])
-            taken = [c for c in queue if c.id in ids and not c.reply.done()]
+            taken: list[Command] = []
+            for cmd in list(queue):
+                if cmd.id in ids and not cmd.reply.done():
+                    refused = self.control_problem(cmd)
+                    if refused is not None:
+                        self.settle(cmd, refused)
+                    else:
+                        taken.append(cmd)
             self.queues[runner_id] = [c for c in queue if c.id not in ids and not c.reply.done()]
             for cmd in taken:
                 cmd.delivered = True
@@ -447,7 +499,7 @@ class Mailbox:
 
     def refuse(self, cmd: Command, refused: Problem) -> None:
         """A person's refused view never disrupts the bot's session or another viewer."""
-        if cmd.attempt_id and not cmd.cleanup:
+        if cmd.attempt_id and not cmd.cleanup and refused.code in ("no_account", "stale_lease"):
             self.close_account(cmd.account_id, refused)
         else:
             self.settle(cmd, refused)
@@ -551,12 +603,6 @@ class Mailbox:
                 facts.url = report.url
             if report.title is not None:
                 facts.title = report.title
-            if report.signed_in is not None:
-                known = "signed_in" if report.signed_in else "signed_out"
-                if facts.state == "needs_you":
-                    facts.before = known
-                else:
-                    facts.state = known
             if cmd.verb == "close" and report.ok:
                 facts.where = facts.runner_id = facts.computer = None
             if cmd.verb == "screenshot" and report.ok and report.image:
@@ -575,8 +621,6 @@ class Mailbox:
     def needs_you(self, account_id: str, ask: str | None, by: Who) -> None:
         with self.lock:
             facts = self.sessions.setdefault(account_id, SessionFacts())
-            if facts.state != "needs_you":
-                facts.before = facts.state
             facts.state, facts.ask, facts.by = "needs_you", ask, by
 
     def clear_needs_you(self, account_id: str, ask: str | None = None) -> None:
@@ -586,7 +630,7 @@ class Mailbox:
             facts = self.sessions.get(account_id)
             if facts is None or facts.state != "needs_you" or (ask is not None and facts.ask != ask):
                 return
-            facts.state, facts.ask = facts.before, None
+            facts.state, facts.ask = "unknown", None
 
     def view(self, account_id: str, c: sqlite3.Connection | None = None) -> Session:
         with self.lock:
@@ -603,7 +647,7 @@ class Mailbox:
                 pass
             elif held:
                 state, by = "in_use", held.who
-            elif state not in ("signed_in", "signed_out"):
+            else:
                 state = "unknown"
             return {
                 "state": state,
@@ -723,7 +767,9 @@ def _computer(c: sqlite3.Connection, runner_id: str | None) -> dict[str, Any] | 
 
 
 def _online(row: dict[str, Any] | None) -> bool:
-    return bool(row and row.get("last_seen_at") and str(row["last_seen_at"]) > H.shift(H.now(), seconds=-HOST_FRESH))
+    with MAILBOX.lock:
+        at = MAILBOX.polled_at.get(str(row["id"])) if row is not None else None
+    return at is not None and time.monotonic() - at < POLL_FRESH
 
 
 def _has_browser(row: dict[str, Any] | None) -> bool:
@@ -787,7 +833,7 @@ def health_problem(c: sqlite3.Connection) -> str | None:
         return "The browser host was removed: pick another computer in Settings > Computers."
     label = str(found["label"] or found["id"])
     if not _online(found):
-        return f"Browser host offline: {label} has not checked in, so website tools that run centrally wait."
+        return f"Browser host offline: {label} is not polling for browser commands, so website tools that run centrally wait."
     if not _has_browser(found):
         return f"Chrome missing on {label}: install Google Chrome there so website tools can run."
     return None
@@ -993,13 +1039,16 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
     that is offline."""
     began = time.perf_counter()
     deadline = cmd.deadline_at = min(cmd.deadline_at, time.monotonic() + within)
+    next_step = (
+        "open the website again" if cmd.verb == "open" else "read the page to check its state before trying again"
+    )
     try:
         while True:
             left = deadline - time.monotonic()
             if left <= 0:
                 raise Problem(
                     "browser_timeout",
-                    f"{cmd.label} did not answer within {int(within)} seconds; read the page to check its state before trying again.",
+                    f"{cmd.label} did not answer within {int(within)} seconds; {next_step}.",
                     504,
                 )
             try:
@@ -1027,7 +1076,7 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
                 cmd,
                 Problem(
                     "browser_timeout",
-                    "The browser did not answer in time; read the page to check its state before trying again.",
+                    f"The browser did not answer in time; {next_step}.",
                     504,
                 ),
             )
@@ -1049,11 +1098,12 @@ async def wait_reply(request: Request, cmd: Command, within: float) -> BrowserRe
             "no_clipboard": "This computer has no available clipboard; use tico login fill instead of copy.",
             "no_chrome": "Chrome is unavailable on this computer; ask a person to install Chrome or pick another browser host.",
             "navigation_failed": "The browser could not open that page; check the address and try tico browser open again.",
-            "browser_timeout": "The browser did not finish in time; read the page to check its state before trying again.",
+            "browser_timeout": f"The browser did not finish in time; {next_step}.",
             "browser_failed": "The browser could not start; ask a person to check Chrome on this computer and try again.",
             "page_error": "The browser could not read this page; reopen the website and try again.",
             "bad_request": "The computer could not understand that command; check the browser command's arguments and try again.",
             "screenshot_failed": "The browser could not capture this page; read or reopen the page and try again.",
+            "session_lost": "This browser restarted; open the website again.",
         }
         code = str(outcome.error) if outcome.error in details else "browser_error"
         detail = details.get(
@@ -1396,6 +1446,9 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
             raise Problem("browser_host_offline", "This browser session is unavailable; open the website again.", 409)
         if cmd.cleanup:
             return
+        refused = mailbox.control_problem(cmd)
+        if refused is not None:
+            raise refused
         if cmd.central and host_id(c) != cmd.runner_id:
             raise Problem("browser_host_offline", "The browser moved to another computer; open the website again.", 409)
         if cmd.identity is not None:
@@ -1501,16 +1554,15 @@ def install(app: "FastAPI", store: Any, auth: Any, mutate: "Callable[..., Any]")
         spot = await asyncio.to_thread(view_place, picked)
         facts = mailbox.facts(account_id)
         sites = list(picked["sites"])
-        args = {} if facts.runner_id == spot.runner_id else {"url": first_url(sites)}
+        url = facts.url if facts.url and _wt().site_matches(sites, facts.url) else first_url(sites)
+        args = {"url": url, "keep": True}
         by = await asyncio.to_thread(lambda: _with_read(lambda c: who_of(c, who.actor)))
         cmd = _new(loop, spot, picked, "open", args, by=by, identity=who)
         mailbox.enqueue(cmd)
         report = await wait_reply(request, cmd, REPLY_WAIT)
         mailbox.note(cmd, report)
         where = "central" if spot.central else "own"
-        await asyncio.to_thread(
-            log, picked, who, "open", page_of(report.url or facts.url or args.get("url", "")), where
-        )
+        await asyncio.to_thread(log, picked, who, "open", page_of(report.url or facts.url or url), where)
         with mailbox.lock:
             frame = mailbox.frames.get(account_id)
             if frame:

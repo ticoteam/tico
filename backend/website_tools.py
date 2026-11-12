@@ -658,7 +658,7 @@ def _accounts_view(c: Any, who: Any, tool: Any, admins: Iterable[str] | None, au
 
 
 def status(accounts: list[dict[str, Any]], host: dict[str, Any] | None) -> dict[str, str]:
-    """{label, tone}: No account; the browser host offline; Needs you; Signed in; Signed out; Ready."""
+    """{label, tone}: No account; the browser host offline; Needs you; In use; Ready."""
     if not accounts:
         return {"label": "No account", "tone": "waiting"}
     if host is not None and not host.get("online"):
@@ -666,10 +666,8 @@ def status(accounts: list[dict[str, Any]], host: dict[str, Any] | None) -> dict[
     states = {str(cast(dict[str, Any], a.get("session") or {}).get("state") or "unknown") for a in accounts}
     if "needs_you" in states:
         return {"label": "Needs you", "tone": "waiting"}
-    if "signed_in" in states or "in_use" in states:
-        return {"label": "Signed in", "tone": "ok"}
-    if "signed_out" in states:
-        return {"label": "Signed out", "tone": "fail"}
+    if "in_use" in states:
+        return {"label": "In use", "tone": "ok"}
     return {"label": "Ready", "tone": "neutral"}
 
 

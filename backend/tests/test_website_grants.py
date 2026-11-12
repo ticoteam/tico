@@ -1,6 +1,7 @@
 """Grant matrix 1–12: real vault and HTTP routes, with token-authenticated fake computers, never Chrome."""
 
 import threading
+import time
 import asyncio
 from types import SimpleNamespace
 
@@ -194,6 +195,8 @@ def computers(website):
     ready(s.api, s.own, ["ops"], capabilities=["browser_v1"])
     s.task = post(s.api, "tasks", {"owner": "ops", "title": "Read the report", "body": "Read Acme."})
     s.turn = claim(s.api, s.own, "ops")
+    for machine in (s.host, s.own):
+        get(s.api, "runner-browser-commands?wait=0", machine["token"])
     facts = B.MAILBOX.facts(s.aid)
     facts.where, facts.runner_id, facts.computer = "central", s.host["runner_id"], "Host"
     facts.tool_id, facts.sites = s.tid, [SITE]
@@ -253,10 +256,7 @@ def test_host_placement_and_fallback_use_only_the_authorized_computer(computers,
     s = computers
     with s.store.transaction() as c:
         if state == "offline":
-            c.execute(
-                "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-                (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
-            )
+            B.MAILBOX.polled_at[s.host["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
         elif state == "no_chrome":
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.host["runner_id"],))
         elif state == "revoked":
@@ -342,6 +342,7 @@ def test_the_assistant_uses_its_persons_grants_and_never_the_assistant_bots(webs
     share(s, shared, "bot:assistant")
     machine, attempt = assistant_turn(s.api, "cara-test")
     ready(s.api, machine, ["assistant"], capabilities=["browser_v1"])
+    get(s.api, "runner-browser-commands?wait=0", machine["token"])
     s.turn = attempt
     thread, box = begin(s)
     [cmd] = poll(s, machine, wait=3)
@@ -472,10 +473,7 @@ def test_placement_refusals_are_stable_and_actionable(computers, central_only, h
         if host == "unset":
             c.execute("DELETE FROM registry_metadata WHERE key=?", (B.KEY,))
         elif host == "offline":
-            c.execute(
-                "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-                (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
-            )
+            B.MAILBOX.polled_at[s.host["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
         else:
             c.execute("UPDATE runner_states SET capabilities='[]' WHERE runner_id=?", (s.host["runner_id"],))
         if not own:
@@ -490,6 +488,7 @@ def test_host_change_rejects_an_old_report_and_the_next_command_uses_the_new_hos
     s = computers
     other = runner(s.api, label="New host")
     ready(s.api, other, [], capabilities=["browser_v1"])
+    get(s.api, "runner-browser-commands?wait=0", other["token"])
     thread, box = begin(s)
     [old] = poll(s, s.host, wait=3)
     post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
@@ -511,6 +510,7 @@ def test_changing_a_host_closes_an_already_open_session_on_the_old_computer(comp
     end(thread, box)
     other = runner(s.api, label="New host")
     ready(s.api, other, [], capabilities=["browser_v1"])
+    get(s.api, "runner-browser-commands?wait=0", other["token"])
     post(s.api, f"runners/{other['runner_id']}/browser-host", {"on": True})
     assert B.session_view(s.aid)["state"] == "unknown"
     [close] = poll(s, s.host, wait=3)
@@ -524,6 +524,8 @@ def test_server_restart_drops_an_inflight_command_and_the_late_report(computers)
     thread, box = begin(s)
     [old] = poll(s, s.host, wait=3)
     B.MAILBOX.reset()
+    for machine in (s.host, s.own):
+        get(s.api, "runner-browser-commands?wait=0", machine["token"])
     end(thread, box, 409, "browser_host_offline")
     report(s, s.host, old, expected=404)
     thread, box = begin(s)
@@ -666,27 +668,20 @@ def test_browser_placement_stays_with_the_session_until_open(computers, where):
     """A: recovering a host never moves an own sign-in, and a stale session never silently falls back."""
     s = computers
     if where == "own":
-        with s.store.transaction() as c:
-            c.execute(
-                "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-                (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
-            )
+        B.MAILBOX.polled_at[s.host["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
     machine = s.own if where == "own" else s.host
     thread, box = begin(s)
     [cmd] = poll(s, machine, wait=3)
     report(s, machine, cmd)
     end(thread, box)
     ready(s.api, s.host, [], capabilities=["browser_v1"])
+    get(s.api, "runner-browser-commands?wait=0", s.host["token"])
     thread, box = begin(s, "read")
     [cmd] = poll(s, machine, wait=3)
     assert cmd["verb"] == "read"
     report(s, machine, cmd)
     assert end(thread, box).json()["where"] == where
-    with s.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-            (H.shift(H.now(), seconds=-200), machine["runner_id"]),
-        )
+    B.MAILBOX.polled_at[machine["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
     response = command(s)
     assert response.status_code == 409 and "open the website again" in response.json()["error"]["detail"]
     assert poll(s, s.own) == [] and poll(s, s.host) == []
@@ -710,11 +705,7 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
     import base64
 
     s = computers
-    with s.store.transaction() as c:
-        c.execute(
-            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
-            (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
-        )
+    B.MAILBOX.polled_at[s.host["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
     thread, box = begin(s)
     [cmd] = poll(s, s.own, wait=3)
     post(
@@ -733,7 +724,11 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
     path = f"website-tools/{s.tid}/accounts/{s.aid}/browser"
     thread, box = person_request(s, path, token, {})
     [cmd] = poll(s, s.own, wait=3)
-    assert cmd["verb"] == "open" and cmd["args"] == {} and cmd["where"] == "own"
+    assert (
+        cmd["verb"] == "open"
+        and cmd["args"] == {"url": "https://" + SITE + "/code", "keep": True}
+        and cmd["where"] == "own"
+    )
     report(s, s.own, cmd)
     assert end(thread, box).json()["where"] == "own"
     post(s.api, path + "/control", {"take": True}, token)
@@ -761,14 +756,14 @@ def test_needs_you_view_and_input_follow_an_own_computer_session(computers):
     assert B.session_view(s.aid)["computer"] == "Own"
 
 
-def test_opening_a_persons_view_wakes_the_existing_page_without_a_url(computers):
+def test_opening_a_persons_view_keeps_the_page_and_supplies_a_recovery_url(computers):
     """C: viewing a two-step sign-in never navigates it back to its old address."""
     s = computers
     facts = B.MAILBOX.facts(s.aid)
     facts.url = "https://" + SITE + "/second-step"
     thread, box = person_request(s, f"website-tools/{s.tid}/accounts/{s.aid}/browser", body={})
     [cmd] = poll(s, s.host, wait=3)
-    assert cmd["verb"] == "open" and cmd["args"] == {}
+    assert cmd["verb"] == "open" and cmd["args"] == {"url": "https://" + SITE + "/second-step", "keep": True}
     report(s, s.host, cmd)
     end(thread, box)
     assert B.MAILBOX.facts(s.aid).url.endswith("/second-step")
@@ -852,3 +847,157 @@ def test_command_deadline_shrinks_in_the_payload_and_matches_the_wire_contract()
         assert errors(cmd.payload(now=cmd.deadline_at - 7), schema, wire) == []
 
     asyncio.run(run())
+
+
+def test_control_handoff_cancels_queued_bot_commands_and_returned_person_input(computers):
+    """1: old queued work never crosses a person's take-control/give-back boundary."""
+    s = computers
+    path = f"website-tools/{s.tid}/accounts/{s.aid}/browser"
+    thread, box = begin(s)
+    prepared(s, s.host)
+    post(s.api, path + "/control", {"take": True})
+    end(thread, box, 409, "person_in_control")
+    assert poll(s, s.host) == []
+    thread, box = person_request(s, path + "/input", body={"kind": "key", "key": "Enter"})
+    prepared(s, s.host)
+    post(s.api, path + "/control", {"take": False})
+    end(thread, box, 409, "no_control")
+    assert poll(s, s.host) == []
+
+
+def test_delivery_rechecks_the_current_control_holder():
+    """1: an authorization snapshot taken before a handoff cannot deliver an old sender's command."""
+
+    async def run():
+        box = B.Mailbox()
+        loop = box.bind()
+        bot = {"subject": "bot:ops", "kind": "bot", "id": "ops", "name": "Ops", "initials": "O"}
+        person = {"subject": "human:ana", "kind": "person", "id": "ana", "name": "Ana", "initials": "A"}
+        box.take("account", "bot:ops", bot)
+        cmd = B._new(
+            loop,
+            B.Place("computer", "Host", True),
+            {"account_id": "account", "tool_id": "tool", "sites": [SITE]},
+            "read",
+            {},
+            attempt_id="attempt",
+            by=bot,
+            identity=Identity("bot:ops", "bot"),
+        )
+        box.enqueue(cmd)
+        allowed_before_handoff = {cmd.id}
+        # Model a holder change after the async permission check, before the atomic hand-out step.
+        box.holds["account"] = B.Hold("human:ana", person, True, time.monotonic() + 30)
+        assert box.hand_out("computer", allowed_before_handoff) == []
+        outcome = cmd.reply.result()
+        assert isinstance(outcome, Problem) and outcome.code == "person_in_control"
+
+    asyncio.run(run())
+
+
+def test_browser_polling_alone_decides_computer_liveness(computers):
+    """2: browser polls survive a missed heartbeat, and advertised Chrome without a poll is offline."""
+    s = computers
+    with s.store.transaction() as c:
+        c.execute(
+            "UPDATE runner_states SET last_seen_at=? WHERE runner_id=?",
+            (H.shift(H.now(), seconds=-200), s.host["runner_id"]),
+        )
+    thread, box = begin(s)
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    assert end(thread, box).json()["where"] == "central"
+    ready(s.api, s.host, [], capabilities=["browser_v1"])
+    B.MAILBOX.polled_at.pop(s.host["runner_id"])
+    with s.store.read() as c:
+        assert B.host_view(c)["online"] is False
+    thread, box = begin(s)
+    [cmd] = poll(s, s.own, wait=3)
+    report(s, s.own, cmd)
+    assert end(thread, box).json()["where"] == "own"
+
+
+def test_an_offline_report_preserves_the_session_and_its_hold(computers):
+    """3: a temporary transport gap refuses one command, then the same browser continues after polling resumes."""
+    s = computers
+    thread, box = begin(s)
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    end(thread, box)
+    facts = B.MAILBOX.facts(s.aid)
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, s.host, wait=3)
+    held = B.MAILBOX.holder(s.aid)
+    B.MAILBOX.polled_at[s.host["runner_id"]] = time.monotonic() - B.POLL_FRESH - 1
+    assert report(s, s.host, cmd, expected=409)["error"]["code"] == "browser_host_offline"
+    end(thread, box, 409, "browser_host_offline")
+    assert B.MAILBOX.facts(s.aid) is facts and B.MAILBOX.holder(s.aid) is held
+    assert poll(s, s.host) == []
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, s.host, wait=3)
+    report(s, s.host, cmd)
+    end(thread, box)
+
+
+def test_a_restarted_browser_has_an_open_again_refusal(computers):
+    """4: a fresh Chrome refuses a non-open verb with a stable, actionable restart code."""
+    s = computers
+    thread, box = begin(s, "read")
+    [cmd] = poll(s, s.host, wait=3)
+    post(s.api, f"runner-browser-commands/{cmd['id']}/report", {"ok": False, "error": "session_lost"}, s.host["token"])
+    response = end(thread, box, 409, "session_lost")
+    assert response.json()["error"]["detail"] == "This browser restarted; open the website again."
+
+
+@pytest.mark.parametrize("reported", [False, True])
+def test_open_timeout_tells_the_caller_to_open_again(reported):
+    """5: an unfinished open cannot be recovered by a read on a session that may not exist."""
+
+    class Caller:
+        state = SimpleNamespace()
+
+        async def is_disconnected(self):
+            return False
+
+    async def run():
+        loop = B.MAILBOX.bind()
+        cmd = B._new(
+            loop,
+            B.Place("computer", "Host", True),
+            {"account_id": "account", "tool_id": "tool", "sites": [SITE]},
+            "open",
+            {},
+        )
+        if reported:
+            cmd.reply.set_result(B.BrowserReport(ok=False, error="browser_timeout"))
+        with pytest.raises(Problem) as refused:
+            await B.wait_reply(Caller(), cmd, 30 if reported else 0)
+        assert refused.value.status == (409 if reported else 504) and "open the website again" in refused.value.detail
+        assert "read the page" not in refused.value.detail
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("old_signed_in", [True, False, None])
+def test_older_runner_sign_in_flags_never_become_session_state(computers, old_signed_in):
+    """6: old report fields remain readable without claiming a sign-in state the browser cannot establish."""
+    s = computers
+    thread, box = begin(s)
+    [cmd] = poll(s, s.host, wait=3)
+    post(
+        s.api, f"runner-browser-commands/{cmd['id']}/report", {"ok": True, "signed_in": old_signed_in}, s.host["token"]
+    )
+    end(thread, box)
+    B.MAILBOX.release(s.aid, "bot:ops")
+    assert B.session_view(s.aid)["state"] == "unknown"
+    assert get(s.api, f"website-tools/{s.tid}")["status"]["label"] == "Ready"
+
+
+@pytest.mark.parametrize("length,masked", [(3, False), (4, True), (7, True)])
+def test_typed_short_usernames_use_the_login_redaction_threshold(length, masked):
+    """7: only a value Tico typed enters the redactor, with the same threshold as passwords and codes."""
+    box = B.Mailbox()
+    value = "user123"[:length]
+    assert box.scrub("account", value) == value
+    box.remember("account", "username", value)
+    assert (box.scrub("account", value) == B.MASK) is masked

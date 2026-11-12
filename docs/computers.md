@@ -445,10 +445,10 @@ logins](credential-vault.md#website-logins)): a Chrome profile per account, kept
 and people watch or take control of from the tool's page. An admin picks it with the **Browser host** switch in that
 computer's pop-up; one per company.
 
-- It needs Google Chrome installed. On Linux it also needs a display. Tico does not install Chrome.
+- It needs Google Chrome installed; Tico does not install it. On Linux without a display Chrome runs headless.
 - It runs no bots of its own: placing a bot there is refused while it is the browser host.
-- It is online when it checked in within the last 90 seconds. Health shows "Browser host offline" or "Chrome missing
-  on <computer>" when it is not ready.
+- It is online when it asked for website commands within the last 40 seconds; a running computer asks continuously.
+  Health shows "Browser host offline" or "Chrome missing on <computer>" when it is not ready.
 - Each account's browser starts on its first command, closes after 15 minutes idle (the sign-in is kept) and at most 8
   are open at once.
 
@@ -459,8 +459,8 @@ Where a website runs is chosen when it is opened:
 3. Otherwise it is refused, naming the browser host when it is the one that is offline.
 
 Every later command stays on that computer. If it goes offline or is no longer allowed, the command is refused and the
-bot opens the website again, which chooses afresh. A person's view follows the session to its computer and does not
-change the page; with no session it opens on the browser host.
+bot opens the website again, which chooses afresh. A person's view follows the session to its computer and keeps its
+page; a browser that restarted or left the site goes back to the site. With no session it opens on the browser host.
 
 ## Add a connection
 
