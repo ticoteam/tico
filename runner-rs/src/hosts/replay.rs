@@ -342,10 +342,11 @@ pub async fn drive(
                         break;
                     }
                     match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
-                        // The host's word to the runner that a new session is up is not in a recording; the host
-                        // fixtures check it.
+                        // The host's word to the runner that a new session is up is not in a recording, nor is a
+                        // failed call's detail for the run's capture; the host fixtures check both.
                         Ok(Some(ev))
                             if ev.get("stderr_tail").is_some()
+                                || ev.get("failed_tool").is_some()
                                 || ev["process_exit"] == true
                                 || ev["kind"] == "thread_confirmed" =>
                         {
@@ -357,7 +358,12 @@ pub async fn drive(
                 }
                 Pace::Record { log, until, .. } => {
                     match tokio::time::timeout(Duration::from_millis(250), rx.recv()).await {
-                        Ok(Some(ev)) if ev["kind"] == "thread_confirmed" => continue,
+                        Ok(Some(ev))
+                            if ev["kind"] == "thread_confirmed"
+                                || ev.get("failed_tool").is_some() =>
+                        {
+                            continue
+                        }
                         Ok(Some(ev)) => {
                             got.push(ev);
                             quiet_since = None;
@@ -390,7 +396,10 @@ pub async fn drive(
     host.stop().await;
     let mut after = vec![];
     while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await {
-        if ev.get("stderr_tail").is_none() && ev["process_exit"] != true {
+        if ev.get("stderr_tail").is_none()
+            && ev.get("failed_tool").is_none()
+            && ev["process_exit"] != true
+        {
             after.push(ev);
         }
     }
