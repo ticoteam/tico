@@ -22,9 +22,10 @@ missing.
      `tico task show <id>`. Read the newest commit: `gh pr view <n> -R <repo> --json headRefOid`. If no pull request
      is listed, or `gh` cannot read it, do not attach a page: say so as a blocker,
      `tico task move <id> "Build" -m "<what is missing>" --version N`.
-  2. Write `reports/reviews/<task>-<first 7 of the commit>.md`. Its first line names that commit. Then blocking issues,
-     questions, suggestions and what you did not check.
-  3. `tico file publish reports/reviews/<file>.md --task <id>` prints the file id. Attach it to the requirement
+  2. Write `reports/reviews/<task>-<first 7 of the commit>.html`, an HTML page (Tico refuses Markdown for a page
+     requirement). Its first lines name that commit and say what it found. Then blocking issues, questions,
+     suggestions and what you did not check.
+  3. `tico page publish reports/reviews/<file>.html --task <id>` prints the file id. Attach it to the requirement
      `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, write the page again at the new commit, publish and attach it.

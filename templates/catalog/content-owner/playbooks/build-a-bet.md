@@ -42,7 +42,8 @@ so.
 
 ## 4. Write the Go-live page
 
-One page a person can read in two minutes. It shows:
+One HTML page a person can read in two minutes (Tico refuses a Markdown page for an OK), with simple inline CSS and
+nothing from elsewhere. At the top, two or three lines say what goes live and what the person decides. Then it shows:
 
 - **The thing as it will look**: the copy or a picture of it, and where it goes live.
 - **The metric** it moves (your KPI or the number under it) and where that number is read.

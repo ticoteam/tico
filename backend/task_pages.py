@@ -70,6 +70,36 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
     raise AssertionError("refuse() always raises")  # pragma: no cover
 
 
+# What a page for an OK is refused with when it is not HTML: what to do instead, in a few words the bot can act on.
+NOT_HTML = (
+    "A page for an OK must be HTML, and this version is not (it reads as Markdown or plain text). Write it as HTML: "
+    "two or three lines at the top saying what it is and what to decide, then the sections, with simple inline CSS and "
+    "screenshots as images. A Spec page: skills/build-the-spec-page. A Fixes 2 page: playbooks/show-what-was-built.md. "
+    "Then tico page publish the .html and attach the new version."
+)
+HEAD_BYTES = 4096  # enough to get past a byte-order mark, blank lines and a long comment-free preamble
+
+
+def is_html(text: str) -> bool:
+    """Whether a page's text is HTML: after a byte-order mark and whitespace it opens with a tag (`<!doctype`,
+    `<html>`, any element). The decide view draws text that is not HTML as Markdown; this is the same test."""
+    return text.lstrip("\ufeff \t\r\n\f\v").startswith("<")
+
+
+def _version_is_html(conn: "sqlite3.Connection", file_id: str, version: int) -> bool:
+    """Whether a page version's bytes open as HTML. True when they cannot be read here (no blob store on this
+    connection, a blob that will not open): the attach is not where an unreadable page is caught, Jev's check is."""
+    found = _one(conn, "SELECT digest FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, version))
+    blobs = getattr(conn, "blobs", None)
+    if not found or not found.get("digest") or blobs is None:
+        return True
+    try:
+        head = b"".join(blobs.open_range(found["digest"], 0, HEAD_BYTES - 1))
+    except Exception:  # noqa: BLE001 - an unreadable blob is Jev's to report, never a refusal here
+        return True
+    return is_html(head.decode("utf-8", errors="replace"))
+
+
 def requirement_of(conn: "sqlite3.Connection", row: Row, requirement: str) -> Row | None:
     """The page requirement of the task's open visit that `requirement` names: its id, or its name (`name_of`, any
     case). None when there is no such page requirement."""
@@ -135,7 +165,8 @@ def attach(
     """Attach a page to a page requirement of the task's open visit. `requirement` is its id or its name (`name_of`),
     `ref` a `parse_ref` page. Who may: the task's owner, whoever holds it now, or any person. Refuses
     `task_requirement` (no such page requirement on this visit, not a page, no such version, a PR not read yet),
-    `task_changed` (a bot's stale or missing `seen_version`), `task_ended`. The route checks the caller may open the
+    `task_changed` (a bot's stale or missing `seen_version`), `task_ended`, and `lint` (a version that is not HTML,
+    `NOT_HTML`: a page for an OK is drawn as HTML). The route checks the caller may open the
     file. Returns the `requirement_pages` row."""
     from . import hubdb
     from . import hubdb_core
@@ -168,6 +199,9 @@ def attach(
     version = version or int(file["current_version"] or 0)
     if not _one(conn, "SELECT 1 AS one FROM bot_file_versions WHERE file_id=? AND version=?", (file_id, version)):
         _refuse(conn, by, "task_requirement", f"That page has no version {version}", task_id)
+    if not _version_is_html(conn, file_id, version):
+        # A writing correction, as `lint` is everywhere: fixed by publishing HTML, never counted toward quarantine.
+        _refuse(conn, by, "lint", NOT_HTML, task_id)
     rubric, context = judged_against(conn, row, found)
     heads: dict[str, str | None] = context.get("heads") or {}
     unread = sorted(ref_ for ref_, sha in heads.items() if not sha)
