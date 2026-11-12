@@ -14,9 +14,12 @@ Today's readers of a conversation are the actors who pass `Auth.conversation`. A
 conversation's readers who also pass `task_privacy.message_readable`, the per-message check. A failure lists one line
 per row and actor where the migrated reader sets differ from today's.
 
-The demo world is built once for the module and kept untouched (`world`); each test migrates its own copy of it, so the
-build (most of the time) is paid once and no test sees another's migration. Each reader set is read in one snapshot
-with one viewer per actor, as one request reads many threads (`threads.Viewer`), from rows fetched in bulk.
+The demo world is built once per worker that runs this module (its module fixture keeps the module on one worker:
+backend/tests/worker_schedule.py) and kept untouched (`world`); each test migrates its own copy of it, so no test sees
+another's migration. The build is most of the module's time, and pytest's per-test window (faulthandler_timeout) counts
+fixture setup, so the first test only builds the world and checks it holds the rows the migration moves: the reader-set
+tests after it each start from a built world. Each reader set is read in one snapshot with one viewer per actor, as
+one request reads many threads (`threads.Viewer`), from rows fetched in bulk.
 """
 
 import dataclasses
@@ -48,7 +51,7 @@ def demo_clock():
 @pytest.fixture(scope="module")
 def world(demo_clock, tmp_path_factory):
     """The demo world, built once for the module: (its settings, its folder). Nothing opens its database; each test
-    copies the folder (`demo_world`, `devcopy_world`) and migrates the copy."""
+    copies the folder (`copy_folder`, `devcopy_world`) and migrates the copy."""
     directory = tmp_path_factory.mktemp("threads-migration-world")
     settings = demo.build(directory / "demo", now=NOW)
     return settings, directory / "demo"
@@ -71,7 +74,8 @@ def copy_folder(world, directory):
     fields = [f.name for f in dataclasses.fields(settings) if f.init]
     copied = dataclasses.replace(settings, **{name: moved(getattr(settings, name)) for name in fields})
     # A test that wrote to the shared world would change what the next test starts from.
-    assert copied.db_path.is_relative_to(target) and copied.registry_dir.is_relative_to(target), copied
+    paths = (copied.db_path, copied.registry_dir, copied.blob_dir, copied.local_owner_token_file)
+    assert all(path is None or path.is_relative_to(target) for path in paths), copied
     return copied
 
 
@@ -218,6 +222,22 @@ def migrated(settings, world_name, directory):
     lines = differences(labeled(*expected), labeled(*got))
     assert not lines, report(lines, world_name, "after threads.migrate (each line: expected before, got after)")
     return threads, expected, got
+
+
+def test_the_demo_world_holds_every_legacy_shape_the_migration_moves(world, tmp_path):
+    """Runs first, so the world's build lands in this test's window and not in a reader-set test's. The reader-set
+    tests prove only as much as the world holds: legacy roots (no stored audience) of each scope, task threads and
+    per-message restricted rows are what `threads.migrate` moves, so a demo that lost them would let a widening pass."""
+    with closing(sqlite3.connect(untouched_copy(world[0], tmp_path).db_path)) as c:
+        roots = {
+            scope
+            for (scope,) in c.execute(
+                "SELECT DISTINCT scope FROM conversations WHERE audience IS NULL AND COALESCE(root_id,id)=id"
+            )
+        }
+        restricted = c.execute("SELECT COUNT(*) FROM messages WHERE restricted=1").fetchone()[0]
+    assert {"direct", "personal", "task"} <= roots, roots
+    assert restricted, "no per-message restricted rows"
 
 
 def test_the_devcopy_world_keeps_every_reader_set(world, tmp_path):
