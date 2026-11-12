@@ -382,15 +382,18 @@ def to_sign_off(co, engineering):
 
 
 def test_the_merge_queue_drops_the_pr_and_the_release_owner_queues_it_again(co):
-    """GitHub takes the signed-off PR out of the merge queue: the Release Owner is woken with why, puts it back with
-    `tico task queue`, and it merges."""
+    """GitHub takes the signed-off PR out of the merge queue because its run was cancelled from outside: the Release Owner
+    is woken with why, puts it back with `tico task queue`, and it merges. A removal that names a failed check is not
+    queued again as it is (test_github_facts_merge_queue)."""
     before = co.needs_you()
     _, engineering = to_build(co)
     to_sign_off(co, engineering)
     co.sign_off(engineering, "Ship it.")
     co.beat()
     assert co.github.prs[(REPO, 1)]["queue_state"] == "queued", "Tico did not put the signed-off PR in the merge queue"
-    co.github.drop(REPO, 1, "Checks failed in the merge queue", check="tests")
+    co.github.drop(
+        REPO, 1, "Checks failed in the merge queue", check="no step failed: the run was cancelled from outside"
+    )
     co.heard(1)
     assert co.task(engineering)["stage"]["name"] == "Merge", f"a dropped PR's task left Merge. {co.line(engineering)}"
     woken = [bot for bot, task in co.queued() if task == engineering]
