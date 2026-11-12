@@ -4,7 +4,17 @@ the newer version the server runs, in the parameter too, and never put the old o
 
 from setup import envfile
 from setup.tests.helpers.preview_flags import CREATE, env, go, world  # noqa: F401 (env: its secrets, autouse)
-from setup.tests.test_plan_bucket import answer
+
+
+def answer(ssm, rule):
+    """Each SSM command gets rule(command) -> (code, stdout, stderr)."""
+
+    def invocation(**kw):
+        code, out, err = rule(ssm.commands[-1])
+        status = "Success" if code == 0 else "Failed"
+        return {"Status": status, "ResponseCode": code, "StandardOutputContent": out, "StandardErrorContent": err}
+
+    ssm.get_command_invocation = invocation
 
 
 def server_runs(ssm, tag):
