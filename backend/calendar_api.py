@@ -8,8 +8,8 @@ One way in for every home. Reads merge, per calendar in `who`:
   not answer lands in `errors`, never as an empty, free-looking day.
 - Tico (backend/calendar_store.py): bots, shared calendars, people without Google. Everyone in the company reads them;
   a private event shows as Busy to everyone but its owner and attendees.
-- Derived (backend/calendar_derived.py): bot runs, planned automation runs, due dates. A person's calendar also shows the
-  runs of the bots that report to them, unless that bot is in view itself.
+- Derived (backend/calendar_derived.py): bot runs, planned automation runs, due dates. Runs show only for a bot in view: a
+  person's calendar does not add the bots that report to them.
 
 Writes route by home (spec 8.2). People view; bots and the Assistant write (decision 13), except a person with no
 Google writing their own Tico calendar. A bot booking people passes `reach.may_book` for each person; a booking that
@@ -672,14 +672,6 @@ def _attending_copies(c: Any, cals: list[Row], start: datetime, end: datetime) -
     return out
 
 
-def _reporting_bots(c: Any, pid: str) -> list[str]:
-    rows = c.execute(
-        "SELECT b.id FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE bc.reports_to=? AND b.state<>'archived'",
-        ("human:" + pid,),
-    ).fetchall()
-    return [r["id"] for r in rows]
-
-
 def _bot_hosts(c: Any, bot_id: str) -> list[str]:
     """The Google calendars that hold events Tico wrote for this bot (calendar_event_links, `bot`)."""
     rows = c.execute(
@@ -851,7 +843,6 @@ def _gather(
         people = _people_map(c)
         found: list[Row] = []
         sources: list[Row] = []
-        in_view = {cal["ref"] for cal in cals}
         if kinds & {"event", "away"}:
             for cal in cals:
                 if cal["home"] == "google":
@@ -887,11 +878,8 @@ def _gather(
             found += cast("list[Row]", derived.due(c, owners, start, end))
         month_counts: list[Row] | None = None
         if "run" in kinds:
-            bots = [cal["id"] for cal in cals if cal["type"] == "bot"]
-            for cal in cals:
-                if cal["type"] == "human":
-                    bots += [b for b in _reporting_bots(c, cal["id"]) if "bot:" + b not in in_view]
-            bots = list(dict.fromkeys(bots))
+            # Only a bot in view brings its runs: a person's calendar no longer adds the bots that report to them.
+            bots = list(dict.fromkeys(cal["id"] for cal in cals if cal["type"] == "bot"))
             if bots:
                 found += cast("list[Row]", derived.scheduled(c, bots, start, end, now))
                 if end - start <= RUN_DETAIL_MAX:
