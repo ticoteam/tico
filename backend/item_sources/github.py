@@ -1088,7 +1088,9 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   it as it is. The manager hears of the new commit once (`changed_after_ok`).
 # - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
 #   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
-#   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
+#   `tico/merge-ok` on that head turns to failure. The undo is moot while an open visit (the task's next one, or
+#   another task's) still wants the PR queued at that head (`undo_moot`); one that took the PR out anyway owes that
+#   visit's queue again (`_wanted_again`). A PR GitHub merged first stays merged ("merged anyway" note to the
 #   manager, keyed `<task>:<visit>:merged_anyway:<ref>`).
 # - History: `pr_queued` (asked again, and GitHub accepted), `pr_dequeued`, `pr_queue_removed`.
 # - A bot's snooze waits for GitHub, never for a clock time it guessed: it ends, as SYSTEM, and whoever has the turn is
@@ -1657,6 +1659,40 @@ def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     return metadata is not None and metadata["state"] == "merged"
 
 
+def undo_moot(conn: "sqlite3.Connection", effect: Row) -> bool:
+    """An `undo` of a visit that left Merge takes the PR out of the queue for good, whoever else queued it: it is moot
+    while an open visit (the task's next one, or another task's on the same PR) still wants that PR queued at the same
+    head (`queued_by_tico`). Against another head it is carried out, and `recorded` queues the wanted head again."""
+    if effect["action"] != QUEUE or not effect.get("pinned"):
+        return False
+    return queued_by_tico(conn, *_pr_of(effect), str(effect["pinned"]))
+
+
+def _wanted_again(conn: "sqlite3.Connection", effect: Row) -> None:
+    """An old visit's `undo` took the PR out of the queue: each `queue` an open visit had carried out on it (and not
+    taken back) is owed again, so the queue holds what the stage wants now. Only after Tico's own dequeue: a PR GitHub
+    took out (failed checks) answers `absent` and still waits for an explicit queue-again. (A visit leaves Merge only
+    back or closed, which owes its undo, or past a merged PR, so `left_at` is a belt to the undo's braces.)"""
+    found = _rows(
+        conn,
+        "SELECT e.visit_id, e.item_type, e.item_key, e.pinned FROM effects e JOIN visits v ON v.id = e.visit_id "
+        "WHERE e.source=? AND e.action=? AND e.kind=? AND e.state='done' AND lower(e.item_key)=lower(?) "
+        "AND e.visit_id<>? AND v.left_at IS NULL AND NOT EXISTS (SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id "
+        "AND u.source = e.source AND u.action = e.action AND u.kind=? AND lower(u.item_key) = lower(e.item_key))",
+        (SOURCE, QUEUE, SA.ACT, str(effect["item_key"]), str(effect["visit_id"]), SA.UNDO),
+    )
+    for row in found:
+        LOG.info(
+            "merge queue: old undo %s dequeued %s; visit %s is owed its queue again",
+            effect["id"],
+            row["item_key"],
+            row["visit_id"],
+        )
+        SA.owe_again(
+            conn, str(row["visit_id"]), SOURCE, QUEUE, str(row["item_type"]), str(row["item_key"]), row["pinned"]
+        )
+
+
 MERGE_OK = "tico/merge-ok"  # the check only the server posts (docs/pipelines-v3.md "GitHub": "tico/merge-ok")
 
 
@@ -1742,6 +1778,7 @@ def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, ver
     elif how == "dequeued":
         save_and_settle(conn, repo, number, {"queue_state": "none"}, version)
         E._event(conn, task_id, E.SYSTEM, "pr_dequeued", ref, None, None, {"ref": ref})
+        _wanted_again(conn, effect)
     return False
 
 
