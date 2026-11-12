@@ -988,6 +988,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
+            _follow(c, settings, who.actor)
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
         return view(c, row(c, sid))
@@ -1007,6 +1008,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
     spread(c, settings, sid, who.actor, signed_on)
+    _follow(c, settings, who.actor)
     return view(c, row(c, sid))
 
 
@@ -1033,6 +1035,7 @@ def remove(c, settings, who, sid, confirm=False):
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
+    _follow(c, settings, who.actor)
     return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": reset}
 
 
@@ -1197,6 +1200,13 @@ def lend(c, runner_id, runtime, actor, shared, others, only=None):
         {"runner": runner_id, "runtime": runtime, "stopped": 0, "sessions_reset": 0},
     )
     return chosen["id"]
+
+
+def _follow(c, settings, actor):
+    """The plans the company has changed: the bots that follow them move to their set (backend/plan_models.py)."""
+    from . import plan_models
+
+    plan_models.follow(c, settings, actor)
 
 
 def spread(c, settings, sid, actor, signed_on=""):
@@ -1435,6 +1445,7 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
         _effect_changed(c, settings, sub["id"])
+        _follow(c, settings, H.KEEPER)
     H.event(
         c,
         H.KEEPER,

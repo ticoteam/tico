@@ -321,7 +321,8 @@ function onbTeamMode(state: OnbState, mode: OnbState['mode']) {
 
 // ----------------------------------------------------------------- What your bots run on
 // The models choice while none is made, the computer in one line, and the Claude or ChatGPT subscription Getting started
-// recommends (backend/getting_started.py `subscription`) until one is signed in or skipped. Done lands on Tasks.
+// recommends (backend/getting_started.py `subscription`) until one is signed in or skipped; on Tico Cloud Done waits for
+// one. Done lands on Tasks.
 function onbRunHTML(state: OnbState): string {
   const hide = state.reopened ? '<button class="ghost" type="button" id="onb-hide">Don\'t remind me</button>' : '';
   return `${onbRunLinesHTML(state)}${onbActions(state, 'Done', false, hide)}`;
@@ -331,7 +332,7 @@ function onbRunLinesHTML(state: OnbState): string {
   const subscription = sub && (sub.done || sub.skipped) ? '' : `<div class="onb-line" id="onb-subscription">
       <span class="onb-mark" aria-hidden="true"></span><span class="onb-line-text">
       <button type="button" class="linkish" data-onb-subscription>Add a Claude or ChatGPT subscription</button>
-      <small class="muted">Recommended</small></span></div>`;
+      ${sub?.optional === false ? '' : '<small class="muted">Recommended</small>'}</span></div>`;
   return `<div class="onb-lines" id="onb-run-lines">${onbComputerHTML(state)}${subscription}</div>`;
 }
 const ONB_CARET = '<span class="nav-icon onb-caret" aria-hidden="true">expand_more</span>';
@@ -603,6 +604,8 @@ async function onbAdvance(state: OnbState, key: string) {
     void onbFinish(state);
     return;
   }
+  // On Tico Cloud the bots need a plan or key of the company's own (getting_started `subscription`, not optional there).
+  if (state.subscription?.optional === false && !state.subscription.done) { onbBusy(state, false, 'Add a plan first'); return; }
   onbDone(state);
 }
 // Create: the team as chosen, then the last step.
