@@ -50,12 +50,7 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
     what: 'Settings > Models: a plan row says Not connected and names nothing (ui/app/subscriptions.ts, chris/signin-ui)'},
   '5 | dialog onb': {states: ['setup-halfway'],
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
-  '5 | dialog task-modal input "Describe the page"': {states: SET_UP,
-    what: 'the Make page prompt on a task is emptied by closing the task'},
   // Small tap targets that are the only control of their row or card.
-  '6 | a "BotOps has no computer"': {states: SET_UP, what: 'Home, Needs attention: a 19 px text link'},
-  '6 | a "OK to give': {states: ['sign-off'], what: 'Home, Needs attention: the sign-off is a 19 px text link'},
-  '6 | a "Which GitHub': {states: ['bot-waiting'], what: 'Home, Needs attention: the question is a 19 px text link'},
   '6 | a.dash-big': {states: ALL, what: 'Home cards: the count is 31 px'},
   '6 | button#account': {states: ALL, what: 'the account row in the drawer is 29 px'},
   '6 | a "Tools"': {states: ALL, what: 'Tools > GitHub: the Tools crumb is 17 px'},
