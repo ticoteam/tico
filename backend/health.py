@@ -53,6 +53,7 @@ QUEUE_WAITS = (
     "updating",
     "restarting",
     "draining",
+    "moving",
     "maintaining",
     "lane_held",
     "cooling_off",
@@ -1257,6 +1258,7 @@ HELD = {
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
     "busy": ("Queued behind this bot's running turn", RUNS),
     "draining": ("Paused, or held while Tico updates: its work starts when it is resumed", BOT_SETTINGS),
+    "moving": ("Moving to its own cloud machine: its next turn starts there once its running turns end", COMPUTERS),
     "restarting": ("{computer} is restarting: it starts new work once its running turns end", COMPUTERS),
     "maintaining": ("{computer} is tidying this bot's task worktrees: its work starts when that finishes", COMPUTERS),
     "lane_held": (
