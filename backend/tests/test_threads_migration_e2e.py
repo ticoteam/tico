@@ -19,8 +19,14 @@ backend/tests/worker_schedule.py) and kept untouched (`world`); each test migrat
 another's migration. The build is most of the module's time, and pytest's per-test window (faulthandler_timeout) counts
 fixture setup, so the first test only builds the world and checks it holds the rows the migration moves: the reader-set
 tests after it each start from a built world. For the same reason the demo world's migration (`migrated_demo`) is
-shared by the demo test, which checks it kept every reader set, and the roster-removal test, which starts from it. Each reader set is read in one snapshot with one viewer per actor, as
-one request reads many threads (`threads.Viewer`), from rows fetched in bulk.
+shared by the demo test, which checks it kept every reader set, and the roster-removal test, which starts from it.
+Each reader set is read in one snapshot with one viewer per actor, as one request reads many threads
+(`threads.Viewer`), from rows fetched in bulk.
+
+`demo.build` starts the app, and the app's start runs `threads.migrate`, so the world is already migrated when today's
+sets are read and the `migrate` here finds nothing to do (`threads.migrated`). These tests therefore pin that the
+pre-threads and threads predicates agree on a migrated world and that a roster removal widens nothing; a fault in the
+migration's own SQL is not seen here.
 """
 
 import dataclasses
@@ -239,8 +245,9 @@ def migrated_demo(world, tmp_path_factory):
 
 def test_the_demo_world_holds_every_legacy_shape_the_migration_moves(world, tmp_path):
     """Runs first, so the world's build lands in this test's window and not in a reader-set test's. The reader-set
-    tests prove only as much as the world holds: legacy roots (no stored audience) of each scope, task threads and
-    per-message restricted rows are what `threads.migrate` moves, so a demo that lost them would let a widening pass."""
+    tests prove only as much as the world holds: roots with no stored audience of each scope (read by the legacy
+    rules, `threads._legacy_denial`) and per-message restricted rows, so a demo that stopped producing them would let
+    those rules change unseen. (Both hold after the migration too, so this does not say rows still await it.)"""
     with closing(sqlite3.connect(untouched_copy(world[0], tmp_path).db_path)) as c:
         roots = {
             scope
