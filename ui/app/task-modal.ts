@@ -205,7 +205,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   // even when Tasks is the first page opened), read once.
   // A read that fails is kept, so the window that closes for it says why (taskModalLoadFailed).
   let readFailed: unknown = null;
-  const reading = Promise.all([opts.detail || get<ModalDetail>(`/v2/tasks/${encodeURIComponent(task.id)}`).catch((error: unknown) => { readFailed = error; return null; })]);
+  const reading = Promise.all([opts.detail || get(`/v2/tasks/${encodeURIComponent(task.id)}`).catch((error: unknown) => { readFailed = error; return null; })]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
   await loadHarnessRows();
