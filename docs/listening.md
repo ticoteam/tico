@@ -59,7 +59,9 @@ Rules are plain text, in a list. A listening has up to 20, besides the first one
 
 How an item is decided:
 
-- One call to the decision model per item answers every Keep and Drop rule at once. More rules do not cost more calls.
+- One call to the decision model answers every Keep and Drop rule at once, for up to ten small posts together
+  (`backend/decide_groups.py`): each post is kept or dropped on its own answers only, a post whose answer is missing is
+  asked again alone, and each post's cost is its share of the call. More rules do not cost more calls.
 - A rule is a yes at 0.75 or more.
 - An item is **kept** when at least one Keep rule is a yes and no Drop rule is. Its tag is the Keep rule with the highest
   score. Otherwise it is **dropped**.

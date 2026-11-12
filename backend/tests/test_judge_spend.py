@@ -203,14 +203,14 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         engine({"team": "Acme"}, QUESTIONS)
     assert refused.value.code == "spend_cap" and len(jev.calls) == 1, "no paid call starts over the cap"
 
-    # Listening: the first post is scored, the rest stay new for after the cap.
+    # Listening: the first call's posts (ten at most) are scored, the rest stay new for after the cap.
     made = listening(api, rules=[{"do": "keep", "tag": "leads", "text": "A lead"}])
-    save(api, source_id(api, made["id"]), [item(n, f"A post about standups, number {n} [r0]") for n in range(3)])
+    save(api, source_id(api, made["id"]), [item(n, f"A post about standups, number {n} [r0]") for n in range(12)])
     jev = Paid(0.6, Listener())
     spend(api, -0.6)  # back to $0.50, so the pass starts
     run_pass(store, None, jev)
     rows = sql(api, "SELECT status, count(*) AS n FROM listening_items GROUP BY status")
-    assert {r["status"]: r["n"] for r in rows} == {"kept": 1, "new": 2} and len(jev.calls) == 1
+    assert {r["status"]: r["n"] for r in rows} == {"kept": 10, "new": 2} and len(jev.calls) == 1
     with store.read() as c:
         assert B.spent_this_month(c) == pytest.approx(1.1)
 
