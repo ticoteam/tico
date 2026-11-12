@@ -1,3 +1,4 @@
+# pyright: strict
 """Ideas: say it once (Product task #209, Engineering #227).
 
 Product's Ideas is an ordinary stage: what is not snoozed moves on to Spec by itself when Spec has room, oldest first.
@@ -139,7 +140,7 @@ def questions_for(qset: Row, ideas: list[Row], offered: list[Row]) -> tuple[Row,
             base = qset["questions"][qid]
             asked = dict(base["instructions"])
             asked["question"] = asked["question"].replace("the idea", f"`ideas[{n}]`", 1)
-            questions[f"{qid}_{n}"] = J.with_options({**base, "instructions": asked}, mine)
+            questions[f"{qid}_{n}"] = J.with_options({**base, "instructions": asked}, mine)  # pyright: ignore[reportUnknownMemberType]
     return questions, pool
 
 
@@ -159,11 +160,11 @@ def _ask(store: Any, state: Row, questions: Row, label: str) -> tuple[Row | None
     if asks is None:
         return None, "unconfigured"
     try:
-        with J.within(CALL_S):
+        with J.within(CALL_S):  # pyright: ignore[reportUnknownMemberType]
             result = asks(state, questions, label)
-        return {"answers": J.check_answers(result.get("answers"), questions), **result}, None
+        return {"answers": J.check_answers(result.get("answers"), questions), **result}, None  # pyright: ignore[reportUnknownMemberType]
     except J.JudgeError as exc:
-        return None, J.error_code(exc)
+        return None, J.error_code(exc)  # pyright: ignore[reportUnknownMemberType]
     except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the ideas go on as they are
         LOG.warning("The idea check failed: %s", type(exc).__name__)
         return None, "error"
@@ -185,7 +186,7 @@ def run(store: Any, now: str | None = None) -> int:
         ]
         since = str(H.shift(at, days=-RECENT_DAYS))
         mine = {row["id"] for row in ideas}
-        offered = [
+        offered: list[Row] = [
             dict(zip(("id", "number", "title", "status", "stage_id", "requester_id"), found, strict=True))
             for found in c.execute(_OFFERED, (PIPELINE, since, OPTIONS)).fetchall()
         ]
@@ -198,7 +199,7 @@ def run(store: Any, now: str | None = None) -> int:
     call_id: str | None = None
     pool: dict[str, Row] = {}
     if ideas:
-        qset = J.load_set(QUESTION_SET)
+        qset: Row = J.load_set(QUESTION_SET)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         questions, pool = questions_for(qset, ideas, offered)
         state = {
             "ideas": [
@@ -214,7 +215,7 @@ def run(store: Any, now: str | None = None) -> int:
             from . import judge
 
             J_: Any = judge
-            detail.update(J_.audit_detail(result), answers=J.summary(answers))
+            detail.update(J_.audit_detail(result), answers=J.summary(answers))  # pyright: ignore[reportUnknownMemberType]
         if why:
             detail["error"] = why
         with store.transaction() as c:
@@ -288,7 +289,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
 
     H = _h()
     number = f"#{original['number']}" if original.get("number") is not None else "another task"
-    TR.relate(conn, H.KEEPER, dup["id"], original["id"], "duplicate_of")
+    TR.relate(conn, H.KEEPER, dup["id"], original["id"], "duplicate_of")  # pyright: ignore[reportUnknownMemberType]
     E.move(conn, dup["id"], E.CLOSED, E.SYSTEM, f"Duplicate of {number}: Jev found the same idea")
     asker = dup.get("requester_id")
     if H.is_human(asker):
@@ -297,7 +298,7 @@ def _close(conn: "sqlite3.Connection", dup: Row, original: Row) -> None:
         if not conn.execute(
             "SELECT 1 FROM task_requesters WHERE task_id=? AND actor=?", (original["id"], asker)
         ).fetchone():
-            roadmaps.add_requester(conn, original["id"], {"source": "manual"}, actor=asker)
+            roadmaps.add_requester(conn, original["id"], {"source": "manual"}, actor=asker)  # pyright: ignore[reportUnknownMemberType]
     name = H.actor_name(conn, asker) if asker else "Someone"
     filed = f"#{dup['number']}" if dup.get("number") is not None else "a duplicate"
     H.task_comment(
