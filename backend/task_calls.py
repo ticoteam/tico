@@ -993,7 +993,7 @@ def task_view(
         "to_leave": to_leave,
         "inputs": handed,
         "repositories": repos,
-        "next":{"id": following["id"], "name": following["name"]} if following else None,
+        "next": {"id": following["id"], "name": following["name"]} if following else None,
         "late": late,
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}
         if snooze
