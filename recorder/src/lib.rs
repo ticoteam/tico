@@ -1,6 +1,7 @@
 pub mod app_location;
 pub mod assist;
 pub mod audio;
+pub mod call_end;
 pub mod calls;
 pub mod capture;
 pub mod desktop;

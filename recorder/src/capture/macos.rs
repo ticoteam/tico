@@ -208,6 +208,78 @@ impl Drop for Tap {
     }
 }
 
+/// Bundle ids of the other processes taking microphone input now, from Core Audio's process objects (macOS
+/// 14.2+). Recorder itself and processes without a bundle id are left out.
+pub fn apps_on_mic() -> Result<Vec<String>> {
+    let system = kAudioObjectSystemObject as u32;
+    let mut address = AudioObjectPropertyAddress {
+        mSelector: kAudioHardwarePropertyProcessObjectList,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut bytes = 0u32;
+    // SAFETY: the address and size point to live stack values.
+    checked(
+        unsafe {
+            AudioObjectGetPropertyDataSize(
+                system,
+                NonNull::from(&mut address),
+                0,
+                ptr::null(),
+                NonNull::from(&mut bytes),
+            )
+        },
+        "Listing audio processes",
+    )?;
+    let mut objects = vec![0u32; bytes as usize / std::mem::size_of::<u32>()];
+    if objects.is_empty() {
+        return Ok(vec![]);
+    }
+    bytes = std::mem::size_of_val(objects.as_slice()) as u32;
+    // SAFETY: `objects` holds `bytes` bytes of AudioObjectIDs; Core Audio writes at most that many.
+    checked(
+        unsafe {
+            AudioObjectGetPropertyData(
+                system,
+                NonNull::from(&mut address),
+                0,
+                ptr::null(),
+                NonNull::from(&mut bytes),
+                NonNull::new(objects.as_mut_ptr()).expect("vec").cast(),
+            )
+        },
+        "Listing audio processes",
+    )?;
+    objects.truncate(bytes as usize / std::mem::size_of::<u32>());
+    let own = std::process::id() as i32;
+    let mut apps = vec![];
+    for object in objects {
+        // A process can go between the list and these reads; it is skipped.
+        let input: Result<u32> =
+            unsafe { property(object, kAudioProcessPropertyIsRunningInput, ptr::null(), 0) };
+        if !input.is_ok_and(|running| running != 0) {
+            continue;
+        }
+        let pid: Result<i32> =
+            unsafe { property(object, kAudioProcessPropertyPID, ptr::null(), 0) };
+        if pid.is_ok_and(|pid| pid == own) {
+            continue;
+        }
+        let name: Result<core_foundation::string::CFStringRef> =
+            unsafe { property(object, kAudioProcessPropertyBundleID, ptr::null(), 0) };
+        let Ok(name) = name else { continue };
+        if name.is_null() {
+            continue;
+        }
+        // SAFETY: the bundle id is a +1 CFString owned by the caller; wrapping it releases it once.
+        let name = unsafe { CFString::wrap_under_create_rule(name) }.to_string();
+        if !name.is_empty() {
+            apps.push(name);
+        }
+    }
+    Ok(apps)
+}
+
 pub fn start() -> Result<Source> {
     // macOS calls require the application bundle's NSAudioCaptureUsageDescription. The packaged
     // app declares macOS 14.2 minimum. Permission refusal is returned as an explicit capture error.

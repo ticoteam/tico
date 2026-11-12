@@ -16,9 +16,11 @@ use std::{
 use tico_recorder_native::{
     assist,
     audio::Channel,
+    call_end::{self, CallWatch, Verdict},
     calls::{self, Claim},
     capture,
     desktop::{self, DesktopOrg},
+    diag,
     engine::RecordingHandle,
     live::{self, LiveSync},
     network::{self, Tico, Transcriber},
@@ -66,7 +68,7 @@ const SEND_WAIT: Duration = Duration::from_secs(600);
 /// Jobs that run beside the person's own actions instead of disabling the controls.
 /// Shown when a recording or a send is asked for while an update installs.
 const UPDATING: &str = "Tico Recorder is updating. Try again in a moment.";
-const BACKGROUND: [&str; 18] = [
+const BACKGROUND: [&str; 19] = [
     "live",
     "calendar",
     "autodraft",
@@ -85,6 +87,7 @@ const BACKGROUND: [&str; 18] = [
     "call-release",
     "call-presence",
     "call-watch",
+    "call-apps",
 ];
 /// How long quitting waits for Tico to take back a call's source.
 const QUIT_RELEASE_WAIT: Duration = Duration::from_secs(3);
@@ -116,6 +119,14 @@ enum Prompted {
     Call { call: String, meeting_id: String },
     /// A calendar event the org showed as joinable, and the occurrence it showed (checked again on Record).
     Event { event: String, occurrence: Value },
+}
+/// The recording in progress, watched for its call to end (`call_end`).
+struct CallEnd {
+    id: String,
+    watch: CallWatch,
+    read_at: Option<Instant>,
+    /// Stopped already, or the apps on the mic could not be read: it keeps recording.
+    off: bool,
 }
 /// A call's source to give back (`Recorder::release_call`).
 #[derive(Clone, Debug)]
@@ -521,6 +532,10 @@ pub struct Recorder {
     call_presence_off: String,
     /// The call recording's live meeting as `watch_call` last read it.
     call_view: Value,
+    /// Stops the recording in progress when its call ends.
+    call_end: Option<CallEnd>,
+    /// Reads the apps on the mic (`capture::apps_on_mic`); tests answer their own.
+    pub apps_on_mic: fn() -> anyhow::Result<Vec<String>>,
     /// Connects to a saved Tico (`Tico::saved`); tests point it at a local server.
     pub tico_for: fn(&Settings, &str) -> anyhow::Result<Tico>,
     /// Starts capture for a new recording (`start_capture`); tests use silent sources.
@@ -656,6 +671,8 @@ impl Recorder {
             call_presence_at: Instant::now(),
             call_presence_off: String::new(),
             call_view: Value::Null,
+            call_end: None,
+            apps_on_mic: capture::apps_on_mic,
             tico_for: Tico::saved,
             start_capture,
         };
@@ -1401,6 +1418,75 @@ impl Recorder {
             });
         }
     }
+    /// Reads which apps use the mic every few seconds while recording (macOS), to stop when the call ends.
+    fn watch_call_end(&mut self) {
+        let Some(id) = self.active.as_ref().map(|(id, _)| id.clone()) else {
+            self.call_end = None;
+            return;
+        };
+        if !cfg!(target_os = "macos") {
+            return;
+        }
+        if self.call_end.as_ref().is_none_or(|watch| watch.id != id) {
+            self.call_end = Some(CallEnd {
+                id: id.clone(),
+                watch: CallWatch::default(),
+                read_at: None,
+                off: false,
+            });
+        }
+        let Some(watch) = self.call_end.as_mut() else {
+            return;
+        };
+        if watch.off
+            || watch
+                .read_at
+                .is_some_and(|at| at.elapsed() < call_end::READ_EVERY)
+            || self.background.contains("call-apps")
+        {
+            return;
+        }
+        watch.read_at = Some(Instant::now());
+        let read = self.apps_on_mic;
+        self.job_for("call-apps", Some(id), move || Ok(json!(read()?)));
+    }
+    /// One read of the apps on the mic during recording `id`, taken at `now`. Once its call has ended the recording
+    /// stops as if Stop was pressed, without asking. A read that failed turns this off for the recording, which
+    /// keeps going.
+    pub fn call_apps_read(&mut self, id: &str, apps: Result<Vec<String>, String>, now: Instant) {
+        if self.active.as_ref().is_none_or(|(active, _)| active != id) {
+            return;
+        }
+        let Some(watch) = self
+            .call_end
+            .as_mut()
+            .filter(|watch| watch.id == id && !watch.off)
+        else {
+            return;
+        };
+        let apps = match apps {
+            Ok(apps) => apps,
+            Err(error) => {
+                watch.off = true;
+                diag!("auto-stop off for this recording: apps on the mic unread: {error}");
+                return;
+            }
+        };
+        let step = watch.watch.observe(now, &apps);
+        for app in &step.first_seen {
+            diag!("call app on mic: {app}");
+        }
+        if step.verdict == Verdict::Stop {
+            watch.off = true;
+            diag!(
+                "auto-stop: call apps left the mic for {} s",
+                call_end::QUIET_FOR.as_secs()
+            );
+            self.stop_by_hand();
+            self.say("Call ended");
+            self.bump();
+        }
+    }
     /// Used on quit: stop and wait for the final audio to be saved.
     pub fn shutdown(&mut self) {
         self.screen.stop_and_wait();
@@ -1835,7 +1921,8 @@ impl Recorder {
             if reply.kind == "delete" {
                 self.join_delete();
             }
-            if reply.kind != "live" {
+            // A read of the apps on the mic changes nothing shown unless it stops the recording.
+            if !["live", "call-apps"].contains(&reply.kind.as_str()) {
                 self.bump();
             }
             if !self.background.remove(&reply.kind) {
@@ -1890,6 +1977,15 @@ impl Recorder {
                 "call-state" => {
                     if let Ok(view) = reply.result {
                         self.call_view = view;
+                    }
+                    continue;
+                }
+                "call-apps" => {
+                    if let Some(id) = reply.meeting {
+                        let apps = reply.result.and_then(|value| {
+                            serde_json::from_value(value).map_err(|error| error.to_string())
+                        });
+                        self.call_apps_read(&id, apps, Instant::now());
                     }
                     continue;
                 }
@@ -2244,6 +2340,7 @@ impl Recorder {
         self.sync_presence();
         self.sync_saved();
         self.watch_call();
+        self.watch_call_end();
         self.watch_stopped_calls();
         self.next_release();
         if self
