@@ -67,7 +67,14 @@ function headerProblems(page: Page, acts: string[]) {
           await go(page, HASH[from]!);
           await onTab(page, from);
           for (const sel of ACTS[from]!) await page.locator('.ru-acts ' + sel).waitFor({timeout: t(15000)});
-          await page.waitForTimeout(300);   // the rule-checks line lands in the header after its own read
+          // The rule-checks line lands in the header after its own read; check the header only once it is there.
+          await page.waitForFunction(() => (document.querySelector('.ru-ph .ru-checks')?.textContent || '').length > 0, null, {timeout: t(15000)});
+          // While the route's fade runs, Chrome gives the pointer to the root element (ui/app/router.ts), and the fade can
+          // start after the page has drawn: wait until the current tab's centre hits something other than the root.
+          await page.waitForFunction(() => {
+            const r = document.querySelector('.ru-tabs a.cur')?.getBoundingClientRect();
+            return !!r && document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2) !== document.documentElement;
+          }, null, {timeout: t(15000)});
           for (const p of await headerProblems(page, ACTS[from]!)) problems.push(`${width}px on ${from}: ${p}`);
           // A real click on the next tab opens it (Playwright refuses to click a link something else covers).
           const to = TABS[(TABS.indexOf(from) + 1) % TABS.length]!;
