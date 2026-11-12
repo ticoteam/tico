@@ -104,7 +104,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             if waiting_on is not None:
                 waits_on = waited_on(c, waiting_on, visible_sql, narrow)
                 filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
-            hidden = teammate_access.Known(c, who, auth).people if (owners or requesters or turn) else frozenset()
+            hidden = frozenset(teammate_access.Known(c, who, auth).people if (owners or requesters or turn) else ())
             match = task_match.parse(
                 c, H.now(), search, owners, stages, requesters, labels, turn, due, late, hidden=hidden
             )
