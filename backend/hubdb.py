@@ -5471,6 +5471,7 @@ def task_create(
     follow=False,
     readers=(),
     readers_check=None,
+    unassigned=False,
 ):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is linted (rule 7).
 
@@ -5488,6 +5489,8 @@ def task_create(
     `top`.
     `number` keeps an imported task's number: a mover's (`mover`), and free.
     `routine` is an automation's own run: a Monitor or Reviewer takes it as its own work.
+    `unassigned` enters it with no assignee: `owner` is still its requester and reach, but a stage owned by the task's
+    assignee has nobody, and its pipeline's manager is woken to pick one (a handoff, backend/stage_effects.py).
     `occurrence` is the marker of a due-date routine's occurrence, "<automation_id>:<due_on>": each day's task is its
     own, so an open one with the same title (an overdue day's) does not count as a duplicate of it, and it is stored
     on the task (`tasks.occurrence`) for the sweeps and the app. With `occurrence_step` too, the task is one per
@@ -5820,7 +5823,7 @@ def task_create(
             row["id"],
             pipeline_id,
             actor,
-            assignee=target,
+            assignee=None if unassigned else target,
             parent=parent["id"] if parent else None,
             link=link,
             wake=wake,
