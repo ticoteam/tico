@@ -27,6 +27,8 @@ from backend.tests.helpers.member_bots import botops  # noqa: F401 - fixture for
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
+from backend.execution import bot_claimable
+from backend.settings_admin import repository_present
 from backend import bot_settings as BS
 from backend.tests.helpers.cloud_machines import (
     FakeHQ,
@@ -2514,6 +2516,151 @@ def test_a_turn_still_out_on_the_old_computer_is_asked_again_at_a_look(cloud):
         c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
     cloud.tick()
     assert placed(cloud)["ops"] == shared
+
+
+def shared_computer(cloud, bot="ops"):
+    """`bot` on the shared machine, made for its work and enrolled; returns the computer as enrolled (with its token)."""
+    adopt(cloud, bot, "shared")
+    work(cloud, bot)
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == CM.SHARED
+    return post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+
+
+def test_a_busy_bot_moving_to_its_own_machine_takes_no_new_turn_on_the_old_one_and_moves_when_they_end(cloud):
+    shared = shared_computer(cloud)
+    ready(cloud.api, shared, ["ops"])
+    assert claim_on(cloud, shared, "ops") and leased(cloud, shared["runner_id"]) == ["ops"]
+    work(cloud, text="And the next thing")  # more work keeps coming: the bot is never idle on its own
+    out = cloud.api.post("/api/v2/bots/ops/cloud-machine", headers=headers(), json={"placement": "own"})
+    assert out.status_code == 200, out.text
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == "ops"
+    own = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert placed(cloud)["ops"] == shared["runner_id"]  # its turn is still out there
+    with cloud.store.transaction() as c:  # its turn ends
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+        cloud.api.app.state.execution.expire(c)
+    # Before the next look, the old computer asks for its next turn, as a busy bot's always does first. Waiting to
+    # move, it starts nothing new there, so the move cannot wait for ever.
+    claim_on(cloud, shared, "ops")
+    assert leased(cloud, shared["runner_id"]) == []
+    cloud.tick()  # the next look moves it, with no drain of anyone's
+    assert placed(cloud)["ops"] == own["runner_id"] and not cloud.row()["move_drain"]
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM bot_control WHERE bot='ops' AND draining=1").fetchone()
+    ready(cloud.api, own, ["ops"])
+    assert claim_on(cloud, own, "ops") and leased(cloud, own["runner_id"]) == ["ops"]
+
+
+def test_a_move_refused_for_good_lets_the_bot_take_turns_where_it_is_again(cloud, monkeypatch):
+    shared = shared_computer(cloud)
+    ready(cloud.api, shared, ["ops"])
+    assert claim_on(cloud, shared, "ops")
+    work(cloud, text="And the next thing")
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    cloud.tick()
+    post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["move_drain"]
+    with cloud.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+    monkeypatch.setattr("backend.execution.stranded", lambda *args: "ticoteam/bot-ops is not on GitHub yet")
+    cloud.tick()
+    assert placed(cloud)["ops"] == shared["runner_id"] and not cloud.row()["move_drain"]
+    assert claim_on(cloud, shared, "ops") and leased(cloud, shared["runner_id"]) == ["ops"]
+
+
+def test_a_move_drain_left_when_the_new_machines_computer_goes_away_is_lifted_at_the_next_look(cloud):
+    shared = shared_computer(cloud)
+    ready(cloud.api, shared, ["ops"])
+    assert claim_on(cloud, shared, "ops")
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    cloud.tick()
+    post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["move_drain"]
+    with cloud.store.transaction() as c:  # its turn ends, and the new machine's computer is gone before the next look
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+        cloud.api.app.state.execution.expire(c)
+        CM.save(c, "ops", runner_id=None)
+    work(cloud, text="And the next thing")
+    cloud.tick()
+    # Nothing to move to: the drain is lifted, and nothing holds the bot's claim for a move any more.
+    assert not cloud.row()["move_drain"] and placed(cloud)["ops"] == shared["runner_id"]
+    with cloud.store.read() as c:
+        assert bot_claimable(c, cloud.store.settings, shared["runner_id"], "ops")[0] != "moving"
+
+
+def control(cloud, action, bot="ops"):
+    with cloud.store.read() as c:
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()["revision"]
+    return cloud.api.post(
+        f"/api/v2/bots/{bot}/control", headers=headers(), json={"action": action, "expected_revision": revision}
+    )
+
+
+def test_a_drained_bot_moved_to_a_machine_that_has_not_reported_its_repository_resumes(cloud):
+    shared_computer(cloud)
+    idle(cloud)
+    assert control(cloud, "drain").status_code == 200
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    # Drained, its move still makes its machine: a pending move is work that can run.
+    assert cloud.tick()[-1] == "create" and cloud.hq.calls[-1][1] == "ops"
+    own = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert placed(cloud)["ops"] == own["runner_id"]
+    with cloud.store.read() as c:
+        assert not repository_present(c, "ops")  # the new computer has not said yet
+    resumed = control(cloud, "resume")
+    assert resumed.status_code == 200, resumed.text
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM bot_control WHERE bot='ops' AND draining=1").fetchone()
+
+
+def test_resuming_a_drained_active_bot_skips_the_repository_check_and_leaves_it_undrained(cloud):
+    enrolled(cloud)  # on its new machine, which has not reported the bot's repository yet
+    assert control(cloud, "drain").status_code == 200
+    resumed = control(cloud, "resume")
+    assert resumed.status_code == 200, resumed.text
+    with cloud.store.read() as c:
+        assert not c.execute("SELECT 1 FROM bot_control WHERE bot='ops' AND draining=1").fetchone()
+
+
+def test_always_on_starts_a_stopped_own_machine_even_while_its_bot_is_drained(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    cloud.tick(400)
+    assert cloud.row()["state"] == "stopped"
+    assert control(cloud, "drain").status_code == 200
+    post(cloud.api, "bots/ops/cloud-machine", {"always_on": True})
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == ["start"]
+
+
+def test_a_drained_bots_waiting_turn_still_starts_its_stopped_machine(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    cloud.tick(400)
+    assert cloud.row()["state"] == "stopped"
+    assert control(cloud, "drain").status_code == 200
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == []  # nothing waits: a drained bot's machine stays stopped
+    work(cloud, text="Waiting for the resume")
+    assert cloud.tick(10) == ["start"]
+
+
+def test_a_turn_that_waited_through_a_drain_still_starts_the_machine_after_the_resume(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    cloud.tick(400)
+    assert control(cloud, "drain").status_code == 200
+    work(cloud, text="Waiting for the resume")
+    cloud.hq.calls.clear()
+    # Drained: started for the waiting turn, idles out with nothing it may run, and stops. Not stuck: nothing could run.
+    assert cloud.tick(10) == ["start"]
+    cloud.tick(400)
+    cloud.tick(10)
+    assert cloud.row()["state"] == "stopped" and cloud.row()["problem"] != "stuck"
+    assert control(cloud, "resume").status_code == 200
+    cloud.hq.calls.clear()
+    # The wake spent while drained is not the one the resume needs.
+    assert cloud.tick(10) == ["start"]
 
 
 def test_a_size_or_always_on_change_on_a_bot_awaiting_its_move_is_saved_and_says_nothing(cloud, monkeypatch):

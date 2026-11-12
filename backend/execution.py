@@ -2430,8 +2430,13 @@ def checkpoint_safe(c, aid, task):
     )
 
 
-# A drained bot (a deploy finishing its running turns, or a person's pause) is given no new work.
-DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1)"
+# A drained bot (a deploy finishing its running turns, or a person's pause) is given no new work: 1. Nor is a bot
+# waiting for its running turns to end to move to its cloud machine's computer (cloud_machines.moving): 2.
+DRAINING_SQL = (
+    "CASE WHEN EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1) THEN 1 "
+    "WHEN EXISTS(SELECT 1 FROM cloud_machines cmv WHERE cmv.bot=a.bot AND cmv.move_drain IS NOT NULL) THEN 2 "
+    "ELSE 0 END"
+)
 
 
 # What a Finance hook may raise that must not hold a bot's work: its own refusals and a bug in it.
@@ -2541,7 +2546,7 @@ def _claim_refusal(
     if caps is None:
         caps = capability_set(runner["capabilities"])
     if draining:
-        return "draining", None
+        return ("moving" if draining == 2 else "draining"), None
     company = loads.company if loads is not None else company_pause.record(c)
     if company is not None:
         # The company pause: nothing new starts until someone resumes (backend/company_pause.py).

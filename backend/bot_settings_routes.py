@@ -456,9 +456,13 @@ def register(
                     "task_id": task["id"] if task else None,
                     "revision": config["revision"] + 1,
                 }
-            if H.bot(c, bot)["state"] == "quarantined" and body.action != "drain":
+            state = (H.bot(c, bot) or {}).get("state")
+            if state == "quarantined" and body.action != "drain":
                 raise Problem("quarantined", "Review the refusal and use quarantine clear to resume this bot", 409)
-            if body.action == "resume":
+            if body.action == "resume" and state != "active":
+                # Only a paused (or otherwise inactive) bot is activated again. An active bot that was only drained
+                # just takes work again: its computer may not have reported its repository yet (a bot moved to a new
+                # cloud machine), and refusing would leave it drained with nothing to wake that machine.
                 settings_admin.ensure_activation(c, who, bot)
             c.execute(
                 "INSERT INTO bot_control(bot,draining) VALUES(?,?) "
