@@ -19,5 +19,9 @@ def up(conn):
     tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if not {"tasks", "visits", "answers"} <= tables:
         return
+    # A legacy cloud database gets tasks.private from cloud migration 57, which runs after these: the store makes
+    # tasks_open_pipeline at start then (store.py, beside tasks_private_status), as for the other indexes naming it.
+    private = "private" in {row[1] for row in conn.execute("PRAGMA table_info(tasks)")}
     for statement in INDEXES:
-        conn.execute(statement)
+        if private or "tasks_open_pipeline" not in statement:
+            conn.execute(statement)
