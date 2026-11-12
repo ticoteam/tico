@@ -500,10 +500,30 @@ def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(
     assert 'wake_once' not in detail
 
 
+def _run(api, name, suite, status, conclusion=None, sha='a' * 40, suite_status='in_progress'):
+    hook(
+        api,
+        'check_run',
+        {
+            'repository': {'full_name': 'ticoteam/tico'},
+            'check_run': {
+                'name': name,
+                'status': status,
+                'conclusion': conclusion,
+                'head_sha': sha,
+                'app': {'slug': 'github-actions'},
+                'check_suite': {'id': suite, 'status': suite_status},
+                'pull_requests': [{'number': 412}],
+            },
+        },
+    )
+
+
 def test_a_run_cancelled_by_its_concurrency_group_is_not_a_failed_check(api):
     """Nov 12 stress run, I38: GitHub cancelled a duplicate workflow run (its concurrency group) and the owner was told
-    the checks failed, so it pushed an empty commit. A cancelled suite superseded by a newer one of its App is left
-    out; a cancel with nothing after it says so plainly. A failed or timed-out check is still a failure."""
+    the checks failed, so it pushed an empty commit. A cancelled suite superseded by a newer run of the same workflow
+    (a newer suite of its App with a check run of the same name) is left out; a cancel with nothing after it says so
+    plainly. A failed or timed-out check is still a failure."""
     assert [G._check_state(r) for r in ('cancelled', 'stale', 'failure', 'timed_out')] == [
         'cancelled',
         'cancelled',
@@ -511,27 +531,87 @@ def test_a_run_cancelled_by_its_concurrency_group_is_not_a_failed_check(api):
         'failing',
     ]
     two = {'suite:github-actions#1': 'cancelled', 'suite:github-actions#2': 'passing'}
-    assert G._overall(two) == 'passing'
-    assert G._overall({**two, 'suite:github-actions#2': 'pending'}) == 'pending'
-    assert G._overall({'suite:github-actions#1': 'cancelled', 'suite:vercel#3': 'passing'}) == 'cancelled'
+    same = {'suite:github-actions#1': ['test'], 'suite:github-actions#2': ['test']}
+    assert G._overall(two, same) == 'passing'
+    assert G._overall({**two, 'suite:github-actions#2': 'pending'}, same) == 'pending'
+    # Another workflow of the same App, or a suite whose runs were never seen, supersedes nothing.
+    assert G._overall(two, {'suite:github-actions#1': ['test'], 'suite:github-actions#2': ['lint']}) == 'cancelled'
+    assert G._overall(two) == 'cancelled'
     assert G._overall({'suite:github-actions#1': 'cancelled', 'lint': 'failing'}) == 'failing'
     _app(api)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Duplicate CI', 'body': 'x', 'links': [PR]})
     hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
     _suite(api, 'github-actions', 'queued', id=2)  # the newer run starts and cancels the older one
+    _run(api, 'test', 1, 'completed', 'cancelled', suite_status='completed')
     _suite(api, 'github-actions', 'completed', 'cancelled', id=1)
+    _run(api, 'test', 2, 'in_progress')
+    _run(api, 'test', 2, 'completed', 'success')
     assert _burst(api, task['id']) == []
     _suite(api, 'github-actions', 'completed', 'success', id=2)
     assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
-    # A new commit whose only run was cancelled, with none after it: re-run it, there is no code to fix.
+    # A new commit: workflow CI is cancelled and never re-run, workflow Lint (a newer suite of the same App) passes.
     hook(api, 'pull_request', pr_event('synchronize', head={'sha': 'b' * 40}))
-    _suite(api, 'github-actions', 'completed', 'cancelled', sha='b' * 40, id=3)
+    b = 'b' * 40
+    _suite(api, 'github-actions', 'queued', sha=b, id=4)
+    _run(api, 'test', 3, 'completed', 'cancelled', sha=b, suite_status='completed')
+    _suite(api, 'github-actions', 'completed', 'cancelled', sha=b, id=3)
+    _run(api, 'lint', 4, 'completed', 'success', sha=b)
+    _suite(api, 'github-actions', 'completed', 'success', sha=b, id=4)
     assert _burst(api, task['id'])[-1] == (
-        f"Checks finished on tico#412: cancelled, not failed (github-actions); re-run them, there is no code to fix "
+        f"Checks finished on tico#412: cancelled, not failed (test, github-actions); re-run them, there is no code to "
+        f"fix "
         f"{PR}/checks at {'b' * 12}"
     )
     link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
     assert link['checks'] == 'cancelled'
+
+
+def test_a_fresh_read_ties_a_cancelled_suite_to_its_workflow_by_its_runs(api):
+    """The background re-read (`read_checks`, `apply_checks`) decides as the webhooks do: a cancelled suite is left
+    out only when a newer suite has a run of the same name."""
+
+    def read(lint_name):
+        answers = {
+            '/check-suites': {
+                'check_suites': [
+                    {'id': 1, 'status': 'completed', 'conclusion': 'cancelled', 'app': {'slug': 'github-actions'}},
+                    {'id': 2, 'status': 'completed', 'conclusion': 'success', 'app': {'slug': 'github-actions'}},
+                ]
+            },
+            '/check-runs': {
+                'check_runs': [
+                    {
+                        'name': 'test',
+                        'status': 'completed',
+                        'conclusion': 'cancelled',
+                        'check_suite': {'id': 1},
+                        'app': {'slug': 'github-actions'},
+                    },
+                    {
+                        'name': lint_name,
+                        'status': 'completed',
+                        'conclusion': 'success',
+                        'check_suite': {'id': 2},
+                        'app': {'slug': 'github-actions'},
+                    },
+                ]
+            },
+            '/status': {'statuses': []},
+        }
+
+        def call(method, path, headers=None, params=None):
+            body = next(v for k, v in answers.items() if path.endswith(k))
+            return SimpleNamespace(status_code=200, json=lambda: body)
+
+        return G.read_checks(SimpleNamespace(_call=call), {}, 'ticoteam/tico', 'a' * 40)
+
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Re-read CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    link_id = get(api, 'tasks/' + task['id'] + '/links')['links'][0]['id']
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, link_id, 'a' * 40, read('lint')) == 'cancelled'  # another workflow: CI never ran
+        assert G.apply_checks(c, link_id, 'a' * 40, read('test')) == 'passing'  # CI re-run in a newer suite
 
 
 def test_an_all_skipped_head_reads_pending_never_green(api):
