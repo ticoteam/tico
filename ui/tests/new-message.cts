@@ -159,6 +159,38 @@ async function add(page: Page, words: string, name: string) {
     await page.waitForFunction(() => !document.querySelector('.nm-composer'), null, {timeout: WAIT});
     for (let i = 0; i < 50 && !(await attached(hub, dm.id)).some(m => m.files.includes('plan.png')); i++) await page.waitForTimeout(100);
     assert.ok((await attached(hub, dm.id)).some(m => m.files.includes('plan.png')), 'a file alone is a message');
+    // A row picked from the list only goes there: neither the words nor the files waiting are sent (only Send sends).
+    const before = (await attached(hub, dm.id)).length;
+    await openPane(page);
+    await add(page, 'om', 'Omar');
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'pick.png', mimeType: 'image/png', buffer: PNG});
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    await nmBox.fill('Not yet');
+    await page.locator('#nm-list li .nm-name', {hasText: 'Omar'}).click();
+    await hashIs(page, '#/thread/' + dm.id);
+    await page.waitForTimeout(500);
+    assert.equal((await attached(hub, dm.id)).length, before, 'a pick sends nothing');
+
+    // An upload refused after a new thread was made for it: the next Send posts into that thread, not a second one.
+    await openPane(page);
+    await add(page, 'pri', 'Priya');
+    await add(page, 'engineering', 'engineering-manager');
+    await page.locator('#nm-list li[aria-selected="true"].nm-new').waitFor({timeout: WAIT});
+    await page.locator('#nm-title').fill('shots');
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'retry.png', mimeType: 'image/png', buffer: PNG});
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    await page.route('**/api/v2/uploads/threads/**', route => route.fulfill({status: 413, contentType: 'application/json',
+      body: JSON.stringify({error: {code: 'too_large', message: 'Too large'}})}), {times: 1});
+    await page.locator('.nm-composer .p-send').click();
+    await page.locator('.nm-composer .p-send:not([disabled])').waitFor({timeout: WAIT});
+    assert.equal(await page.evaluate(() => location.hash), '#/threads/new', 'a refused upload stays to try again');
+    assert.equal(await nmChips.count(), 1, 'the file waits');
+    await page.locator('.nm-composer .p-send').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, {timeout: WAIT});
+    const retried = decodeURIComponent((await page.evaluate(() => location.hash)).slice('#/thread/'.length));
+    const named = ((await api(hub, 'dana', 'GET', '/v2/threads?limit=200')).threads as Thread[]).filter(t => t.title === 'shots');
+    assert.deepEqual(named.map(t => t.id), [retried], 'one thread named shots');
+    assert.ok((await attached(hub, retried)).some(m => m.files.includes('retry.png')), 'the file went in on the retry');
 
     // Omar and a bot, no thread yet: a name is asked for, then a private thread, pinned for its people, takes the message.
     await openPane(page);

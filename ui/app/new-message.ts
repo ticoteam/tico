@@ -148,10 +148,14 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
       : await post(thvPath(id) + '/messages', {text: body});
     if (r?.held) toast('Your first message was held by a rule', true);
   };
+  // A DM or thread made for files whose upload then failed: the next Send to the same row posts there, not into a
+  // second thread of the same name.
+  let early: {key: string; id: string} | null = null;
   // Go to a row: a teammate is added, a thread opens, a DM or a new thread is made first when it has to be. `body`: the
-  // composer's words, posted there on the way with the files waiting; a DM or thread made for files is made empty first,
-  // then the message with them goes in it.
-  const go = async (r: NmRow | null | undefined, body = ''): Promise<void> => {
+  // composer's words when sending, posted there on the way with the files waiting; a DM or thread made for files is made
+  // empty first, then the message with them goes in it. A row picked from the list (no `body`) only goes there, sending
+  // neither the words nor the files.
+  const go = async (r: NmRow | null | undefined, body?: string): Promise<void> => {
     if (!r || busy) return;
     if (r.kind === 'actor') { choose(r.actor); return; }
     const title = name.trim().replace(/^#+/, '').trim();
@@ -162,14 +166,18 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
     }
     busy = true; sendable();
     try {
-      const sent = files.slice(), first = sent.length ? '' : body;
-      let id = r.kind === 'thread' ? r.t.id : r.kind === 'dm' ? r.id || '' : '', posted = !!id;
+      const sent = body === undefined ? [] : files.slice(), words = body || '', first = sent.length ? '' : words;
+      const key = r.kind === 'dm' ? 'dm\n' + r.actor : r.kind === 'new' ? ['new', title, ...chosen].join('\n') : '';
+      let id = r.kind === 'thread' ? r.t.id : r.kind === 'dm' ? r.id || '' : '';
+      if (!id && key && early?.key === key) id = early.id;
+      const posted = !!id;
       if (r.kind === 'dm' && !id) id = made(await post('/v2/threads/dm', {members: [r.actor], ...(first ? {body: first} : {})}));
-      else if (r.kind === 'new') {
+      else if (r.kind === 'new' && !id) {
         id = made(await post('/v2/threads', {title, audience: 'members', members: chosen, pin_for_members: true, ...(first ? {body: first} : {})}));
       }
-      if (id && (sent.length || posted && body)) await say(id, body, sent);
-      if (id) { box.value = ''; files = []; sent.forEach(pillPreviewForget); drawFiles(); open(id); }
+      if (!posted && id && sent.length) early = {key, id};
+      if (id && (sent.length || posted && words)) await say(id, words, sent);
+      if (id) { box.value = ''; files.forEach(pillPreviewForget); files = []; drawFiles(); open(id); }
     } catch (e) {
       if (errorCode(e) === 'name_required') list.querySelector<HTMLInputElement>('#nm-title')?.focus();
       toast(errorMessage(e, ''), true);
