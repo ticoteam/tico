@@ -313,8 +313,9 @@ def test_every_filter_the_list_takes_still_answers(api):
         "late": "false",
         "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
         "on_behalf_of": "default",
+        "type": "bug",  # installed Recorder builds send it; accepted and ignored
     }
-    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
+    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of", "type"}
     for name, value in values.items():
         r = api.get(f"/api/v2/tasks?{name}={value}", headers=headers())
         assert r.status_code == 200, (name, r.text)
@@ -326,3 +327,11 @@ def test_the_filter_list_is_what_the_route_declares(api):
 
     route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/v2/tasks" and "GET" in r.methods)
     assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS
+
+
+def test_an_installed_recorder_type_search_still_answers(api):
+    """Recorder builds from 0.5.181 send `type=<task type>` with a picker search: it answers the search, unnarrowed."""
+    made = post(api, "tasks", {"owner": "ben", "title": "Review pricing", "body": "Please."})
+    r = api.get("/api/v2/tasks?q=pricing&limit=30&brief=true&offset=0&type=bug", headers=headers())
+    assert r.status_code == 200, r.text
+    assert [t["id"] for t in r.json()["tasks"]] == [made["id"]]
