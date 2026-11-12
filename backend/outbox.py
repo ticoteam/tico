@@ -5,6 +5,9 @@ given (`Table`) and the columns and states that describe a row's life.
 - **Lease.** A worker claims a due row by moving it from its due state to its flight state and stamping the lease
   column, in a short transaction, before it calls out (`claim`, `claim_next`). A row still in flight whose lease is older
   than the stale window was cut off mid-call: `reclaim_stale` puts it back to due, and the call is made again.
+- **Owner.** A table with a `token` column stamps a fresh one (`new_token`) on each claim and clears it when the row
+  leaves flight. Release and settlement given that token change the row only while it is still in flight under it, so
+  a worker that outlived the stale window cannot settle or release the claim that replaced its own.
 - **Schedule.** `Waits` gives the seconds to wait after each failed attempt; past the last one the row gives up, unless
   `repeat_last` keeps the last wait for good. `Doubling` is an open-ended exponential wait (no give-up).
 - **Settling.** `settle_failure` records the attempt count and the error, then either returns the row to its due state
@@ -20,6 +23,7 @@ caller does the arithmetic through `later`.
 
 import logging
 import random
+import secrets
 import threading
 from collections import Counter
 from dataclasses import dataclass
@@ -43,6 +47,7 @@ class Table:
     attempts: str = "attempts"
     error: str = "last_error"
     id: str = "id"
+    token: str | None = None  # the claim's owner (`new_token`), where the table keeps one
 
 
 @dataclass(frozen=True)
@@ -93,13 +98,31 @@ class Doubling:
 
 
 # -------------------------------------------------------------------------------------------------- claim and lease
-def claim(c, table, row_id, now):
-    """Take one row: due to flight, lease stamped `now`. True when it was ours. A row that is not due (sent, given up,
-    canceled, or held by another worker) is refused, which is what makes a repeat of it a no-op."""
+def new_token():
+    """A claim's owner: unguessable and never reused, so an old claim never matches a new one."""
+    return secrets.token_urlsafe(16)
+
+
+def _owned(table, token):
+    """The WHERE tail and its values that keep a write to the claim `token` owns (nothing, without a token)."""
+    if token is None:
+        return "", ()
+    if not table.token:
+        raise ValueError(f"{table.name} keeps no claim token")
+    return f" AND state=? AND {table.token}=?", (table.flight, token)
+
+
+def claim(c, table, row_id, now, token=None):
+    """Take one row: due to flight, lease stamped `now` (and the claim's `token`, where the table keeps one). True when
+    it was ours. A row that is not due (sent, given up, canceled, or held by another worker) is refused, which is what
+    makes a repeat of it a no-op."""
+    if bool(table.token) != (token is not None):
+        raise ValueError(f"{table.name}: a claim token is required exactly when the table keeps one")
+    owner = f", {table.token}=?" if table.token else ""
     moved = (
         c.execute(
-            f"UPDATE {table.name} SET state=?, {table.lease}=? WHERE {table.id}=? AND state=?",
-            (table.flight, now, row_id, table.due),
+            f"UPDATE {table.name} SET state=?, {table.lease}=?{owner} WHERE {table.id}=? AND state=?",
+            (table.flight, now, *((token,) if table.token else ()), row_id, table.due),
         ).rowcount
         == 1
     )
@@ -108,7 +131,7 @@ def claim(c, table, row_id, now):
     return moved
 
 
-def claim_next(c, table, now, *, accept=None, limit=100):
+def claim_next(c, table, now, *, accept=None, limit=100, token=None):
     """The first due row (by due time) that `accept` allows, claimed; or None. `accept` sees each candidate row."""
     rows = c.execute(
         f"SELECT * FROM {table.name} WHERE state=? AND {table.due_at}<=? ORDER BY {table.due_at} LIMIT ?",
@@ -117,26 +140,32 @@ def claim_next(c, table, now, *, accept=None, limit=100):
     for row in rows:
         if accept is not None and not accept(row):
             continue
-        if claim(c, table, row[table.id], now):
+        if claim(c, table, row[table.id], now, token):
             return row
     return None
 
 
-def release(c, table, row_id):
-    """Give a claimed row back unsent, with no attempt counted: it is due again without waiting. True when it was held."""
+def release(c, table, row_id, token=None):
+    """Give a claimed row back unsent, with no attempt counted: it is due again without waiting. True when it was held
+    (by the claim `token`, when given)."""
+    owner, values = _owned(table, token)
+    cleared = f", {table.token}=NULL" if table.token else ""
     return (
         c.execute(
-            f"UPDATE {table.name} SET state=?, {table.lease}=NULL WHERE {table.id}=? AND state=?",
-            (table.due, row_id, table.flight),
+            f"UPDATE {table.name} SET state=?, {table.lease}=NULL{cleared} WHERE {table.id}=? AND state=?{owner}",
+            (table.due, row_id, table.flight, *values),
         ).rowcount
         == 1
     )
 
 
 def reclaim_stale(c, table, before, now):
-    """Rows still in flight whose lease was stamped before `before` go back to due at `now`. Returns how many."""
+    """Rows still in flight whose lease was stamped before `before` go back to due at `now`, their claim token cleared,
+    so the worker that was cut off can no longer settle them. Returns how many."""
+    cleared = f", {table.token}=NULL" if table.token else ""
     back = c.execute(
-        f"UPDATE {table.name} SET state=?, {table.lease}=NULL, {table.due_at}=? WHERE state=? AND {table.lease}<?",
+        f"UPDATE {table.name} SET state=?, {table.lease}=NULL{cleared}, {table.due_at}=? "
+        f"WHERE state=? AND {table.lease}<?",
         (table.due, now, table.flight, before),
     ).rowcount
     if back:
@@ -145,29 +174,44 @@ def reclaim_stale(c, table, before, now):
 
 
 # ---------------------------------------------------------------------------------------------- settle the attempt
-def finish(c, table, row_id, state, *, attempts, error, due_at, extra=None):
-    """Write a row's terminal (or any non-flight) state and release its lease. `extra` adds columns the caller keeps."""
+def finish(c, table, row_id, state, *, attempts, error, due_at, extra=None, token=None):
+    """Write a row's terminal (or any non-flight) state and release its lease. `extra` adds columns the caller keeps.
+    Given the claim `token`, only while that claim still holds the row. True when it was written."""
     cols = {
         "state": state,
         table.attempts: attempts,
         table.error: error,
         table.due_at: due_at,
         table.lease: None,
+        **({table.token: None} if table.token else {}),
         **(extra or {}),
     }
     assignments = ", ".join(f"{column}=?" for column in cols)
-    c.execute(f"UPDATE {table.name} SET {assignments} WHERE {table.id}=?", (*cols.values(), row_id))
+    owner, values = _owned(table, token)
+    return (
+        c.execute(
+            f"UPDATE {table.name} SET {assignments} WHERE {table.id}=?{owner}", (*cols.values(), row_id, *values)
+        ).rowcount
+        == 1
+    )
 
 
-def settle_failure(c, table, row_id, *, attempts, error, schedule, now, later, give_up_state, rng=random, extra=None):
+def settle_failure(
+    c, table, row_id, *, attempts, error, schedule, now, later, give_up_state, rng=random, extra=None, token=None
+):
     """A failed attempt: back to due at `later(now, wait)` when the schedule has a wait left, else `give_up_state` at
-    `now`. Returns True when the row gave up."""
+    `now`. Returns True when the row gave up. Given the claim `token`, nothing is written unless that claim still
+    holds the row (then it returns False: the row did not give up)."""
     wait = schedule.after(attempts, rng)
     if wait is None:
-        finish(c, table, row_id, give_up_state, attempts=attempts, error=error, due_at=now, extra=extra)
+        if not finish(c, table, row_id, give_up_state, attempts=attempts, error=error, due_at=now, extra=extra, token=token):
+            return False
         note(table.name, "gave_up", row_id, attempts=attempts)
         return True
-    finish(c, table, row_id, table.due, attempts=attempts, error=error, due_at=later(now, wait), extra=extra)
+    if not finish(
+        c, table, row_id, table.due, attempts=attempts, error=error, due_at=later(now, wait), extra=extra, token=token
+    ):
+        return False
     note(table.name, "retry", row_id, attempts=attempts, wait=round(wait, 1))
     return False
 
