@@ -2,7 +2,8 @@ import type {Route} from 'playwright';
 // Settings > Billing against a fake server: the owner's balance and one status line, credits with past ones (and what
 // expired) behind "Show past credits", a day opening into hours with "<$0.01" under a cent, the month's statement with
 // its CSV link, and "Talk to us to add credit" opening the booking link with no card form; the empty state and the
-// record-only line; no gateway key or a refused one naming Settings › Models with a link to the Tico Gateway card; a member has no Billing tab and never asks for it; no sideways scroll on a phone. Every request is
+// record-only line; no gateway key or a refused one naming Settings › Models with a link to the Tico Gateway card;
+// a member has no Billing tab and never asks for it; no sideways scroll on a phone. Every request is
 // intercepted. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -169,7 +170,8 @@ declare function settingsShow(tab: string): void;
     await day.locator('[data-billing-hours] a[data-billing-gateway]').click();
     await page.waitForFunction(() => SETTINGS_TAB === 'models');
     await page.locator('#settings-gateway-card').waitFor();
-    assert(await page.locator('#settings-gateway-card').isVisible(), 'the Tico Gateway card shows');
+    await page.waitForFunction(() => { const r = document.querySelector('#settings-gateway-card')!.getBoundingClientRect();
+      return r.top >= 0 && r.top < innerHeight; }, null, {timeout: 5000});   // in view, not just on the page
     // a member: no Billing tab, and the page never asks for billing
     role = 'human';
     const before = asked.length;
