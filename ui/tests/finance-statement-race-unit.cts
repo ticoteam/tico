@@ -157,6 +157,25 @@ async function main(): Promise<void> {
   acts[0]!.resolve({status: 'committed', result: {new: 2}});
   await posted;
 
+  // 2b. The same two requests, but the older one fails after the newer one has shown: the newer review stays.
+  open();
+  await reviewed();
+  tick(false);
+  const failsLate = previews[1]!;
+  tick(true);
+  previews[2]!.resolve(answer('flipped', 4));
+  await flush();
+  failsLate.reject(pageError('Could not read the file'));
+  await flush();
+  assert.equal(box.hidden, false, "an older preview's failure does not hide the newer review");
+  assert.equal(save.textContent, 'Post 4 rows');
+  assert.equal(err.hidden, true, "an older preview's failure shows no error");
+  const postsNewer = press();
+  await flush();
+  assert.equal(acts[0]!.payload.preview_token, 'token-flipped');
+  acts[0]!.resolve({status: 'committed'});
+  await postsNewer;
+
   // 3. The replacement preview fails: no old preview is left to post.
   open();
   await reviewed();
