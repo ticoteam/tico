@@ -1,3 +1,4 @@
+# pyright: strict
 """Stage rules over HTTP (Stage rules spec, step 1, part 3): read the rules that apply to a stage, add, edit, retire,
 and a person's accept or skip of a bot's suggestion; and the Rules page's groups with a count each.
 
@@ -8,8 +9,8 @@ rule reads to its caller.
   there (that stage, the whole pipeline, the company) and the built-in behaviours (stage_rules.BUILT_IN, read-only).
 - Writing: a person who may change the pipeline (pipeline_settings.may_change: its owner, its manager, the company's
   owner and Admins) adds, edits and retires its rules, and accepts or skips a suggestion on it. A company rule (no
-  pipeline) is the company's owner's and Admins'. A bot's add or edit is a suggestion (stage_rules makes it one), and a
-  bot never retires, accepts or skips.
+  pipeline) is the company's owner's and Admins'. A bot's add, edit or retire is a suggestion (stage_rules makes it
+  one), and a bot never accepts or skips.
 - Each rule says whether the caller may change it (`can_edit`) and what it costs (`cost`: free, or one Jev call per
   event).
 - The Rules page's groups (`GET /api/v2/rule-groups`): Company, Outside, Pipelines and stages, Due, Wakes, Automations
@@ -22,14 +23,18 @@ from typing import Any, Literal
 from fastapi import Request
 from pydantic import Field
 
-from . import hubdb as H
-from . import pipeline_settings
-from . import stage_rules as SR
+from . import hubdb as _hubdb
+from . import pipeline_settings as _pipeline_settings
+from . import stage_rules as _stage_rules
 from .models import Contract
 from .store import Problem
 
-EVENTS = ("enters", "owner_changes", "bot_snoozes", "timer")
-THENS = ("block", "tell_manager", "tell_owner", "move_back")
+# Modules not yet strict: read through Any, as backend/stage_rules.py does.
+H: Any = _hubdb
+pipeline_settings: Any = _pipeline_settings
+SR: Any = _stage_rules
+Row = dict[str, Any]
+
 SCOPES = ("stage", "pipeline", "company")
 NAME_MAX = 200
 TEXT_MAX = 1000
@@ -65,24 +70,24 @@ class StageRuleDecide(Contract):
     why: str = Field(default="", max_length=TEXT_MAX)
 
 
-def _pipeline_row(c, pipeline_id):
+def _pipeline_row(c: Any, pipeline_id: str | None) -> Row | None:
     if not pipeline_id:
         return None
-    row = c.execute("SELECT * FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
+    row: Any = c.execute("SELECT * FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
     if not row:
         raise Problem("not_found", "No such pipeline", 404)
     return dict(row)
 
 
-def _stage_names(c, pipeline_id):
+def _stage_names(c: Any, pipeline_id: str | None) -> dict[str, str]:
     """{stage id: name} of a pipeline's stages, in order."""
     if not pipeline_id:
         return {}
-    rows = c.execute("SELECT id, name FROM stages WHERE pipeline_id=? ORDER BY position, id", (pipeline_id,))
+    rows: Any = c.execute("SELECT id, name FROM stages WHERE pipeline_id=? ORDER BY position, id", (pipeline_id,))
     return {r["id"]: r["name"] for r in rows}
 
 
-def may_change(c, actor, pipeline_id):
+def may_change(c: Any, actor: str, pipeline_id: str | None) -> bool:
     """Whether a person may change the rules on this pipeline ('' is the company: its owner and Admins). A bot never
     does: its writes are suggestions."""
     if not H.is_human(actor):
@@ -91,17 +96,17 @@ def may_change(c, actor, pipeline_id):
         row = _pipeline_row(c, pipeline_id)
     except Problem:
         return False
-    return pipeline_settings.may_change(c, actor, row)
+    return bool(pipeline_settings.may_change(c, actor, row))
 
 
-def _refuse_unless(c, actor, pipeline_id):
+def _refuse_unless(c: Any, actor: str, pipeline_id: str | None) -> None:
     if not may_change(c, actor, pipeline_id):
         if pipeline_id:
             raise Problem("forbidden", "Only the pipeline's owner, its manager and Admins change its rules.", 403)
         raise Problem("forbidden", "Only the company's owner and Admins change company rules.", 403)
 
 
-def _checked(c, fields):
+def _checked(c: Any, fields: Row) -> Row:
     """The fields as stage_rules takes them: `pipeline` becomes `pipeline_id`, and each stage must be the pipeline's."""
     out = {k: v for k, v in fields.items() if v is not None and k != "revision"}
     if "pipeline" in out:
@@ -112,7 +117,7 @@ def _checked(c, fields):
     return out
 
 
-def _stages_ok(c, pipeline_id, stages):
+def _stages_ok(c: Any, pipeline_id: str | None, stages: list[str] | None) -> None:
     if not stages:
         return
     if not pipeline_id:
@@ -123,19 +128,19 @@ def _stages_ok(c, pipeline_id, stages):
         raise Problem("invalid", f"Not a stage of {pipeline_id}: {', '.join(unknown)}", 422)
 
 
-def _row(c, rule_id):
+def _row(c: Any, rule_id: str) -> Row:
     """The rule as stage_rules.view reads it (JSON decoded, `then`, its scope and cost), or 404."""
-    rule = SR.get(c, rule_id)
+    rule: Row | None = SR.get(c, rule_id)
     if not rule:
         raise Problem("not_found", "No such stage rule", 404)
     return rule
 
 
-def view(c, actor, rule, names=None):
+def view(c: Any, actor: str, rule: Row, names: dict[str, dict[str, str]] | None = None) -> Row:
     """A rule as its caller reads it: stage_rules.view's (from get or listed), with the names of its pipeline and
     stages and `can_edit`."""
-    out = dict(rule)
-    pid = out.get("pipeline_id") or ""
+    out: Row = dict(rule)
+    pid: str = out.get("pipeline_id") or ""
     stage_names = (names or {}).get(pid)
     if stage_names is None:
         stage_names = _stage_names(c, pid)
@@ -143,16 +148,24 @@ def view(c, actor, rule, names=None):
             names[pid] = stage_names
     out["pipeline_name"] = ""
     if pid:
-        found = c.execute("SELECT name FROM pipelines WHERE id=?", (pid,)).fetchone()
+        found: Any = c.execute("SELECT name FROM pipelines WHERE id=?", (pid,)).fetchone()
         out["pipeline_name"] = found["name"] if found else pid
-    out["stage_names"] = [stage_names.get(s, s) for s in out.get("stages") or []]
-    out["can_edit"] = (
+    stages: list[str] = out.get("stages") or []
+    out["stage_names"] = [stage_names.get(s, s) for s in stages]
+    out["can_edit"] = bool(
         may_change(c, actor, pid) and not out.get("retired_at") and out.get("status") in ("active", "suggested")
     )
     return out
 
 
-def listing(c, actor, pipeline=None, stage=None, status="active", mine=False):
+def listing(
+    c: Any,
+    actor: str,
+    pipeline: str | None = None,
+    stage: str | None = None,
+    status: str = "active",
+    mine: bool = False,
+) -> Row:
     """The rules, optionally only those that apply to a pipeline (and a stage), each as `view` reads it; retired ones
     only with status=retired. With `mine`, only the rules the caller wrote or suggested."""
     if stage and not pipeline:
@@ -162,40 +175,44 @@ def listing(c, actor, pipeline=None, stage=None, status="active", mine=False):
     if stage and stage not in _stage_names(c, pipeline):
         raise Problem("not_found", f"No stage {stage} in {pipeline}", 404)
     if status == "retired":
-        rows = [r for r in SR.listed(c, pipeline_id=pipeline, stage_id=stage, retired=True) if r.get("retired_at")]
+        every: list[Row] = SR.listed(c, pipeline_id=pipeline, stage_id=stage, retired=True)
+        rows = [r for r in every if r.get("retired_at")]
     else:
         wanted = None if status in (None, "", "any") else status
         rows = SR.listed(c, pipeline_id=pipeline, stage_id=stage, status=wanted, retired=status == "any")
     if mine:
         rows = [r for r in rows if r.get("created_by") == actor]
-    names = {}
+    names: dict[str, dict[str, str]] = {}
     items = [view(c, actor, r, names) for r in rows]
     items.sort(key=lambda r: (SCOPES.index(r.get("scope") or "company"), r.get("created_at") or "", r["id"]))
     return {
         "items": items,
         "built_in": list(SR.BUILT_IN),
         "may_add": bool(pipeline) and may_change(c, actor, pipeline),
-        "may_suggest": H.is_bot(actor),
+        "may_suggest": bool(H.is_bot(actor)),
     }
 
 
-def _automations(c):
+def _automations(c: Any) -> tuple[list[Row], list[Row]]:
     """(wakes, automations on tasks): the "What wakes" automations and the automations a task starts, as id, name and
     whether it is on. Both are edited on the Automations page."""
     if not H._has_table(c, "automations"):
         return [], []
-    from . import automations as AU
+    from . import automations as _automations_mod
 
-    wakes, tasks = [], []
+    AU: Any = _automations_mod
+    wakes: list[Row] = []
+    tasks: list[Row] = []
+    r: Any
     for r in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL ORDER BY created_at, id").fetchall():
         try:
-            flow = AU.flow_of(r)
+            flow: Row = AU.flow_of(r)
         except Exception:  # noqa: BLE001 - a flow that cannot be read is not listed
             continue
         if flow.get("builtin"):
             continue
         item = {"id": r["id"], "name": flow.get("name") or r["id"], "enabled": bool(r["enabled"])}
-        trigger = flow.get("trigger") or {}
+        trigger: Row = flow.get("trigger") or {}
         if str(r["id"]).startswith(WAKES_PREFIX):
             wakes.append(item)
         elif trigger.get("type") == "task_received" or (
@@ -205,16 +222,17 @@ def _automations(c):
     return wakes, tasks
 
 
-def groups(c, auth, who):
+def groups(c: Any, auth: Any, who: Any) -> Row:
     """The Rules page's groups, in the page's order, each with its count; and the Wakes, Automations on tasks and Built
     in rows the page lists read-only."""
-    from . import org_rules
+    from . import org_rules as _org_rules
 
-    org = org_rules.counts(c, auth, who)
-    stage = SR.listed(c, status="active")
-    stage_suggested = SR.listed(c, status="suggested")
+    org_rules: Any = _org_rules
+    org: dict[str, int] = org_rules.counts(c, auth, who)
+    stage: list[Row] = SR.listed(c, status="active")
+    stage_suggested: list[Row] = SR.listed(c, status="suggested")
     wakes, tasks = _automations(c)
-    counts = [
+    counts: list[tuple[str, str, int]] = [
         ("internal", "Company", org["internal"]),
         ("external", "Outside", org["external"]),
         ("stages", "Pipelines and stages", len(stage)),
@@ -232,16 +250,16 @@ def groups(c, auth, who):
     }
 
 
-def install(app, store, auth, mutate):
-    def fresh(who, rule_id):
+def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
+    def fresh(who: Any, rule_id: str) -> Row:
         with store.read() as c:
             return view(c, who.actor, _row(c, rule_id))
 
     @app.get("/api/v2/rule-groups")
-    def rule_groups(request: Request):
+    def rule_groups(request: Request) -> Row:  # pyright: ignore[reportUnusedFunction]
         """The Rules page's groups with a count each: Company, Outside, Pipelines and stages, Due, Wakes, Automations
         on tasks, Built in and Suggested; and the Wakes, Automations on tasks and Built in rows."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return groups(c, auth, who)
@@ -253,31 +271,31 @@ def install(app, store, auth, mutate):
         stage: str | None = None,
         status: Literal["active", "suggested", "retired", "any"] = "active",
         mine: bool = False,
-    ):
+    ) -> Row:  # pyright: ignore[reportUnusedFunction]
         """The stage rules. With `pipeline` (and `stage`), only those that apply there: that stage's, the whole
         pipeline's and the company's, most specific first. `status` active (default), suggested, retired or any; `mine`
         only those the caller wrote or suggested. `built_in` lists the behaviours in code, read-only."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return listing(c, who.actor, pipeline, stage, status, mine)
 
     @app.get("/api/v2/stage-rules/{rule_id}")
-    def stage_rules_show(request: Request, rule_id: str):
+    def stage_rules_show(request: Request, rule_id: str) -> Row:  # pyright: ignore[reportUnusedFunction]
         """One stage rule: On, When, If, Then, what it costs, and whether the caller may change it."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return view(c, who.actor, _row(c, rule_id))
 
     @app.post("/api/v2/stage-rules")
-    def stage_rules_add(request: Request, body: StageRuleFields):
+    def stage_rules_add(request: Request, body: StageRuleFields) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Add a stage rule. A person who may change the pipeline adds it in force; a bot's is a suggestion that a
         person accepts or skips."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
 
-        def work(c):
+        def work(c: Any) -> Row:
             fields = _checked(c, body.model_dump())
             fields.setdefault("pipeline_id", "")
             _stages_ok(c, fields["pipeline_id"], fields.get("stages"))
@@ -287,17 +305,17 @@ def install(app, store, auth, mutate):
                 _refuse_unless(c, who.actor, fields["pipeline_id"])
             return {"id": SR.add(c, who.actor, fields)["id"]}
 
-        made = mutate(request, body, work)
+        made: Row = mutate(request, body, work)
         return fresh(who, made["id"])
 
     @app.post("/api/v2/stage-rules/{rule_id}")
-    def stage_rules_edit(request: Request, rule_id: str, body: StageRuleEdit):
+    def stage_rules_edit(request: Request, rule_id: str, body: StageRuleEdit) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Change a stage rule: only the fields sent, against the `revision` read. A bot's change is a suggestion that
         replaces the rule once a person accepts it."""
-        who = request.state.identity
+        who: Any = request.state.identity
         auth.domain(who)
 
-        def work(c):
+        def work(c: Any) -> Row:
             row = _row(c, rule_id)
             if row.get("retired_at"):
                 raise Problem("conflict", "This rule is retired.", 409)
@@ -312,17 +330,17 @@ def install(app, store, auth, mutate):
                 _refuse_unless(c, who.actor, pid)
             return {"id": SR.edit(c, who.actor, rule_id, fields, body.revision)["id"]}
 
-        made = mutate(request, body, work)
+        made: Row = mutate(request, body, work)
         return fresh(who, made["id"])
 
-    def decide(request, rule_id, body, action):
-        who = request.state.identity
+    def decide(request: Request, rule_id: str, body: StageRuleDecide, action: str) -> Row:
+        who: Any = request.state.identity
         auth.domain(who)
         bot = not H.is_human(who.actor)
         if bot and action != "retire":
             raise Problem("forbidden", "A bot suggests rules; a person accepts or skips them.", 403)
 
-        def work(c):
+        def work(c: Any) -> Row:
             row = _row(c, rule_id)
             if body.revision is not None and row["revision"] != body.revision:
                 raise Problem("conflict", "The rule changed since you read it. Read it again.", 409)
@@ -340,21 +358,21 @@ def install(app, store, auth, mutate):
             # Accepting a suggested change answers with the rule it changed.
             return {"id": getattr(SR, action)(c, who.actor, rule_id)["id"]}
 
-        done = mutate(request, body, work)
+        done: Row = mutate(request, body, work)
         return fresh(who, done["id"])
 
     @app.post("/api/v2/stage-rules/{rule_id}/retire")
-    def stage_rules_retire(request: Request, rule_id: str, body: StageRuleDecide):
+    def stage_rules_retire(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """Retire a stage rule in force: it stops applying, and stays readable with status=retired. A bot's retire is
         a suggestion to retire it, which a person accepts or skips."""
         return decide(request, rule_id, body, "retire")
 
     @app.post("/api/v2/stage-rules/{rule_id}/accept")
-    def stage_rules_accept(request: Request, rule_id: str, body: StageRuleDecide):
+    def stage_rules_accept(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """A person accepts a bot's suggestion: a new rule comes into force, a change replaces the rule it names."""
         return decide(request, rule_id, body, "accept")
 
     @app.post("/api/v2/stage-rules/{rule_id}/skip")
-    def stage_rules_skip(request: Request, rule_id: str, body: StageRuleDecide):
+    def stage_rules_skip(request: Request, rule_id: str, body: StageRuleDecide) -> Row:  # pyright: ignore[reportUnusedFunction]
         """A person skips a bot's suggestion: it is set aside and nothing changes."""
         return decide(request, rule_id, body, "skip")

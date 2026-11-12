@@ -8842,7 +8842,14 @@ STABLE.extend(
             'Change a stage rule against the revision read; a bot\'s change is a suggestion',
             None,
         ),
-        ('/api/v2/stage-rules/{rule_id}/retire', 'post', 'Rules', 'retireStageRule', 'Retire a stage rule in force', None),
+        (
+            '/api/v2/stage-rules/{rule_id}/retire',
+            'post',
+            'Rules',
+            'retireStageRule',
+            'Retire a stage rule in force',
+            None,
+        ),
         (
             '/api/v2/stage-rules/{rule_id}/accept',
             'post',
@@ -8851,7 +8858,14 @@ STABLE.extend(
             'A person accepts a bot\'s suggested stage rule or change',
             None,
         ),
-        ('/api/v2/stage-rules/{rule_id}/skip', 'post', 'Rules', 'skipStageRule', 'A person skips a suggested stage rule', None),
+        (
+            '/api/v2/stage-rules/{rule_id}/skip',
+            'post',
+            'Rules',
+            'skipStageRule',
+            'A person skips a suggested stage rule',
+            None,
+        ),
         (
             '/api/v2/rules/{rule_id}/due',
             'post',

@@ -38,10 +38,25 @@ OWNER_ON_TEAM = {
 def test_the_stage_panel_lists_every_rule_that_applies_grouped_most_specific_first(api):
     engineering(api)
     build = add(api, OWNER_ON_TEAM)
-    whole = add(api, {"name": "Quiet bot tasks", "pipeline": "eng", "event": "timer",
-                      "timer": {"kind": "quiet", "hours": 6}, "then": "tell_manager"})
-    company = add(api, {"name": "Snooze only for a real wait", "event": "bot_snoozes",
-                        "jev": "Is the bot waiting on something outside, or blocked?", "then": "block"})
+    whole = add(
+        api,
+        {
+            "name": "Quiet bot tasks",
+            "pipeline": "eng",
+            "event": "timer",
+            "timer": {"kind": "quiet", "hours": 6},
+            "then": "tell_manager",
+        },
+    )
+    company = add(
+        api,
+        {
+            "name": "Snooze only for a real wait",
+            "event": "bot_snoozes",
+            "jev": "Is the bot waiting on something outside, or blocked?",
+            "then": "block",
+        },
+    )
     other_stage = add(api, {**OWNER_ON_TEAM, "name": "Fixes only", "stages": [FIX]})
     other_pipeline = add(api, {"name": "Spec rule", "pipeline": "prod", "event": "enters", "then": "tell_owner"})
 
@@ -109,8 +124,12 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
     assert made["id"] in [r["id"] for r in get(api, "stage-rules?pipeline=eng&stage=" + BUILD)["items"]]
 
     # A bot's change to a rule in force is a suggestion too; the rule stays as it was until a person accepts it.
-    change = post(api, f"stage-rules/{made['id']}",
-                  {"revision": accepted["revision"], "reason": "Ask the manager."}, token="ops-test")
+    change = post(
+        api,
+        f"stage-rules/{made['id']}",
+        {"revision": accepted["revision"], "reason": "Ask the manager."},
+        token="ops-test",
+    )
     assert change["status"] == "suggested" and change["suggests"] == made["id"]
     assert get(api, f"stage-rules/{made['id']}")["reason"] == OWNER_ON_TEAM["reason"]
     post(api, f"stage-rules/{change['id']}/skip", {}, token="ben-test")
@@ -145,8 +164,16 @@ def test_the_rules_page_lists_every_kind_of_rule_in_its_group_with_a_count(api):
     keys = [g["key"] for g in got["groups"]]
     assert keys == ["internal", "external", "stages", "due", "wakes", "automations", "builtin", "suggested"]
     labels = [g["label"] for g in got["groups"]]
-    assert labels == ["Company", "Outside", "Pipelines and stages", "Due", "Wakes", "Automations on tasks", "Built in",
-                      "Suggested"]
+    assert labels == [
+        "Company",
+        "Outside",
+        "Pipelines and stages",
+        "Due",
+        "Wakes",
+        "Automations on tasks",
+        "Built in",
+        "Suggested",
+    ]
     count = {g["key"]: g["count"] for g in got["groups"]}
     assert count["internal"] == 1 and count["stages"] == before["stages"] + 2
     # Suggested holds a bot's org rule and its stage rule.
