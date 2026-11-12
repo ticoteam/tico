@@ -2,6 +2,7 @@ import pytest
 
 from clients import harness_manifests as manifests
 
+
 def test_manifests_load_and_reject_unknown_capabilities():
     rows = manifests.load()
     assert {"codex", "claude", "gemini", "antigravity", "grok", "cursor", "musecode", "pi"} <= set(rows)

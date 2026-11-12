@@ -6,7 +6,6 @@ parse with unique ids. The API serves them to anyone signed in, takes a learning
 and lets only the owner delete one.
 """
 
-
 import pytest
 
 from backend import integrations as I
@@ -34,12 +33,6 @@ def test_a_company_page_adds_a_service_and_replaces_a_shipped_one(tmp_path):
     pages, _ = I.load(ROOT / "integrations", tmp_path)
     assert pages["github"]["title"] == "GitHub (our org)"
     assert set(pages) == SHIPPED | {"stripe"}
-
-
-
-
-
-
 
 
 def test_the_tool_list_files_a_bots_alias_under_its_page_with_each_bots_write_level_and_problem(api):

@@ -125,7 +125,6 @@ class KnownSenders(unittest.TestCase):
         self.put("new", "kim@other.example", [self.OWNER], 300)
         self.assertEqual(self.known("later", "new"), {"later": False, "new": False})
 
-
     def test_an_inbound_message_claiming_the_owners_from_does_not_make_the_recipient_known(self):
         self.put("spoof", self.OWNER, ["pat@customer.example"], 100)  # INBOX, never SENT
         self.put("later", "pat@customer.example", [self.OWNER], 200)

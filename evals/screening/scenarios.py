@@ -424,7 +424,6 @@ def s_settings(org, items, judge):
 # ---------------------------------------------------------------------------------------------- 11 skills
 def s_skills(org, items, judge):
     cases = K.load_cases()
-    problems = K.case_problems(cases)
     proposals = K.propose_all(org, cases)
     rows = K.screen_all(org, cases, proposals)
     ok, lines = K.grade(cases, rows)

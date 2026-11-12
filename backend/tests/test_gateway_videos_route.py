@@ -103,6 +103,5 @@ def test_a_video_request_is_checked_before_anything_is_sent(api, monkeypatch):
 
 def test_a_video_needs_a_connected_gateway_and_stops_at_the_video_budget(api, monkeypatch):
 
-
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "gateway_not_connected"

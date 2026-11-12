@@ -194,8 +194,6 @@ def _manager_links_and_unlinks(api, bot_manager):
         assert all(e['actor'] == actor for e in H.task_history(c, task['id']) if e['field'] == 'link')
 
 
-
-
 def _nonmanager_unchanged_and_refusal_names_managers(api, manager):
     _, _ = manager
     outsider = bot_token(api, 'cmo')

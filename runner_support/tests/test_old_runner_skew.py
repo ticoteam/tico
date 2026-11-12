@@ -37,6 +37,7 @@ from runner_support.tests.test_conformance import (  # noqa: F401
     test_a_task_turn_works_in_its_own_worktree_with_the_tasks_repo_and_pushes_its_run,
 )
 
+
 @pytest.mark.parametrize("harness", ["claude"])
 def test_a_sub_thread_turn_on_an_old_runner_never_reads_a_direct_message_or_another_threads_session(api, computer):
     """A sub-thread turn may lose its root's context on an old runner, but it must not read a direct message's text or

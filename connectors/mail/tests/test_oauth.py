@@ -343,7 +343,6 @@ class ReadOnlyRefusals(Base):
         self.assertIsNone(oauth.require(None, "labels", "ana@acme.example", "label mail"))
         oauth.require([G + "gmail.modify"], "drafts", "ana@acme.example", "write drafts")  # modify covers drafts
 
-
     def test_a_turn_with_a_supervisor_token_refuses_the_same_writes(self):
         os.environ[auth.SOCKET_ENV], os.environ["HUB_TOKEN"] = "/tmp/none.sock", "attempt"
         with patch(
@@ -542,7 +541,6 @@ class ActGrant(Base):
         self.assertIn(G + "calendar.events", calendar_granted)
         self.assertEqual(server.calls[1][1]["scopes"][0], G + "calendar.events")
 
-
     def test_gmail_and_calendar_writes_reach_google_for_the_act_grant(self):
         self.finish()
         act = MagicMock()
@@ -554,7 +552,6 @@ class ActGrant(Base):
         self.assertEqual(act.users.return_value.messages.return_value.modify.call_count, 1)
         self.assertEqual(act.users.return_value.drafts.return_value.create.call_count, 1)
         self.assertEqual(act.events.return_value.insert.call_count, 1)
-
 
     def test_a_refresh_for_scopes_the_grant_lacks_says_connect_again(self):
         from clients.tico import APIError

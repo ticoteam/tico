@@ -188,8 +188,9 @@ class Paid:
 def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypatch):
     """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
     from backend import learnings as L
-    from backend.listening import judge_pending
-    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
+    from backend.listening import run_pass
+    from backend.tests.helpers.automation_runs import sql
+    from backend.tests.helpers.listening import FakeJudge as Listener, item, listening, save, source_id
 
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
@@ -202,24 +203,14 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         engine({"team": "Acme"}, QUESTIONS)
     assert refused.value.code == "spend_cap" and len(jev.calls) == 1, "no paid call starts over the cap"
 
-    # Listening: the first post is judged, the rest stay unjudged for after the cap.
-    _bots(api)
-    listening = _token(api, "social-media-manager")
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [_post(str(n), f"Creator post {n} [creator]") for n in range(3)],
-        },
-        token=listening,
-    )
-    api.app.state.judge = jev = Paid(0.6, Listener())
-    spend(api, -0.6)  # back to $0.50, so the batch starts
-    out = post(api, "listening/judge", {}, token=listening)
-    assert out["judged"] == 1 and [e["error"] for e in out["errors"]] == ["spend_cap"] and len(jev.calls) == 1
+    # Listening: the first post is scored, the rest stay new for after the cap.
+    made = listening(api, rules=[{"do": "keep", "tag": "leads", "text": "A lead"}])
+    save(api, source_id(api, made["id"]), [item(n, f"A post about standups, number {n} [r0]") for n in range(3)])
+    jev = Paid(0.6, Listener())
+    spend(api, -0.6)  # back to $0.50, so the pass starts
+    run_pass(store, None, jev)
+    rows = sql(api, "SELECT status, count(*) AS n FROM listening_items GROUP BY status")
+    assert {r["status"]: r["n"] for r in rows} == {"kept": 1, "new": 2} and len(jev.calls) == 1
     with store.read() as c:
         assert B.spent_this_month(c) == pytest.approx(1.1)
 

@@ -1406,6 +1406,7 @@ def test_an_update_of_a_shared_checkout_waits_for_another_under_way(repos):
     result, calls = run_apply(checkout, state, lock_wait=0)
     assert result["state"] == "failed" and ru.read_status(state)["state"] == "failed"
     assert head(checkout) == before and calls.restarts == 0 and calls.installs == []
+
     def release():
         time.sleep(1.5)
         held.close()

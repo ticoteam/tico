@@ -381,8 +381,6 @@ def test_a_passing_sibling_in_the_same_file_is_no_evidence_and_the_passing_testc
     assert list(flips_of(attempt(junit_for((sibling, None), (flaky, None))))) == [flaky]
 
 
-
-
 def test_a_pull_request_run_is_keyed_by_the_merge_commit_it_tested_not_the_branch_head():
     """A pull_request run tests the branch merged into main as main was then: two runs of one branch head test two
     commits once main moved, so a failure then a pass across them is not a flip unless the merge commit matches."""

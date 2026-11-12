@@ -13,7 +13,6 @@ from backend.tests.helpers.mcp import call, rpc
 from backend.tests.helpers.onboarding import draft, environment, machine, signed_in  # noqa: F401
 
 
-
 def _token(api):
     """A run's token for bot:finance-owner, as a claimed job carries it: a computer enrolls, the bot is assigned to it,
     a person asks it something, and the computer claims the job (the same steps as test_api.setup_attempt, signed in
@@ -39,16 +38,6 @@ def _token(api):
     return post("jobs/claim", {"bot": BK.SLUG, "start_places": True}, run["token"])["attempt"]["token"]
 
 
-
-
-
-
-
-
-
-
-
-
 # ----------------------------------------------------------------------------- check 1, 2 and 5: built, guarded, offered the right tools
 
 
@@ -57,16 +46,6 @@ def _c1_archive_refused_as_a_system_bot(api, token):
     body = {"expected_revision": bot.get("revision", 0), "successor": None, "revoke_agent": True}
     r = api.post("/api/v2/bots/" + BK.SLUG + "/archive", json=body, headers=signed_in())
     assert r.status_code == 409 and "system_bot" in r.text, r.text
-
-
-
-
-
-
-
-
-
-
 
 
 def _c2_rule_create_is_refused_once_finance_rules_is_revoked(api, token):
@@ -95,14 +74,6 @@ def test_bookkeeper_rehearsal_setup_and_guards(environment):
 
 
 # ----------------------------------------------------------------------------- check 3 and 6: triggers, quiet runs and visible failures
-
-
-
-
-
-
-
-
 
 
 def _c6_a_failed_sync_reaches_the_owner_without_botops(api, token):

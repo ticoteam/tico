@@ -11,6 +11,7 @@ from backend.tests.helpers.demo import NOW, signed_in
 
 WEEK_AGO = NOW - timedelta(days=7)
 
+
 def page(path, key=None, **query):
     return path, key, query
 

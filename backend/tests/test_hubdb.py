@@ -40,6 +40,7 @@ class Schema(HubCase):
         )
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
+
 class RegistrySync(HubCase):
     def test_sync_is_idempotent_and_keeps_quarantine(self):
         H.quarantine(self.conn, "seo", "test")

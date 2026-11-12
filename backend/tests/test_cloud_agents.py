@@ -114,10 +114,6 @@ def onboarding_artifacts(api, bot):
 # --- checks: each takes (api, hq) and may rely on the story's earlier checks only where the story says so ---
 
 
-
-
-
-
 def _a_supported_agent_is_added_not_requested_and_an_unknown_one_is_refused(api, hq):
     before = _open_ids(api)
     ask(api, "cloud-agents/claude/request", {}, expected=422)

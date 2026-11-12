@@ -291,7 +291,6 @@ class MintWithoutKey(Base):
 
 
 class WorkspaceRefusals(Base):
-
     def test_the_supervisor_names_each_workspace_refusal_as_that_kind(self):
         os.environ[auth.SOCKET_ENV] = "/run/tico/credential.sock"
         os.environ["HUB_TOKEN"] = "synthetic-token"

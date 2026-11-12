@@ -130,7 +130,6 @@ class Cli(Stage2):
         self.assertEqual(rc, 0, err)
         self.assertEqual(p["approval_request"]["payload"]["attachments"], [file_meta("answer.pdf", data + b" v2")])
 
-
     def test_the_draft_text_lists_files_without_an_attachment_approval_request(self):
         (self.root / "emp-inbox" / "answer.pdf").write_bytes(b"%PDF-1.4 the answer")
         rc, out, err = self.run_cli(
