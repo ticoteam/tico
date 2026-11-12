@@ -54,7 +54,7 @@ function chats(sent: Sent[]) {
 
 const bar = (page: Page) => page.locator('#task-ask .pa-bar');
 const buttons = (page: Page) => page.locator('#task-ask .pa-to-b').evaluateAll(els => els.map(e => ({
-  text: (e.textContent || '').trim(), on: e.getAttribute('aria-checked') === 'true'})));
+  text: (e.querySelector('.pa-to-l')?.textContent || '').trim(), on: e.getAttribute('aria-checked') === 'true'})));
 const placeholder = (page: Page) => page.locator('#task-ask .pa-text').getAttribute('placeholder');
 const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el => {
   const r = el.getBoundingClientRect();
@@ -104,7 +104,7 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.deepEqual(sent[1]!.body.refs, {board: {pipeline_id: 'product', pipeline: 'Product', stage_id: 'spec', stage: 'Spec',
         task_ids: ['t-1', 't-2', 't-8'], more: 0}}, 'the message carries the pipeline, the stage and the tasks on screen');
       assert.equal((await sheet.locator('.pa-name').textContent())?.trim(), 'Writer');
-      assert.equal((await sheet.locator('.th-board').textContent())?.replace(/\s+/g, ' ').trim(), 'Product › Spec 3 tasks', 'one card under the message');
+      assert.equal((await sheet.locator('.th-board').textContent())?.replace(/\s+/g, ' ').trim(), 'Product › Spec · 3 tasks', 'one card under the message');
       assert.equal(await sheet.locator('.pm-tabs, .pm-body, .pm-tab').count(), 0, 'the chat alone: no Log, no Tasks');
       assert.equal(await page.locator('#task-ask .pa-text').inputValue(), '', 'the box is empty once sent');
 

@@ -697,8 +697,8 @@ function thvBoardHTML(m: ThvMessage): string {
   if (!b || typeof b !== 'object' || !b.pipeline) return '';
   const n = (Array.isArray(b.task_ids) ? b.task_ids.length : 0) + (Number(b.more) || 0);
   const where = b.stage ? `${b.pipeline} › ${b.stage}` : b.pipeline;
-  return `<div class="th-board" role="note"><span class="th-board-where">${esc(where)}</span>`
-    + `<span class="th-board-n tnum">${n} ${n === 1 ? 'task' : 'tasks'}</span></div>`;
+  return `<div class="th-board" role="note"><span class="th-board-where">${esc(where)}</span> `
+    + `<span class="th-board-n tnum">· ${n} ${n === 1 ? 'task' : 'tasks'}</span></div>`;
 }
 // Update cards are notices the server writes with refs.card 'update'; older rows may carry only refs.update.
 const thvIsUpdateCard = (m: ThvMessage) => m.refs?.card === 'update' || m.kind === 'update' || (!!m.refs?.update && m.kind === 'notice');
