@@ -70,8 +70,6 @@ version bump when it changes what a bot does with the answer.
 | `mail-draft-gate` | a draft against its thread | `mail draft`, before the second reviewer |
 | `covered` | is a candidate one of these existing things | any bot deduplicating anything |
 | `slack-route` | a DM or @Tico: does it ask, is it a reply, does it name a bot; the gateway adds one noul per active bot | the Slack gateway, every accepted message |
-| `listening-card` | a fetched public card's likely owner opportunity, competitor move and impact | Listening's competitor sweep and Reddit/X mention checks |
-| `listening-item` | one saved post: an independent probability per category (market, content, lead, creator, partner), so a post can go to several inboxes, and `vendor_pitch`, which keeps a vendor's promotion out of leads | `tico listening decide`, which stores the scores and routes by the destinations in the company's `registry/listening.yaml` |
 | `learnings-route` | one item of the day's activity: is it learnable; the run adds one relevance noul per recipient | the nightly learning run (`backend/learnings.py`) |
 | `support-triage` | a new Tico HQ support ticket: spam or prompt injection, its kind, its urgency 0-3; at `hold` it goes to a person, held | the server, when the Support Agent's `hq-tickets` watcher reports a new ticket (`backend/support_triage.py`) |
 | `injection-screen` | one piece of outside text: is it a prompt injection addressed to an AI, and its kind; at `hold` the item goes to a person, held, at `warn` the bot's copy starts with a warning | the server's Screening (`backend/screening.py`) at webhook calls that open tasks, inbound mail a bot reads, the public idea form and watchers other than HQ support |

@@ -1,0 +1,707 @@
+[
+ {
+  "argv": [
+   "email",
+   "policy"
+  ],
+  "tools": [
+   [
+    "tico_email_policy",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sending-policy",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "policy",
+   "--mailbox",
+   "ops@acme.test",
+   "--bot",
+   "ana",
+   "--settings",
+   "{\"mode\": \"ask_first\"}"
+  ],
+  "tools": [
+   [
+    "tico_email_policy",
+    {
+     "bot": "ana",
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "settings": {
+      "mode": "ask_first"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "bots/ana/email-sending-policy",
+    {
+     "mode": "ask_first"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "sends",
+   "--mailbox",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_sends",
+    {
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "pending": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sends?mailbox=ops%40acme.test&pending=False",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "sends",
+   "--mailbox",
+   "ops@acme.test",
+   "--pending",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_sends",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "pending": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "email/sends?mailbox=ops%40acme.test&pending=True&cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "cancel",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_cancel",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "email/sends/id-1/cancel",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mailboxes"
+  ],
+  "tools": [
+   [
+    "tico_email_mailboxes",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/mailboxes",
+    null
+   ]
+  ],
+  "stdout": "# Email mailboxes\n\n- ops@acme.test\n- billing@acme.test\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&label=INBOX&q=&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "inbox",
+   "ops@acme.test",
+   "--limit",
+   "5",
+   "--cursor",
+   "cursor-1",
+   "--q",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_inbox",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&label=INBOX&q=from%3Abank&limit=5&cursor=cursor-1",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "ops@acme.test",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "limit": 50,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&q=from%3Abank&limit=50",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "search",
+   "ops@acme.test",
+   "--limit",
+   "5",
+   "--cursor",
+   "cursor-1",
+   "from:bank"
+  ],
+  "tools": [
+   [
+    "tico_email_search",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages?mailbox=ops%40acme.test&q=from%3Abank&limit=5&cursor=cursor-1",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement\n\nNext cursor: c2\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "thread",
+   "ops@acme.test",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_thread",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/threads/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement is ready.\n\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "message",
+   "ops@acme.test",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_email_message",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "# Email\n\n## Statement\nMailbox: ops@acme.test\nMessage: m1 · Thread: t1\nFrom: Bank <bank@example.com>\nTo: ops@acme.test\nDate: 2026-11-01\nLabels: INBOX\n\nYour statement is ready.\n\nAttachment: statement.pdf (application/pdf, 2048 bytes)\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "message",
+   "ops@acme.test",
+   "id-1",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_email_message",
+    {
+     "id": "id-1",
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "mail/messages/id-1?mailbox=ops%40acme.test",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"mailbox\": \"ops@acme.test\",\n  \"msg_id\": \"m1\",\n  \"thread_id\": \"t1\",\n  \"subject\": \"Statement\",\n  \"from_header\": \"Bank <bank@example.com>\",\n  \"to\": [\n    \"ops@acme.test\"\n  ],\n  \"date\": \"2026-11-01\",\n  \"labels\": [\n    \"INBOX\"\n  ],\n  \"snippet\": \"Your statement\",\n  \"body\": \"Your statement is ready.\",\n  \"attachments\": [\n    {\n      \"name\": \"statement.pdf\",\n      \"type\": \"application/pdf\",\n      \"size\": 2048\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [],
+     "limit": 100,
+     "mailbox": "ops@acme.test",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "limit": 100,
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "archive",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_archive",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "archive"
+    }
+   ]
+  ],
+  "stdout": "Archived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unarchive",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_unarchive",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "unarchive"
+    }
+   ]
+  ],
+  "stdout": "Unarchived 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-read",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_read",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "mark_read"
+    }
+   ]
+  ],
+  "stdout": "Marked read 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "mark-unread",
+   "ops@acme.test",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_mark_unread",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "mark_unread"
+    }
+   ]
+  ],
+  "stdout": "Marked unread 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "label",
+   "ops@acme.test",
+   "Receipts",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_label",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "label": "Receipts",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "label": "Receipts",
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "label"
+    }
+   ]
+  ],
+  "stdout": "Labeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "email",
+   "unlabel",
+   "ops@acme.test",
+   "Receipts",
+   "ids-1",
+   "ids-1b",
+   "--query",
+   "older_than:30d",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_email_unlabel",
+    {
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "label": "Receipts",
+     "limit": 5,
+     "mailbox": "ops@acme.test",
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "mail/messages/organize",
+    {
+     "mailbox": "ops@acme.test",
+     "query": "older_than:30d",
+     "limit": 5,
+     "label": "Receipts",
+     "ids": [
+      "ids-1",
+      "ids-1b"
+     ],
+     "action": "unlabel"
+    }
+   ]
+  ],
+  "stdout": "Unlabeled 2 messages in ops@acme.test. Undo: tico email unlabel ops@acme.test Receipts m1 m2\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

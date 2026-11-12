@@ -422,31 +422,10 @@
     {
       "fixable": true,
       "new": [
-        "listening",
-        "decide"
-      ],
-      "old": [
-        "listen",
-        "judge"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
         "listening"
       ],
       "old": [
         "listen"
-      ]
-    },
-    {
-      "fixable": true,
-      "new": [
-        "listening",
-        "item"
-      ],
-      "old": [
-        "intake"
       ]
     },
     {
@@ -536,6 +515,17 @@
       ],
       "old": [
         "org"
+      ]
+    },
+    {
+      "fixable": true,
+      "new": [
+        "message",
+        "send"
+      ],
+      "old": [
+        "chat",
+        "send"
       ]
     },
     {
@@ -784,6 +774,14 @@
     [
       "org",
       "reports-to"
+    ],
+    [
+      "org",
+      "models"
+    ],
+    [
+      "org",
+      "show"
     ]
   ],
   "commands_removed": [

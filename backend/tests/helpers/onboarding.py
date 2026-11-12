@@ -16,7 +16,7 @@ COMPANY = {
     "company_name": "Acme",
     "app_name": "Atlas",
     "assistant_name": "Morgan",
-    "assistant_bot": "coo",
+    "assistant_bot": "assistant",
     "github_owner": "AcmeCorp",
 }
 
@@ -36,7 +36,7 @@ PEOPLE = {
 
 # What a fresh environment seeds: the assistant people talk to, and the bot that builds the
 # rest. Both start planned, exactly as templates/environment-registry/employees.yaml does.
-SEED = {"coo": {"name": "coo", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
+SEED = {"assistant": {"name": "assistant", "status": "planned"}, "botops": {"name": "botops", "status": "planned"}}
 
 
 TOKEN = "local-owner-secret-token-0123456789"
@@ -44,7 +44,7 @@ TOKEN = "local-owner-secret-token-0123456789"
 
 ASSISTANT_CARD = {
     "template": "assistant",
-    "slug": "coo",
+    "slug": "assistant",
     "name": "{{assistant_name}}",
     "required": True,
     "default": True,
@@ -72,7 +72,7 @@ BOTOPS_CARD = {
 
 
 SUPPORT_CARD = {
-    "template": "support",
+    "template": "support-owner",
     "slug": "support",
     "name": "Support",
     "required": False,
@@ -86,7 +86,7 @@ SUPPORT_CARD = {
 
 
 SALES_CARD = {
-    "template": "sales",
+    "template": "inbound-sales-owner",
     "slug": "sales",
     "name": "Sales",
     "required": False,
@@ -118,7 +118,7 @@ def write_catalog(root, cards):
 
 @pytest.fixture
 def environment(tmp_path):
-    """A signed-in, loopback environment seeded with just coo and botops, plus a catalog."""
+    """A signed-in, loopback environment seeded with just assistant and botops, plus a catalog."""
     clients = []
 
     def build(cards=None, seed=SEED, **overrides):

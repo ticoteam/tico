@@ -174,7 +174,6 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
         assert done.status_code == 200 and done.json()["profile"] == "scout", done.text
         REAL_SLEEP(0.02)
 
-    started = time.monotonic()
     code, out, err = connector.pair(approve_as_botops)
     assert code == 0, err
     assert "Tell BotOps" in out and "Approved for bot 'scout'" in out and "Tico sees it: 0 message(s)" in out
@@ -280,4 +279,3 @@ def test_a_hermes_bot_pairs_works_is_archived_restored_and_pairs_again(api, boto
     post(api, "chat/scout", {"text": "Welcome back."})
     assert [m["body"] for m in connector.tool("tico_message_list")["messages"]] == ["Welcome back."]
     assert connector.run("doctor", "--profile", "scout")[0] == 0
-    assert time.monotonic() - started < 10

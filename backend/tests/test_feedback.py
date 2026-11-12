@@ -106,7 +106,7 @@ def test_a_private_assistant_chats_feedback_is_its_persons_alone(api):
     r, attempt = assistant_turn(api, "cara-test", text="hi")  # the Assistant's bot turn answers, as the model does
     finish(api, r, attempt, "Hi Cara, what can I do?")
     chat = api.get("/api/v2/assistant", headers=headers("cara-test")).json()["messages"]
-    reply = [m for m in chat if m["sender_id"] == "bot:coo" and m["body"] == "Hi Cara, what can I do?"][-1]["id"]
+    reply = [m for m in chat if m["sender_id"] == "bot:assistant" and m["body"] == "Hi Cara, what can I do?"][-1]["id"]
     rated = give(api, reply, token="cara-test", reason="Too chirpy")
     assert rows(api, "SELECT attempt_id FROM feedbacks WHERE id=?", rated["id"])[0]["attempt_id"] == attempt["id"]
     assert [m["id"] for m in markers(api, [reply], token="cara-test")] == [rated["id"]]

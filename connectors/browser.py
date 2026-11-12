@@ -3,8 +3,8 @@
 signed-in website goes through this; nobody drives Chrome, the Orca browser, or Aside directly.
 
   connectors/browser.py doctor
-  connectors/browser.py repl --as listening "const p = await openTab('https://www.linkedin.com/...'); ..."
-  connectors/browser.py repl --as sales-enablement --file steps.js
+  connectors/browser.py repl --as social-media-manager "const p = await openTab('https://www.linkedin.com/...'); ..."
+  connectors/browser.py repl --as sales-enablement-manager --file steps.js
   connectors/browser.py task --as influencer "Find ten creators on Upfluence who ..."   # Aside's own agent
   connectors/browser.py tabs --as cpo
 
@@ -58,7 +58,7 @@ ACTIONS = re.compile(
 URLS = re.compile(r"https?://([A-Za-z0-9.-]+)")
 # The one employee that reads the owner's social sessions, and the hosts that count as one. This is
 # in the hub, not in any bot.yaml, so a bot cannot grant itself a social site.
-SESSION_OWNER = "listening"
+SESSION_OWNER = "social-media-manager"
 SOCIAL_HOSTS = (
     "x.com",
     "twitter.com",
@@ -139,8 +139,7 @@ def check_social(slug, sites=(), text=""):
     if named:
         raise Refused(
             f"{slug} may not use the owner's social sessions ({', '.join(named)}); only {SESSION_OWNER} reads them.",
-            "Read what Listening saved from your Tico inbox (tico listening item list), or open a task on "
-            "listening for a lookup.",
+            "Open a task on listening for a lookup.",
         )
 
 

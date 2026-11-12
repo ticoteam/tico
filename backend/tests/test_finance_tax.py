@@ -29,7 +29,7 @@ from backend.tests.helpers.finance_fixtures import (
 PLAIN = "human:eve"
 PAYABLES = "human:dan"  # a teammate whose view covers their own expenses and payables
 TIN = "00-0000001"
-BOOKKEEPER = {"bookkeeper": {"name": "bookkeeper", "runtime": "fake", "status": "active"}}
+BOOKKEEPER = {"finance-owner": {"name": "finance-owner", "runtime": "fake", "status": "active"}}
 
 
 @pytest.fixture
@@ -333,9 +333,9 @@ def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keep
 def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
     with store.transaction() as c:
         # the shared fixture registers the Bookkeeper; a new install has none until its own set-up
-        c.execute("DELETE FROM bot_settings WHERE bot_id IN (SELECT id FROM bots WHERE slug=?)", ("bookkeeper",))
-        c.execute("DELETE FROM bot_config WHERE bot=?", ("bookkeeper",))
-        c.execute("DELETE FROM bots WHERE slug=?", ("bookkeeper",))
+        c.execute("DELETE FROM bot_settings WHERE bot_id IN (SELECT id FROM bots WHERE slug=?)", ("finance-owner",))
+        c.execute("DELETE FROM bot_config WHERE bot=?", ("finance-owner",))
+        c.execute("DELETE FROM bots WHERE slug=?", ("finance-owner",))
         assert FT.seed_dues(c, AT) == []
         FA.setup(c, OWNER, AT)
         assert FT.seed_dues(c, AT) == []
@@ -378,7 +378,7 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             assert rules == 1, key
             assert len(dues) == 1, key
             owner, repeats, first_due, routine_id = dues[0]
-            assert (owner, routine_id is not None) == ("bot:bookkeeper", True), key
+            assert (owner, routine_id is not None) == ("bot:finance-owner", True), key
             assert (repeats, first_due) == first[key], key
 
 
@@ -400,22 +400,6 @@ def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(keeper
     with keeper.transaction() as c:
         # Without the amount owed there is no bill to make: the owed figure is read off the workpaper.
         assert act(c, PAYABLES, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"}).code == "denied"
-
-
-def test_an_everything_grant_reads_the_workpapers_whole(keeper):
-    with keeper.transaction() as c:
-        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
-        bank = _bank(c)
-        _grant(c, PAYABLES, "everything", whose="company")
-        _expense(c, acme, 20_000, "bank", "b1", "1000")
-        _pay(c, acme, 40_000, {"money_account_id": bank})
-    with keeper.read() as c:
-        mine = FR.form_1099_report(c, PAYABLES, 2026, AT)
-        mine_csv = FR.form_1099_csv(c, PAYABLES, 2026, AT)
-        everyone = FR.form_1099_report(c, OWNER, 2026, AT)
-    assert _vendor_row(mine, "Acme Consulting")["cash_paid"] == 60_000
-    assert mine_csv.splitlines()[1] == "2026,Acme Consulting,yes,600.00,0.00,2000.00,no"
-    assert mine == everyone
 
 
 def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(keeper):

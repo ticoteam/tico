@@ -85,10 +85,12 @@ STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
 MAX_VALUE = 64 * 1024
 
-# What each kind is, the runtime it signs in, and how a turn receives it: `env` in the turn's environment, or `file` in
+# What each kind is, the name a new one gets when the person gives none (`default_name`), the runtime it signs in, and
+# how a turn receives it: `env` in the turn's environment, or `file` in
 # the CLI's own home (set by the runner). `billing` is what the run records (backend/usage.py). Listed in the page's order.
 KINDS = {
     "claude_token": {
+        "name": "Claude",
         "runtime": "claude",
         "label": "Claude plan",
         "env": "CLAUDE_CODE_OAUTH_TOKEN",
@@ -98,6 +100,7 @@ KINDS = {
         "connect": True,
     },
     "codex_login": {
+        "name": "ChatGPT",
         "runtime": "codex",
         "label": "ChatGPT plan",
         "file": "auth.json",
@@ -107,6 +110,7 @@ KINDS = {
         "connect": True,
     },
     "anthropic_key": {
+        "name": "Anthropic API",
         "runtime": "claude",
         "label": "Anthropic API key",
         "env": "ANTHROPIC_API_KEY",
@@ -115,6 +119,7 @@ KINDS = {
         "help": "An Anthropic API key (sk-ant-…).",
     },
     "openai_key": {
+        "name": "OpenAI API",
         "runtime": "codex",
         "label": "OpenAI API key",
         "file": "auth.json",
@@ -162,7 +167,8 @@ class SubscriptionWrite(Contract):
 
 
 class SubscriptionConnect(Contract):
-    """Sign a plan in from the page: a new subscription (`kind`, `name`), or a saved one's new value (`subscription`).
+    """Sign a plan in from the page: a new subscription (`kind`; `name`, else its plan's), or a saved one's new value
+    (`subscription`).
     `owner_id` names the new one's owner (default: whoever connects it). `confirm` accepts that a reconnect stops and
     restarts the live runs on every computer given it."""
 
@@ -925,9 +931,23 @@ def _confirm_reconnect(c, settings, given):
         _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
 
 
-def save(c, vault, settings, who, body, sid=None):
+def default_name(c, kind):
+    """The name of a new subscription whose adder gave none: its plan or provider ("Claude", "ChatGPT"), numbered from
+    the second of that name on ("Claude 2"). It is renamed under its row's Edit."""
+    base = KINDS[kind]["name"]
+    taken = {r["name"].strip().lower() for r in c.execute("SELECT name FROM model_subscriptions")}
+    n, name = 1, base
+    while name.lower() in taken:
+        n += 1
+        name = f"{base} {n}"
+    return name
+
+
+def save(c, vault, settings, who, body, sid=None, signed_on=""):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
-    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. Returns its view."""
+    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. A plan added or given
+    a new secret goes on the computers that need it (`spread`; `signed_on`: the computer a Connect ran on). Returns its
+    view."""
     now = H.now()
     if sid:
         sub = row(c, sid)
@@ -967,17 +987,17 @@ def save(c, vault, settings, who, body, sid=None):
             login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
             stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
+            spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
+            _follow(c, settings, who.actor)
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
         return view(c, row(c, sid))
     if not body.kind or body.secret is None:
         raise Problem("secret", "Choose a kind and paste the token, key or login", 422)
-    name = (body.name or "").strip()
-    if not name:
-        raise Problem("name", "Enter a name", 422)
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
+    name = (body.name or "").strip() or default_name(c, body.kind)
     owner = _default_owner(c, who, body, body.kind)
     sid = H.new_id()
     c.execute(
@@ -987,6 +1007,8 @@ def save(c, vault, settings, who, body, sid=None):
     )
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     _tick_provider(c, settings, who.actor, body.kind)
+    spread(c, settings, sid, who.actor, signed_on)
+    _follow(c, settings, who.actor)
     return view(c, row(c, sid))
 
 
@@ -1013,6 +1035,7 @@ def remove(c, settings, who, sid, confirm=False):
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
+    _follow(c, settings, who.actor)
     return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": reset}
 
 
@@ -1116,15 +1139,17 @@ def may_grant(c, auth, actor):
     return bool(human) and not standing(c, pid) and str(human.get("email") or "").lower() in auth.bot_admins
 
 
-def lend(c, runner_id, runtime, actor, shared, others):
-    """Give a cloud machine's computer the company's plan for `runtime` when it has no plan and no sign-in of its own
-    there, so a bot placed on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or
-    reset: a computer with a plan, a sign-in reported (any state but missing), or a live run on that runtime, is left
-    as it is (returns None, and the next placement asks again). The plan is the first that works, preferring one already
-    given to the shared machine's computer (`shared`), then to another cloud machine's (`others`), then the lowest known
-    used percent, then the most recently added. Only subscription plans count (an API key bills per use, so it is never
-    chosen for a computer). Returns the subscription id given, or None when no plan fits."""
+def lend(c, runner_id, runtime, actor, shared, others, only=None):
+    """Give a computer the company's plan for `runtime` when it has no plan and no working sign-in of its own there, so
+    a bot on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or reset: a computer
+    with a plan, a sign-in that works or has not said (any state but missing, failed or rejected), or a live run on that
+    runtime, is left as it is (returns None, and the next placement asks again). The plan is the first that works,
+    preferring one already given to the shared machine's computer (`shared`), then to another cloud machine's
+    (`others`), then the lowest known used percent, then the most recently added; with `only`, that plan or none. Only
+    subscription plans count (an API key bills per use, so it is never chosen for a computer). Returns the subscription
+    id given, or None when no plan fits."""
     from . import login_holds
+    from .readiness import SIGNED_OUT
 
     runner = c.execute(
         "SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)
@@ -1137,7 +1162,7 @@ def lend(c, runner_id, runtime, actor, shared, others):
     ):
         return None
     own = (readiness_document(runner["readiness"]).get("runtimes") or {}).get(runtime) or {}
-    if own.get("authenticated") not in (None, "missing") or _live(c, runner_id, runtime):
+    if own.get("authenticated") not in (None, *SIGNED_OUT) or _live(c, runner_id, runtime):
         return None
     kinds = [
         kind for kind, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"
@@ -1145,8 +1170,8 @@ def lend(c, runner_id, runtime, actor, shared, others):
     subs = H._rows(
         c.execute(
             f"SELECT * FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
-            "AND status<>'needs_reconnect' ORDER BY created_at DESC",
-            kinds,
+            "AND status<>'needs_reconnect'" + (" AND id=?" if only else "") + " ORDER BY created_at DESC",
+            [*kinds, *([only] if only else [])],
         )
     )
     cloud = {r: 0 if r == shared else 1 for r in [shared, *others] if r}
@@ -1175,6 +1200,40 @@ def lend(c, runner_id, runtime, actor, shared, others):
         {"runner": runner_id, "runtime": runtime, "stopped": 0, "sessions_reset": 0},
     )
     return chosen["id"]
+
+
+def _follow(c, settings, actor):
+    """The plans the company has changed: the bots that follow them move to their set (backend/plan_models.py)."""
+    from . import plan_models
+
+    plan_models.follow(c, settings, actor)
+
+
+def spread(c, settings, sid, actor, signed_on=""):
+    """A plan just added, connected or reconnected goes on the computers that need it, by `lend`'s rules (nothing
+    replaced, stopped or reset): the computer a Connect signed it in on (`signed_on`), then on a Tico Cloud company each
+    cloud machine's computer, the shared one first; on a company with one computer, that one. With several computers of
+    its own, a company chooses where (Settings > Computers). A plan placed before the bots is otherwise never on a
+    computer, and they run on Tico Medium. Returns the computer ids given it."""
+    from . import cloud_machines
+
+    sub = row(c, sid)
+    if not sub or sub["status"] == "needs_reconnect":
+        return []
+    spec = KINDS.get(sub["kind"]) or {}
+    if spec.get("billing") != "subscription":
+        return []
+    shared, others = cloud_machines.lend_order(c)
+    if cloud_machines.cloud_company(c, settings):
+        computers = [signed_on, shared, *others]
+    else:
+        live = [r[0] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")]
+        computers = [signed_on, *(live if len(live) == 1 else [])]
+    return [
+        runner_id
+        for runner_id in dict.fromkeys(r for r in computers if r)
+        if lend(c, runner_id, spec["runtime"], actor, shared, others, only=sid)
+    ]
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
@@ -1386,6 +1445,7 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
         _effect_changed(c, settings, sub["id"])
+        _follow(c, settings, H.KEEPER)
     H.event(
         c,
         H.KEEPER,
@@ -1451,10 +1511,13 @@ def connect_ready(c):
 
 def connect(c, settings, who, body):
     """Start a Connect: queue the sign-in on a computer, remembering what its result becomes. Read back, given a code
-    and cancelled like any sign-in (backend/model_login.py). Its row says where (`computer`)."""
+    and cancelled like any sign-in (backend/model_login.py). Its row says where (`computer`) and what the subscription
+    is called (`name`: the one given, else `default_name`). With no computer online on a company whose cloud computer
+    can be started, it starts that one and answers `waking` with no sign-in: asked again, it queues once that is up."""
     from . import model_login
 
     name, sid = (body.name or "").strip(), body.subscription or ""
+    sub = None
     if sid:
         sub = row(c, sid)
         if not sub:
@@ -1468,8 +1531,6 @@ def connect(c, settings, who, body):
     if sid:
         if not body.confirm:
             _confirm_reconnect(c, settings, _signed_in_with(c, sid))
-    elif not name:
-        raise Problem("name", "Enter a name", 422)
     elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     # A reconnect keeps its owner; a new one is checked now, before anyone signs in.
@@ -1480,20 +1541,41 @@ def connect(c, settings, who, body):
             **model_login.view(login),
             "computer": runner["label"],
             "not_yours": runner["owner_id"] != H.actor_id(who.actor),
+            "name": sub["name"] if sub else target["name"],
+            "waking": False,
         }
 
-    # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs.
+    # Asked again (a reloaded page): the sign-in already going picks back up, wherever it runs. Looked for before a
+    # name is made up for it: the one it was given is on its row.
     model_login.sweep(c)
-    going = c.execute(
-        f"SELECT l.* FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
-        f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind=? AND s.name=? AND s.subscription_id=? "
-        f"AND {model_login.ACTIVE_SQL}",
-        (who.actor, kind, name, sid),
+    target = c.execute(
+        f"SELECT l.id, s.name FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+        f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind=? AND s.subscription_id=? "
+        f"AND {model_login.ACTIVE_SQL}" + (" AND s.name=?" if name else "") + " ORDER BY l.created_at",
+        (who.actor, kind, sid, *([name] if name else [])),
     ).fetchone()
-    if going:
+    if target:
+        going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         return answer(going, model_login._runner(c, going["runner_id"]))
+    target = {"name": name or ("" if sid else default_name(c, kind))}
     computers = _connect_computers(c, spec["runtime"], who)
     if not computers:
+        # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
+        # the page asks again until it is up (`waking`, no sign-in yet).
+        from . import cloud_machines
+
+        if cloud_machines.signin_wake(c, settings):
+            return {
+                "id": "",
+                "kind": "connect",
+                "runner_id": "",
+                "runtime": spec["runtime"],
+                "state": "requested",
+                "computer": "",
+                "not_yours": False,
+                "name": sub["name"] if sub else target["name"],
+                "waking": True,
+            }
         raise Problem(
             "offline",
             "Connect needs a computer online, on the latest Tico, with "
@@ -1513,7 +1595,7 @@ def connect(c, settings, who, body):
         )
     c.execute(
         "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id) VALUES(?,?,?,?,?)",
-        (login["id"], kind, name, sid, owner),
+        (login["id"], kind, "" if sid else target["name"], sid, owner),
     )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner)
@@ -1536,9 +1618,9 @@ def connected(c, vault, settings, who, login_id, body):
     if login["state"] not in model_login.ACTIVE:
         raise Problem("state", "That sign-in has ended", 409)
     target = c.execute("SELECT * FROM subscription_connects WHERE login_id=?", (login_id,)).fetchone()
-    state, message = "done", ""
+    state, message, category = "done", "", ""
     if not target:
-        state, message = "failed", "That sign-in has ended"
+        state, message, category = "failed", "That sign-in has ended", "ended"
     else:
         write = SubscriptionWrite(
             kind=target["kind"],
@@ -1555,16 +1637,29 @@ def connected(c, vault, settings, who, login_id, body):
                 SimpleNamespace(actor=login["requested_by"]),
                 write,
                 target["subscription_id"] or None,
+                signed_on=who.runner_id,
             )
         except Problem as problem:
-            state, message = "failed", model_login.redact(problem.detail)
+            # A fixed word for the history: never the value, nor what the provider said about it.
+            state, message, category = "failed", model_login.redact(problem.detail), "value_refused"
     c.execute(
         "UPDATE model_logins SET state=?, message=?, url='', user_code='', pending_code=NULL, lines='[]', "
         "updated_at=? WHERE id=?",
         (state, message, H.now(), login_id),
     )
     c.execute("DELETE FROM subscription_connects WHERE login_id=?", (login_id,))
-    H.event(c, "runner:" + who.runner_id, "runner.login." + state, who.runner_id, {"runtime": login["runtime"]})
+    H.event(
+        c,
+        "runner:" + who.runner_id,
+        "runner.login." + state,
+        who.runner_id,
+        {
+            "runtime": login["runtime"],
+            "login_id": login_id,
+            "kind": "connect",
+            **({"category": category} if category else {}),
+        },
+    )
     return {"state": state, "message": message}
 
 

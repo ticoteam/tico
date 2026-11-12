@@ -32,7 +32,7 @@ agreement lapse), a human's call.
 ## 5. Fees due (first review of the month)
 
 For each partner deal paid by the customer last month: the amount collected, the agreement clause and rate,
-the fee. Put the list on the task for the Finance Owner (`bookkeeper`) to pay. Make a payment only when the task asks and a granted Tool allows it; otherwise name the missing access.
+the fee. Put the list on the task for the Finance Owner (`finance-owner`) to pay. Make a payment only when the task asks and a granted Tool allows it; otherwise name the missing access.
 
 ## 6. Write and hand over
 

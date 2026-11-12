@@ -1,2 +1,2 @@
 # Learnings
-Durable facts about the job and the business. Date each entry.
+Durable facts about the job and the team. Date each entry.

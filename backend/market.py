@@ -5,9 +5,9 @@ The Librarian (`bot:librarian`) curates: it and the company owner are the only a
 entity, an edge, a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
 retired or merged, and every changed field is a `history_events` row (subject_type `market_<kind>`).
 
-With the redesign on, a change made in a bot turn an automation started (a listening match's Market listening, the
-daily briefing) also names that turn and what started it (`market_turn_sources`), and the graph shows it as each
-entity's or edge's `source`: the match reaches the graph only through the Librarian's turn, and the graph says so.
+With the redesign on, a change made in a bot turn an automation started (Market listening, the daily briefing) also
+names that turn (`market_turn_sources`), and the graph shows it as each entity's or edge's `source`: what a listening
+sends reaches the graph only through the Librarian's turn, and the graph says so.
 """
 
 import hashlib
@@ -1254,7 +1254,7 @@ def report(
 ):
     """Prose from anyone on the roster. It never changes an entity or an edge.
 
-    `source_ref` names where the finding came from (an intake item, backend/listening.py). A
+    `source_ref` names where the finding came from (a listening item, backend/listening.py). A
     reporter files one insight per source_ref: the same ref again returns the first insight."""
     H._writer(conn, actor)
     source_ref = str(source_ref or "").strip() or None
@@ -1655,7 +1655,7 @@ def sweep(conn, actor, unverified, *, today=None, owner_email=None):
         title = "Verify " + row["name"]
         body = f"Check {row['id']}.\n\nLook for: {look}\n"
         try:
-            listener = (H.resolve_bot(conn, "listening") or {}).get("id", "listening")
+            listener = (H.resolve_bot(conn, "social-media-manager") or {}).get("id", "social-media-manager")
             task = H.task_create(conn, actor, title, body, "bot:" + listener, deduplicate=True)
         except H.Refused:
             # A refusal here must not roll back the owner task already inserted in this sweep.
@@ -2305,16 +2305,7 @@ def nothing_to_curate(conn, settings, local):
     the weekly delta page from market events."""
     if local.weekday() == 0 or conn.execute("SELECT 1 FROM market_insights WHERE status='new' LIMIT 1").fetchone():
         return None
-    from . import listening
-
-    mine = listening.destinations_of(CURATOR, listening.destinations(settings, conn, check_questions=False))
-    if not mine:
-        return "no market insight is new, and Listening sends the Librarian nothing"
-    if conn.execute(
-        f"SELECT 1 FROM intake_items WHERE status='new' AND destination IN ({','.join('?' * len(mine))}) LIMIT 1", mine
-    ).fetchone():
-        return None
-    return "no market insight or listening item is new"
+    return "no market insight is new"
 
 
 def ensure_curator(conn):

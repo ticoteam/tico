@@ -16,6 +16,7 @@ groups whatever its team says (backend/groups.py).
 
 import hashlib
 import json
+import logging
 from datetime import date, timedelta
 from urllib.parse import urlsplit
 
@@ -31,6 +32,7 @@ from . import market_spend as MS
 from . import market_watch as MW
 from . import models as M
 from . import onboarding as O
+from . import setup_live
 from . import strategy as S
 from . import strategy_setup as SS
 from .company_file import draft as D
@@ -40,12 +42,14 @@ from .store import H, Problem, encode
 
 PLAN_KEY = "onboarding.company_file"
 FAILED_KEY = "onboarding.company_import_failed"
+log = logging.getLogger(__name__)
 
 
-# The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner is the Bookkeeper, in
+# The built-ins the chart shows in a team rather than in the Built-in group: the Finance Owner, in
 # Corporate. Every other built-in stays in the Built-in group whatever team a file names.
-IN_TEAM_BUILT_INS = ("bookkeeper",)
+IN_TEAM_BUILT_INS = ("finance-owner",)
 SOFTWARE_DEPARTMENTS = ("product", "engineering")  # the default chart's seats a company that makes no software skips
+SOFTWARE_TEAMS = ("Product", "Engineering")  # and its teams
 
 
 def plan(onboarding, c, who, text):
@@ -59,7 +63,7 @@ def plan(onboarding, c, who, text):
     try:
         saved = starter.load(text)
     except C.DraftError as exc:
-        raise Problem("company_file", str(exc), 422) from None
+        raise Problem("company_file", exc.plain, 422) from None
     draft = saved
     owner = onboarding.auth.owner_id(c)
     if not owner or not H.human(c, owner):
@@ -78,10 +82,10 @@ def plan(onboarding, c, who, text):
         card = by_name.get(bot["template"])
         if card is not None and card["required"]:
             slug = onboarding._bot_slug(card["slug"])
-            if slug in builtins:
-                raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)
             ids[bot["id"]] = slug
-            builtins[slug] = (bot, card)
+            # There is one of each built-in. A second role on it (two roles an older release had that both fold into
+            # the Finance Owner, say) is that built-in too: the first keeps its place, and a line to either ends there.
+            builtins.setdefault(slug, (bot, card))
         elif onboarding._bot_slug(bot["id"]) in required or bot["id"] in required:
             raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)
         else:
@@ -123,6 +127,15 @@ def plan(onboarding, c, who, text):
             parent = ids.get(parent) or home
             if parent == slug:
                 parent = home
+            # A file that names no manager for one of the General Manager's built-ins (BotOps) leaves it on the
+            # built-ins' own line, as a company with no file has it (onboarding.ensure_general_team), not the owner's.
+            named = bot.get("reports_to")
+            if (
+                slug in Groups.GENERAL_TEAM
+                and Groups.GENERAL_MANAGER in required
+                and not (named and named != bot["id"] and named in D.chart_ids(draft))
+            ):
+                parent = Groups.GENERAL_MANAGER
             instructions = O.render(card, display, bot["title"])["instructions"]
             if bot["reason"]:
                 instructions += "\n\nWhy this role is on the company chart:\n" + bot["reason"]
@@ -148,7 +161,7 @@ def plan(onboarding, c, who, text):
                 "team": bot.get("team", ""),
                 "live": bool(bot.get("live")),
             }
-        # A built-in that sits in a team (the Finance Owner is the Bookkeeper) keeps a seat on its line, filled by the
+        # A built-in that sits in a team (the Finance Owner is the Finance Owner) keeps a seat on its line, filled by the
         # built-in bot itself: a manager hired above it later takes it along (recruiting._follow_filled).
         for slug, (bot, card) in builtins.items():
             if slug in IN_TEAM_BUILT_INS:
@@ -651,6 +664,8 @@ def apply(onboarding, c, who, text, fingerprint):
         "imported_at": H.now(),
         "by": who.actor,
         "deferred": summary["deferred"],
+        # The seats the preview listed (summary["seats"]): a built-in's own seat (the Finance Owner's) is made too, and
+        # is counted with the built-ins (`bots` on the event), so this is one under the seats created for each.
         "seats": sum(1 for key in made if not seats[key].get("fills")),
         "people": people,
         **({"strategy": strategy} if strategy else {}),
@@ -707,10 +722,14 @@ def _go_live(onboarding, c, who, seats, made, teams):
             "display_name": seat["title"],
             "instructions": instructions,
             "reports_to": under,
+            "goes_live": True,
         }
         bot_id = onboarding._define(c, who, key, choice, card, reports_to=under)
         declared = onboarding._declared(c, bot_id)
         declared["placed_under"] = under
+        # Its setup ends with it live and taking work, with no person step (backend/setup_live.py): BotOps takes it
+        # live on its "Set up" task, and nothing parks it in Onboarding.
+        declared[setup_live.GOES_LIVE] = True
         onboarding._write_config(c, bot_id, declared)
         onboarding._setup_task(c, who, bot_id, choice, card, record["answers"])
         if teams.get(key):
@@ -718,7 +737,7 @@ def _go_live(onboarding, c, who, seats, made, teams):
         lifecycle.fill_seat(c, who, seat_id, bot_id)
 
 
-REVIEWER_TEMPLATE = "pr-reviewer"  # Reviewer 1 and Reviewer 2 (pipeline_seats.TEMPLATES)
+REVIEWER_TEMPLATE = "reviewer"  # Reviewer 1 and Reviewer 2 (pipeline_seats.TEMPLATES)
 
 
 def second_reviewer_model(onboarding, c, first_card):
@@ -741,7 +760,7 @@ def second_reviewer_model(onboarding, c, first_card):
 def lay_out_chart(onboarding, c, who, seats):
     """A chart's seats (plan()'s `seats` shape) laid out as Recruiting seats. A seat with a team goes in the group of that
     name, one per name, made if missing; one without goes in its template's group, as it always has. A built-in's seat
-    (`fills`: the Finance Owner's is the Bookkeeper's) is filled at once by that bot as it is, which goes in the seat's
+    (`fills`: the Finance Owner's is the Finance Owner's) is filled at once by that bot as it is, which goes in the seat's
     group: no second bot and no setup task. `placed_under` keeps the line it is on, so a manager hired above its seat
     later takes it along (recruiting._follow_filled). Returns ({key: seat id}, {key: group id})."""
     teams = Groups.seat_teams(
@@ -792,13 +811,15 @@ def finish_new_company(onboarding, c, who, seats, made, teams):
     return True
 
 
-def default_chart(onboarding, c, home):
+def default_chart(onboarding, c, home, every_team=False):
     """The chart a new company starts with when setup picked none: the chart formula's own default
     (backend/company_file/chart_formula.py: no segment or bet picked, the default channels), which is the chart the
     site's company file gives a company that picked nothing, in plan()'s `seats` shape. A seat whose template this
     install lacks is left out, and a seat under it reports to the owner. A company that said software is not its
-    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`). The
-    Finance Owner's seat is filled by the Bookkeeper, as on import."""
+    product gets no Product or Engineering seats, as the chart builder does (company_file/actions.py `seed`), and a team
+    setup's Your team step switched off (`answers.teams_off`) gets none, unless `every_team` (the step lists them all);
+    a team of built-ins only (`locked_teams`) is never off. The Finance Owner's seat is filled by the Finance Owner, as
+    on import."""
     from .company_file import chart_formula as F
 
     cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
@@ -808,8 +829,11 @@ def default_chart(onboarding, c, home):
     rows = [
         row
         for row in F.build({})["employees"]
-        if row["template"] in cards and not (no_software and row["department"] in SOFTWARE_DEPARTMENTS)
+        if row["template"] in cards
+        and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
+    off = set() if every_team else set(record["answers"].get("teams_off") or []) - locked_teams(rows, cards)
+    rows = [row for row in rows if row["team"] not in off]
     keys = {row["id"] for row in rows}
     seats = {}
     for row in rows:
@@ -828,6 +852,64 @@ def default_chart(onboarding, c, home):
             **({"fills": built_in} if built_in else {}),
         }
     return seats
+
+
+def locked_teams(rows, cards):
+    """The default chart's teams made of built-ins only: every company has them, so setup cannot switch them off."""
+    teams = {}
+    for row in rows:
+        teams.setdefault(row["team"], []).append(bool(cards[row["template"]]["required"]))
+    return {team for team, required in teams.items() if all(required)}
+
+
+def default_teams(onboarding, c, home):
+    """The default chart by team, for setup's Your team step: each team's name, whether it is on, and its seats in
+    chart order (live: a bot works from day one; else a Recruiting seat), each with the seat it reports to inside the
+    team (None for the team's top seats), so the step draws the chart's own shape. Every team is listed, the
+    switched-off ones as off; a team of built-ins only is `locked`, always on."""
+    off = set(O.load(c)["answers"].get("teams_off") or [])
+    chart = default_chart(onboarding, c, home, every_team=True)
+    teams = {}
+    for key, seat in chart.items():
+        team = teams.setdefault(
+            seat["team"], {"team": seat["team"], "on": seat["team"] not in off, "locked": True, "roles": []}
+        )
+        team["locked"] = team["locked"] and bool(seat.get("fills"))
+        boss = chart.get(seat["reports_to"])
+        team["roles"].append(
+            {
+                "id": key,
+                "title": seat["title"],
+                "live": seat["live"] or bool(seat.get("fills")),
+                "reports_to": seat["reports_to"] if boss and boss["team"] == seat["team"] else None,
+            }
+        )
+    for team in teams.values():
+        team["on"] = team["on"] or team["locked"]
+    return [*teams.values(), *general_team(onboarding)]
+
+
+def general_team(onboarding):
+    """The built-ins' own team as setup shows it, always on: the General Manager first, then the built-ins that report to
+    it (groups.GENERAL_TEAM, onboarding.ensure_general_team), under the group's own name. The chart formula leaves the
+    built-ins out (every company has them), and the Assistant reports to its person, so it is in no team."""
+    from . import groups as G
+
+    cards = {card["template"]: card for card in O.read_cards(onboarding.settings)}
+    names = [(slug, (cards.get(slug) or {}).get("name")) for slug in (G.GENERAL_MANAGER, *G.GENERAL_TEAM)]
+    roles = [
+        {
+            "id": slug,
+            "title": name,
+            "live": True,
+            "reports_to": None if slug == G.GENERAL_MANAGER else G.GENERAL_MANAGER,
+        }
+        for slug, name in names
+        if name
+    ]
+    if not roles or roles[0]["id"] != G.GENERAL_MANAGER:
+        return []
+    return [{"team": G.BUILT_IN_NAME, "on": True, "locked": True, "roles": roles}]
 
 
 def add_invitee(onboarding, c, who, key, email):
@@ -870,9 +952,15 @@ def add_invitee(onboarding, c, who, key, email):
 def load_on_start(onboarding, c):
     """The installer-configured plan is applied before any generic sample company.
 
-    A changed plan never replaces a configured company. An error raises, and the caller (`start`) keeps it for the
-    owner to see instead of stopping the server or installing a different team."""
+    A company whose setup is complete is left alone: no plan replaces its team, and nothing is kept against it. Until
+    then, an error raises, and the caller (`start`) keeps it for the owner to see instead of stopping the server or
+    installing a different team."""
     settings = onboarding.settings
+    if O.load(c).get("completed"):
+        # The team is in, and no file replaces it: a start never shows a company file failure to a set-up company (an
+        # owner who uploaded a fixed file after a failed start would otherwise see the old file's failure again).
+        clear_failure(c)
+        return None
     if settings.company_file_error:
         raise Problem("company_file", settings.company_file_error, 422)
     if not settings.company_file_data.strip():
@@ -898,8 +986,16 @@ def start(onboarding, store, telemetry=None):
     except Exception as exc:
         if isinstance(exc, Problem):
             reason = str(exc.detail)
+            log.warning("Company file from setup not imported: %s", reason)
+        elif isinstance(exc, C.DraftError):
+            # The owner reads the plain words (a role by its title); the log keeps the field the check refused.
+            reason = exc.plain
+            log.warning("Company file from setup not imported: %s", exc)
+            if telemetry:
+                telemetry.capture("company_import", exc)
         else:
             reason = "Tico couldn't read or apply it"
+            log.exception("Company file from setup not imported")
             if telemetry:
                 telemetry.capture("company_import", exc)
         failure = {"at": H.now(), "reason": reason[:500]}
@@ -928,8 +1024,9 @@ def forget(store):
 
 
 def dismiss(onboarding, c, who):
-    """The owner's way out of a kept failure they will not fix by import (a changed file on a company already set up,
-    say): Health and the welcome page stop showing it. A server start with the same file records it again."""
+    """The owner's way out of a kept failure they will not fix by import (they will set the team up by hand, say): Health
+    and the welcome page stop showing it. A server start with the same file records it again while setup is not
+    complete."""
     onboarding._owner(who)
     clear_failure(c, who.actor)
     return onboarding.view(c, who)

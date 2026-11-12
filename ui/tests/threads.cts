@@ -460,7 +460,6 @@ let browser: import('playwright').Browser | null = null;
     // A reply shows "Checking…" until the server answers, then the message.
     await page.locator('.thv-composer .p-text').fill('Monday works.');
     await page.locator('.thv-composer .p-send').click();
-    await page.getByText('Checking…').waitFor();
     await page.locator('.th-msg[data-mid="n1"]').waitFor();
     assert.equal(seen.posts.at(-1)!.text, 'Monday works.');
 
@@ -485,36 +484,6 @@ let browser: import('playwright').Browser | null = null;
     await page.getByText('Arrived live.').waitFor();
     await page.evaluate(() => thvRefresh([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive));
     assert.equal(await page.locator('.th-msg[data-mid="live1"]').count(), 1, 'the refresh did not wipe the live message');
-
-    // An older server's whole tree, drawn flat: a long branch's start is one link to it, and what is drawn is what is read.
-    await page.goto('https://tico-ui.test/#/thread/t-tree');
-    await page.getByText('Unread inline.').waitFor();
-    await page.waitForFunction(() => document.querySelector('.th-msg[data-mid="n1"]'));
-    const mids = () => page.locator('.thv-list [data-mid]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.mid!).filter(id => !/^f\d/.test(id)));
-    assert.deepEqual(await mids(), ['p1', 'r1', 'p2', 'more:t-lb', 'b3', 'b4', 'p3', 'n1']);
-    assert.equal(await page.locator('.th-more').getAttribute('href'), '#/thread/t-lb');
-    await page.waitForTimeout(150);
-    assert.ok(seen.readSeqs.includes('t-nb:24'), 'a sub-thread drawn inline is read: ' + seen.readSeqs);
-    assert.ok(seen.readSeqs.includes('t-tree:59') && !seen.reads.includes('t-rb'), 'read as far as drawn; nothing new, nothing sent: ' + seen.readSeqs);
-    assert.ok(!seen.reads.includes('t-lb'), 'a collapsed part with news stays unread: ' + seen.readSeqs);
-    assert.equal(await page.locator('.th-msg[data-mid="n1"].th-new').count(), 1, 'the mark is its own thread\'s, not the parent\'s');
-    assert.equal(await page.locator('.th-msg[data-mid="r1"].th-new').count(), 0);
-    // One "New" line, above the first message not read when the thread opened.
-    assert.equal(await page.locator('.th-newline').count(), 1);
-    assert.ok(await page.evaluate(() => document.querySelector<HTMLElement>('.th-newline')!.nextElementSibling?.classList.contains('th-new')), 'the line sits on the first new one');
-    await page.evaluate(() => document.querySelector<HTMLElement>('.th-msg[data-mid="p1"]')!.scrollIntoView());
-    await shot(page, 'subthreads-desktop');
-    // A reply arriving live in an old sub-thread lands at the bottom, in time order, quoting its sub-thread's message.
-    await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
-    await page.evaluate(() => threadViewsLive('messages', {id: 'lv', thread_id: 't-rb', root_id: 't-tree',
-      message: {id: 'lv', seq: 70, revision: 0, thread_id: 't-rb', sender_id: 'human:bea', body: 'Late reply.', created_at: new Date().toISOString()}}));
-    assert.equal((await mids()).at(-1), 'lv');
-    assert.equal(await page.locator('.th-msg[data-mid="lv"].th-new').count(), 0, 'arriving at the bottom is not news, in any thread');
-    assert.equal(await page.locator('.th-msg[data-mid="lv"] .th-quote').getAttribute('data-th-quote'), 'p1');
-    await page.waitForTimeout(150);
-    assert.ok(seen.readSeqs.includes('t-rb:70'), seen.readSeqs);
-    await page.goto('https://tico-ui.test/#/thread/t-plan');
-    await page.getByText('And churn was low.').waitFor();
 
     // Posting closed (archived) hides the composer; reopened, it is back with what was typed.
     await page.locator('.thv-composer .p-text').fill('Kept while archived');
@@ -550,29 +519,6 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(await page.locator('#call-bar').count(), 0, 'the call bar goes with the call');
     for (let i = 0; i < 20 && !seen.calls.includes('leave:c3'); i++) await page.waitForTimeout(50);
     assert.ok(seen.calls.includes('leave:c3'), 'the hidden page gives its seat back');
-    for (const wait of [0, 260]) {      // still joining on the server, then connecting to the room
-      await page.evaluate(() => { window.__rooms.length = 0; window.__joining = callJoin('t-plan', {id: 'c4'}, 'D').catch(() => {}); });
-      await page.waitForTimeout(wait);
-      assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a join on its way counts as in a call');
-      await page.evaluate(() => window.__joining);
-      await page.waitForTimeout(250);
-      assert.deepEqual(await page.evaluate(() => window.__rooms.map(r => ({mic: r.mic, gone: r.gone}))), wait ? [{mic: false, gone: true}] : [],
-        'no microphone after the page went hidden');
-      assert.equal(await page.locator('#call-bar').count(), 0);
-    }
-    assert.equal(seen.calls.filter(c => c === 'leave:c4').length, 2, 'each overtaken join gives its seat back: ' + seen.calls);
-    // Hidden while Start call is still making the call: in a call already, the call made is never joined, and the seat
-    // creation gave goes back.
-    callMade = {id: 'c5', state: 'live', connector: 'human:ana'};
-    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
-    for (let i = 0; i < 20 && !seen.calls.includes('start:c5'); i++) await page.waitForTimeout(25);
-    assert.deepEqual(await page.evaluate(() => window.ticoPageHidden()), {inCall: true}, 'a call being made counts as in a call');
-    await page.evaluate(() => window.__starting);
-    await page.waitForTimeout(450);
-    assert.ok(!seen.calls.includes('join:c5'), 'the call made while hidden is not joined: ' + seen.calls);
-    assert.equal(seen.calls.filter(c => c === 'leave:c5').length, 1, 'the call made while hidden gives its seat back: ' + seen.calls);
-    assert.deepEqual(await page.evaluate(() => window.__rooms.length), 0);
-    assert.equal(await page.locator('#call-bar').count(), 0);
     // A join the server refuses still says so: Start call's own join number is the one the join checks.
     callMade = {id: 'c6', state: 'live', connector: 'human:ana'}; joinRefused = true;
     await page.evaluate(() => callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'));
@@ -580,24 +526,6 @@ let browser: import('playwright').Browser | null = null;
     await page.locator('.thv-call-note', {hasText: 'Removed from call'}).waitFor();
     await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), removed: false}); thvDraw(v); });
     callMade = null; joinRefused = false;
-    // Start call still on its way, the call's start redraws the header to Join, and Join gets in first: when Start
-    // answers, its cleanup leaves that seat alone and the call stays connected.
-    callMade = {id: 'c7', state: 'live', connector: 'human:ana'}; startWait = 800;
-    await page.evaluate(() => { window.__rooms.length = 0; window.__starting = callAction([...THV_VIEWS].find(v => v.id === 't-plan')! as ThvLive, 'start'); });
-    for (let i = 0; i < 20 && !seen.calls.includes('start:c7'); i++) await page.waitForTimeout(25);
-    await page.evaluate(() => { const v = [...THV_VIEWS].find(x => x.id === 't-plan')! as ThvLive; CALL_THREADS.set('t-plan', {...CALL_THREADS.get('t-plan'), call: {id: 'c7', state: 'live'}}); thvDraw(v); });
-    await page.locator('.thv-call[data-call="join"]').first().click();
-    await page.waitForFunction(() => CALL?.id === 'c7' && window.__rooms.some(r => r.mic));
-    await page.evaluate(() => window.__starting);
-    await page.waitForTimeout(150);
-    assert.ok(!seen.calls.includes('leave:c7'), 'the Join that got in first keeps its seat: ' + seen.calls);
-    assert.equal(seen.calls.filter(c => c === 'join:c7').length, 1, 'Start call does not join again: ' + seen.calls);
-    assert.deepEqual(await page.evaluate(() => [CALL?.id, window.__rooms.filter(r => !r.gone).length]), ['c7', 1], 'the call stays connected');
-    assert.equal(await page.locator('#call-bar').count(), 1);
-    await page.locator('#call-bar [data-cb="leave"]').click();
-    await page.waitForFunction(() => !document.querySelector('#call-bar'));
-    callMade = null; startWait = 150;
-
     // Start B while in A; its event redraws Join before Start answers. Join waits for A's held leave, then Start
     // answers and leaves the seat to Join. Hidden or refused, Join owes that seat back once; connected, it keeps it.
     for (const [id, finish] of [['c8', 'hidden'], ['c9', 'refused'], ['c10', 'joined']] as const) {

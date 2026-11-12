@@ -385,22 +385,24 @@ def test_a_message_bot_keeps_reading_the_old_mailbox_both_ways(environment):
     api = environment()
     with api.app.state.store.transaction() as c:
         roster = Access._load_json(c, "people")
-        roster["people"] = [{**p, "inbox_bot": "coo"} if p["id"] == "morgan" else p for p in roster["people"]]
+        roster["people"] = [{**p, "inbox_bot": "assistant"} if p["id"] == "morgan" else p for p in roster["people"]]
         Access._save_roster(c, roster)
         # Set as morgan's message bot (People): its grant on the mailbox it reads (backend/mailbox_access.py).
         from backend import mailbox_access
 
-        mailbox_access.message_bot_changed(c, next(p for p in roster["people"] if p["id"] == "morgan"), None, "", "coo")
-        assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]  # no mailbox declared: the sign-in
+        mailbox_access.message_bot_changed(
+            c, next(p for p in roster["people"] if p["id"] == "morgan"), None, "", "assistant"
+        )
+        assert routines.token_mailboxes(c, "assistant") == [OWNER_EMAIL]  # no mailbox declared: the sign-in
     api.app.state.auth.proxy = HeaderProxy()
     for email in (NEW, OWNER_EMAIL, NEW):
         change(api, email)
         assert api.get("/api/v2/me", headers={"x-test-email": email}).json()["actor"] == "human:morgan"
         with api.app.state.store.read() as c:
-            assert routines.token_mailboxes(c, "coo") == [OWNER_EMAIL]
+            assert routines.token_mailboxes(c, "assistant") == [OWNER_EMAIL]
             [box] = routines.message_bot_mailboxes(c)
             assert box["address"] == OWNER_EMAIL and box["person_id"] == "morgan"
-            assert routines.inbox_of(c, "coo")["mailboxes"] == [OWNER_EMAIL]
+            assert routines.inbox_of(c, "assistant")["mailboxes"] == [OWNER_EMAIL]
 
 
 def test_changing_it_back_lets_the_old_address_in_again_as_the_same_person(environment):

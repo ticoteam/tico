@@ -26,13 +26,13 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 ```
 
 Docker Desktop must be open and running on a Mac. Tico runs at `http://127.0.0.1:8765`; open the sign-in link the
-installer prints. Then get one first result: **Content Marketer** drafts a short post about a made-up product, you review
+installer prints. Then get one first result: **Content Owner** drafts a short post about a made-up product, you review
 it, and you close the task. Sign in to each model subscription you chose (a ChatGPT sign-in for Codex, a Claude sign-in for Claude Code), or use an
 API key. One signed-in model is enough for the first result; Health lists the others until you sign in. You need no GitHub account or outside Tool. [Demo mode](docs/demo.md) does not run bots.
 
-1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Marketer** (`content`) checked.
+1. In **Finish setup**, choose an AI provider, name your team and pick **Marketing** with **Content Owner** (`content`) checked.
    With no provider yet, write one bet and one line under **What we won't do**; any short sentence works.
-   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner.
+   Ten built-in bots are created: Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner.
 2. Use **Add computer** to join this computer, run the command shown, then **Create my team**.
 3. Open **Settings > Computers** and **Sign in** beside Codex or Claude Code; finish the provider's browser flow.
    Other harnesses and API credentials are covered in [Harnesses](docs/harnesses.md). Choose the bot's model in **Settings > Bots**.
@@ -40,7 +40,7 @@ API key. One signed-in model is enough for the first result; Health lists the ot
    [first-result recovery](docs/install.md#first-result-recovery). With no spending limit set there is no cap; a limit pauses new
    work and lets a run in progress finish ([Usage](docs/usage.md)).
 5. On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired before its manager
-   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Marketer's
+   reports to the nearest hired manager above it until that manager is hired, then moves under it. On Content Owner's
    page, press **Start onboarding**. Use the [sample answers](docs/install.md#sample-answers-for-content-marketer)
    to give it readers, publishing plans, topics, voice examples and privacy rules; review its first draft in chat.
 6. On **Tasks**, press **+** (New task) and assign it the short draft from [Your first result](docs/install.md#your-first-result). The bot marks
@@ -96,7 +96,7 @@ team on localhost with no setup ([docs/demo.md](docs/demo.md)).
 | [docs/updates.md](docs/updates.md) | Updating the server and its computers |
 | [docs/assistant.md](docs/assistant.md) | The built-in Assistant: what it does at once and what it proposes |
 | [docs/librarian.md](docs/librarian.md) | The built-in Librarian: answers from the team's docs, with citations |
-| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Bot: automatic colours, a human's override, readings with evidence |
+| [docs/goals-and-kpis.md](docs/goals-and-kpis.md) | Goals, KPIs and the built-in Strategy Owner: automatic colours, a human's override, readings with evidence |
 | [docs/connect-an-agent.md](docs/connect-an-agent.md) | Connecting an external agent (Grok, Muse, Claude, Cursor, Codex, any MCP client) with a personal token |
 | [PRIVACY.md](PRIVACY.md), [docs/telemetry.md](docs/telemetry.md) | The anonymous usage count: exactly what is sent, and how to turn it off |
 
@@ -202,7 +202,7 @@ named team must also carry a permanent id, or the process refuses to start.
 | `TICO_COMPANY_NAME` | Compatibility alias for the team name | `Acme` |
 | `TICO_APP_NAME` | App, window and notification name | `Atlas` |
 | `TICO_ASSISTANT_NAME` | The Assistant's name (default `Assistant`) | `Morgan` |
-| `TICO_ASSISTANT_BOT` | Slug of that assistant in the roster | `coo` |
+| `TICO_ASSISTANT_BOT` | Slug of that assistant in the roster | `assistant` |
 | `TICO_OWNER_EMAIL` | Who owns the environment on first boot. Falls back to `owner:` in `hub-access.yaml`; after that the owner is stored and changed in Settings > Humans ([docs/people.md](docs/people.md)) | `you@example.com` |
 | `TICO_PUBLIC_URL` | Where browsers reach this server | `https://atlas.example.com` |
 | `TICO_RUNNER_URL` | Where runners enroll, when it differs. A runner on the same computer may use `http://127.0.0.1:<port>` | `https://runner.example.com` |
@@ -265,7 +265,7 @@ server's variable file; real hostnames, buckets, ARNs and humans live outside th
 | `infra/` | cloud-init files for a new server or runner (they call `scripts/install.sh`) |
 | `connectors/`, `integrations/`, `skills/` | Shared adapters bots use instead of vendor APIs, one page per outside system, and shared runtime skills |
 | `policies/` | Rules every bot follows: approvals, access, handoffs, writing |
-| `templates/` | `catalog/` is the bot templates setup picks from, one folder per template with its card and its starting repository; `employee-repo/` is the generic starting point, `environment-registry/` seeds a new environment with `coo` and `botops` |
+| `templates/` | `catalog/` is the bot templates setup picks from, one folder per template with its card and its starting repository; `employee-repo/` is the generic starting point, `environment-registry/` seeds a new environment with `assistant` and `botops` |
 | `scripts/` | `tico`, `tico-computer`, `hub` (`tico`'s old name), `setup-runner.sh`, `app.sh`, `publish-employee.sh` and maintenance commands |
 | `docs/` | Documentation: [how it works](docs/how-it-works.md), [using Tico](docs/using-tico.md), [finish setup](docs/onboarding.md), [creating bots](docs/creating-bots.md), [files](docs/files.md), [environments](docs/environments.md), [Hermes agents](docs/hermes-agents.md) and [OpenClaw agents](docs/openclaw-agents.md) (connect a profile in 2 minutes, with a scheduled sync); `history/` holds retired designs |
 

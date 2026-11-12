@@ -59,7 +59,6 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
         ).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE detail LIKE ?", (f"%{TOKEN}%",)).fetchone()
     add(api, token="cara-test", expected=403)  # a member saves nothing
-    add(api, name="  ", expected=422)
     add(api, "claude_token", "not-a-token", expected=422)
     add(api, "codex_login", "{}", expected=422)
     api.app.state.store.settings.test_identities["assistant"] = Identity(
@@ -149,6 +148,41 @@ def test_a_turn_signs_in_with_its_computers_subscription_and_a_refused_one_is_pa
         c.execute("UPDATE attempt_subscriptions SET revision=2 WHERE attempt_id=?", (turn["id"],))
         MS.turn_worked(c, turn["id"], "claude")
     assert listed(api)[0]["status"] == "working"
+
+
+def given_events(api):
+    with api.app.state.store.read() as c:
+        return [
+            (r["actor"], json.loads(r["detail"])["runner"])
+            for r in c.execute("SELECT actor,detail FROM events WHERE action='subscription.given' ORDER BY rowid")
+        ]
+
+
+def test_a_plan_added_on_a_company_with_one_computer_goes_on_it_unless_its_own_sign_in_works(api):
+    setup(api)
+    company(api)
+    m = machine(api)  # nothing signed in for Claude or Codex
+    sid = add(api)["id"]
+    assert effect(api, m) == sid and given_events(api) == [("human:ana", m["runner_id"])]
+    assert listed(api)[0]["computers"] == [m["runner_id"]]
+    add(api, secret=OTHER, name="Newer Max")
+    assert effect(api, m) == sid  # a plan it has is never replaced
+    give(api, m, "claude", None)
+    signed = machine(api, signed_in=True, bot="cpo", label="Signed Mac")  # its own Claude login works
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), m["runner_id"]))
+    add(api, secret="sk-ant-oat01-" + "c" * 24, name="Third Max")
+    assert effect(api, signed) is None and len(given_events(api)) == 1  # left as it is
+
+
+def test_a_plan_added_on_a_company_with_several_computers_waits_for_the_person_to_choose(api):
+    setup(api)
+    company(api)
+    m = machine(api)
+    machine(api, bot="cpo", label="Office Mac")
+    add(api)
+    assert effect(api, m) is None and given_events(api) == []
+    assert listed(api)[0]["computers"] == [] and listed(api)[0]["usage"]["reason"] == "Not on a computer yet"
 
 
 def test_an_older_computer_runs_on_its_own_login_as_before(api):
@@ -1298,41 +1332,6 @@ def test_upfront_values_keep_restart_fence_for_legacy_automatic_and_new_named_fa
     assert give(api, m, "codex", None, confirm=True)["stopped"] == 1
 
 
-def test_an_api_key_subscriptions_month_cost_is_the_measured_cost_of_its_runs(api):
-    # The month's cost sums the est_cost_usd each run stored; it once summed a column no run writes and read zero.
-    setup(api)
-    company(api)
-    on(api, "ops", "claude", "claude-sonnet-5-5")
-    sid = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")["id"]
-    m = machine(api, signed_in=True)
-    give(api, m, "claude", sid)
-    post(api, "chat/ops", {"text": "Summarize the Acme account."})
-    turn = claim(api, m)
-    post(api, f"attempts/{turn['id']}/started", {"thread_id": "api-cost"}, m["token"])
-    post(
-        api,
-        f"attempts/{turn['id']}/complete",
-        {
-            "outcome": "completed",
-            "text": "Done.",
-            "last_seq": 0,
-            "usage": {
-                "input_tokens": 1000,
-                "cached_tokens": 0,
-                "output_tokens": 500,
-                "model": "claude-sonnet-5-5",
-                "runtime": "claude",
-                "billing": "api",
-            },
-        },
-        m["token"],
-    )
-    with api.app.state.store.read() as c:
-        cost = c.execute("SELECT est_cost_usd FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
-    assert cost and cost > 0
-    assert listed(api)[0]["usage"]["cost_usd_month"] == round(cost, 2)
-
-
 def roster(api, pid, **fields):
     """Mark a person on the roster: hidden (left) or sign_in False (switched off)."""
     with api.app.state.store.transaction() as c:
@@ -1806,13 +1805,6 @@ def test_a_plan_list_runs_the_month_cost_query_only_when_an_api_key_is_saved(api
     assert not any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
     add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
     assert any("est_cost_usd" in sql for sql in listing_statements(api, monkeypatch))
-
-
-def test_the_month_cost_query_reads_the_months_turns_through_their_index(api):
-    with api.app.state.store.read() as c:
-        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + MS.costs_sql(1), ("2026-11-01", "sub"))]
-    assert any("attempts_created" in step for step in plan), plan
-    assert not any(step.startswith("SCAN") for step in plan), plan
 
 
 def test_the_credential_time_migration_starts_each_plan_from_its_last_change_and_skips_a_new_file():

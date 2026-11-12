@@ -1,4 +1,4 @@
-"""The Goal Manager (templates/catalog/goal-manager, docs/goals-and-kpis.md) is built in like the Librarian:
+"""The Strategy Owner (templates/catalog/strategy-owner, docs/goals-and-kpis.md) is built in like the Librarian:
 a required bootstrap card, routines that start paused, a company from before it gets it on update, nobody
 archives it, only the owner edits it, and its daily pass starts once the first KPI exists."""
 
@@ -11,10 +11,10 @@ from backend.tests.helpers.goal_manager import BASE, with_goal_manager
 
 
 def routines(api):
-    """The Strategy Bot's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left
+    """The Strategy Owner's routines as they run now: each its automation (backend/routines.py `row`), deleted ones left
     out."""
     with api.app.state.store.read() as c:
-        rows = {r["id"]: R.row(c, r["id"]) for r in c.execute("SELECT id FROM schedules WHERE bot='goal-manager'")}
+        rows = {r["id"]: R.row(c, r["id"]) for r in c.execute("SELECT id FROM schedules WHERE bot='strategy-owner'")}
     return {sid: row for sid, row in rows.items() if row and row["automation"] and not row["deleted_at"]}
 
 
@@ -34,13 +34,13 @@ def built(environment):
 
 def test_it_is_built_for_every_company_with_its_two_pass_routines_paused(environment):
     api, record = built(environment)
-    assert sorted(row["slug"] for row in record["bots"]) == ["botops", "coo", "goal-manager"]
+    assert sorted(row["slug"] for row in record["bots"]) == ["assistant", "botops", "strategy-owner"]
     assert all(row["setup_task_id"] is None for row in record["bots"])  # the runner sets it up, not BotOps
-    assert states(api)["goal-manager"] == "active"
+    assert states(api)["strategy-owner"] == "active"
     assert {k: v["enabled"] for k, v in routines(api).items()} == {
-        "goal-manager:kpi-pass": 0,
-        "goal-manager:goals-review": 0,
-        "goal-manager:market-briefing": 1,
+        "strategy-owner:kpi-pass": 0,
+        "strategy-owner:goals-review": 0,
+        "strategy-owner:market-briefing": 1,
     }
     api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
     assert len(routines(api)) == 3  # twice is still three
@@ -51,25 +51,25 @@ def test_a_company_from_before_gets_it_on_update_once_a_computer_and_model_exist
     machine(api)
     draft(api)
     api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())
-    assert "goal-manager" not in states(api)  # this release's catalog has no card yet
+    assert "strategy-owner" not in states(api)  # this release's catalog has no card yet
     with_goal_manager(api)
     with TestClient(create_app(api.app.state.store.settings)):  # a restart is an update
         pass
-    assert states(api)["goal-manager"] == "active" and len(routines(api)) == 3
+    assert states(api)["strategy-owner"] == "active" and len(routines(api)) == 3
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='paused' WHERE slug='goal-manager'")
+        c.execute("UPDATE bots SET state='paused' WHERE slug='strategy-owner'")
     with TestClient(create_app(api.app.state.store.settings)):
         pass
-    assert states(api)["goal-manager"] == "paused"  # a person who paused it keeps it paused
+    assert states(api)["strategy-owner"] == "paused"  # a person who paused it keeps it paused
 
 
 def test_nobody_archives_it_and_only_the_owner_edits_it(environment):
     api, _ = built(environment)
     with api.app.state.store.read() as c:
-        revision = c.execute("SELECT revision FROM bot_config WHERE bot='goal-manager'").fetchone()[0]
-    gone = api.post("/api/v2/bots/goal-manager/archive", json={"expected_revision": revision}, headers=signed_in())
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot='strategy-owner'").fetchone()[0]
+    gone = api.post("/api/v2/bots/strategy-owner/archive", json={"expected_revision": revision}, headers=signed_in())
     assert gone.status_code == 409 and gone.json()["error"]["code"] == "system_bot"
     edit = {"description": "Somebody else's", "expected_revision": revision}
-    admin = api.post("/api/v2/bots/goal-manager/definition", json=edit, headers=as_person(api, "riley"))  # an Admin
+    admin = api.post("/api/v2/bots/strategy-owner/definition", json=edit, headers=as_person(api, "riley"))  # an Admin
     assert admin.status_code == 403
-    assert api.post("/api/v2/bots/goal-manager/definition", json=edit, headers=signed_in()).status_code == 200
+    assert api.post("/api/v2/bots/strategy-owner/definition", json=edit, headers=signed_in()).status_code == 200

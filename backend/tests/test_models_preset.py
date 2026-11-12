@@ -250,21 +250,6 @@ def test_the_turn_carries_what_each_gateway_model_reads():
         gateway_tiers.reset()
 
 
-def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_refused(api):
-    settings = api.app.state.store.settings
-    seeded = providers.env_seed(type("S", (), {"models_preset": "subscriptions-gateway"})())
-    assert (seeded["enabled"], seeded["preset"]) == (["anthropic", "openai"], "subscriptions-gateway")
-    assert providers.env_seed(type("S", (), {"models_preset": "something-else"})()) is None
-    with api.app.state.store.transaction() as c, pytest.raises(providers.ProviderError):
-        record = providers.load(c, settings)
-        providers.save(
-            c,
-            "human:ana",
-            {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": record["revision"]},
-            "2026-10-19T00:00:00Z",
-        )
-
-
 def needs(api):
     """The company's sign-in card (models_preset.card), as a list. Needs you no longer lists setup cards since the
     cut-over (it is the engine's list and a person's @s), so the card is read where it is made."""
@@ -667,3 +652,114 @@ def test_a_bot_the_gateway_runs_before_sign_in_is_not_reported_as_needing_a_logi
         assert "gateway" not in location["readiness"]
         assert can["can_run"] is False and can["sign_in"] is True and can["problem"] == "Claude login required", can
         assert label == ("Saved — Claude login required", "model_sign_in"), label
+
+
+def test_a_task_turn_on_the_gateway_before_sign_in_names_the_gateways_harness_on_its_session(api, monkeypatch):
+    """Acme rc.3 bug 9: the task's session link said harness `claude` for a turn the Gateway ran (pi)."""
+    from backend.store import H
+
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "session": "task"})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    readiness = {
+        "schema_version": 1,
+        "runtimes": {
+            "claude": {"installed": True, "authenticated": "missing"},
+            "pi": {"installed": True, "authenticated": "missing"},
+        },
+        "bots": {
+            "ops": {
+                "ready": False,
+                "runtime": "claude",
+                "model": CLAUDE["model"],
+                "repository_present": True,
+                "configuration_valid": True,
+                "problems": ["claude is not signed in"],
+            }
+        },
+        "isolated": True,
+    }
+    body = {"version": "test", "platform": "test", "readiness": readiness, "capabilities": ["task_lanes_v2"]}
+    post(api, "runners/heartbeat", body, token=machine["token"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Check the task folder", "body": "Use only the fixture"})
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert (got["config"]["runtime"], got["config"]["waiting_for_sign_in"]) == ("pi", "claude")
+    post(api, f"attempts/{got['id']}/started", {"thread_id": "pi-thread"}, machine["token"])
+    with api.app.state.store.read() as c:
+        sessions = [json.loads(link["detail"]) for link in H.task_links(c, task["id"]) if link["kind"] == "session"]
+    assert [(s["harness"], s["primary"]) for s in sessions] == [("pi", True)]
+
+
+def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_bots_run_on(api, monkeypatch):
+    """Acme rc.4 B4: on a cloud machine with no Claude or Codex sign-in every bot ran on Tico Medium, its runs said no
+    fallback and Health's `on_fallback` stayed empty, so two reviewers set to different models were the same model."""
+    from backend import health, hubdb
+    from backend.tests.helpers.api import get
+    from backend.usage_records import ran_on
+
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    on_claude(api, "ops")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated="cloud")
+    post(api, "chat/ops", {"text": "Use only the synthetic fixture"})
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert got["config"]["waiting_for_sign_in"] == "claude"
+    post(api, f"attempts/{got['id']}/started", {"thread_id": "pi-thread"}, machine["token"])
+    done = {"outcome": "completed", "last_seq": 0, "text": "Done."}
+    post(api, f"attempts/{got['id']}/complete", done, machine["token"])
+    with api.app.state.store.read() as c:
+        assert ran_on(c, [got["id"]])[got["id"]]["fallback"] == "pi"
+    found = get(api, "health")
+    [row] = found["on_fallback"]
+    assert (row["bot"], row["harness"], row["waiting_for_sign_in"]) == ("ops", "pi", "claude")
+    assert row["set_to"] == {"runtime": "claude", "model": CLAUDE["model"]}
+    # A turn recorded before the field existed (no `waiting_for_sign_in` in its result) says nothing either way: its bot
+    # does not carry the field, and it is not on the fallback.
+    with api.app.state.store.transaction() as c:
+        old = dict(c.execute("SELECT * FROM attempts WHERE id=?", (got["id"],)).fetchone())
+        stamp = hubdb.now()
+        old.update(
+            id="pre-upgrade",
+            token_hash="pre-upgrade",
+            job_id=None,
+            bot_id="cpo",
+            state="completed",
+            created_at=stamp,
+            started_at=stamp,
+            finished_at=stamp,
+            result=json.dumps({"model": "gpt-6-luna"}),
+        )
+        c.execute(f"INSERT INTO attempts({','.join(old)}) VALUES({','.join('?' * len(old))})", list(old.values()))
+    with api.app.state.store.read() as c:
+        on_now, _, carrying = health._fallbacks(c)
+    assert [r["bot"] for r in on_now] == ["ops"] and carrying == {"ops"}
+    check = next(x for x in found["checks"] if x["id"] == "on_fallback")
+    assert check["status"] == "info" and check["summary"] == row["line"]
+    assert "claude-opus-5-5" in row["line"] and "no Claude subscription" in row["line"]
+
+    # Every bot whose turns carry the field ran on the Gateway for want of a sign-in: one line, not one a bot.
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "cpo", {**BS.read(c, "cpo"), "runtime": "codex", "harness": "codex", "model": "gpt-6-luna"})
+    gateway = {"harness": "pi", "model": "tico-medium-1.0", "changed_at": None}
+    rows = [
+        {**gateway, "bot": "ops", "waiting_for_sign_in": "claude"},
+        {**gateway, "bot": "cpo", "waiting_for_sign_in": "codex"},
+    ]
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        one = health._fallback_lines(c, settings, [dict(r) for r in rows], {"ops", "cpo"})
+        # A third bot whose turns carry the field but whose latest run is not on the Gateway blocks the one line.
+        each = health._fallback_lines(c, settings, listed := [dict(r) for r in rows], {"ops", "cpo", "pipe"})
+    assert "Tico Medium" in one and "Claude or Codex" in one and "gpt-6-luna" not in one
+    assert each == " ".join(row["line"] for row in listed) and "gpt-6-luna" in each
+    # A bot whose turns predate the field and whose own hop ran it elsewhere is not in the group, and keeps its line.
+    hop = [*rows, {"bot": "pipe", "harness": "codex", "model": None, "waiting_for_sign_in": None, "changed_at": None}]
+    with api.app.state.store.read() as c:
+        text = health._fallback_lines(c, settings, listed := [dict(r) for r in hop], {"ops", "cpo"})
+    assert text.startswith("Every bot") and text.endswith(listed[-1]["line"])

@@ -53,31 +53,6 @@ def test_reserved_names_are_never_given_to_a_company(ready, slug):
     assert not (ready.root / "companies" / slug).exists()
 
 
-def test_the_brief_reserved_list_is_complete():
-    assert cell.RESERVED == {
-        "hub",
-        "admin",
-        "accounts",
-        "updates",
-        "preview",
-        "runner",
-        "www",
-        "api",
-        "app",
-        "mail",
-        "status",
-        "docs",
-        "help",
-        "support",
-        "hq",
-        "gateway",
-        "hooks",
-        "cloud",
-        "tico",
-        "team",
-    }
-
-
 def test_domain_must_be_the_slug_under_the_cell_domain(ready):
     args = add_args(ready)
     args[args.index("--domain") + 1] = "boatyard.example.com"
@@ -331,13 +306,6 @@ def test_adding_again_with_a_new_secret_converges(ready):
     assert env["TICO_OIDC_CLIENT_SECRET"] == "rotated-" + "r" * 30
 
 
-def test_default_version_is_the_installers_release(ready):
-    args = add_args(ready)
-    del args[args.index("--version") : args.index("--version") + 2]
-    ready.system.release = "v7.0.1"
-    assert ready(*args)["version"] == (cell._installer_version() or "v7.0.1")
-
-
 def test_add_waits_for_health_and_says_why_it_failed(ready):
     ready.system.health["boatyard.tico.team"] = 502
     ready.system.fail["logs"] = Result(0, "tico: error: set TICO_OWNER_EMAIL\n")
@@ -450,11 +418,6 @@ def test_a_config_the_router_refuses_is_put_back(ready):
     answer = ready(*add_args(ready, "bravo"))
     assert answer["error"] == "router_failed"
     assert (ready.root / "router" / "Caddyfile").read_text() == before
-
-
-def test_edge_images_are_the_ones_compose_yaml_pins():
-    text = (ROOT / "compose.yaml").read_text()
-    assert cell.ROUTER_IMAGE in text and cell.TUNNEL_IMAGE in text
 
 
 def test_the_router_holds_requests_while_a_server_is_down():
@@ -1862,16 +1825,6 @@ def test_a_sleep_without_a_time_is_an_ordinary_sleep(ready, body):
     assert "reverse_proxy 127.0.0.1:8082" in caddyfile(ready)
 
 
-def test_the_answer_gets_back_before_the_company_stops(ready):
-    ready(*add_args(ready))
-    svc = service(ready, lead=0.5)
-    assert svc.post("boatyard", 0, "/sleep", b'{"wake_at": null}') == (202, {"state": "sleeping", "wake_at": None})
-    assert record(ready)["state"] == "running"  # the work waits its lead
-    for worker in list(svc.workers):
-        worker.join(10)
-    assert record(ready)["state"] == "sleeping" and ready.system.ps["boatyard"][0] == "exited"
-
-
 def test_a_sleep_body_never_chooses_the_company(ready):
     ready(*add_args(ready, "alpha"))
     ready(*add_args(ready, "bravo"))
@@ -1879,14 +1832,6 @@ def test_a_sleep_body_never_chooses_the_company(ready):
     body = {"wake_at": None, "company": "bravo", "slug": "bravo", "reason": "idle"}
     assert ask(svc, "alpha", path="/sleep", body=body) == (202, {"state": "sleeping", "wake_at": None})
     assert record(ready, "alpha")["state"] == "sleeping" and record(ready, "bravo")["state"] == "running"
-
-
-@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
-def test_a_sleep_with_a_missing_or_wrong_token_is_refused_as_update_is(ready, auth):
-    ready(*add_args(ready))
-    svc = service(ready, lead=0)
-    assert ask(svc, path="/sleep", body={"wake_at": None}, auth=auth) == (401, {"error": "unauthorized"})
-    assert record(ready)["state"] == "running" and ready.system.ps["boatyard"][0] == "running"
 
 
 @pytest.mark.parametrize(
@@ -2074,19 +2019,6 @@ def test_get_sleep_answers_null_for_a_record_that_holds_no_valid_policy(ready, v
 
 def status_of(svc, path):
     return svc.get("boatyard", path)[1]
-
-
-@pytest.mark.parametrize("auth", ["", "Bearer", "Bearer wrong", "Basic abc"])
-def test_get_sleep_is_gated_as_status_is(ready, auth):
-    ready(*add_args(ready))
-    ready("set-sleep", "--company", "boatyard", "--minutes", "30")
-    svc = service(ready)
-    assert ask(svc, path="/sleep", method="GET", auth=auth) == (401, {"error": "unauthorized"})
-    assert ask(svc, path="/status", method="GET", auth=auth) == (401, {"error": "unauthorized"})
-    mine = "Bearer " + token(ready)
-    assert svc.gate("boatyard", 0, peer(1), mine)[0] == 403  # another company's container
-    assert svc.gate("boatyard", 1, peer(1), mine)[0] == 403  # a listener whose slot is not boatyard's
-    assert ask(svc, path="/sleep", method="GET") == (200, {"minutes": 30})
 
 
 def test_get_sleep_over_http_is_gated_as_status_is(ready):

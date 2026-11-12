@@ -9,7 +9,7 @@ lead: true
 icon: balance
 suggest: default
 tags: [legal, contracts, compliance, policy, risk, b2b, b2c, smb]
-team_templates: [legal-review, paralegal, compliance, privacy, ip-paralegal, legal-ops, corporate-secretary]
+team_templates: [contracts-manager, paralegal, compliance-manager, privacy-manager, ip-paralegal, legal-operations-manager, corporate-secretary]
 summary: "Runs the legal desk: one queue for every legal request, reviews of the contracts that matter, a watch on every legal deadline and policy drafts for a human to adopt. Summaries for a human, not legal advice; it sends and signs only what a task asks for and a granted Tool allows."
 when: "A team of ten to two hundred people with no in-house lawyer, or one lawyer who needs the queue, the calendar and the first drafts handled."
 pains:

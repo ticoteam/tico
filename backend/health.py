@@ -384,22 +384,55 @@ PUBLISH_WARNING = "GitHub history not published: "  # runner-rs/src/readiness_ex
 DENIED_WARNING = "Claude Code denies what AGENT.md asks for: "  # runner-rs/src/readiness_extra.rs
 DENIES_WARNING = "Claude Code settings deny: "  # runner-rs/src/readiness_extra.rs
 # GitHub writes a bot's access may allow: the command, and the `can` verbs (backend/bot_tools.py) that allow it.
-# Merging and reviewing are left out: denying them to a bot that opens pull requests is a policy (a person or
-# another bot merges; no bot approves its own work), not a leftover.
-GITHUB_WRITES = (
-    ("gh pr create", ("write", "pull_requests")),
-    ("gh pr comment", ("write", "pull_requests")),
-    ("gh pr edit", ("write", "pull_requests")),
-    ("gh issue create", ("write", "issues")),
-    ("gh issue comment", ("write", "issues")),
-    ("git push", ("write",)),
-)
+# Only a push: write access to a repository is given for pushing, and says nothing about whether the bot's work opens,
+# edits or comments on pull requests or issues. A Release Owner given write to push fixes in Merge denies `gh pr create`
+# on purpose, because Tico queues and merges the pull request itself. Whether a bot needs a `gh` command is what its
+# AGENT.md asks for, which the computer compares with the same denies (Health "Claude Code permissions").
+GITHUB_WRITES = (("git push", ("write",)),)
 WRITE_VERBS = {"write", "pull_requests", "issues"}
 
 
-def _unpublished(c):
-    """Bots whose local history the runner could not give a GitHub repository (runner-rs/src/execute.rs `publish`)."""
-    return _reported(c, PUBLISH_WARNING)
+def _unpublished(c, withheld=()):
+    """Bots whose local history the runner could not give a GitHub repository (runner-rs/src/execute.rs `publish`),
+    leaving out those whose repository Tico does not use (`withheld`): a computer may still report its last failure."""
+    return [(bot, why) for bot, why in _reported(c, PUBLISH_WARNING) if bot not in withheld]
+
+
+def _withheld(c, settings):
+    """{bot: why} for each bot whose history Tico does not back up to GitHub (repositories.home): the App is installed
+    on chosen repositories and not the bot's, or another company made a repository with the bot's name."""
+    from .execution import _github_app, _repository_of
+    from .repositories import Homes
+
+    configs = {
+        r["bot"]: r
+        for r in c.execute(f"SELECT bot,{BS.CONFIG} AS config,repo FROM bot_config bc {BS.JOIN}")  # read once
+    }
+    bots = [r["id"] for r in c.execute("SELECT id FROM bots WHERE state<>'archived' ORDER BY id")]
+    app, homes, out = (_github_app(c),), Homes(c), {}
+    for bot in bots:
+        repository, owner = _repository_of(c, settings, bot, configs.get, app)
+        why = homes.why(owner, repository) if repository else ""
+        if why:
+            out[bot] = why
+    return out
+
+
+def _history_check(c, withheld):
+    """One plain line for every bot whose history is kept on its computer only: never a line per bot, never an item
+    for a person. Bots work as usual; only the backup is off."""
+    from .repositories import CHOSEN_ONLY, HOME_WORDS
+
+    said = [HOME_WORDS[CHOSEN_ONLY]] if CHOSEN_ONLY in withheld.values() else []
+    taken = sorted(_bot_name(c, bot) for bot, why in withheld.items() if why != CHOSEN_ONLY)
+    if taken:
+        said.append(
+            "Bot history is not backed up to GitHub for "
+            + ", ".join(taken[:3])
+            + (f" and {len(taken) - 3} more" if len(taken) > 3 else "")
+            + ": a repository with the bot's name was already there, made by someone else, so Tico leaves it alone"
+        )
+    return _check("bot_history", "Bot history", "info", ". ".join(said) + ".")
 
 
 def _reported(c, prefix, limit=200):
@@ -422,8 +455,9 @@ def _reported(c, prefix, limit=200):
 
 
 def harness_denies(c, settings):
-    """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
-    but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies."""
+    """(bot, command, repositories) for each GitHub write in GITHUB_WRITES (a push) a bot's access allows on a
+    repository other than its own but its Claude Code settings deny. Its own repository is left out, so a bot that
+    only reads keeps its denies."""
     from .bot_tools import listing, prime_state
     from .github_app import repo_of
     from .repositories import Reads
@@ -597,87 +631,25 @@ def failed_repository_copies(c, online_ids):
     return out
 
 
-LISTENING_ACTIVE_DAYS = 14  # Listening still saving posts this recently is still in use
-
-
-def _listening_lost(c, settings):
-    """Listening once sent posts to inboxes and still saves them, but the registry no longer routes any: what a
-    server move that left `listening.yaml` behind looks like. A company that stopped listening is not flagged."""
-    from . import listening
-
-    routed = c.execute("SELECT count(*) n, max(created_at) last FROM intake_items").fetchone()
-    if not routed or not routed["n"]:
-        return None
-    last = routed["last"]
-    saved = c.execute("SELECT count(*) n FROM listen_items WHERE first_seen_at>?", (last,)).fetchone()["n"]
-    if not c.execute(
-        "SELECT 1 FROM listen_items WHERE first_seen_at>? LIMIT 1", (H.shift(H.now(), days=-LISTENING_ACTIVE_DAYS),)
-    ).fetchone():
-        return None
-    present = (settings.registry_dir / listening.LISTENING_FILE).is_file()
-    return _check(
-        "listening",
-        "Listening",
-        "warn" if present else "bad",
-        f"Listening routes nowhere: listening.yaml {'has no valid destinations' if present else 'is missing from the company registry'}. "
-        f"It last sent a post to an inbox on {last[:10]}; {_plural(saved, 'post')} saved since went to no inbox. "
-        "Restore listening.yaml and questions/listening-item.json from the registry's previous copy.",
-        [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-    )
-
-
-def _listening_questions_lost(c, settings, qset):
-    """The registry has no questions of its own, yet posts were scored lately with a later version of the set than
-    the shipped one now in use: the company's own questions were there and are gone."""
-    from . import listening
-
-    if (settings.registry_dir / "questions" / (listening.QUESTION_SET + ".json")).is_file():
-        return None
-    since = H.shift(H.now(), days=-30)
-    for row in c.execute(
-        "SELECT question_set, max(judged_at) last FROM listen_judgments WHERE judged_at>? GROUP BY question_set",
-        (since,),
-    ):
-        name, _, version = str(row["question_set"]).partition("@")
-        if name == qset["id"] and version.isdigit() and int(version) > int(qset["version"]):
-            return _check(
-                "listening",
-                "Listening",
-                "warn",
-                f"Listening scores posts with Tico's built-in questions ({qset['label']}), but until "
-                f"{row['last'][:10]} it used the company's own ({row['question_set']}). "
-                "Restore questions/listening-item.json in the company registry.",
-                [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-            )
-    return None
-
-
 def _listening(c, settings):
+    """A listening that is on with a source whose last read was blocked, limited or failed, or with posts waiting
+    unscored (decisions are off, or a spend cap is reached). Nothing listening, or all of it well: no check."""
     from . import listening
-    from clients.judge import JudgeError
 
-    dests = listening.destinations(settings, c, check_questions=False)
-    if not dests:
-        return _listening_lost(c, settings)
-    try:
-        qset = listening.question_set(settings)
-        problems = listening.category_problems(dests, qset)
-    except JudgeError:
-        problems = [
-            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json."
-        ]
-    if not problems:
-        return _listening_questions_lost(c, settings, qset)
-    summary = "; ".join(problems[:5])
-    if len(problems) > 5:
-        summary += f"; and {len(problems) - 5} more"
-    return _check(
-        "listening",
-        "Listening",
-        "warn",
-        summary,
-        [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-    )
+    trouble, waiting = listening.trouble(c), listening.stalled(c)
+    if not trouble and not waiting:
+        return None
+    words = {"blocked": "was blocked", "rate_limited": "was rate limited", "error": "failed"}
+    lines = [
+        f"{row['name']}: {listening.site_label(row) or row['key']} {words[row['status']]}"
+        + (f" ({row['last_error']})" if row["last_error"] else "")
+        for row in trouble
+    ]
+    lines += [f"{name}: posts are waiting to be scored" for name in waiting]
+    summary = "; ".join(lines[:5])
+    if len(lines) > 5:
+        summary += f"; and {len(lines) - 5} more"
+    return _check("listening", "Listening", "warn", summary, [_fix("Listening", "#/listening")])
 
 
 def repository_fix(c, bot, label, github_owner=""):
@@ -1024,7 +996,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                         "problem": problem_words(cloud["problem"]),
                     }
                 )
-            elif count and oldest and oldest < cutoff:
+            elif count and oldest and oldest < cutoff and slug not in parked:
+                # An onboarding bot's queue waits on purpose (unfinished_setup says so), not on the machine.
                 if where and cloud["state"] in GOING:
                     claimable = (
                         ('company_limit', None, False)
@@ -1136,10 +1109,14 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                 if where[0] in restarting
                 else refused or "slow"
             )
+            # A job its task's snooze holds waits on purpose: it starts when the snooze ends (Run now and Wake end it).
+            # It is Work queueing, as on a sleeping cloud machine, never a stuck bot.
+            resting = idle and reason == "task_wait"
             slow.append(
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
+                | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
             )
-            if idle:
+            if idle and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                     | (
@@ -1174,23 +1151,13 @@ def company_import_failed(c):
     found = failure(c)
     if not found:
         return None
-    from .onboarding import load
-
-    # A company already set up can't take an import, so the way out offered is the one that works: dismissing it
-    # (or removing or fixing the file setup gave the server); before then, importing or setting the team up.
-    way_out = (
-        "This company is already set up, so the file can't replace its team: dismiss this on the welcome page, "
-        "or fix or remove the company file setup gave this server."
-        if load(c).get("completed")
-        else "Import it again, set your team up, or dismiss this, on the welcome page."
-    )
     return _check(
         "company_import",
         "Company file from setup not imported",
         "bad",
         f"{found.get('reason') or 'It could not be applied'}. Nothing from it was created and no sample team "
-        f"took its place. {way_out}",
-        [_fix("Open the welcome page", WELCOME)],
+        "took its place. Set your team up in setup, from the default team or a fixed company file.",
+        [_fix("Open setup", WELCOME)],
     )
 
 
@@ -1682,15 +1649,17 @@ def token_failure(c):
 
 
 def _github(c, github, settings):
-    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots), and "warn" once it has
-    one: the built-in bots come with every install, so the warning waits for a bot someone made."""
+    """Not connected is "info" while the team has no bot of its own (getting_started.own_bots) at work, and "warn" once
+    it has one: the built-in bots come with every install, so the warning waits for a bot someone made, and a planned
+    one (a new company's live seats, until BotOps sets them up) keeps nothing yet."""
     from .github_app import account_word
 
     row = github.row(c) if github else None
     failure = token_failure(c) if row else None
     fix = _fix("Open GitHub", "#/tools/github")
     if not row:
-        bots = own_bots(c, settings)
+        planned = {row[0] for row in c.execute("SELECT id FROM bots WHERE state='planned'")}
+        bots = [bot for bot in own_bots(c, settings) if bot not in planned]
         return _check(
             "github",
             "GitHub",
@@ -1793,6 +1762,117 @@ def _github_workflows(c, github):
             [_fix("Open GitHub settings", "#/tools/github")],
         )
     return None
+
+
+def _app_lacks(c, permission, refused_since=None):
+    """Whether the GitHub App's installation lacks `permission` at write: what GitHub last reported
+    (github_app.PERMISSIONS_SEEN), unless GitHub refused for want of it (at `refused_since`) after that report, or there
+    is none yet. Reads no network."""
+    from .github_app import PERMISSIONS_SEEN, permission_seen
+    from .repositories import metadata
+
+    seen = permission_seen(c, permission)
+    seen_at = str(metadata(c, PERMISSIONS_SEEN).get("at") or "")
+    if refused_since and (seen is None or seen_at <= refused_since):
+        return True
+    return seen is not None and seen != "write"
+
+
+def _github_release_cut(c, github):
+    """Tico cuts a release when the Release Owner asks (item_sources/github_release.py), with a token naming Actions:
+    write (a release workflow) or Contents: write (a tag). Only a person can grant that permission, so say so plainly,
+    while it is true and matters: a pipeline's In a release is set to a way that needs a permission the installation
+    lacks (as GitHub last reported it, or as it last refused an ask of that way), and a task waits in that stage now.
+    It clears once the permission is there, the setting is cleared or changed, or no task waits any more (its release
+    came). Reads what Tico recorded, no network."""
+    from .github_app import links
+    from .item_sources import github_release as GR
+
+    row = github.row(c) if github else None
+    if not row:
+        return None
+    needs = {"workflow": ("actions", GR.MISSING_ACTIONS), "tag": ("contents", GR.MISSING_CONTENTS)}
+    waiting = {}  # kind -> {stage name: tasks waiting there}
+    for settings, stage_id, stage in c.execute(
+        "SELECT r.settings, s.id, s.name FROM requirements r JOIN stages s ON s.id = r.stage_id "
+        "JOIN pipelines p ON p.id = s.pipeline_id WHERE r.withdrawn_at IS NULL AND r.kind='item' AND r.source=? "
+        "AND r.condition='in_release' AND s.retired_at IS NULL AND p.retired_at IS NULL",
+        (GR.SOURCE,),
+    ).fetchall():
+        try:
+            how = GR.way(json.loads(settings or "{}") or {})
+        except (TypeError, ValueError, AttributeError):
+            how = None
+        if how is None:
+            continue
+        count = c.execute(
+            "SELECT count(*) FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+            "WHERE v.stage_id=? AND t.status='open'",
+            (stage_id,),
+        ).fetchone()[0]
+        if count:
+            places = waiting.setdefault(how[0], {})
+            places[stage] = places.get(stage, 0) + count
+    lines = []
+    for kind, places in sorted(waiting.items()):
+        permission, missing = needs[kind]
+        refused = c.execute(
+            "SELECT updated_at, last_error FROM effects WHERE source=? AND action=? AND kind='act' "
+            "AND state IN ('done', 'failed') AND pinned LIKE ? ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+            (GR.SOURCE, GR.RELEASE, kind + ":%"),
+        ).fetchone()
+        since = str(refused[0]) if refused and str(refused[1] or "").startswith(GR.MISSING) else None
+        if not _app_lacks(c, permission, since):
+            continue
+        total = sum(places.values())
+        where = " and ".join(sorted(places))
+        lines.append(
+            f"{missing}. Until then {total} {'task' if total == 1 else 'tasks'} in {where} "
+            f"{'waits' if total == 1 else 'wait'} for a release Tico can't cut"
+        )
+    if not lines:
+        return None
+    return _check(
+        "github_release_cut",
+        "Tico can't cut releases",
+        "warn",
+        ". ".join(lines) + ".",
+        [
+            _fix("Change the App's permissions", links(row)["permissions_url"]),
+            _fix("Open GitHub settings", "#/tools/github"),
+        ],
+    )
+
+
+def _github_merge_ok(c, github):
+    """Tico's Merge stage posts its `tico/merge-ok` check run on each pull request it queues, and on each merge queue
+    group (item_sources/github.py), with the server's own Checks: write token. Without it nothing is posted, so a
+    ruleset that requires the check refuses the merge. One line, while a pipeline queues pull requests and the
+    installation, as GitHub last reported it, lacks Checks: write. Reads no network."""
+    from .github_app import links
+
+    row = github.row(c) if github else None
+    if not row:
+        return None
+    queues = c.execute(
+        "SELECT 1 FROM stages s JOIN pipelines p ON p.id = s.pipeline_id WHERE s.retired_at IS NULL "
+        "AND p.retired_at IS NULL AND json_valid(s.on_enter) AND json_extract(s.on_enter, '$.act') = 'github.queue' "
+        "LIMIT 1"
+    ).fetchone()
+    if not queues or not _app_lacks(c, "checks"):
+        return None
+    return _check(
+        "github_merge_ok",
+        "Tico can't post its merge check",
+        "warn",
+        "Tico's GitHub App lacks Checks: write, so Tico posts no tico/merge-ok check on the pull requests it queues, "
+        "and a ruleset that requires that check refuses their merge. A person sets Checks to Read and write in the "
+        "App's permissions on GitHub and accepts the change for the installation.",
+        [
+            _fix("Change the App's permissions", links(row)["permissions_url"]),
+            _fix("Open GitHub settings", "#/tools/github"),
+        ],
+    )
 
 
 def _github_workflow_edits(c, github):
@@ -2202,31 +2282,42 @@ def _failed(c):
 
 
 def _fallbacks(c, loads=None):
-    """(on fallback, limited): bots whose latest run in the last day ran on a fallback harness, with that
-    harness and when the unbroken run of fallback turns began; and bots a usage limit still holds."""
+    """(on fallback, limited, carrying): bots whose latest run in the last day ran on something other than what the bot
+    is set to, with that harness, the model that did the work, the runtime it is set to when the claim moved it to the
+    Gateway because that runtime is not signed in on its computer (`waiting_for_sign_in`, backend/models_preset.py),
+    and when the unbroken run of such turns began; bots a usage limit still holds; and the bots with any turn in the
+    last day that carries `waiting_for_sign_in` (a turn recorded before the field existed says nothing either way)."""
     from .execution import cooling_off
 
-    since, latest = H.shift(H.now(), hours=-RECENT_HOURS), {}
+    since, latest, carrying = H.shift(H.now(), hours=-RECENT_HOURS), {}, set()
     for r in c.execute(
-        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS harness "
+        "SELECT bot_id,coalesce(started_at,created_at) AS began,json_extract(result,'$.fallback') AS hop,"
+        "json_extract(result,'$.waiting_for_sign_in') AS unsigned,usage_model "
         "FROM attempts WHERE state IN ('completed','failed','interrupted') AND finished_at>? "
         "ORDER BY bot_id,finished_at DESC",
         (since,),
     ):
+        if r["unsigned"]:
+            carrying.add(r["bot_id"])
+        # The runner's own hop names its harness; a turn the claim moved to the Gateway ran on the Gateway's.
+        harness = r["hop"] or (models_preset.GATEWAY_RUNTIME if r["unsigned"] else None)
         row = latest.setdefault(
             r["bot_id"],
-            {"bot": r["bot_id"], "harness": r["harness"], "changed_at": r["began"], "open": bool(r["harness"])},
+            {
+                "bot": r["bot_id"],
+                "harness": harness,
+                "model": r["usage_model"] or None,
+                "waiting_for_sign_in": (r["unsigned"] or None) if not r["hop"] else None,
+                "changed_at": r["began"],
+                "open": bool(harness),
+            },
         )
-        if row["open"] and r["harness"]:
+        if row["open"] and harness:
             row["changed_at"] = r["began"]
         else:
             row["open"] = False
     on = sorted(
-        (
-            {"bot": row["bot"], "harness": row["harness"], "changed_at": row["changed_at"]}
-            for row in latest.values()
-            if row["harness"]
-        ),
+        ({k: v for k, v in row.items() if k != "open"} for row in latest.values() if row["harness"]),
         key=lambda row: (row["changed_at"] or "", row["bot"]),
     )
     limited = [
@@ -2234,7 +2325,88 @@ def _fallbacks(c, loads=None):
         for r in c.execute("SELECT bot,changed_at FROM bot_status WHERE state='limited' ORDER BY changed_at,bot")
         if cooling_off(c, r["bot"], loads)
     ]
-    return on, limited
+    return on, limited, carrying
+
+
+# What a person calls the subscription a runtime signs in with, in Health's line about what bots run on.
+SUBSCRIPTION_NAMES = {"claude": "Claude", "codex": "Codex"}
+
+
+def _model_words(runtime, model):
+    """`Codex (gpt-6-luna)`, or `Tico Medium` for a Tico model."""
+    from . import gateway_tiers
+
+    found = gateway_tiers.resolve(model)
+    if found:
+        return "Tico " + found["label"]
+    return _harness_name(runtime) + (f" ({model})" if model else "") if runtime else str(model or "")
+
+
+def _ran_on_words(row):
+    """What a row of `_fallbacks` ran on: the model the runner counted, else the Gateway for a turn the claim moved
+    there, else the fallback's harness."""
+    if not row.get("model") and row.get("waiting_for_sign_in"):
+        return "the Tico AI Gateway"
+    return _model_words(row["harness"], row.get("model"))
+
+
+def _named_lines(lines, most=5):
+    """The first `most` lines, then how many bots the rest are, in words a person reads."""
+    more = len(lines) - most
+    tail = [f"And {more} more bot{'s' if more != 1 else ''}."] if more > 0 else []
+    return " ".join(lines[:most] + tail)
+
+
+def _fallback_lines(c, settings, on, carrying):
+    """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
+    each row as `line`; and the summary for Health: those lines, or one line when every bot whose turns carry
+    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, with a line for
+    any other bot in `on`."""
+    from .shared_bots import follow
+
+    if not on:
+        return ""
+    record, bots = providers.load(c, settings), [row["bot"] for row in on]
+    configs = {}
+    for part in H.chunks(bots):
+        configs.update(
+            (r["bot"], r["config"])
+            for r in c.execute(
+                f"SELECT bot,{BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} WHERE bot IN ({','.join('?' * len(part))})",
+                part,
+            )
+        )
+    for row in on:
+        runtime, model = providers.bot_choice(
+            c, settings, follow(c, row["bot"], H._json(configs.get(row["bot"]), {}) or {}), record
+        )
+        row["set_to"] = {"runtime": runtime, "model": model}
+        ran_on = _ran_on_words(row)
+        name = _bot_name(c, row["bot"])
+        if row.get("waiting_for_sign_in"):
+            unsigned = row["waiting_for_sign_in"]
+            row["line"] = (
+                f"{name} is set to {_model_words(runtime or unsigned, model)} and runs on {ran_on}: its computer "
+                f"has no {SUBSCRIPTION_NAMES.get(unsigned, _harness_name(unsigned))} subscription."
+            )
+        else:
+            row["line"] = (
+                f"{name} is set to {_model_words(runtime, model)} and runs on its fallback, {ran_on}: "
+                f"what it is set to was not available."
+            )
+    signed = {row["bot"] for row in on if row.get("waiting_for_sign_in")}
+    if len(carrying) > 1 and signed == carrying:
+        group = [row for row in on if row["bot"] in carrying]
+        models = sorted({_ran_on_words(row) for row in group})
+        unsigned = sorted({row["waiting_for_sign_in"] for row in group})
+        names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
+        summary = (
+            f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
+            "subscription."
+        )
+        rest = _named_lines([row["line"] for row in on if row["bot"] not in carrying])
+        return f"{summary} {rest}" if rest else summary
+    return _named_lines([row["line"] for row in on])
 
 
 def _bot_computers(computers):
@@ -2444,6 +2616,7 @@ NEVER_STUCK_COUNTS = ("waiting_on_nothing", "retry", "manager", "person", "cant_
 # (backend/sql.py), since they name tasks the Admin may not read.
 NEVER_STUCK_KEY = "health:never_stuck"
 NEVER_STUCK_TASKS_KEY = "health:never_stuck:tasks"
+NEVER_STUCK_FRESH_MINUTES = 10  # an older reading says when it was read
 
 
 def _plate_people(c, auth):
@@ -2482,10 +2655,10 @@ def _plate_check(c, who, auth, full):
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
+                if not item.get("task_id"):
+                    continue  # a Paused cause (a held run, a login) stands for tasks no bot asked this person for
                 # The row Needs you's pass already read for this snapshot (waiting_on.prime): no read of its own.
-                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item.get("task_id") or "",)) or {}).get(
-                    "requester_id"
-                )
+                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item["task_id"],)) or {}).get("requester_id")
                 if H.is_bot(asker):
                     bots[asker] = bots.get(asker, 0) + 1
             over.append((len(items), person.actor, bots))
@@ -2605,22 +2778,33 @@ def _never_stuck_check(c, visible_sql=None):
         return json.loads(row[0]) if row else None
 
     reading = stored(NEVER_STUCK_KEY)
-    named = stored(NEVER_STUCK_TASKS_KEY) if visible_sql else None
+    named = stored(NEVER_STUCK_TASKS_KEY)
     if not reading or (visible_sql and not (named and "broken_tasks" in named)):
         return _check("never_stuck", "Tasks", "unknown", "The hourly never-stuck reading has not run yet.")
-    if visible_sql and named:
+    if named and "broken_tasks" in named:
+        # The reading is up to an hour old: a task done since then no longer counts, so the numbers never say a task
+        # is stuck after it closed. A task that got stuck since then waits for the next reading.
         listed, breaks = named["tasks"], named["broken_tasks"]
         ids = {tid for found in listed.values() for tid in found} | {tid for found in breaks for tid in found}
-        readable = _readable(c, visible_sql, sorted(ids))
-        counts = {key: sum(1 for tid in listed.get(key, []) if tid in readable) for key in NEVER_STUCK_COUNTS}
-        # A break counts for a reader of every task it is about; one about no task is the company's alone.
-        counts["broken"] = sum(1 for found in breaks if found and all(tid in readable for tid in found))
+        readable = _readable(c, visible_sql or "1", sorted(ids))
+        still_open = _readable(c, f"status='open' AND ({visible_sql or '1'})", sorted(ids))
+        counts = {key: sum(1 for tid in listed.get(key, []) if tid in still_open) for key in NEVER_STUCK_COUNTS}
+        counts["no_one"] = len({tid for tid in listed.get("no_one", []) if tid in still_open})
+        # A break can be about a done task (a wake queued after it closed), so it counts until the next reading. It
+        # counts for a reader of every task it is about; one about no task is the company's alone.
+        counts["broken"] = (
+            sum(1 for found in breaks if found and all(tid in readable for tid in found))
+            if visible_sql
+            else int(reading.get("broken") or 0)
+        )
     else:
         counts = {key: int(reading.get(key) or 0) for key in NEVER_STUCK_COUNTS}
     summary = (
         f"{counts['waiting_on_nothing']} waiting on nothing, {counts['retry']} on a retry, "
         f"{counts['manager']} with a manager, {counts['person']} reached a person, {counts['cant_run']} can't run."
     )
+    if reading.get("at") and str(reading["at"]) < H.shift(H.now(), minutes=-NEVER_STUCK_FRESH_MINUTES):
+        summary += f" Read at {str(reading['at'])[11:16]} UTC; tasks closed since are left out."
     if counts["no_one"]:
         # The company's owner and Admins learn how many, never which: no one who reads them can move them.
         them = "it" if counts["no_one"] == 1 else "them"
@@ -2699,13 +2883,19 @@ def view(c, who, settings, auth, github, config):
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
     blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
-    on_fallback, limited = _fallbacks(c, loads) if kind != "bot" else ([], [])
+    on_fallback, limited, carrying = _fallbacks(c, loads) if kind != "bot" else ([], [], set())
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
         on_fallback = [row for row in on_fallback if readable.get(row["bot"], auth.FULL)["read"]]
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    # What bots run on when it is not what they are set to: two reviewers set to different models that both run on
+    # the Gateway are not independent, and a person reads that here.
+    if running_on := _fallback_lines(c, settings, on_fallback, carrying):
+        checks.append(
+            _check("on_fallback", "What bots run on", "info", running_on, [_fix("Open Models", "#/settings", "models")])
+        )
     from . import task_privacy
 
     refused, queued = [], refused_queues(c, settings, loads)
@@ -2956,7 +3146,10 @@ def view(c, who, settings, auth, github, config):
                 [_fix("Open bots", "#/settings", "bots")],
             )
         )
-    unpublished = _unpublished(c) if full else []
+    withheld = _withheld(c, settings) if full else {}
+    if withheld:
+        checks.append(_history_check(c, withheld))
+    unpublished = _unpublished(c, withheld) if full else []
     if unpublished:
         checks.append(
             _check(
@@ -3708,6 +3901,10 @@ def view(c, who, settings, auth, github, config):
             checks.append(repo_create)
         if workflows := _github_workflows(c, github):
             checks.append(workflows)
+        if release_cut := _github_release_cut(c, github):
+            checks.append(release_cut)
+        if merge_ok := _github_merge_ok(c, github):
+            checks.append(merge_ok)
         if edits := _github_workflow_edits(c, github):
             checks.append(edits)
         slack = _slack(c)

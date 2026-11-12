@@ -1,25 +1,25 @@
-"""Counsel: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
+"""The Rules Owner: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
 and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
 
 - Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text (a PDF is read as a
   link's PDF is: clients/doc_fetch.py `pdf_to_text`), or a public link fetched with clients/doc_fetch.py with no
   credential (`env={}`), either held to DOC_CHARS characters. The text is screened for prompt injection
-  (backend/screening.py, source `document`): at `warn` the task starts with the warning line; at `hold` Counsel is not
-  given the text at all. Then the write opens one private task for Counsel, its body naming the file and version and
+  (backend/screening.py, source `document`): at `warn` the task starts with the warning line; at `hold` the Rules Owner is not
+  given the text at all. Then the write opens one private task for the Rules Owner, its body naming the file and version and
   holding the document fenced as untrusted data, and records the version in `rule_reads`. A link is saved as a Files
   version attached to that task, one file per link and requester, so a later change never alters an earlier cite and a
   teammate who cannot read the task cannot read the text. A document cut at DOC_CHARS is marked truncated.
-- Counsel has no credentials and sends nothing: its tool list is `clients/hubtools.py` COUNSEL_TOOLS. It reads its task and
+- The Rules Owner has no credentials and sends nothing: its tool list is `clients/hubtools.py` COUNSEL_TOOLS. It reads its task and
   the rules in force, plus explicitly granted physical mail or the legal letter its current task handles, and writes
-  suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
+  suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: The Rules Owner
   cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
   version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
-  it), never stored. Only Counsel and a person cite; no other bot can.
+  it), never stored. Only the Rules Owner and a person cite; no other bot can.
 - `POST /api/v2/rules/ask` answers "can I...?" with the active rules that share words with the question, at once, and
-  opens a private Counsel task for the full answer. Every answer carries the one line that it is not legal advice.
+  opens a private Rules Owner task for the full answer. Every answer carries the one line that it is not legal advice.
 
-Counsel is a helper (backend/assistant.py `HELPERS`): built in, off the org chart, seeded by onboarding like the
-Librarian (templates/catalog/tico-counsel). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
+The Rules Owner is a helper (backend/assistant.py `HELPERS`): built in, off the org chart, seeded by onboarding like the
+Librarian (templates/catalog/rules-owner). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
 owner can turn it on or off.
 """
 
@@ -48,16 +48,16 @@ from .blobs import register
 from .models import Contract
 from .store import Problem, encode
 
-SLUG = H.COUNSEL
-NAME = "Counsel"
+SLUG = H.RULES_OWNER
+NAME = "Rules Owner"
 NOT_ADVICE = "Not legal advice. For real exposure, ask a lawyer."
 QUESTION_MAX = 500
 NOTE_MAX = 2000
-# The most of a document Counsel reads: a link is fetched to this bound, a file is read to it. Longer text is cut here and
+# The most of a document the Rules Owner reads: a link is fetched to this bound, a file is read to it. Longer text is cut here and
 # the read says so (truncated), in the response, the task and the rule_reads row.
 DOC_CHARS = 400_000
-# A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
-# named by file and version, and Counsel reads it with `tico file read`.
+# A document's text goes into the Rules Owner's task only up to this many characters (a run's prompt budget). A longer one is
+# named by file and version, and the Rules Owner reads it with `tico file read`.
 TEXT_INLINE_MAX = 20_000
 ASK_MATCHES = 8
 STOP_WORDS = frozenset(
@@ -67,7 +67,7 @@ STOP_WORDS = frozenset(
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"', "–": "-", "—": "-", " ": " "})
 
-# Each read Counsel was asked for, one row per read task: the file version (the only versions it may cite,
+# Each read the Rules Owner was asked for, one row per read task: the file version (the only versions it may cite,
 # backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
 RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
  task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
@@ -91,7 +91,7 @@ class RuleAsk(Contract):
 
 
 def ensure(c):
-    """The table of the document versions Counsel was asked to read. Unversioned, as the org-rules tables are."""
+    """The table of the document versions the Rules Owner was asked to read. Unversioned, as the org-rules tables are."""
     columns = {r[1]: r[5] for r in c.execute("PRAGMA table_info(rule_reads)")}
     if columns and columns.get("task_id") != 1:
         # A development table keyed by (file, version): a second reader replaced the first read's row. One row per task.
@@ -139,7 +139,7 @@ def _version(value):
 
 
 def document(c, blobs, file_id, number):
-    """One version's text as Counsel reads it: the whole text up to DOC_CHARS, and whether it was cut. A PDF is read the
+    """One version's text as the Rules Owner reads it: the whole text up to DOC_CHARS, and whether it was cut. A PDF is read the
     way a link's PDF is (doc_fetch.pdf_to_text); a PDF that cannot be read is a 422 that says why. (None, False) when the
     version does not exist or is of a type Tico reads no text from."""
     row = c.execute(
@@ -152,7 +152,9 @@ def document(c, blobs, file_id, number):
     data = blobs.get(row["digest"])
     if row["mime"] == "application/pdf":
         if len(data) > doc_fetch.MAX_BYTES:
-            raise Problem("unreadable", "That PDF is larger than 5 MB; Counsel reads a PDF up to that size", 422)
+            raise Problem(
+                "unreadable", "That PDF is larger than 5 MB; the Rules Owner reads a PDF up to that size", 422
+            )
         try:
             text = doc_fetch.pdf_to_text(data)
         except doc_fetch.FetchError as exc:
@@ -180,7 +182,7 @@ def named(source_name, credential_name):
 
 def suggested_who(c, source_name, who=None, auth=None):
     """The departments of the bots granted a credential whose name carries this From (backend/credentials.py). Empty
-    lists when none is granted: Counsel then leaves Who to the owner. A credential has no vendor field, so the match is
+    lists when none is granted: The Rules Owner then leaves Who to the owner. A credential has no vendor field, so the match is
     on the name's words (`named`). Given `who`, a key of a tool they may not see never counts (backend/api_tools.py
     `visible`)."""
     if not str(source_name or "").strip():
@@ -290,8 +292,8 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
     file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
 
 
-# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py), said in their own words;
-# COUNSEL_ROUTES below refuses every route it does not name in any case. Counsel speaks only on its own task: a task
+# Outward routes a Rules Owner token may not call (403, from the API's middleware: backend/app.py), said in their own words;
+# COUNSEL_ROUTES below refuses every route it does not name in any case. The Rules Owner speaks only on its own task: a task
 # comment is allowed there and nowhere else (TASK_COMMENT).
 OUTWARD = tuple(
     re.compile(pattern)
@@ -312,26 +314,28 @@ OUTWARD = tuple(
 )
 TASK_COMMENT = re.compile(r"^/api/v2/tasks/([^/]+)/comments(/|$)")
 SENDS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-REFUSED = "Counsel sends nothing outside Tico and speaks only on its own task: this call is not its to make."
+REFUSED = "The Rules Owner sends nothing outside Tico and speaks only on its own task: this call is not its to make."
 
 
 def is_counsel(who):
     return who.role == "bot" and who.actor == "bot:" + SLUG
 
 
-ATTACH_REFUSED = "Counsel attaches no files: it quotes the document it was asked to read in its words and its rule."
+ATTACH_REFUSED = (
+    "The Rules Owner attaches no files: it quotes the document it was asked to read in its words and its rule."
+)
 
 
 def no_attachments(who, items):
-    """Counsel's comments carry no files (visuals.attach, before any is read): an attachment is a version of a file on
+    """The Rules Owner's comments carry no files (visuals.attach, before any is read): an attachment is a version of a file on
     its task, which is not the one version its read grants (run_read), and its response would carry a signed address."""
     if items and is_counsel(who):
         raise Problem("privacy", ATTACH_REFUSED, 403)
 
 
 def refused(store, who, path, method):
-    """Whether a call by Counsel is refused: an outward route (OUTWARD), or a task comment on a task that is not Counsel's
-    own (the task's owner is Counsel). Any other call is the runner's or a read, and is left to the route."""
+    """Whether a call by the Rules Owner is refused: an outward route (OUTWARD), or a task comment on a task that is not the Rules Owner's
+    own (the task's owner is the Rules Owner). Any other call is the runner's or a read, and is left to the route."""
     if not is_counsel(who) or method.upper() not in SENDS:
         return False
     if any(pattern.match(path) for pattern in OUTWARD):
@@ -345,7 +349,7 @@ def refused(store, who, path, method):
 
 
 def _task(c, who, title, text, labels=()):
-    """Counsel's task for a person's request: private to that person and Counsel (the file's readers are not widened)."""
+    """The Rules Owner's task for a person's request: private to that person and the Rules Owner (the file's readers are not widened)."""
     return H.task_create(c, who.actor, title, text, "bot:" + SLUG, labels=["rules", *labels], private=True)
 
 
@@ -355,7 +359,7 @@ def _screen(store, text):
 
 
 def prepare(store, auth, who, blobs, body):
-    """Outside any write: the document's text as Counsel reads it, and its screening verdict. A link is fetched here
+    """Outside any write: the document's text as the Rules Owner reads it, and its screening verdict. A link is fetched here
     with no credential (`env={}`: no server token reaches the fetch). Nothing is written."""
     if bool(body.file_id) == bool(body.url):
         raise Problem("validation", "Say which document: a file (file_id) or a link (url), not both", 422)
@@ -367,13 +371,13 @@ def prepare(store, auth, who, blobs, body):
             if not row or not F.file_visible(c, auth, who, row, {}):
                 raise Problem("not_found", "That file is not one you can read", 404)
             if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
-                raise Problem("forbidden", "Counsel is outside this page's audience", 403)
+                raise Problem("forbidden", "The Rules Owner is outside this page's audience", 403)
             number = row["current_version"]
             text, cut = document(c, blobs, row["id"], number)
         if text is None:
             raise Problem(
                 "unreadable",
-                "Counsel reads text, Markdown, HTML, CSV and PDF; this file has no text Tico can read",
+                "The Rules Owner reads text, Markdown, HTML, CSV and PDF; this file has no text Tico can read",
                 422,
             )
         found = {
@@ -427,7 +431,7 @@ def _receipt(source, file_id, number, title, who_hint, cut, action, task_id, exi
 
 
 def read(c, auth, who, files, blobs, body, found):
-    """Add a document: its one private Counsel task, the file version it names (a link's text is saved as one), and its
+    """Add a document: its one private Rules Owner task, the file version it names (a link's text is saved as one), and its
     rule_reads row. `found` is what prepare read and screened before this write; a file must still be at the version
     that was read. The page's own title is untrusted: it goes inside the fence, never on a line of its own."""
     H._writer(c, who.actor)
@@ -443,7 +447,7 @@ def read(c, auth, who, files, blobs, body, found):
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
         if not F.page_audience_visible(c, auth, Identity("bot:" + SLUG, "bot"), row, {}):
-            raise Problem("forbidden", "Counsel is outside this page's audience", 403)
+            raise Problem("forbidden", "The Rules Owner is outside this page's audience", 403)
         if row["current_version"] != found["number"]:
             raise Problem("conflict", "The document changed while it was added; add it again", 409)
         file_id, number, plan = found["file_id"], found["number"], None
@@ -523,7 +527,7 @@ def read(c, auth, who, files, blobs, body, found):
 
 
 def attempt_read(c, aid):
-    """The read a Counsel run may publish from: the `rule_reads` row of its read task, Counsel's own, when that task is
+    """The read a Rules Owner run may publish from: the `rule_reads` row of its read task, the Rules Owner's own, when that task is
     the only task whose text the run carries (an assignment notice's list of other open tasks names them, it does not
     carry them). None for any other run: one that carries a second task could carry its text into a company-wide rule."""
     from .task_privacy import carried_tasks
@@ -539,7 +543,7 @@ def attempt_read(c, aid):
 
 
 def run_read(c, who):
-    """attempt_read for a call Counsel's run makes; None for any other caller."""
+    """attempt_read for a call the Rules Owner's run makes; None for any other caller."""
     if not is_counsel(who) or not who.attempt_id:
         return None
     return attempt_read(c, who.attempt_id)
@@ -576,7 +580,7 @@ def page_copies(c):
         except sqlite3.OperationalError as exc:
             if "no such table" not in str(exc):
                 raise
-            return {}  # standalone hubdb and pre-Counsel migration databases
+            return {}  # standalone hubdb and pre-the Rules Owner migration databases
 
     return read_cache.value(c, ("counsel_page_copies",), build, shared=True)
 
@@ -678,7 +682,9 @@ def scrub_page_task(c, tid):
         # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
         c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (encode({"text": REMOVED_PAGE}), aid))
         c.execute(
-            "UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,)
+            "UPDATE attempt_diagnostics SET stderr_tail=NULL,failed_tools=NULL,end_reason=NULL,last_event=NULL "
+            "WHERE attempt_id=?",
+            (aid,),
         )
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
     if attempts:
@@ -727,7 +733,7 @@ def revoked_page_run(c, aid):
 
 
 def postal_task(c, who, letter):
-    """Without an explicit mail grant, Counsel reads only the legal letter its current task handles."""
+    """Without an explicit mail grant, the Rules Owner reads only the legal letter its current task handles."""
     if not who.attempt_id or letter["kind"] != "legal" or not letter["task_id"]:
         return False
     from . import read_cache
@@ -762,8 +768,8 @@ def postal_scan(c, auth, who, ident, rest, query):
 
 
 def private_suggestion(c, who, data):
-    """A rule Counsel writes from a private run. Its read tasks are private, and a private run publishes nothing
-    company-wide (backend/task_privacy.py guard_write), except this: on its own read task, Counsel suggests external
+    """A rule the Rules Owner writes from a private run. Its read tasks are private, and a private run publishes nothing
+    company-wide (backend/task_privacy.py guard_write), except this: on its own read task, the Rules Owner suggests external
     rules for that read's From, each citing that read's file version with a quote of at least PRIVATE_QUOTE_MIN
     characters (check_cite then finds it in that version), whose quote only the file's readers see (org_rules.view).
     While it may, its reads are scoped to that read (read_refused). Anything else from a private run is refused here.
@@ -779,12 +785,12 @@ def private_suggestion(c, who, data):
     source = O._source_named(c, data.get("source_id")) if data.get("source_id") else None
     if data.get("kind") != "external" or not read["source_id"] or source != read["source_id"]:
         raise Problem(
-            "privacy", "From a document's read, Counsel suggests external rules for that read's From only", 403
+            "privacy", "From a document's read, the Rules Owner suggests external rules for that read's From only", 403
         )
     if cite.get("file_id") != read["file_id"] or _version(cite.get("version")) != read["version"]:
         raise Problem(
             "privacy",
-            "From a document's read, Counsel's rule cites that document at the version its task "
+            "From a document's read, the Rules Owner's rule cites that document at the version its task "
             f"names: file {read['file_id']} version {read['version']}",
             403,
         )
@@ -794,13 +800,13 @@ def private_suggestion(c, who, data):
         )
 
 
-# Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
-# later is not Counsel's until it is named here. It is what Counsel is offered and what runs it: its tools
+# Every call the Rules Owner may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
+# later is not the Rules Owner's until it is named here. It is what the Rules Owner is offered and what runs it: its tools
 # (clients/hubtools.py COUNSEL_TOOLS: tico_rules_list/get/add, tico_file_read, tico_task_comment, tico_task_close) and the
 # calls they make, the MCP that carries them (each call inside comes back through here), `me` (which tools it is
 # offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
 # credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own
-# token, not Counsel's. Each call is then scoped (read_refused): its own run, the tasks it carries, its read's version.
+# token, not the Rules Owner's. Each call is then scoped (read_refused): its own run, the tasks it carries, its read's version.
 GET, WRITE, ANY = (
     frozenset({"GET", "HEAD"}),
     frozenset({"POST"}),
@@ -823,24 +829,26 @@ COUNSEL_ROUTES = tuple(
         (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
     )
 )
-READ_SCOPE = "Counsel reads only its own task and run, its requested document version, and authorized physical mail."
-# Counsel outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
+READ_SCOPE = (
+    "The Rules Owner reads only its own task and run, its requested document version, and authorized physical mail."
+)
+# The Rules Owner outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
 # credentials are fetched with that token too), and it has no agent credential unless someone makes it an external
 # agent. Such a token owns every read task, so it calls nothing but `me`.
 STANDING = ((GET, re.compile(r"^/api/v2/me$")),)
-STANDING_REFUSED = "Counsel works only inside a run: outside one it reads and writes nothing."
-# SQL reads across the whole hub: never Counsel's, in a run or not (outside the allowlist too; its own words).
+STANDING_REFUSED = "The Rules Owner works only inside a run: outside one it reads and writes nothing."
+# SQL reads across the whole hub: never the Rules Owner's, in a run or not (outside the allowlist too; its own words).
 SQL_READS = re.compile(r"^/api/(v2/)?sql/?$")
-SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document version it was asked to read."
+SQL_REFUSED = "The Rules Owner reads no SQL: it reads its own task and the document version it was asked to read."
 
 
 def read_refused(store, auth, who, method, path, query):
-    """Why a call by Counsel is refused, or None. Only COUNSEL_ROUTES are its, whatever else its bot's rights would
+    """Why a call by the Rules Owner is refused, or None. Only COUNSEL_ROUTES are its, whatever else its bot's rights would
     allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
-    a run's attempt and steps are its own run's alone; a Counsel run reads only the tasks it carries
+    a run's attempt and steps are its own run's alone; a Rules Owner run reads only the tasks it carries
     (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's read (run_read), that
     file at that version, which it names. Postal reads independently require a mail grant or the legal letter carried
-    by its current task. Counsel outside a run (no attempt) calls only STANDING."""
+    by its current task. The Rules Owner outside a run (no attempt) calls only STANDING."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
@@ -883,9 +891,9 @@ def read_refused(store, auth, who, method, path, query):
 
 
 def cite_readers(c, auth, who):
-    """Whom a rule's cite is shown as when Counsel reads rules: the people whose tasks its run carries (who asked for its
+    """Whom a rule's cite is shown as when the Rules Owner reads rules: the people whose tasks its run carries (who asked for its
     read or its question), each of whom must be able to read the cited file, so a quote never enters a run whose asker
-    could not read it. Nobody outside a run, or for a task with no person behind it: Counsel then sees no quote."""
+    could not read it. Nobody outside a run, or for a task with no person behind it: The Rules Owner then sees no quote."""
     if not who.attempt_id:
         return []
     from .task_privacy import carried_tasks
@@ -904,15 +912,15 @@ def cite_readers(c, auth, who):
 
 
 def _disclaimer(line):
-    """Whether a line of Counsel's reply is only its NOT_ADVICE line (markup and quote marks around it aside)."""
+    """Whether a line of the Rules Owner's reply is only its NOT_ADVICE line (markup and quote marks around it aside)."""
     return normal(line).strip(" *_>`\"'-") == normal(NOT_ADVICE)
 
 
 def turn_done(c, attempt, outcome, task_id, text):
-    """Counsel's turn on a document's read task ended (backend/execution.py complete). A completed turn finishes the
-    read it was allowed to publish from (attempt_read): Counsel says it is done (task_done) with the turn's last line
+    """The Rules Owner's turn on a document's read task ended (backend/execution.py complete). A completed turn finishes the
+    read it was allowed to publish from (attempt_read): The Rules Owner says it is done (task_done) with the turn's last line
     other than NOT_ADVICE, so it never sits open after the work. Done never pushes past: a read that waits on an ask
-    Counsel made stays where it is. A run that carried another task copies nothing and finishes nothing. A failed,
+    The Rules Owner made stays where it is. A run that carried another task copies nothing and finishes nothing. A failed,
     stopped or canceled turn leaves the task to the never-stuck check; a finished task is left as it is."""
     if attempt["bot_id"] != SLUG or outcome != "completed" or not task_id:
         return
@@ -927,7 +935,7 @@ def turn_done(c, attempt, outcome, task_id, text):
 
 
 def check_cite(c, auth, who, blobs, cite):
-    """A suggestion's cite, checked. Counsel cites only the (file, version) of its own run's read (run_read: the
+    """A suggestion's cite, checked. The Rules Owner cites only the (file, version) of its own run's read (run_read: the
     `rule_reads` row of the read task it runs on), and it must name that version: any other cite is a 404 before any
     quote is checked. A person cites a file they can read (F.file_visible); any other bot cites nothing. Returns the cite
     to store, or None when the quote is not in that version's text (the drop is counted as an event and no rule is
@@ -939,14 +947,16 @@ def check_cite(c, auth, who, blobs, cite):
         if not row or not read or read["file_id"] != row["id"] or number != read["version"]:
             raise Problem(
                 "not_found",
-                "Counsel cites only the document its run was asked to read, at the version its "
+                "The Rules Owner cites only the document its run was asked to read, at the version its "
                 "task gives, and names that version",
                 404,
             )
         if not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
     elif who.role == "bot":
-        raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
+        raise Problem(
+            "forbidden", "Only the Rules Owner cites a document; a bot's rule is written without a quote", 403
+        )
     else:
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
@@ -961,7 +971,7 @@ def check_cite(c, auth, who, blobs, cite):
 
 
 def ask(c, auth, who, question):
-    """A "can I...?" question: the active rules that share words with it (cited, now), and one private Counsel task for
+    """A "can I...?" question: the active rules that share words with it (cited, now), and one private Rules Owner task for
     the full answer."""
     H._writer(c, who.actor)
     if not available(c):
@@ -1003,8 +1013,8 @@ def ask(c, auth, who, question):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/rules/read")
     def rules_read_document(request: Request, body: RuleRead):
-        """Add a document for Counsel to read: a file you can read, or a public link (fetched now, with no credential,
-        saved as a file version). Counsel suggests the obligations in it as rules, each with its quote, for a person to add
+        """Add a document for the Rules Owner to read: a file you can read, or a public link (fetched now, with no credential,
+        saved as a file version). The Rules Owner suggests the obligations in it as rules, each with its quote, for a person to add
         or skip. The Idempotency-Key is checked before the fetch: a replay returns the saved answer and fetches nothing."""
         who = request.state.identity
         key = request.headers.get("idempotency-key")
@@ -1018,6 +1028,6 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/rules/ask")
     def rules_ask(request: Request, body: RuleAsk):
-        """A "can I...?" question: the rules that apply, cited, and Counsel's answer as a task."""
+        """A "can I...?" question: the rules that apply, cited, and the Rules Owner's answer as a task."""
         who = request.state.identity
         return mutate(request, body, lambda c: ask(c, auth, who, body.question))

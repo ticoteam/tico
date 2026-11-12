@@ -1,0 +1,543 @@
+[
+ {
+  "argv": [
+   "thread",
+   "catchup",
+   "thread-id-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_catchup",
+    {
+     "operation_id": null,
+     "scope": "subtree",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-id-1/catch-up",
+    {
+     "scope": "subtree"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catchup",
+   "thread-id-1",
+   "--thread-only"
+  ],
+  "tools": [
+   [
+    "tico_thread_catchup",
+    {
+     "operation_id": null,
+     "scope": "thread",
+     "thread_id": "thread-id-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-id-1/catch-up",
+    {
+     "scope": "thread"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catch-up"
+  ],
+  "tools": [
+   [
+    "tico_thread_catch_up",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/catch-up",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "catch-up",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_catch_up",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/catch-up?cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_thread_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/timeline",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "show",
+   "thread-1",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5",
+   "--flat"
+  ],
+  "tools": [
+   [
+    "tico_thread_show",
+    {
+     "cursor": "cursor-1",
+     "flat": true,
+     "limit": 5,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/timeline?cursor=cursor-1&limit=5&flat=1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "reply",
+   "thread-1",
+   "message-1",
+   "Shipped it",
+   "--ref",
+   "task:42",
+   "--ref",
+   "task:42b"
+  ],
+  "tools": [
+   [
+    "tico_thread_reply",
+    {
+     "message": "message-1",
+     "operation_id": null,
+     "refs": [
+      "task:42",
+      "task:42b"
+     ],
+     "text": "Shipped it",
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/messages",
+    {
+     "text": "Shipped it",
+     "kind": "say",
+     "parent_message_id": "message-1",
+     "refs": {
+      "task": [
+       "42",
+       "42b"
+      ]
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "task",
+   "message-id-1",
+   "--title",
+   "Launch",
+   "--owner",
+   "me"
+  ],
+  "tools": [
+   [
+    "tico_thread_task",
+    {
+     "message_id": "message-id-1",
+     "operation_id": null,
+     "owner": "me",
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "threads/messages/message-id-1/task",
+    {
+     "title": "Launch",
+     "owner": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "read",
+   "thread-1"
+  ],
+  "tools": [
+   [
+    "tico_thread_read",
+    {
+     "all": false,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"invalid\",\n  \"detail\": \"Give seq, the seq of the last message read, or all\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "thread",
+   "read",
+   "thread-1",
+   "--seq",
+   "5",
+   "--all"
+  ],
+  "tools": [
+   [
+    "tico_thread_read",
+    {
+     "all": true,
+     "operation_id": null,
+     "seq": 5,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/read-all",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "search",
+   "from:bank",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_search",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null,
+     "q": "from:bank"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/search?q=from%3Abank&before=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "list",
+   "thread-1",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_list",
+    {
+     "cursor": "cursor-1",
+     "limit": 5,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "threads/thread-1/members?cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "members",
+   "add",
+   "thread-1",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_thread_members_add",
+    {
+     "actor": "bot:ana",
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "threads/thread-1/members",
+    {
+     "actor": "bot:ana",
+     "role": "member"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1",
+   "--title",
+   "Launch",
+   "--archive",
+   "--audience",
+   "members",
+   "--group",
+   "audience-group-id-1",
+   "--keep-days",
+   "5",
+   "--keep-forever",
+   "--pin-for-everyone"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "archived": true,
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "operation_id": null,
+     "pinned_for_everyone": true,
+     "retention_days": null,
+     "thread": "thread-1",
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {
+     "title": "Launch",
+     "archived": true,
+     "audience": "members",
+     "audience_group_id": "audience-group-id-1",
+     "pinned_for_everyone": true,
+     "retention_days": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "thread",
+   "link-slack",
+   "thread-1",
+   "google-search",
+   "--history",
+   "--off"
+  ],
+  "tools": [
+   [
+    "tico_thread_link_slack",
+    {
+     "channel": "google-search",
+     "history": true,
+     "off": true,
+     "operation_id": null,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"usage\",\n  \"detail\": \"--off takes the thread's Slack link away: it takes no channel and no --history\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "thread",
+   "update",
+   "thread-1",
+   "--keep-days",
+   "14"
+  ],
+  "tools": [
+   [
+    "tico_thread_update",
+    {
+     "operation_id": null,
+     "retention_days": 14,
+     "thread": "thread-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "threads/thread-1",
+    {
+     "retention_days": 14
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

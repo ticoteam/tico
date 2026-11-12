@@ -15,7 +15,15 @@ interface GithubAppState {
   authorized?: boolean;
   /** The callback URL the App needs as its Callback URL, or '' when its manifest already names it. */
   callback_url?: string;
+  /** Bots' own repositories, which Tico makes by itself (backend/bot_repo_maker.py): `problem` is why the rest wait. */
+  bot_repositories?: {made: number; taken: number; waiting: number; problem: string};
 }
+interface GithubRepoRow { full_name: string; enabled?: boolean | number; bot_repo?: boolean | number; archived?: boolean | number | null; reachable?: boolean | number; }
+// What GitHub's return says in one sentence (backend/github_app.py `stale_return`); the other returns need no words.
+const GITHUB_RETURNS: Record<string, string> = {
+  again: 'GitHub is already connected, so nothing changed. If GitHub made a second app just now, delete it there.',
+  expired: 'That GitHub link is used or too old. Connect again.',
+};
 interface GithubManifestSetup { action: string; manifest: unknown; }
 interface GithubAuthorizeLink { url?: string; }
 interface Window {
@@ -49,7 +57,26 @@ window.mountGithubConnect = async function (host) {
         On that page set <strong>Administration</strong> to <strong>Read and write</strong> and save, accept the new permission for ${text(state.org)} when GitHub asks, then
         <button type="button" class="ghost" data-gh-recheck>Check again</button></p>
       </div>`;
-    const repos = `${ready}${authorize}${fix}${waiting}`;
+    // Tico makes each bot's repository by itself: one line while some are still to come.
+    const bots = state.bot_repositories;
+    const making = bots && bots.waiting && state.administration && state.installed
+      ? `<p class="muted" data-gh-bot-repos>Making bot repositories: ${bots.made} of ${bots.made + bots.waiting}.${bots.problem ? ` ${text(bots.problem)}` : ''}</p>` : '';
+    // Installed, and no repository In use yet: the team's repository is chosen here, one tap, so Engineering never
+    // waits on it later. Nothing is ticked for the person. A lone product repository comes first.
+    let choose = '', shown: GithubRepoRow[] = [];
+    if (state.installed) {
+      let listed: GithubRepoRow[] = [];
+      try { listed = ((await get('/v2/repositories')) as {repositories?: GithubRepoRow[]}).repositories || []; } catch { listed = []; }
+      if (!host.isConnected) return;
+      const product = listed.filter(r => !r.bot_repo && !r.archived && r.reachable !== false && r.reachable !== 0);
+      if (product.length && !product.some(r => r.enabled)) {
+        shown = product.slice(0, 8);
+        choose = `<div data-gh-choose><p><strong>Which repository does your team work on?</strong></p>
+          ${shown.map((r, i) => `<div class="row"><span>${text(r.full_name)}</span> <button type="button" class="${product.length === 1 ? 'primary' : 'ghost'}" data-gh-use="${i}">Use</button></div>`).join('')}
+          ${product.length > shown.length ? `<p><a href="#/settings/general">All ${product.length} repositories</a></p>` : ''}</div>`;
+      }
+    }
+    const repos = `${choose}${ready}${making}${authorize}${fix}${waiting}`;
     host.innerHTML = `<p>Connected to <strong>${text(state.org)}</strong> through the app <strong>${text(state.slug)}</strong>.
       <span data-gh-install>${state.installed ? `Installed on the ${personal ? 'account' : 'organization'}.` : 'Not installed yet.'}</span></p>
       ${repos}
@@ -63,6 +90,15 @@ window.mountGithubConnect = async function (host) {
       <p role="status" data-gh-status></p>`;
     // The server's links are set as properties, and only when they point at GitHub over https or at Tico's install route.
     const link = (node: HTMLAnchorElement | null, url: string | null | undefined) => { if (node && url && (url === '/api/v2/github/app/install' || /^https:\/\/github\.com\//.test(url))) node.href = url; };
+    ghEl<HTMLElement>(host, '[data-gh-status]').textContent = GITHUB_RETURNS[(/[?&]github=([a-z]+)/.exec(location.hash) || [])[1] || ''] || '';
+    host.querySelectorAll<HTMLButtonElement>('[data-gh-use]').forEach(button => {
+      button.onclick = async () => {
+        button.disabled = true;
+        const name = shown[Number(button.dataset.ghUse)]!.full_name;
+        try { await put('/v2/repositories/' + name.split('/').map(encodeURIComponent).join('/'), {enabled: true}); window.mountGithubConnect(host); }
+        catch (error) { ghEl<HTMLElement>(host, '[data-gh-status]').textContent = errorMessage(error, ''); button.disabled = false; }
+      };
+    });
     link(host.querySelector<HTMLAnchorElement>('[data-gh-permissions]'), state.permissions_url);
     link(host.querySelector<HTMLAnchorElement>('[data-gh-events]'), state.permissions_url);
     link(host.querySelector<HTMLAnchorElement>('[data-gh-install-link]'), state.install_url);
@@ -107,6 +143,7 @@ window.mountGithubConnect = async function (host) {
       <button class="primary" type="submit">Connect GitHub</button>
       <p role="status" data-gh-status></p></form>`;
   const form = ghEl<HTMLFormElement>(host, '[data-gh-form]');
+  ghEl<HTMLElement>(host, '[data-gh-status]').textContent = GITHUB_RETURNS[(/[?&]github=([a-z]+)/.exec(location.hash) || [])[1] || ''] || '';
   form.onsubmit = async event => {
     event.preventDefault();
     const status = ghEl<HTMLElement>(host, '[data-gh-status]');

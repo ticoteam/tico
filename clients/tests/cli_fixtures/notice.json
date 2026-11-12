@@ -1,0 +1,26 @@
+[
+ {
+  "argv": [
+   "notice",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_notice_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "notices",
+    null
+   ]
+  ],
+  "stdout": "[\n  {\n    \"kind\": \"info\",\n    \"body\": \"Tico 0.6 is out\",\n    \"source\": \"latest\"\n  }\n]\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

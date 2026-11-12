@@ -35,7 +35,7 @@ appear in the settings history, where the owner can undo them, like the humans a
 
 Who may edit a bot's access: its owners (see [Bot owners](#bot-owners)): the team owner, the admins, the bot's creator
 and other owners, and the humans it reports up to on the team chart (the same humans who may change the bot's other settings).
-The Assistant, BotOps, the Librarian and the Strategy Bot can have their access edited too.
+The Assistant, BotOps, the Librarian and the Strategy Owner can have their access edited too.
 
 ## Always full access
 
@@ -168,7 +168,7 @@ Threads ([Threads](threads.md)) have their own audience, separate from a bot's t
 - **company**: every person on the team. **team**: the people in one group, and the company owner. **members**: the people,
   bots and groups added to the thread. It is private by default.
 - **home**: a bot's or a person's Home, readable by its Read audience. A person's personal chat with a bot moves into
-  that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Bot's
+  that bot's Home with its messages, unless its owner may not read that Home. The Assistant's and the Strategy Owner's
   chats, the Librarian's per-person docs chats, and chats with a bot synced from another app, stay where they are.
   Everyone who can read the Home can read those messages, except one whose own references name a task, a file under
   `target`, `answer`, `review` or `body_sources`, or a meeting under `live_meeting` or `live_meetings`, that its reader
@@ -244,13 +244,13 @@ Only the Owner changes them, directly in Settings or by asking BotOps to act wit
 and remove groups and put humans and bots in them; members read them. A group is an access audience, so moving a human or a bot into a
 group, or a group under another, can change who reads a bot. BotOps does this as the person who asked it (`POST`, `PATCH` and `DELETE`
 on `/api/v2/groups` through `tico api`, or `tico group update`), with that person's own rights: an owner or an admin, at once; a member is
-refused. The Strategy Bot only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
-same rights. Built-in bots stay outside groups.
+refused. The Strategy Owner only suggests org changes; when the person in its chat asks for one, it makes it citing their message, with the
+same rights. Built-in bots stay in the General group, which nobody adds to or removes from by hand.
 
-**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner, the Rules Owner and the Brand Owner) act for the whole team, so only the owner changes their settings,
+**The built-in bots** (the Assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Rules Owner and the Design Owner) act for the whole team, so only the owner changes their settings,
 routines, access or place, and only the owner may add them. A member cannot register a bot with the name `assistant`, `botops`,
-`librarian`, `goal-manager` or `coo`; an Admin can, and manages every other bot.
-The Strategy Bot's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Bot](strategy-bot.md)).
+`librarian`, `strategy-owner` or `assistant`; an Admin can, and manages every other bot.
+The Strategy Owner's level, regular checks and name, and publishing a strategy version, are the owner's alone: an Admin cannot change them ([Your Strategy Owner](strategy-bot.md)).
 
 A member may have at most **25 active bots** by default; owners and admins have no limit. An admin changes the number in
 Settings > People (**Bot limit per member**). Past it, adding a bot answers `409 bot_limit` with what to do. A starter bot that is still `needs_setup`
@@ -301,7 +301,7 @@ An incoming webhook (a trigger) is an address outside senders post to ([Webhooks
   data from outside Tico.
 - **Rules on a call** (`webhook.received`): the owner and admins write team rules; a bot's owners, its operator and BotOps write
   that bot's rules. Waking a bot needs rights over that bot. A rule that sends to an outgoing endpoint is written by a person, or by
-  a bot with its outbound send switch on, never the Strategy Bot. The endpoint must exist and its maker must own it or be an admin: Tico checks
+  a bot with its outbound send switch on, never the Strategy Owner. The endpoint must exist and its maker must own it or be an admin: Tico checks
   that when the rule is saved, and again when it runs.
 - **Tico Team** is a built-in webhook. Nobody deletes it; only its keep days change.
 - **Screening** checks a call's text before a bot gets it ([Screening](#screening)).
@@ -317,7 +317,7 @@ text at the doors it comes in by, before a bot reads it. Change it in **Settings
 | Mail | An inbound message a bot reads (`tico inbound read`): the subject and body | Warn |
 | Ideas | The public roadmap's suggestion form: the title and summary | Warn |
 | Watchers | A watcher's new task, except the Support Agent's HQ tickets, which [support triage](support.md#support-triage) checks | Warn |
-| Documents | A document or a link that Counsel reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
+| Documents | A document or a link that the Rules Owner reads to suggest rules (Rules › External): the file's text, or the page the link fetches | Warn |
 | Slack | A message a person sends a bot in Slack (a DM or an @mention), and a message in a channel linked to a thread, with its edits | Warn |
 
 Each door is **Off**, **Warn** or **Hold**. Mail is only ever marked, so it offers Off and Warn. Slack's row in Settings
@@ -342,7 +342,7 @@ The check has four layers. Two of them can be switched off in the same card:
   (`questions/injection-screen.json`). A webhook, watcher, idea or automation turn at or over the hold line (85%), on a
   door set to Hold, becomes a task for a person titled `Held: ...`: the bot is not woken and nothing is deleted. Hand the
   task to the bot to release it; close it if it is an attack. With no person to hold it, it goes to its bot with the
-  warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for Counsel,
+  warning line instead. A document at or over the hold line, on a door set to Hold, becomes a read task for the Rules Owner,
   labelled held, with its text left out. Slack stays at Warn for now, so no Slack message is held; at Warn it gets no
   line. At or over `warn` (50%), the bot's copy starts with a line saying the text looks like a prompt injection and is
   data. That covers mail, Documents, webhooks, watchers, ideas and automation turns, not Slack. Mail is never held: its
@@ -376,7 +376,7 @@ An endpoint is an address Tico posts events to ([API](api.md#outgoing-webhooks))
   made, owned by the person who OK'd it from its preview, when the bot repeats the call. A bot sees every endpoint
   without its full address, and changes none.
 - **Custom events** (`tico webhook send`, names `custom.*`) are sent by people, and by a bot only while its outbound send switch is on.
-  The Strategy Bot never sends one and never causes a webhook.
+  The Strategy Owner never sends one and never causes a webhook.
 - **Privacy.** An endpoint hears of a task, ask or bot only when its owner could read it themselves; the event body is
   built
   from what that person sees. Health, inbound and webhook events go to owner and admin endpoints only.
@@ -391,7 +391,7 @@ is the same humans who always have full access to it. A bot owner can:
 
 - edit its configuration: instructions, model, routines, name and description, repository;
 - set its See, Read and Write access;
-- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner or Brand Owner);
+- pause it, rename it, archive it (never the built-in Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner or Design Owner);
 - add or remove owners (`POST /api/v2/bots/{bot}/co-owners`, Settings > Bots, **Owned by**);
 - give it a stored credential they hold themselves or stored themselves, and no one else's.
 
@@ -425,6 +425,8 @@ Its instructions are changed by a **next-run task** the manager files for the re
 Creating, archiving and restoring a report are asked of BotOps (below). A manager reaches only the bots directly under it, and
 `Auth.report_manager` decides that.
 It does not widen `Auth.bot_manager`: a manager bot owns nothing it did not own before.
+The default chart makes no bot a group's lead: a lead sets its group's reach and spend limits, and those stay with people.
+A bot becomes a lead only when a person names it one.
 
 Two switches turn it off, and the owner's comes first:
 
@@ -762,7 +764,7 @@ who may change it, its class, the route and body it writes, and a link that open
 without knowing the route:
 
     tico settings find "sql"                                  key, name, where, class and who may change it
-    tico settings show bot.limit.usd --bot support            the current value, who may change it, whether you may
+    tico settings show bot.limit.usd --bot support-owner            the current value, who may change it, whether you may
     tico settings set release.times 09:30,17:00               change it with your rights (BotOps, the Assistant: the
                                                              person's)
 
@@ -772,17 +774,17 @@ what `set` does when BotOps or the Assistant asks for a person (the same answer 
 - **direct** (reversible, inside the team, no new spend: routines, tags, a bot's model, release times,
   the privacy count): it changes at once, as that person, and the answer names the new value.
 - **confirm** (spending more, people and roles, sending or publishing outside, anything destructive, team rules,
-  ownership, the Strategy Bot): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
+  ownership, the Strategy Owner): BotOps gets a Confirm card for the person to tap; nothing changes until they do, and nothing
   confirms it for them. A wake rule is direct unless it sends a webhook or forwards the call. The person's own
   `tico settings set` runs at once. The person's tap is their own click, also on the routes that take only that (the
-  Strategy Bot's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
+  Strategy Owner's level and checks, company storage, turning the Assistant on). A confirm entry whose route BotOps can't yet
   put on a card is person-only until it can (`NO_CARD_YET`, empty now; the catalogue test fails once one can, so it
   goes back to confirm).
 - **person** (a sign-in, a secret value, an upload such as the team icon, the person's own OKs and mail, and a
   new outgoing webhook or Gateway wake URL, whose signing secret is shown only once, in Settings): BotOps answers with
   a one-line reason and the card's link.
 
-The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Bot chat), and it may card every
+The Assistant's Confirm card is in the person's own Assistant chat (the owner's Strategy Owner chat), and it may card every
 catalogue route BotOps may. A direct or a confirm entry runs on the person's own words: the Assistant's run cites their
 message in that chat, as a task action does (its route checks who may change it). Without that, or while the owner's
 "Assistant acts without asking" is off, it is a card too. A card or a cited write from the Assistant is exactly one

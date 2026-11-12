@@ -10,7 +10,7 @@ Those live in the person's `preferences` row, so each person has their own.
 import json
 import sqlite3
 
-from . import model_login, providers
+from . import cloud_machines, model_login, providers
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
@@ -21,7 +21,7 @@ LIBRARIAN = "librarian"
 MARKET_TASK = "Set up the market map"
 ONLINE_SECONDS = 120
 # The checklist items a person may skip.
-OPTIONAL = ("github",)
+OPTIONAL = ("github", "subscription")
 
 
 def _person(who):
@@ -120,20 +120,50 @@ def _login_target(runners, wanted, c=None):
     return None
 
 
+def _plan_signed_in(c):
+    """Whether a Claude or ChatGPT plan is signed in on one of the company's computers: the computer's own login for
+    that tool, when it is not an API key, or a company plan given to the computer that bills by subscription
+    (backend/model_subscriptions.py). A computer that is offline keeps its last report, so its sign-in still counts."""
+    from .model_subscriptions import KINDS, in_effect
+    from .readiness import api_key_login, computer_login
+
+    # The tools a plan signs in to: the ones a subscription kind names (Claude and Codex today).
+    plan_runtimes = sorted({kind["runtime"] for kind in KINDS.values() if kind.get("billing") == "subscription"})
+    for runner in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
+        readiness = readiness_document(runner["readiness"])
+        for runtime in plan_runtimes:
+            login = computer_login(readiness, runtime)
+            if login.get("installed") and login.get("authenticated") == "ready" and not api_key_login(login):
+                return True
+            given = in_effect(c, runner["id"], runtime)
+            if given and KINDS.get(given["kind"], {}).get("billing") == "subscription":
+                return True
+    return False
+
+
+def _saved_plan_or_key(c):
+    """Whether the company has a Claude or ChatGPT plan or an API key saved that does not need reconnecting."""
+    return (
+        H._has_table(c, "model_subscriptions")
+        and c.execute("SELECT 1 FROM model_subscriptions WHERE status<>'needs_reconnect' LIMIT 1").fetchone()
+        is not None
+    )
+
+
 def built_in(settings):
-    """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md), the
-    Bookkeeper (docs/bookkeeper.md), the Brand Owner, the Updates and Automations Owners, and Counsel, which
-    onboarding.ensure_counsel adds once a computer enrolls. Counsel is built in, so it is not one of the company's own
+    """The bots every install starts with: the four a person talks to, the General Manager (docs/general-manager.md), the
+    Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates and Automations Owners, and the Rules Owner, which
+    onboarding.ensure_counsel adds once a computer enrolls. The Rules Owner is built in, so it is not one of the company's own
     bots (own_bots)."""
     return {
         settings.assistant_bot,
         BOTOPS,
         LIBRARIAN,
-        "goal-manager",
-        "task-manager",
-        "bookkeeper",
-        H.BRAND_OWNER,
-        H.COUNSEL,
+        "strategy-owner",
+        "general-manager",
+        "finance-owner",
+        H.DESIGN_OWNER,
+        H.RULES_OWNER,
         "updates-owner",
         "automations-owner",
     }
@@ -205,6 +235,7 @@ def checklist(c, who, settings, github):
     ).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)
+    cloud = cloud_machines.cloud_company(c, settings)
     items = [
         _item("signed_in", "Signed in", True, ""),
         _item(
@@ -227,6 +258,18 @@ def checklist(c, who, settings, github):
             "#/settings",
             "devices" if wanted else "models",
             login=_login_target(runners, wanted, c),
+        ),
+        # On Tico Cloud a plan or key is required: the bots have no other model of the company's own to run on.
+        _item(
+            "subscription",
+            "Add a Claude or ChatGPT subscription",
+            _plan_signed_in(c) or (cloud and _saved_plan_or_key(c)),
+            "Use your own subscription for your own bots, within the provider's terms."
+            if cloud
+            else "Recommended. Use your own subscription for your own bots, within the provider's terms.",
+            "#/settings",
+            "models",
+            optional=not cloud,
         ),
         _item(
             "github",

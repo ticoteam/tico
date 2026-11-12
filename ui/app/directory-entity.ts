@@ -1,4 +1,4 @@
-/* ui/app/directory-entity.ts — one Directory entity (#/library/directory/<id>): a person, an organization, a place or
+/* ui/app/directory-entity.ts — one contact (#/library/contacts/<id>): a person, an organization, a place or
    any other type. Header, the rules that apply, values with their source and age (each age opens the field's history),
    links, and notes. A place adds what it is inside, the bodies that govern or regulate it, and whether it comes from the
    shared places tree. Reads: GET /api/v2/entities/card, /rules, /history, /types/<key> and /self; the one write is
@@ -11,7 +11,9 @@ interface DirLink {
   id: string; link_key: string; link_name: string; inverse_name: string | null;
   from_entity_id: string; to_entity_id: string; valid_from_on: string | null; valid_until_on: string | null;
   other_id: string; other_name: string; other_type: string;
+  file?: DirFile | null;   // a document's file, when it has one the reader may open (documents are files, not contacts)
 }
+interface DirFile { id: string; title: string; page: boolean }
 interface DirRef { system: string; external_type: string; external_id: string; url: string | null; synced_at: string | null }
 interface DirNote { id: string; author_key: string; body: string; audience: string; created_at: string }
 interface DirPlace { kind: string; governing_body: string; shared: boolean }
@@ -45,7 +47,7 @@ function dirValueText(v: unknown): string {
   if (typeof v === 'string' || typeof v === 'number') return String(v);
   return JSON.stringify(v);
 }
-// Where a value came from: the Directory's own tools record the writer (source "hub", source id the actor).
+// Where a value came from: the Contacts tools record the writer (source "hub", source id the actor).
 const dirValueSource = (v: { source_type: string; source_id: string }): string =>
   v.source_type === 'hub' ? dirWho(v.source_id) : v.source_type ? dirSource(v.source_type) : '';
 const dirShortAgo = (iso: string | null): string => iso ? ago(iso).replace(/ ago$/, '') : '';
@@ -66,7 +68,7 @@ async function pageDirectoryEntity(id: string): Promise<void> {
       get<{ types: DirType[] }>('/v2/entities/types', { fresh: true }).then(r => r.types),
     ]);
   } catch (e) {
-    if (dirLive(run)) main.innerHTML = `<div class="tt dir"><p><a href="${DIR_ROUTE}">Directory</a></p>${dirErr(e)}</div>`;
+    if (dirLive(run)) main.innerHTML = `<div class="tt dir"><p><a href="${DIR_ROUTE}">Contacts</a></p>${dirErr(e)}</div>`;
     return;
   }
   // Rules, the type's field names and our own row are drawn when they come; the page does not wait on them.
@@ -90,8 +92,10 @@ async function pageDirectoryEntity(id: string): Promise<void> {
 
 // ----------------------------------------------------------------- header
 function dirCrumb(card: DirCard, types: readonly DirType[], parent: DirLink | undefined): string {
-  return `<nav class="dir-crumb" aria-label="Directory"><a href="${DIR_ROUTE}">Directory</a>
-    <span aria-hidden="true">›</span> <a href="${dirListHref(card.type)}" data-dir-crumb-type>${esc(dirTypeName(types, card.type, true))}</a>
+  // A type the list does not show (a document) has no list to go back to.
+  const listed = types.some(t => t.key === card.type);
+  return `<nav class="dir-crumb" aria-label="Contacts"><a href="${DIR_ROUTE}">Contacts</a>
+    ${listed ? `<span aria-hidden="true">›</span> <a href="${dirListHref(card.type)}" data-dir-crumb-type>${esc(dirTypeName(types, card.type, true))}</a>` : ''}
     ${parent ? `<span aria-hidden="true">›</span> <a href="${dirHref(parent.other_id)}">${esc(parent.other_name)}</a>` : ''}</nav>`;
 }
 function dirHero(card: DirCard, sub: string, chips: string): string {
@@ -99,7 +103,13 @@ function dirHero(card: DirCard, sub: string, chips: string): string {
     <div class="dir-hero-text"><h1 data-dir-name>${esc(card.name)}</h1>${sub ? `<p class="muted dir-sub" data-dir-sub>${sub}</p>` : ''}</div>
     ${chips ? `<div class="dir-chips">${chips}</div>` : ''}</header>`;
 }
-const dirLinkTo = (l: DirLink): string => `<a href="${dirHref(l.other_id)}">${esc(l.other_name)}</a>`;
+// A document is a file, not a contact: it opens its file (a page in Tico, any other file as itself), and without one
+// it is its name alone.
+const dirFileHref = (f: DirFile): string => f.page ? pageHref(f.id) : `${API}/v2/files/${encodeURIComponent(f.id)}`;
+const dirLinkTo = (l: DirLink): string => l.other_type !== 'document'
+  ? `<a href="${dirHref(l.other_id)}">${esc(l.other_name)}</a>`
+  : l.file ? `<a href="${esc(dirFileHref(l.file))}" data-dir-file="${esc(l.file.id)}"${l.file.page ? '' : ' target="_blank" rel="noopener"'}>${esc(l.other_name)}</a>`
+    : `<span data-dir-document>${esc(l.other_name)}</span>`;
 
 // ----------------------------------------------------------------- person, organization and the rest
 function dirEntityHTML(card: DirCard, types: readonly DirType[], describe: DirDescribe | null): string {

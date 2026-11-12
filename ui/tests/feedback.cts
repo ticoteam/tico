@@ -55,7 +55,7 @@ function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed
     if (p === '/api/v2/feedback' && method === 'POST') {
       let row = rows.find(r => r.subject_type === body.subject_type && r.subject_id === body.subject_id);
       if (!row) rows.push(row = {id: 'fb-' + ++n, person_id: 'human:ana', subject_type: body.subject_type, subject_id: body.subject_id,
-        bot_id: 'bot:coo', outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso()});
+        bot_id: 'bot:assistant', outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso()});
       Object.assign(row, {rating: body.rating, reason: body.reason ?? row.reason ?? '', updated_at: iso()});
       if (body.tell_bot) Object.assign(row, {outcome: 'told_bot', note_id: 'n-' + n, note_status: 'waiting'});
       return json(row);
@@ -73,7 +73,7 @@ function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed
   }).then(() => ({rows, reads, writes}));
 }
 
-const BOTS = [{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}];
+const BOTS = [{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}];
 async function chatPage(browser: Browser, {phone = false, theme = 'dark', off = false, hash = '#/assistant', seed = []}: {phone?: boolean; theme?: string; off?: boolean; hash?: string; seed?: Row[]} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1200, height: 800}, hasTouch: phone, serviceWorkers: 'block'});
   const errors: string[] = [];
@@ -81,8 +81,8 @@ async function chatPage(browser: Browser, {phone = false, theme = 'dark', off = 
   await page.addInitScript(theme => { try { localStorage.setItem('tico.theme', theme); } catch {} }, theme);
   const snapshot = {execution: null, messages: [
     {id: 'm1', sender_id: 'human:ana', body: 'How did the launch week go?', created_at: iso()},
-    {id: 'm2', sender_id: 'bot:coo', body: 'Signups rose 18% on the week. The pricing page drove most of it; the webinar drove almost none, so I would drop it next month.', created_at: iso()},
-    {id: 'm3', sender_id: 'bot:coo', body: 'Revenue was $41,200, up from $38,900.', created_at: iso()}]};
+    {id: 'm2', sender_id: 'bot:assistant', body: 'Signups rose 18% on the week. The pricing page drove most of it; the webinar drove almost none, so I would drop it next month.', created_at: iso()},
+    {id: 'm3', sender_id: 'bot:assistant', body: 'Revenue was $41,200, up from $38,900.', created_at: iso()}]};
   await page.context().route('**/*', route => {
     const p = new URL(route.request().url()).pathname;
     const json = (body: unknown) => route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
@@ -217,15 +217,6 @@ async function chatDesktop(browser: Browser, theme = 'dark') {
   await second.getByRole('button', {name: 'Not good', exact: true}).click();
   assert.equal(await show.locator('.fb-out').innerText(), 'Sent to bot');
   await page.keyboard.press('Escape');
-  // A reason typed and the sheet closed with Escape is still kept with its 👎.
-  await second.hover();
-  await second.getByRole('button', {name: 'Not good', exact: true}).click();      // already 👎: opens what happened
-  await show.getByRole('button', {name: 'Edit'}).click();
-  await sheet.getByRole('textbox').fill('Totals are off by a month');
-  await page.keyboard.press('Escape');
-  await page.waitForFunction(() => !document.querySelector('dialog.fb-sheet[open]'));
-  await new Promise(r => setTimeout(r, 300));
-  assert.equal(rows.find(r => r.subject_id === 'm3')!.reason, 'Totals are off by a month');
   // Both rated replies at rest: each keeps only its chosen thumb, filled, on its row.
   await page.mouse.move(0, 0);
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());      // the resting look, not the keyboard's ring
@@ -376,7 +367,7 @@ async function threadMessage(browser: Browser) {
 // Ask, the floating Assistant panel on any page, reads its replies' feedback itself: a page with nothing to rate never
 // turned feedback on, and a reply rated earlier shows its chosen thumb.
 async function askPanel(browser: Browser) {
-  const seed = [{id: 'fb-0', person_id: 'human:ana', subject_type: 'message', subject_id: 'm3', rating: 'up', reason: '', bot_id: 'bot:coo',
+  const seed = [{id: 'fb-0', person_id: 'human:ana', subject_type: 'message', subject_id: 'm3', rating: 'up', reason: '', bot_id: 'bot:assistant',
     outcome: 'none', note_id: null, note_status: null, org_rule_id: null, rule_status: null, created_at: iso(), updated_at: iso()}];
   const {page, errors, reads, writes} = await chatPage(browser, {hash: '#/automations', seed});
   await page.locator('#ask-row').waitFor();

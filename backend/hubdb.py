@@ -227,7 +227,7 @@ def counts_for_person(conn, message, reason, conversation_id):
     return True
 
 
-REVIEW_OWNER = "coo"  # rule 8's first review task
+REVIEW_OWNER = "assistant"  # rule 8's first review task
 FLEET_MAINTAINER = "botops"  # the fleet's maintainer bot: reviews refused writes and may start any bot's task
 BOT_STATES = SV.BOT_STATES
 STATUS_STATES = SV.BOT_STATUS_STATES
@@ -600,56 +600,9 @@ ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
 CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
 """
 
-# Listening's observation store and the shared intake (backend/listening.py). Four tables: what a
-# sweep covered, what it saw, what the decision model scored, and where each post was sent. A market insight
-# filed from an intake item names it in `source_ref`, once per reporter.
+# A market insight names what it was filed from in `source_ref`, once per reporter. (The listening tables this once
+# made are gone: backend/migrations/20261111190425_listening_feed.py.)
 LISTENING_SCHEMA = """
-CREATE TABLE IF NOT EXISTS listen_runs (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  query TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  pages_read INTEGER DEFAULT 0,
-  items_seen INTEGER DEFAULT 0,
-  note TEXT);
-CREATE INDEX IF NOT EXISTS listen_runs_started ON listen_runs(started_at, source);
-
-CREATE TABLE IF NOT EXISTS listen_items (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  native_id TEXT NOT NULL,
-  url TEXT NOT NULL,
-  author TEXT,
-  author_url TEXT,
-  content TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  published_at TEXT,
-  first_seen_at TEXT NOT NULL,
-  first_run_id TEXT REFERENCES listen_runs(id),
-  UNIQUE (source, native_id));
-
-CREATE TABLE IF NOT EXISTS listen_judgments (
-  id TEXT PRIMARY KEY,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  question_set TEXT NOT NULL,
-  scores TEXT NOT NULL,
-  judged_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS listen_judgments_item ON listen_judgments(item_id, judged_at);
-
-CREATE TABLE IF NOT EXISTS intake_items (
-  id TEXT PRIMARY KEY,
-  destination TEXT NOT NULL,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  judgment_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'new',
-  receiver_ref TEXT,
-  reason TEXT,
-  created_at TEXT NOT NULL,
-  decided_at TEXT,
-  UNIQUE (destination, item_id));
-CREATE INDEX IF NOT EXISTS intake_items_queue ON intake_items(destination, status, created_at);
-
 ALTER TABLE market_insights ADD COLUMN source_ref TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS market_insights_source_ref
   ON market_insights(reported_by, source_ref) WHERE source_ref IS NOT NULL;
@@ -786,7 +739,7 @@ CREATE TABLE IF NOT EXISTS task_check_models (
   harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', role TEXT NOT NULL, created_by TEXT, created_at TEXT);
 """
 
-# What the Strategy Bot has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
+# What the Strategy Owner has asked a person on the Goals page's behalf (backend/goal_asks.py): one row per
 # KPI or proposal, kind and person, naming the task that asks it; append to preserve existing installations.
 GOAL_ASKS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS goal_asks (
@@ -834,8 +787,8 @@ CREATE TABLE IF NOT EXISTS compact_first(
   PRIMARY KEY(bot, conversation_id));
 """
 
-# The Strategy Bot's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
-# Strategy Bot item stands for, and what became of it.
+# The Strategy Owner's merged asks (backend/strategy_merge.py): each original item in a person's Needs you that one
+# Strategy Owner item stands for, and what became of it.
 STRATEGY_MERGES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_merges (
   merged_into TEXT NOT NULL, original TEXT NOT NULL, person TEXT NOT NULL, asker TEXT NOT NULL,
@@ -846,7 +799,7 @@ CREATE INDEX IF NOT EXISTS strategy_merges_original ON strategy_merges(original,
 CREATE INDEX IF NOT EXISTS strategy_merges_person ON strategy_merges(person, created_at);
 """
 
-# The Strategy Bot log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
+# The Strategy Owner log (backend/strategy_acts.py): each decision it made alone at level 3, or each thing it proposed
 # because it stays the owner's, and its Undo. Every task event one decision (or its Undo) wrote carries its action id.
 STRATEGY_ACTIONS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS strategy_actions (
@@ -1923,9 +1876,27 @@ def hook(conn, type, subject, data, actor, revision=None):
     try:
         from . import automations
 
-        automations.on_event(conn, type, subject, data, actor)
+        # An automation hears of a private task only when its owner reads it, as a webhook endpoint's owner does.
+        hears = (lambda row: _automation_hears(conn, row.get("owner_id"), subject)) if task(conn, subject) else None
+        automations.on_event(conn, type, subject, data, actor, access=hears)
     except Exception:
         logging.getLogger(__name__).warning("automations did not hear %s", type, exc_info=True)
+
+
+def _automation_hears(conn, owner, task_id):
+    """Whether an automation owned by `owner` (`person:<id>`, `bot:<id>`, `group:<id>`) may hear an event about task
+    `task_id`: always for a company task; for a private one, only when the owner reads it (webhooks.view_for). A group
+    stands for no one, so it hears of no private task."""
+    row = task(conn, task_id)
+    if not row or not task_private(conn, row):
+        return True
+    kind, _, ident = str(owner or "").partition(":")
+    if kind == "group" or not ident:
+        return False
+    from . import webhooks
+
+    who = "human:" + ident if kind == "person" else str(owner)
+    return webhooks.view_for(conn, who, "task.event", task_id, {}, {}) is not None
 
 
 def _task_facts(conn, task_id, actor, **more):
@@ -2268,12 +2239,15 @@ def _escalate(conn, actor, rule, detail, severity, ts, context=None):
     if slug == FLEET_MAINTAINER and (bot(conn, REVIEW_OWNER) or {}).get("state") in (None, "planned", "archived"):
         # A company without an assistant has nobody to review BotOps: a person does.
         reviewer = human_actor(default_human(conn))
-    if count >= REVIEW_AT and not _review_exists(conn, f"Review {slug}'s refused writes", day):
+    # By the name people know it by, not its id (Initech, Nov 11: "Review 01a1cb0d-…'s refused writes").
+    found = bot(conn, slug) or {}
+    name = found.get("display_name") or found.get("slug") or slug
+    if count >= REVIEW_AT and not _review_exists(conn, f"Review {name}'s refused writes", day):
         _review_task(
             conn,
             reviewer,
-            f"Review {slug}'s refused writes",
-            f"{count} writes from {slug} were turned down today. "
+            f"Review {name}'s refused writes",
+            f"{count} writes from {name} were turned down today. "
             f"The last one broke the {rule} rule: {said}. "
             f"Read its refusals and decide whether its playbook or its reach needs a change.",
             origin=actor,
@@ -2520,7 +2494,7 @@ def _message_writer(conn, actor, msg, conv):
 def resolve_actor(conn: object, value: object) -> "str | None":
     """`cmo`, `bot:cmo`, `ana`, `human:ana`, `keeper` -> the actor string, or None.
 
-    A bare name no bot or person answers to is the one live bot built from that template (`marketing-lead`), if there is
+    A bare name no bot or person answers to is the one live bot built from that template (`growth-manager`), if there is
     exactly one and no open seat is set up from that template (`_template_owner`).
 
     None is what rule 2 refuses on: an address that is not a bot, a human or the keeper.
@@ -2543,7 +2517,7 @@ def resolve_actor(conn: object, value: object) -> "str | None":
 
 
 def _template_owner(conn, name):
-    """The one live bot built from the template `name` (a template's own `--owner marketing-lead`), as its actor.
+    """The one live bot built from the template `name` (a template's own `--owner growth-manager`), as its actor.
     None when no live bot is, or two are: an ambiguous name is still refused. An archived bot is not live. An open seat
     set up from the template (lifecycle.py: its `template`, closed once a bot fills it) is one more claim on the name."""
     if not _has_table(conn, "bot_settings"):
@@ -2571,7 +2545,9 @@ INACTIVE_STATES = HELD_STATES + ("planned",)
 def back_when(conn, slug, state):
     """When a held or planned bot runs again, in words the sender can act on."""
     if state == "planned":
-        return "has not started yet"
+        from .setup_live import being_set_up
+
+        return "is still being set up" if being_set_up(conn, slug) else "has not started yet"
     resumes = quarantine_resumes(conn, slug)["resumes_at"] if state == "quarantined" else None
     if resumes:
         return f"is quarantined until about {resumes[11:16]} UTC, when it resumes by itself"
@@ -2899,8 +2875,8 @@ def open_conversation(
     if scope is None:
         scope = "task" if task_id else "direct"
         humans = [p for p in people if is_human(p)]
-        if kind == "chat" and len(humans) == 1 and "bot:coo" in people:
-            scope, owner_actor, room_key = "personal", humans[0], "coo"
+        if kind == "chat" and len(humans) == 1 and "bot:assistant" in people:
+            scope, owner_actor, room_key = "personal", humans[0], "assistant"
     if scope not in CONVERSATION_SCOPES:
         refuse(conn, actor, "scope", f"a conversation scope is {'|'.join(CONVERSATION_SCOPES)}, not {scope}")
     if scope == "personal":
@@ -3433,23 +3409,23 @@ def can_move(conn, actor):
 
 
 # ----------------------------------------------------------------------------- who works a task
-TASK_MANAGER = "bot:task-manager"
+GENERAL_MANAGER = "bot:general-manager"
 
 
-def task_manager_acts(conn, actor, row):
-    """The Task Manager's narrow mover right (docs/task-manager.md): on a task it may read it moves and closes it with
+def general_manager_acts(conn, actor, row):
+    """The General Manager's narrow mover right (docs/general-manager.md): on a task it may read it moves and closes it with
     a note, relates, comments and reassigns within the department. It is not a `mover` (no lane, number, labels or
     tags) and never a bot with rights on a bot, a credential, a send or spending. The slug alone is not
-    enough: the bot behind it must be built from the task-manager template, so a bot someone names the same cannot ride on
+    enough: the bot behind it must be built from the general-manager template, so a bot someone names the same cannot ride on
     it. A private task it is not on stays unreadable (task_private_readable), so this never widens privacy."""
-    if actor != TASK_MANAGER or not row:
+    if actor != GENERAL_MANAGER or not row:
         return False
     built = (
-        _one(conn, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN} WHERE bot=?", ("task-manager",))
+        _one(conn, f"SELECT s.template AS template FROM bot_config bc {BS.JOIN} WHERE bot=?", ("general-manager",))
         if _has_table(conn, "bot_config")
         else None
     )
-    return (built or {}).get("template") == "task-manager" and task_private_readable(conn, actor, row)
+    return (built or {}).get("template") == "general-manager" and task_private_readable(conn, actor, row)
 
 
 def task_private(conn, row):
@@ -3465,7 +3441,7 @@ def task_private(conn, row):
 
 def task_private_readable(conn, actor, row):
     """Private tasks admit their parties, their readers (`tasks.readers`, a group's by its members), bot parties’
-    org-chart managers, meeting participants and Counsel page copies' readers."""
+    org-chart managers, meeting participants and the Rules Owner page copies' readers."""
     if not row:
         return False
     row = dict(row)
@@ -3513,7 +3489,7 @@ def assistant_turn_person(who):
 # bots and `group:<id>`s). A group reader names everyone in it and in the groups under it, decided at each check, so
 # leaving the group takes the access away. Anyone who may change the task changes the list (set_task_readers), and
 # each add and remove is in the task's history. The inherited readers (bot parties' managers, meeting participants,
-# Counsel page copies) are task_private_readable's and are never listed.
+# The Rules Owner page copies) are task_private_readable's and are never listed.
 
 
 def task_readers(row):
@@ -3736,33 +3712,32 @@ def private_tasks_default(conn, actor, declared=None):
     return config.get("private_tasks_default", config.get("template") in PRIVATE_BY_TEMPLATE) is True
 
 
-# The templates whose tasks are private unless their config says otherwise: a general counsel's, and Counsel's (a
+# The templates whose tasks are private unless their config says otherwise: a general counsel's, and the Rules Owner's (a
 # document's text and a can-I question are a company's own, so a teammate who cannot read the source cannot read them).
-PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
-# The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
+PRIVATE_BY_TEMPLATE = ("general-counsel", "rules-owner")
+# The built-in Rules Owner's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
 # "counsel" (a legal team's, say) is never taken for it.
-COUNSEL = "tico-counsel"
-# The built-in Brand Owner's slug (docs/onboarding.md): it keeps the brand book. A company that hired a Brand Manager
-# under this slug before it was built in keeps that bot (backend/onboarding.py `_ensure_builtin`).
-BRAND_OWNER = "brand"
+RULES_OWNER = "rules-owner"
+# The built-in Design Owner's slug (docs/onboarding.md): it owns design and keeps the brand book.
+DESIGN_OWNER = "design-owner"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).
 PRODUCT_BOT_SLUGS = frozenset(
     {
         FLEET_MAINTAINER,
-        COUNSEL,
-        BRAND_OWNER,
+        RULES_OWNER,
+        DESIGN_OWNER,
         "librarian",
-        "goal-manager",
-        "task-manager",
+        "strategy-owner",
+        "general-manager",
         "health-monitor",
-        "bookkeeper",
+        "finance-owner",
         "doc-updater",
-        "support",
-        "coo",
+        "support-owner",
+        "assistant",
         "market-analyst",
-        "listening",
+        "social-media-manager",
         "cpo",
         "updates-owner",
         "automations-owner",
@@ -4413,6 +4388,12 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
                 + ": no result is left to wake on",
             )
         return _arm_wake_once(conn, actor, have, wake_once)
+    if kind == "pr" and match and not is_human(actor):
+        from .item_sources import github as GS
+
+        if GS.queues_now(conn, task_id):
+            # The Merge stage queues the PRs that were signed off: a new one is linked by a person, or after going back.
+            refuse(conn, actor, "task_stage", GS.LINK_IN_MERGE)
     title = str(title or "").strip()
     if not title:
         m = PR_URL.match(url) or ISSUE_URL.match(url)
@@ -4438,6 +4419,16 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
             "UPDATE task_links SET repo=?,number=?,updated_at=? WHERE id=?",
             (match.group(1) + "/" + match.group(2), int(match.group(3)), now(), link["id"]),
         )
+        from .item_sources import match_link
+
+        item = match_link(url)
+        if item:
+            # The item the link is (backend/item_sources), once per task: a second link to it keeps none.
+            conn.execute(
+                "UPDATE task_links SET source=?,item_type=?,item_key=? WHERE id=? AND NOT EXISTS (SELECT 1 FROM "
+                "task_links d WHERE d.task_id=? AND d.source=? AND d.item_type=? AND d.item_key=?)",
+                (*item, link["id"], task_id, *item),
+            )
         link = _one(conn, "SELECT * FROM task_links WHERE id=?", (link["id"],))
     _task_event(conn, task_id, actor, "link", None, url, title)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
@@ -4538,11 +4529,11 @@ def _demote_sessions(conn, task_id, owner=None):
             )
 
 
-# Bots that keep nothing from one task to the next (Counsel): each task is judged on its own. Their runner starts a
+# Bots that keep nothing from one task to the next (the Rules Owner): each task is judged on its own. Their runner starts a
 # session for every task and never resumes one across tasks, reads and keeps no memory/ or state.md, copies no harness
 # memory into the repository, and gets no nightly learnings (backend/learnings.py roster). A bot's config says
 # `stateless: true`; a template listed here makes its bots stateless too, so bots built before the flag are.
-STATELESS_BY_TEMPLATE = ("tico-counsel",)
+STATELESS_BY_TEMPLATE = ("rules-owner",)
 
 
 def stateless(config):
@@ -4671,7 +4662,7 @@ def _task_link_allowed(conn, actor, row, mover=None, kind=None):
         and not task_participant(conn, actor, row)
         and not delegated
         and not task_ancestor_party(conn, actor, row)
-        and not (kind is None and task_manager_acts(conn, actor, row))
+        and not (kind is None and general_manager_acts(conn, actor, row))
     ):  # relations only, never pull request links
         refuse(
             conn,
@@ -5024,6 +5015,10 @@ def task_comment(
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
+    if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
+        from . import task_engine
+
+        task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
@@ -5047,11 +5042,23 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
+    until = shift(now(), hours=24)
+    for recipient, mid in _woken_bots(conn, msg):
+        conn.execute(
+            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
+            "VALUES(?,?,?,?,?)",
+            (task_id, recipient, person, mid, until),
+        )
+
+
+def _woken_bots(conn, msg):
+    """The bots a message wakes, each with the message that starts its run: the bot it is written to, unless it is
+    quiet, and each bot a steer or queue delivery is pending for."""
     woken = []
     refs = _json(msg.get("refs"), {}) or {}
     if is_bot(msg.get("recipient_id")) and not refs.get("quiet"):
         woken.append((msg["recipient_id"], msg["id"]))
-    woken += [
+    return woken + [
         (r["recipient"], r["carrier_id"])
         for r in _rows(
             conn.execute(
@@ -5061,13 +5068,6 @@ def delegate_woken(conn, task_id, person, msg):
             )
         )
     ]
-    until = shift(now(), hours=24)
-    for recipient, mid in woken:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
 
 
 def jobs_mark(conn):
@@ -5385,6 +5385,48 @@ def task_comment_delete(conn, actor, task_id, message_id):
     return deleted
 
 
+PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", re.IGNORECASE)
+
+
+def review_finding_route(conn, actor, task_id, target):
+    """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
+    task's own pull request goes back to that task's Builder through its review (docs/pipelines-v3.md, Engineering),
+    and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
+    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    if not is_bot(actor) or not is_human(target):
+        return
+    row = task(conn, task_id)
+    if not row or row.get("pipeline_id") != GENERAL_PIPELINE:
+        return
+    prs = {
+        (str(repo).lower(), int(number))
+        for repo, number in conn.execute(
+            "SELECT repo, number FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+            "AND number IS NOT NULL",
+            (task_id,),
+        )
+    }
+    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
+    for repo, number in sorted(prs):
+        own = conn.execute(
+            "SELECT t.title, s.name FROM task_links l JOIN tasks t ON t.id=l.task_id JOIN stages s ON s.id=t.stage_id "
+            "WHERE l.kind='pr' AND lower(l.repo)=? AND l.number=? AND t.id<>? AND t.status='open' "
+            "AND t.pipeline_id IS NOT NULL AND t.pipeline_id<>? ORDER BY t.created_at LIMIT 1",
+            (repo, number, task_id, GENERAL_PIPELINE),
+        ).fetchone()
+        if own:
+            refuse(
+                conn,
+                actor,
+                "review_route",
+                f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
+                "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
+                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
+            )
+
+
 def task_create(
     conn,
     actor,
@@ -5403,6 +5445,7 @@ def task_create(
     lint=True,
     goal_id=None,
     pipeline=None,
+    stage=None,
     link="sub_task",
     number=None,
     mover=None,
@@ -5473,7 +5516,7 @@ def task_create(
         if again:
             return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
-    from . import task_engine, visual_specs
+    from . import private_pipelines, task_engine, visual_specs
 
     body = visual_specs.child_body(conn, parent_id, body)  # tickets under a spec'd roadmap card get its spec
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
@@ -5487,6 +5530,13 @@ def task_create(
         or parent
         and task_private(conn, parent)
     )
+    # A private pipeline's task is private whatever was asked, `from_private` too; its readers are written before it
+    # enters (backend/private_pipelines.py).
+    pipeline_id = str(pipeline or GENERAL_PIPELINE)
+    pipe = task_engine.pipeline(conn, pipeline_id)
+    in_private_pipeline = private_pipelines.is_private(pipe)
+    if in_private_pipeline:
+        private = True
     if private:
         requester = actor
     from .roadmaps import settings as roadmap_settings
@@ -5520,8 +5570,6 @@ def task_create(
     severity = classify(f"{title}\n{body}", to_actor=target, actor=actor, conn=conn)
     path_mentioned(conn, actor, "new task", f"{title}\n{body}".strip())
     lane = _lane_for(conn, lane, target, actor)
-    pipeline_id = str(pipeline or GENERAL_PIPELINE)
-    pipe = task_engine.pipeline(conn, pipeline_id)
     if (
         not pipe
         or pipe.get("retired_at")
@@ -5686,6 +5734,8 @@ def task_create(
                 mover=mover,
                 check=(lambda added: readers_check(row["id"], added)) if readers_check else None,
             )
+        if in_private_pipeline:
+            private_pipelines.admit(conn, row["id"], pipe)
         if dedicated:
             conn.execute("UPDATE conversations SET task_id=? WHERE id=?", (row["id"], conv["id"]))
         if number is not None:
@@ -5770,6 +5820,7 @@ def task_create(
             wake=wake,
             trigger=trigger,
             source=trigger_source,
+            start=stage,
         )
         _next_number(conn, actor, row["id"], pipeline_id)
         event(conn, actor, "task.create", row["id"], {"owner": target, "title": title})
@@ -5812,7 +5863,7 @@ def task_create(
 
 def title_key(title):
     """What two task titles are compared by, for a duplicate: case-folded, trimmed, inner spaces collapsed. The
-    create and rename refusals, the Task Manager's duplicates and the stale review's twin all use it; the stored
+    create and rename refusals, the General Manager's duplicates and the stale review's twin all use it; the stored
     title stays as typed. In Python, since SQLite's lower() folds ASCII only."""
     return " ".join(str(title or "").split()).casefold()
 
@@ -5957,14 +6008,18 @@ def task_update(
         if not private and parent:
             if task_private(conn, parent):
                 refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
+        from . import private_pipelines
+
+        if not private and private_pipelines.of_task(conn, task_id):
+            refuse(conn, actor, "private", private_pipelines.STAYS_PRIVATE)
     # The same owner sent in another form (`cmo` for `bot:cmo`) is no reassignment.
     if owner is not None and resolve_actor(conn, owner) == row["owner_id"]:
         owner = None
     from . import task_calls
 
-    mine = _task_party(conn, actor, row) or task_manager_acts(conn, actor, row)
-    if actor == TASK_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
-        # Its grant is narrow (task_manager_acts): notes, a move and a reassignment, nothing else.
+    mine = _task_party(conn, actor, row) or general_manager_acts(conn, actor, row)
+    if actor == GENERAL_MANAGER and actor not in (row["owner_id"], row["requester_id"]):
+        # Its grant is narrow (general_manager_acts): notes, a move and a reassignment, nothing else.
         beyond = [
             name
             for name, value in (
@@ -5991,7 +6046,7 @@ def task_update(
                 conn,
                 actor,
                 "identity",
-                f"The Task Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
+                f"The General Manager moves, notes and reassigns tasks only, not {', '.join(beyond or ['size'])}",
             )
     if mover is None:
         mover = actor == KEEPER or is_human(actor) and can_move(conn, actor)
@@ -6116,7 +6171,7 @@ def task_update(
     if rank is not None:
         sets.append("rank=:rank")
         args["rank"] = float(rank)
-        # A queue move writes no event of its own, except on a task a Strategy Bot decision changed: its Undo keeps a
+        # A queue move writes no event of its own, except on a task a Strategy Owner decision changed: its Undo keeps a
         # later move, even one back to the same place (backend/strategy_acts.py).
         if float(rank) != row.get("rank") and _strategy_changed(conn, task_id):
             _task_event(conn, task_id, actor, "rank", row.get("rank"), float(rank), note or "")
@@ -6362,7 +6417,7 @@ def history_event(
 
 def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None, data=None):
     """One row of a task's history; returns its id."""
-    # A Strategy Bot decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
+    # A Strategy Owner decision (or its Undo) stamps each change it makes with its action id (backend/strategy_acts.py).
     from .strategy_acts import ACTION
 
     return history_event(
@@ -6382,7 +6437,7 @@ def _task_event(conn, task_id, actor, field, old, new, note="", *, event_id=None
 
 
 def _strategy_changed(conn, task_id):
-    """Whether a Strategy Bot decision (or its Undo) is writing this task now or has changed it before."""
+    """Whether a Strategy Owner decision (or its Undo) is writing this task now or has changed it before."""
     from .strategy_acts import ACTION
 
     return bool(ACTION.get()) or bool(
@@ -6735,6 +6790,15 @@ def task_run_now(conn, actor, task_id):
         refuse(conn, actor, "run-now", f"the task is {row['status']}; {task_reopen_hint(conn, actor, row)}")
     if why := setup_hold(conn, row["owner_id"]):
         raise Refused("run-now", why)  # not a refused write: nothing to count against the caller
+    if (
+        row.get("pipeline_id")
+        and conn.execute("SELECT 1 FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()
+    ):
+        # Run now asks for the work now: like the task's Wake button it ends the snooze, in the presser's name. Left
+        # snoozed, the engine holds the run it queues (task_wakes.may_start) and Run now did nothing.
+        from . import task_engine
+
+        task_engine.unsnooze(conn, task_id, actor, "Run now")
     waiting = None
     try:
         waiting = _one(
@@ -8073,6 +8137,7 @@ from .task_calls import (
     task_move as task_move,
     task_page_attach as task_page_attach,
     task_reassign as task_reassign,
+    task_release as task_release,
     task_requeue as task_requeue,
     task_snooze as task_snooze,
     task_thumbs as task_thumbs,

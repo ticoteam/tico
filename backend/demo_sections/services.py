@@ -138,7 +138,7 @@ CONTENT = {
             },
             "handoff": (
                 "human:ana",
-                "bot:compliance",
+                "bot:compliance-manager",
                 "Compliance owns the LX-400 retest. Rerun the conducted emissions and file the report.",
             ),
         },
@@ -169,8 +169,8 @@ CONTENT = {
                 "text": "Invoice 22731 for 500 lens housings. Payment terms net 30.",
             },
             "handoff": (
-                "bot:finance-lead",
-                "bot:accounts-payable",
+                "bot:finance-owner",
+                "bot:accounts-payable-specialist",
                 "Pay invoice 22731 on terms and match it to the purchase order.",
             ),
         },
@@ -178,18 +178,18 @@ CONTENT = {
     "gateway": {"key_prefix": "tico-gw-", "note": "Connected.", "used": 0.18, "spent_usd": 42.6, "cap_usd": 250.0},
     # Gateway models in use, by bot: a Tico tier is a level, and -fast for the quick one.
     "models": {
-        "coo": "tico-high",
+        "assistant": "tico-high",
         "firmware": "tico-xhigh",
-        "pr-reviewer": "tico-medium-fast",
-        "content": "tico-medium-fast",
+        "reviewer": "tico-medium-fast",
+        "content-owner": "tico-medium-fast",
         "seo": "tico-low-fast",
-        "sales": "tico-medium",
+        "inbound-sales-owner": "tico-medium",
         "sdr": "tico-xlow-fast",
-        "support": "tico-low-fast",
-        "escalations": "tico-high-fast",
-        "bookkeeper": "tico-low",
-        "accounts-payable": "tico-xlow",
-        "compliance": "tico-high",
+        "support-owner": "tico-low-fast",
+        "escalations-manager": "tico-high-fast",
+        "finance-owner": "tico-low",
+        "accounts-payable-specialist": "tico-xlow",
+        "compliance-manager": "tico-high",
     },
     "subscription": {"name": "Acme Claude team plan", "kind": "claude_token", "runtime": "claude"},
     "github": {
@@ -202,21 +202,21 @@ CONTENT = {
     "slack": {"team": "TDEMOTEAM1", "app": "ADEMOAPP1", "team_name": "Acme Lights"},
     # MCP tools each bot declares; the computer reports them with its readiness, and Tools shows them as ready.
     "tools": {
-        "issue-triage": {
+        "qa-owner": {
             "service": "linear",
             "can": ["read", "comment"],
             "env": "LINEAR_API_KEY",
             "url": "https://mcp.linear.example/mcp",
             "transport": "http",
         },
-        "sales-ops": {
+        "sales-operations-manager": {
             "service": "crm",
             "can": ["read"],
             "env": "CRM_API_KEY",
             "url": "https://mcp.crm.example/mcp",
             "transport": "http",
         },
-        "support": {
+        "support-owner": {
             "service": "helpdesk",
             "can": ["read", "reply"],
             "env": "HELPDESK_API_KEY",
@@ -252,7 +252,7 @@ def seed(b):
 
 def mail_access(b):
     """Seed after the company's conversations so the grant's audit ids do not shift their stable ids."""
-    b.call("PUT", "postal/addresses/all/grants/bot/legal-review", {"level": "read"})
+    b.call("PUT", "postal/addresses/all/grants/bot/contracts-manager", {"level": "read"})
     _email_sending(b)
 
 
@@ -537,7 +537,7 @@ def _runners(b):
     b.at(days=5.9)
     tools = CONTENT["tools"]
     bots = {}
-    for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "goal-manager"]:
+    for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]:
         entry = {
             "ready": True,
             "runtime": "claude",

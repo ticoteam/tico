@@ -342,7 +342,7 @@ def test_replay_runs_a_stored_call_again_once_per_request_and_not_after_it_expir
 
 def test_who_may_read_a_stored_body(api):
     as_bot(api, "ops")
-    as_bot(api, "coo")
+    as_bot(api, "assistant")
     made = post(api, "triggers", {"name": "Shop"})["trigger"]
     routine(api)
     big = json.dumps({"rows": ["x" * 40] * 800}).encode()  # pretty-printed: over two parts
@@ -372,16 +372,16 @@ def test_who_may_read_a_stored_body(api):
     )
     assert "part 1 of" in part1["content"] and len(part1["content"]) < triggers.MAX_CONTENT + 400
     get(api, path + "?part=99", token="ops-test", expected=404)
-    get(api, path, token="coo-test", expected=404)  # a bot it was not given to
+    get(api, path, token="assistant-test", expected=404)  # a bot it was not given to
     # A person's message with the same refs gives the bot nothing; Tico's own notice naming the delivery does.
     from backend import hubdb as H
 
     with api.app.state.store.transaction() as c:
-        H.notice(c, "human:ben", "bot:coo", "Look at this", refs={"trigger": "shop", "delivery": "big"})
-    get(api, path, token="coo-test", expected=404)
+        H.notice(c, "human:ben", "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+    get(api, path, token="assistant-test", expected=404)
     with api.app.state.store.transaction() as c:
-        H.notice(c, H.KEEPER, "bot:coo", "Look at this", refs={"trigger": "shop", "delivery": "big"})
-    assert get(api, path, token="coo-test")["delivery"]["part"] == 1
+        H.notice(c, H.KEEPER, "bot:assistant", "Look at this", refs={"trigger": "shop", "delivery": "big"})
+    assert get(api, path, token="assistant-test")["delivery"]["part"] == 1
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE trigger_bodies SET expires_at='2000-01-01T00:00:00.000000Z'")
     expired = get(api, path)["delivery"]
@@ -390,7 +390,7 @@ def test_who_may_read_a_stored_body(api):
 
 def test_a_bot_makes_and_manages_its_own_triggers_only(api):
     as_bot(api, "ops")
-    as_bot(api, "coo")
+    as_bot(api, "assistant")
     made = post(api, "triggers", {"name": "Ops hook"}, token="ops-test")["trigger"]
     assert made["id"] == "ops-hook" and made["url"].count("/") > 4
     post(api, "triggers/ops-hook", {"hourly": 600, "keep_days": 30}, token="ops-test")
@@ -398,9 +398,9 @@ def test_a_bot_makes_and_manages_its_own_triggers_only(api):
     post(api, "triggers/ops-hook", {"keep_days": 31}, token="ops-test", expected=422)
     post(api, "triggers/ops-hook", {"unheard": "email"}, token="ops-test", expected=422)
     post(api, "triggers/ops-hook", {"type_from": "bad header!"}, token="ops-test", expected=422)
-    post(api, "triggers/ops-hook/rotate", {}, token="coo-test", expected=403)
-    post(api, "triggers/ops-hook", {"name": "x"}, token="coo-test", expected=403)
-    shown = get(api, "triggers/ops-hook", token="coo-test")["trigger"]  # anyone signed in reads it
+    post(api, "triggers/ops-hook/rotate", {}, token="assistant-test", expected=403)
+    post(api, "triggers/ops-hook", {"name": "x"}, token="assistant-test", expected=403)
+    shown = get(api, "triggers/ops-hook", token="assistant-test")["trigger"]  # anyone signed in reads it
     assert shown["hourly"] == 600 and shown["keep_days"] == 30 and "secret" not in json.dumps(shown)
     post(api, "triggers/ops-hook/delete", {}, token="ops-test")
     # The owner changes any trigger; the secret is never in the event log.

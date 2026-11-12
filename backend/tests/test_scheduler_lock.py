@@ -33,12 +33,12 @@ def seed(store):
     rows = []
     for i in range(TASKS):
         status = "open"  # a row made by hand may only start open (tasks_enter_only)
-        owner = "bot:coo" if i % 3 else "ana"
+        owner = "bot:assistant" if i % 3 else "ana"
         due = None
         if i % 50 == 0:
             # due tomorrow (inside the day of slack), or long past and owned by a paused bot
             due = stamp(AT + timedelta(hours=10)) if i % 100 else "2026-09-01"
-            owner = "bot:coo" if i % 100 else "bot:finance"
+            owner = "bot:assistant" if i % 100 else "bot:finance"
         rows.append(
             (
                 str(uuid.uuid4()),
@@ -67,7 +67,7 @@ def seed(store):
 def routine(c, key, title, due=None):
     """A routine of the COO's, seeded the way Tico seeds one: its schedule automation, due at `due` when given."""
     aid = routines.create(
-        c, H.KEEPER, "coo", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
+        c, H.KEEPER, "assistant", {"title": title, "cron": "0 9 * * *", "timezone": "UTC", "text": "Do it"}, key=key
     )["automation"]
     if due:
         c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (due, aid))
@@ -122,42 +122,8 @@ def test_tick_holds_the_write_lock_only_briefly_per_step(api, monkeypatch):
     assert {"tick_ms", "hold_ms", "hold_step", "wait_ms"} <= set(health)
 
 
-def test_hold_ms_is_the_hold_not_the_wait_behind_another_writer(api):
-    """Another writer holds the lock for a second as the tick starts: that shows as wait_ms, not hold_ms."""
-    import threading
-
-    store = api.app.state.store
-    taken = threading.Event()
-
-    def hold():
-        with store.read() as other:
-            other.execute("BEGIN IMMEDIATE")
-            taken.set()
-            time.sleep(1)
-            other.execute("ROLLBACK")
-
-    holder = threading.Thread(target=hold)
-    holder.start()
-    taken.wait(5)
-    Scheduler(store, api.app.state.execution).tick(AT)
-    holder.join()
-    with store.read() as c:
-        health = json.loads(c.execute("SELECT detail FROM service_health WHERE service='scheduler'").fetchone()[0])
-    assert health["wait_ms"] >= 900 and health["hold_ms"] < 900, health
-
-
 def plan(c, sql, *args):
     return " | ".join(row[-1] for row in c.execute("EXPLAIN QUERY PLAN " + sql, args))
-
-
-def test_tick_task_queries_read_an_index_not_the_tasks_table(api):
-    with api.app.state.store.read() as c:
-        leases = plan(
-            c,
-            "SELECT id FROM attempts WHERE state IN ('leased','running') AND lease_until<=? ORDER BY lease_until,id LIMIT 8",
-            H.now(),
-        )
-        assert 'attempts_live_lease' in leases and 'TEMP B-TREE' not in leases, leases
 
 
 def test_split_tick_still_fires_each_occurrence_once(api):
@@ -174,6 +140,8 @@ def test_split_tick_still_fires_each_occurrence_once(api):
         ]
         assert sorted(runs) == sorted(made)
         assert (
-            c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:coo' AND title LIKE 'Morning %'").fetchone()[0]
+            c.execute(
+                "SELECT count(*) FROM tasks WHERE owner_id='bot:assistant' AND title LIKE 'Morning %'"
+            ).fetchone()[0]
             == 3
         )

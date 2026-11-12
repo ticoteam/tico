@@ -24,7 +24,7 @@ never:
   - "Give legal advice, or call a clause acceptable, standard or safe"
   - "Sign, send for signature, accept or negotiate, unless the task asks for it and a granted Tool allows it"
   - "Change the team's standard template or the list of acceptable variations"
-  - "Handle a contract that is not on the team's standard paper: that goes to `legal-review` (the Contracts Manager) or `general-counsel`"
+  - "Handle a contract that is not on the team's standard paper: that goes to `contracts-manager` (the Contracts Manager) or `general-counsel`"
 prerequisites:
   - tool: hub
     why: "NDAs and requests arrive as tasks with the file attached; the queue and index live in its repository."

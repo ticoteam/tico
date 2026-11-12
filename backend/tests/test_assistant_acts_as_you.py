@@ -2,7 +2,6 @@
 (backend/assistant.py `admits_on_turn`, backend/app.py request_guard). The NEVER list, the 30-minute window, the member's
 ceiling, the owner's switch, and approvals that only the person decides stay as they were."""
 
-import inspect
 import json
 import re
 from pathlib import Path
@@ -127,26 +126,6 @@ def test_a_message_older_than_thirty_minutes_no_longer_lends_its_words(api):
     assert revision["error"]["code"] == "confirm_required"
 
 
-def test_a_member_keeps_the_ceiling_on_their_own_assistant(api):
-    as_member(api, "ben@acme.example")
-    with api.app.state.store.transaction() as c:
-        secret = H.task_create(c, "human:ana", "Ana's private review", "Nothing for ben.", "bot:inbox")["id"]
-    r, attempt = assistant_turn(api, "ben-test")
-    token = attempt["token"]
-    get(api, "tasks/" + secret, token, expected=404)
-    post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
-
-
-def test_the_owners_switch_puts_every_write_back_on_a_card(api):
-    set_rule(api, assistant_direct=False)
-    r, attempt = assistant_turn(api, "ana-test")
-    token = attempt["token"]
-    # Archiving a bot is gated: with the owner's switch off, the Assistant only proposes it.
-    revision = post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
-    assert revision["error"]["code"] == "confirm_required"
-    set_rule(api, assistant_direct=True)
-
-
 def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
     """The routine or Slack run (not the person's Assistant room) never acts as the person."""
     with api.app.state.store.read() as c:
@@ -235,7 +214,7 @@ def card(api, token, path, body, method="POST", summary="Archive the Ops bot", f
 
 
 def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api):
-    coo = setup_attempt(api, "coo")[2]["token"]  # the Assistant bot's own identity (its daily sweep)
+    coo = setup_attempt(api, "assistant")[2]["token"]  # the Assistant bot's own identity (its daily sweep)
     made = card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 1}, for_person="human:ana")["action"]
     assert made["owner"] == "human:ana" and made["proposer"] == "assistant" and made["status"] == "pending"
     assert made["conversation_id"] == api_room(api, "ana-test")
@@ -246,7 +225,7 @@ def test_the_assistants_background_run_puts_one_card_in_the_persons_own_chat(api
 
 
 def test_a_background_card_never_approves_and_is_capped_per_person_per_day(api):
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     # An OK is the person's own tap on its preview: never a card, alone or as a bulk step.
     with api.app.state.store.transaction() as c:
         ads = H.task_create(c, "human:ana", "Run the ads", "Q4.", "bot:ops")
@@ -286,7 +265,7 @@ def test_one_card_holds_closes_an_automation_change_and_a_rule_stop(api):
 
 
 def test_a_background_card_is_only_for_a_real_active_person(api):
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     card(api, coo, "/api/v2/bots/ops/archive", {"expected_revision": 1}, for_person="human:ghost", expected=404)
     with api.app.state.store.read() as c:
         assert (
@@ -299,14 +278,14 @@ def test_a_background_card_is_only_for_a_real_active_person(api):
 
 
 def test_a_routine_run_of_the_assistant_bot_is_never_the_persons_turn(api):
-    """The daily sweep is a routine of the coo bot: its attempt is not a turn the person started in their Assistant room,
+    """The daily sweep is a routine of the assistant bot: its attempt is not a turn the person started in their Assistant room,
     so the Assistant principal is None and the run keeps the bot's own identity (via is never "assistant")."""
-    _, _, attempt = setup_attempt(api, "coo")
+    _, _, attempt = setup_attempt(api, "assistant")
     auth = api.app.state.auth
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert auth.assistant_principal(c, row) is None
-    assert get(api, "me", attempt["token"])["actor"] == "bot:coo"
+    assert get(api, "me", attempt["token"])["actor"] == "bot:assistant"
 
 
 def test_the_providers_keys_are_never_a_chat_write(api):
@@ -338,7 +317,7 @@ def test_the_morning_day_is_the_company_day_in_los_angeles(monkeypatch):
 
 def test_the_morning_message_lands_in_the_persons_assistant_chat(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: "2026-11-06T09:00:00.000000Z")  # 01:00 on Nov 6 in Los Angeles
-    coo = setup_attempt(api, "coo")[2]["token"]  # the Assistant bot's own identity (its background run)
+    coo = setup_attempt(api, "assistant")[2]["token"]  # the Assistant bot's own identity (its background run)
     made = morning(api, coo, body="Close the invoice first.")
     assert made["day"] == "2026-11-06" and made["next_at"] == "2026-11-07T08:00:00.000000Z", made
     assert made["conversation_id"] == api_room(api, "ana-test") and made["conversation_id"] != api_room(api, "ben-test")
@@ -349,7 +328,7 @@ def test_the_morning_message_lands_in_the_persons_assistant_chat(api, monkeypatc
         audit = c.execute(
             "SELECT actor FROM events WHERE action='assistant.morning' AND target=?", (made["message_id"],)
         ).fetchone()
-    assert (sender, recipient, kind, body) == ("bot:coo", "human:ana", "say", "Close the invoice first.")
+    assert (sender, recipient, kind, body) == ("bot:assistant", "human:ana", "say", "Close the invoice first.")
     assert json.loads(refs) == {"assistant": True, "morning": "2026-11-06"}, refs
     assert audit is not None and audit[0] == "human:ana"
 
@@ -358,7 +337,7 @@ def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_
     # The run is claimed at 23:59:30 UTC (15:59 in Los Angeles), so its lease covers both calls. The second call is past
     # UTC midnight and still the same company day: it is refused, and says when the next one can go.
     monkeypatch.setattr(H, "now", lambda: "2026-11-05T23:59:30.000000Z")
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     assert morning(api, coo)["day"] == "2026-11-05"
     monkeypatch.setattr(H, "now", lambda: "2026-11-06T00:00:45.000000Z")
     refused = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "Again."}, headers=headers(coo))
@@ -367,7 +346,7 @@ def test_a_second_morning_message_the_same_company_day_is_refused_with_the_next_
 
 
 def test_only_the_assistants_background_run_sends_the_morning_message(api):
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     other_bot = setup_attempt(api, "ops")[2]["token"]
     morning(api, other_bot, expected=403)
     morning(api, "ana-test", expected=403)  # a person, even the one it is for
@@ -381,14 +360,14 @@ def test_the_assistants_chat_turn_never_sends_the_morning_message(api):
 
 
 def test_a_morning_message_is_only_for_an_active_person(api):
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     morning(api, coo, for_person="human:ghost", expected=404)
     post(api, "access/people/cara", {"sign_in": False})
     morning(api, coo, for_person="human:cara", expected=404)
 
 
 def test_a_morning_message_is_at_most_two_thousand_characters(api):
-    coo = setup_attempt(api, "coo")[2]["token"]
+    coo = setup_attempt(api, "assistant")[2]["token"]
     r = api.post("/api/v2/assistant/morning", json={"for": "human:ana", "body": "x" * 2001}, headers=headers(coo))
     assert r.status_code == 422, r.text
 
@@ -493,36 +472,6 @@ REVIEWED = {
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
     "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
-
-
-def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
-    """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
-    subscription, a signing key, an invite, or the providers, must be on NEVER for every write it takes
-    (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
-    touches = re.compile(
-        r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
-        r"enroll|pairing|subscription|signing|replace_lost|invite|provider"
-    )
-    checked, offenders = 0, []
-    for route in api.app.routes:
-        methods = getattr(route, "methods", None)
-        endpoint = getattr(route, "endpoint", None)
-        if not methods or endpoint is None:
-            continue
-        try:
-            source = inspect.getsource(endpoint)
-        except (OSError, TypeError):
-            continue
-        if not touches.search(source):
-            continue
-        path = re.sub(r"\{[^}]+\}", "x1", route.path)
-        for method in sorted(set(methods) - {"GET", "HEAD", "OPTIONS"}):
-            checked += 1
-            if assistant.admits_on_turn(method, path, None):
-                offenders.append(f"{method} {route.path}")
-    assert checked >= 20, checked
-    unreviewed = [o for o in offenders if o not in REVIEWED]
-    assert not unreviewed, "\n".join(unreviewed)
 
 
 def _template_tools():

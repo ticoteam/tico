@@ -1,6 +1,6 @@
 """First run builds a team: what the org builder saves, and a starter bot's life from Create to onboarded.
 
-Creating uses the real support, Chief of Staff and Issue Triage templates.
+Creating uses the real Support Owner, Chief of Staff and QA Owner templates.
 """
 
 import json
@@ -27,7 +27,7 @@ CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
 
 
 def real_starters(api, *names):
-    """The support and Chief of Staff templates as shipped: their card, playbooks and paused routine."""
+    """The Support Owner and Chief of Staff templates as shipped: their card, playbooks and paused routine."""
     for name in names:
         shutil.copytree(CATALOG / name, Path(api.app.state.store.settings.catalog_dir) / name, dirs_exist_ok=True)
 
@@ -35,7 +35,7 @@ def real_starters(api, *names):
 def support_routine(api):
     """The support bot's first routine as it runs now: its automation (backend/routines.py `row`)."""
     with api.app.state.store.read() as c:
-        sid = c.execute("SELECT id FROM schedules WHERE bot='support'").fetchone()[0]
+        sid = c.execute("SELECT id FROM schedules WHERE bot='support-owner'").fetchone()[0]
         return routines.row(c, sid)
 
 
@@ -47,13 +47,13 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     """Create, parked, woken only by a person, ready by the bot itself and completed by a person above it; and the member
     limit ignores parked bots."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
-    real_starters(api, "support", "chief-of-staff", "issue-triage")
+    real_starters(api, "support-owner", "chief-of-staff", "qa-owner")
     computer = machine(api)
     who = signed_in()
     selected = {
         "chief-of-staff": {"template": "chief-of-staff", "display_name": "Chief of Staff", "instructions": ""},
-        "support": {
-            "template": "support",
+        "support-owner": {
+            "template": "support-owner",
             "display_name": "Help desk",
             "instructions": "",
             "reports_to": "chief-of-staff",
@@ -62,39 +62,48 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     assert draft(api, selected=selected).status_code == 200
     record = build_team(api)  # what picking a candidate for each seat makes (bot-lifecycle-spec.md)
     rows = {row["slug"]: row for row in record["bots"]}
-    assert rows["support"]["onboarding_state"] == rows["chief-of-staff"]["onboarding_state"] == "needs_setup"
-    assert rows["botops"]["onboarding_state"] == rows["coo"]["onboarding_state"] == ""  # built in: they work at once
+    assert rows["support-owner"]["onboarding_state"] == rows["chief-of-staff"]["onboarding_state"] == "needs_setup"
     assert (
-        rows["support"]["setup_task_id"] is None and rows["support"]["reports_to"] == rows["chief-of-staff"]["id"]
+        rows["botops"]["onboarding_state"] == rows["assistant"]["onboarding_state"] == ""
+    )  # built in: they work at once
+    assert (
+        rows["support-owner"]["setup_task_id"] is None
+        and rows["support-owner"]["reports_to"] == rows["chief-of-staff"]["id"]
     )  # stored by id
     assert rows["chief-of-staff"]["reports_to"] == "human:morgan"  # the owner, by default
 
     # Exposed with the template and its version; placed on the computer and active, its routine seeded off.
     listed = {b["slug"]: b for b in api.get("/api/v2/bots", headers=who).json()}
-    assert listed["support"]["onboarding_state"] == "needs_setup" and listed["coo"]["onboarding_state"] == ""
-    detail = api.get("/api/v2/bots/support", headers=who).json()
+    assert (
+        listed["support-owner"]["onboarding_state"] == "needs_setup" and listed["assistant"]["onboarding_state"] == ""
+    )
+    detail = api.get("/api/v2/bots/support-owner", headers=who).json()
     assert (detail["template"], detail["template_version"], detail["state"]) == (
-        "support",
+        "support-owner",
         releases.version(),
         "active",
     )
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []  # no BotOps task
     assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
-        assert BS.read(c, 'support')["materialize"] is True
+        assert BS.read(c, "support-owner")["materialize"] is True
 
     # Nothing wakes it but a person: a task notice waits, the person's own message is claimed.
-    ready(api, computer, ["support"])
-    api.post("/api/v2/tasks", json={"owner": "support", "title": "Look at the queue", "body": "x"}, headers=signed_in())
-    assert claim(api, computer, "support") is None
-    started = post(api, "chat/support", {"text": "Let's set you up."}, token="local-owner-secret-token-0123456789")
+    ready(api, computer, ["support-owner"])
+    api.post(
+        "/api/v2/tasks", json={"owner": "support-owner", "title": "Look at the queue", "body": "x"}, headers=signed_in()
+    )
+    assert claim(api, computer, "support-owner") is None
+    started = post(
+        api, "chat/support-owner", {"text": "Let's set you up."}, token="local-owner-secret-token-0123456789"
+    )
     assert enabled(api) == 1  # starting the setup switched its first routine on: nobody approves it separately
-    attempt = claim(api, computer, "support")
-    assert attempt and attempt["bot"] == "support"
+    attempt = claim(api, computer, "support-owner")
+    assert attempt and attempt["bot"] == "support-owner"
     assert attempt["onboarding"] == "needs_setup"  # the runner's prompt follows the template's flow
 
     # Start setup is a message in the person's own chat with the bot: the conversation the bot page's Chat tab lists.
-    chats = api.get("/api/v2/conversations", params={"chat_with": "support"}, headers=who).json()["conversations"]
+    chats = api.get("/api/v2/conversations", params={"chat_with": "support-owner"}, headers=who).json()["conversations"]
     assert [c["id"] for c in chats] == [started["conversation_id"]] == [attempt["conversation"]["id"]]
     assert chats[0]["scope"] == "personal" and chats[0]["kind"] == "chat"
     shown = api.get(f"/api/v2/conversations/{chats[0]['id']}/messages", headers=who).json()["messages"]
@@ -102,29 +111,29 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
 
     # The bot says it is ready, with what it learned; a person above it marks onboarding complete, once.
     def call(token, summary=""):
-        return api.post("/api/v2/bots/support/onboarded", json={"summary": summary}, headers=headers(token))
+        return api.post("/api/v2/bots/support-owner/onboarded", json={"summary": summary}, headers=headers(token))
 
     assert call(computer["token"]).status_code == 403  # the computer is not the bot
     said = call(attempt["token"], "I know the queue and the refund rules.")  # the bot, in its own turn
     assert said.status_code == 200 and said.json()["stage"] == "onboarding" and said.json()["changed"] is False
     assert said.json()["ready"]["summary"] == "I know the queue and the refund rules."
-    shown = api.get("/api/v2/bots/support", headers=who).json()
+    shown = api.get("/api/v2/bots/support-owner", headers=who).json()
     assert shown["stage"] == "onboarding" and shown["can_complete_onboarding"] is True
     assert shown["onboarding_ready"]["summary"] == "I know the queue and the refund rules."
-    done = api.post("/api/v2/bots/support/onboarded", json={}, headers=who)  # the owner, above its manager
+    done = api.post("/api/v2/bots/support-owner/onboarded", json={}, headers=who)  # the owner, above its manager
     assert done.status_code == 200 and done.json()["onboarding_state"] == "onboarded" and done.json()["changed"] is True
     assert call(attempt["token"]).json() == {
-        "bot": "support",
+        "bot": "support-owner",
         "onboarding_state": "onboarded",
         "stage": "active",
         "changed": False,
-        "routine": None,  # a repeat call arms nothing: the first routine is armed once (arm_first_routine)
+        "routine": None,  # a repeat call arms nothing: routines are armed once (arm_routines)
     }
-    assert api.get("/api/v2/bots/support", headers=who).json()["stage"] == "active"
+    assert api.get("/api/v2/bots/support-owner", headers=who).json()["stage"] == "active"
     assert api.get("/api/v2/bots/chief-of-staff", headers=who).json()["onboarding_state"] == "needs_setup"
 
     # Parked bots do not count toward a member's limit until they are onboarded.
-    real_starters(api, "issue-triage")
+    real_starters(api, "qa-owner")
     assert api.put("/api/v2/access/limits", json={"member_bot_limit": 1}, headers=signed_in()).status_code == 200
     as_person(api, "quinn")
     model = api.get("/api/v2/models", headers=signed_in()).json()["default"]
@@ -145,7 +154,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
             },
         )
 
-    for slug, template in (("help", "support"), ("closer", "issue-triage"), ("chief-two", "chief-of-staff")):
+    for slug, template in (("help", "support-owner"), ("closer", "qa-owner"), ("chief-two", "chief-of-staff")):
         assert create(slug, template).status_code == 200, slug  # parked: three of them, with a limit of one
     assert create("plain").status_code == 200  # and the one that counts still fits
     over = create("plain-two")
@@ -169,9 +178,9 @@ def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it
     """Overview's "Finish with defaults" on a bot nobody started: its template's first routine is on, as Start setup
     would have left it, and only once."""
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
-    real_starters(api, "support")
+    real_starters(api, "support-owner")
     machine(api)
-    selected = {"support": {"template": "support", "display_name": "Help desk", "instructions": ""}}
+    selected = {"support-owner": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}
     assert draft(api, selected=selected).status_code == 200
     build_team(api)
 
@@ -179,17 +188,17 @@ def test_finishing_setup_with_defaults_turns_the_first_routine_on_as_starting_it
         return support_routine(api)["enabled"]
 
     assert enabled() == 0
-    finished = api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()
+    finished = api.post("/api/v2/bots/support-owner/onboarded", json={}, headers=signed_in()).json()
     assert finished["onboarding_state"] == "onboarded" and finished["routine"] and enabled() == 1
-    again = api.post("/api/v2/bots/support/onboarded", json={}, headers=signed_in()).json()
+    again = api.post("/api/v2/bots/support-owner/onboarded", json={}, headers=signed_in()).json()
     assert again["changed"] is False and enabled() == 1
 
 
 def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_not(environment):
     api = environment(cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, "")])
-    real_starters(api, "support")
+    real_starters(api, "support-owner")
     machine(api)
-    selected = {"support": {"template": "support", "display_name": "Help desk", "instructions": ""}}
+    selected = {"support-owner": {"template": "support-owner", "display_name": "Help desk", "instructions": ""}}
     assert draft(api, selected=selected).status_code == 200
     build_team(api)
 
@@ -197,15 +206,15 @@ def test_go_live_turns_the_first_routine_on_once_and_a_strangers_message_does_no
         return support_routine(api)["enabled"]
 
     as_person(api, "quinn")  # a member who does not manage it
-    assert api.post("/api/v2/chat/support", json={"text": "hello"}, headers=signed_in("quinn")).status_code == 200
+    assert api.post("/api/v2/chat/support-owner", json={"text": "hello"}, headers=signed_in("quinn")).status_code == 200
     assert enabled() == 0
-    live = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
+    live = api.post("/api/v2/bots/support-owner/go-live", json={}, headers=signed_in())
     assert live.status_code == 200 and live.json()["routine_armed"] and enabled() == 1
     off = api.patch(
         f"/api/v2/automations/{support_routine(api)['automation']}", json={"enabled": False}, headers=signed_in()
     )  # a person turns it off: going live again leaves it off
     assert off.status_code == 200, off.text
-    again = api.post("/api/v2/bots/support/go-live", json={}, headers=signed_in())
+    again = api.post("/api/v2/bots/support-owner/go-live", json={}, headers=signed_in())
     assert again.status_code == 200 and enabled() == 0
 
 
@@ -214,7 +223,13 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     api = environment(seed={}, catalog_dir=CATALOG)
     who = signed_in()
     departments = ["sales", "marketing", "support", "finance", "operations"]
-    templates = ["sales-lead", "marketing-lead", "support-lead", "finance-lead", "ops-manager"]
+    templates = [
+        "inbound-sales-owner",
+        "growth-manager",
+        "escalations-manager",
+        "fpa-analyst",
+        "operations-manager",
+    ]
     selected = {slug: {"template": slug, "display_name": slug, "instructions": ""} for slug in templates}
     body = {
         "names": {"company_name": "Fresh Synthetic Co"},
@@ -261,7 +276,7 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
             group.pop("order", None)
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
     assert all("order" not in group for group in legacy["org_groups"].values())
-    selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
+    selected = {"fpa-analyst": {"template": "fpa-analyst", "display_name": "Finance", "instructions": ""}}
     assert (
         api.put(
             "/api/v2/setup", json={"answers": {"departments": ["finance"]}, "selected": selected}, headers=who

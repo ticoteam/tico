@@ -1259,7 +1259,7 @@ def rules(c: sqlite3.Connection, kind: str = "gate", active_only: bool = True) -
 
 
 def posting_rules_since(c: sqlite3.Connection, since: str) -> list[Any]:
-    """Posting rules made since a time, newest first (the Bookkeeper's weekly digest)."""
+    """Posting rules made since a time, newest first (the Finance Owner's weekly digest)."""
     return c.execute(
         "SELECT * FROM fin_rules WHERE kind='posting' AND created_at>=? ORDER BY created_at DESC, id", (since,)
     ).fetchall()

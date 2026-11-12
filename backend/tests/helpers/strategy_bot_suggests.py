@@ -5,7 +5,7 @@ from backend.tests.helpers.strategy_bot_level import level
 from backend.tests.helpers.company import with_strategy_bot
 
 
-OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+OWNER, STRATEGY_BOT = "human:ana", "bot:strategy-owner"
 
 
 def bot_task(api, slug, title, status="open"):

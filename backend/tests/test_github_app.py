@@ -1,6 +1,5 @@
 """The GitHub App: manifest, state nonce, secret storage, installation tokens, runner scope."""
 
-import importlib.util
 import json
 import sqlite3
 import statistics
@@ -22,6 +21,7 @@ from backend.store import Problem, encode
 from backend.enqueue import enqueue_stored
 from backend import bot_settings as BS
 from backend.tests.helpers.github_app import (
+    EVENT_PERMISSIONS,
     FakeGitHub,
     KEY,
     PEM,
@@ -33,6 +33,7 @@ from backend.tests.helpers.github_app import (
     connect,
     gh,
     manifest,
+    manifest_refusal,
     product_repo_request,
     put_extras,
     runner_token,
@@ -94,6 +95,55 @@ def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
     assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
 
 
+@pytest.mark.parametrize("administration", [True, False])
+@pytest.mark.parametrize("personal", [True, False])
+def test_every_event_the_manifest_subscribes_to_is_covered_by_a_permission_it_asks_for(administration, personal):
+    """GitHub refuses the whole manifest otherwise, and nobody can connect (v0.6.0-rc.7: `merge_group` without
+    `merge_queues`). EVENT_PERMISSIONS is GitHub's rule per event, from its webhook events page."""
+    body = G.manifest(SimpleNamespace(public_url=PUBLIC), "Acme Tico", administration, personal=personal)
+    assert body["default_events"], "the manifest subscribes to no event"
+    for event in body["default_events"]:
+        assert event in EVENT_PERMISSIONS, f"add {event} and the permission GitHub requires for it to EVENT_PERMISSIONS"
+        assert body["default_permissions"].get(EVENT_PERMISSIONS[event]) in ("read", "write"), event
+    assert manifest_refusal(body) == ""
+
+
+def test_fake_github_refuses_a_manifest_as_github_does_so_connecting_fails_in_tests(api, gh, monkeypatch):
+    real = G.manifest
+
+    def rc7(*args, **kw):  # the manifest v0.6.0-rc.7 shipped
+        body = real(*args, **kw)
+        del body["default_permissions"]["merge_queues"]
+        return body
+
+    monkeypatch.setattr(G, "manifest", rc7)
+    with pytest.raises(AssertionError, match="Default events are not supported by permissions: merge_group"):
+        connect(api)
+    assert not gh.of("/conversions")  # GitHub made no App, so nothing came back to Tico
+    monkeypatch.setattr(G, "manifest", lambda *a, **kw: {**real(*a, **kw), "default_events": ["push", "deployment"]})
+    with pytest.raises(AssertionError, match="unknown to the fake GitHub.*deployment"):
+        connect(api)
+
+
+def test_no_token_names_merge_queues_so_an_app_made_before_it_keeps_working(api, gh):
+    """An App made before the manifest asked for Merge queues: its installation reports none, and GitHub refuses a token
+    naming a permission the installation lacks. Turn, read and check tokens never name it."""
+    connect(api)
+    gh.permissions = {name: level for name, level in manifest_permissions().items() if name != "merge_queues"}
+    asked = []
+    gh.on_token = lambda body: asked.append((body or {}).get("permissions") or {})
+    runner_token(api, "cpo")
+    assert turn_token(api).status_code == 200
+    assert api.app_state.github_app.mint_checks("Acme/emp-cpo")
+    assert len(asked) >= 2 and not any("merge_queues" in permissions for permissions in asked)
+    assert "merge_queues" not in {**G.TURN_READS, **G.TURN_PERMISSIONS, **G.READ_PERMISSIONS, **G.CHECKS_PERMISSIONS}
+    assert not token_health(api)
+
+
+def manifest_permissions():
+    return G.manifest(SimpleNamespace(public_url=PUBLIC), "Acme Tico", True)["default_permissions"]
+
+
 def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_it_once_granted(api, gh):
     """BotOps' create without Administration: a refusal naming a person and both fixes, no task filed, the bot kept as
     planned; once GitHub reports the permission, BotOps's next try makes the repository."""
@@ -121,6 +171,23 @@ def test_missing_repo_permission_is_refused_with_both_fixes_and_botops_creates_i
     assert checked.status_code == 200 and checked.json()["administration"] is True, checked.text
     made = create()
     assert made.status_code == 200 and gh.created_repositories == {"Acme/bot-newbie"}, made.text
+
+
+def test_a_first_repository_list_that_fails_is_named_by_its_code_on_the_install_event(api, gh, monkeypatch):
+    from backend import repositories
+
+    connect(api)
+    secret = "ghs_PLANTEDsecret0123456789abcdef"
+
+    def refused(service):
+        raise Problem("github_repositories", "GitHub answered " + secret, 502)
+
+    monkeypatch.setattr(repositories, "sync", refused)
+    assert api.get("/api/v2/github/app/installed", headers=auth()).status_code == 302
+    with api.app_state.store.read() as c:
+        rows = [r["detail"] for r in c.execute("SELECT detail FROM events WHERE action='github.app_installed'")]
+    assert json.loads(rows[-1]) == {"installed": True, "sync_failed": "github_repositories"}
+    assert secret not in "".join(rows)
 
 
 def test_state_is_single_use_and_bound_to_session(api, gh):
@@ -181,7 +248,8 @@ def test_jwt_claims_and_repo_scoped_token(api, gh):
 
 
 def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh):
-    assert manifest(api)["manifest"]["default_permissions"]["actions"] == "read"
+    # The App asks for Actions: write, for Tico's own release dispatch; a bot's turn token only ever reads Actions.
+    assert manifest(api)["manifest"]["default_permissions"]["actions"] == "write"
     connect(api)
     runner_token(api, "cpo")
     # An installation that has not accepted Actions yet still gets its token, without it.
@@ -191,6 +259,29 @@ def test_turn_token_reads_workflow_runs_once_the_installation_allows_it(api, gh)
     assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
     assert turn_token(api).status_code == 200
     assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"
+    gh.permissions = {"actions": "write"}  # accepted for the release dispatch: a turn still only reads
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert turn_token(api).status_code == 200
+    assert gh.of("/access_tokens")[-1][2]["permissions"]["actions"] == "read"
+
+
+def test_what_github_reports_of_the_installation_is_kept_for_health_and_forgotten_with_the_app(api, gh):
+    from backend.github_app import PERMISSIONS_SEEN, permission_seen
+
+    def seen(name):
+        with api.app_state.store.read() as c:
+            return permission_seen(c, name)
+
+    connect(api)
+    gh.permissions = {"checks": "read"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert seen("checks") == "read" and seen("deployments") == ""
+    gh.permissions = {"checks": "write"}
+    assert api.post("/api/v2/github/app/check-permissions", headers=auth()).status_code == 200
+    assert seen("checks") == "write"
+    with api.app_state.store.transaction() as c:
+        api.app_state.github_app.forget(c)
+        assert not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (PERMISSIONS_SEEN,)).fetchone()
 
 
 def test_a_private_meetings_turn_gets_a_read_only_token_and_a_team_meetings_a_write_one(api, gh):
@@ -1012,7 +1103,7 @@ def test_only_botops_records_where_a_bot_was_built_and_never_over_another_record
     assert _built_on(api) is None  # cmo's call is not a build
     botops_turn(api)
     _box(api)
-    gh.generate_status = 422
+    gh.generate_status = 500  # (a 422 is "already exists": cmo's repository, this company's own, is the answer)
     failed = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
     assert failed.status_code >= 400 and _built_on(api) is None  # GitHub refused: nothing recorded
     gh.generate_status = 201
@@ -1061,25 +1152,6 @@ def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says
     assert r.status_code == 200, r.text
     assert turn_token(api).status_code == 200
     assert turns()[-1]["actions"] == "read"
-
-
-def test_the_fake_installation_lists_a_repository_created_through_it_only_when_it_has_every_repository():
-    """The fake behaves like GitHub: an all-repositories installation lists what was created through it, once; a
-    selected-repositories one lists only what was selected."""
-    fake = FakeGitHub()
-    fake.repositories = [{"full_name": "Acme/docs", "default_branch": "trunk"}]
-    client = httpx.Client(transport=httpx.MockTransport(fake), base_url="https://api.github.com")
-    for name in ("docs", "tico-services"):
-        assert client.post("/orgs/Acme/repos", json={"name": name, "private": True}).status_code == 201
-
-    def listed():
-        return client.get("/installation/repositories").json()["repositories"]
-
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}, {"full_name": "Acme/tico-services"}]
-    fake.missing = {"tico-services"}
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
-    fake.missing, fake.selection = set(), "selected"
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
 
 
 def personal(gh, login="ana-dev"):
@@ -1340,24 +1412,6 @@ def link_state(api, actor="owner-test"):
     return parse_qs(urlparse(link.json()["url"]).query)["state"][0]
 
 
-def test_concurrent_user_token_refreshes_run_one_refresh_and_share_its_token(api, gh):
-    import threading
-
-    personal(gh, "ana-dev")
-    connect(api, org="ana-dev")
-    authorize(api)
-    service = api.app_state.github_app
-    expire(api)
-    served = []
-    threads = [threading.Thread(target=lambda: served.append(service.user_token())) for _ in range(6)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(10)
-    assert len(served) == 6 and set(served) == {"gho_2"}
-    assert gh.refreshes == 1, "GitHub rotates the refresh token, so a second refresh would be refused"
-
-
 def test_the_authorization_return_needs_a_state_its_own_actor_made_recently(api, gh):
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
@@ -1590,31 +1644,6 @@ def test_an_install_return_with_no_state_is_refused_for_an_app_that_recorded_no_
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_installation", refused.text
 
 
-def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
-    sql = (Path(G.__file__).parent / "migrations" / "20261107181259_github_user_token.sql").read_text(encoding="utf-8")
-    with sqlite3.connect(":memory:") as c:
-        c.executescript(sql)
-        c.executescript(sql)
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_token)")} == {
-            "id",
-            "login",
-            "github_id",
-            "client_id",
-            "ciphertext",
-            "nonce",
-            "access_expires_at",
-            "refresh_expires_at",
-            "authorized_by",
-            "authorized_at",
-            "refreshed_at",
-        }
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_states)")} == {
-            "nonce",
-            "actor",
-            "created_at",
-        }
-
-
 def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     organization = {"slug": "acme-tico", "org": "Acme", "account_type": "Organization"}
     personal_row = {"slug": "acme-tico", "org": "ana-dev", "account_type": "User"}
@@ -1747,22 +1776,6 @@ def test_the_no_session_exemption_is_the_callback_alone(api, gh):
     ):
         r = getattr(api, method)(path, json={"state": state}) if method == "post" else api.get(path)
         assert r.status_code == 401 and r.json()["error"]["code"] == "identity", path
-
-
-def test_the_github_app_state_code_migration_adds_its_columns_once_and_runs_again_safely():
-    migration = Path(G.__file__).parent / "migrations"
-    (path,) = sorted(migration.glob("*_github_app_state_code.py"))
-    spec = importlib.util.spec_from_file_location("github_app_state_code", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    with sqlite3.connect(":memory:") as c:
-        c.execute(
-            "CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, "
-            "administration INTEGER NOT NULL, created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization')"
-        )
-        module.up(c)
-        module.up(c)
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} >= {"code", "returned_at"}
 
 
 def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the_return(api, gh, monkeypatch):

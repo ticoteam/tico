@@ -4,7 +4,7 @@ description: Write a paid social audience or creative test before it starts (one
 ---
 # Read an audience or creative test
 
-When to use: before any new audience or creative test starts, and at each review while one runs.
+When to use: when you build a new audience or creative test, before it goes live, and when you measure it.
 
 Steps:
 1. Write the question in one sentence that names the measure: "Does the morning-routine hook give a lower cost per trial than the price-proof hook?" One idea per test.

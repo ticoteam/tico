@@ -355,11 +355,11 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
         cid = H.task(c, tid)["conversation_id"]
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-            "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)",
+            "VALUES('msg-coo',?,'bot:ops','bot:assistant','chat','Over to you','{}',?)",
             (cid, H.now()),
         )
         enqueue_stored(c, 'msg-coo')
-        assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "coo"
+        assert c.execute("SELECT bot_id FROM jobs WHERE message_id='msg-coo'").fetchone()["bot_id"] == "assistant"
     assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot still follows it: a comment that names the bot wakes it.
     with api.app.state.store.transaction() as c:
@@ -397,8 +397,8 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
 
     machine = runner(api, "ana")
     assign(api, machine, "ops")
-    assign(api, machine, "coo")
-    ready(api, machine, ["ops", "coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["ops", "assistant"])
     tid, attempt = task_attempt(api, machine)
     post(
         api,
@@ -416,23 +416,23 @@ def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(
         cid = H.task(c, tid)["conversation_id"]
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-            "VALUES('msg-ana',?,'human:ana','bot:coo','chat','Check the April numbers','{}',?)",
+            "VALUES('msg-ana',?,'human:ana','bot:assistant','chat','Check the April numbers','{}',?)",
             (cid, H.now()),
         )
         c.execute(
             "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,created_at) "
-            "VALUES('msg-carry',?,'keeper','bot:coo','notice','coo: Check the April numbers',?,?)",
+            "VALUES('msg-carry',?,'keeper','bot:assistant','notice','assistant: Check the April numbers',?,?)",
             (
                 cid,
                 json.dumps({"carries": "msg-ana", "from": "human:ana", "wake": "thread", "reason": "mention"}),
                 H.now(),
             ),
         )
-        _wake_by_hand(c, "msg-carry", "coo")
+        _wake_by_hand(c, "msg-carry", "assistant")
     shown = get(api, f"tasks/{tid}")["execution"]
     assert (shown["message_id"], shown["bot_id"], shown["state"], shown["from_person"]) == (
         "msg-carry",
-        "coo",
+        "assistant",
         "queued",
         True,
     )

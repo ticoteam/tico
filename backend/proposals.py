@@ -1,6 +1,6 @@
 """Proposals for the redesign's budgets (redesign CONTRACT §5): a bot's change to a task cap or a spend limit, asked as
 an OK of the top of the org (backend/task_asks.py, subject `proposal:<id>`, content `{kind, change}`). An org change is
-no proposal: the Strategy Bot suggests it in words and makes it when the person asks (the Assistant makes it as them,
+no proposal: the Strategy Owner suggests it in words and makes it when the person asks (the Assistant makes it as them,
 backend/assistant.py `admits_on_turn`); the owner and group leads make it themselves on the Org tab.
 
   KINDS                      task_cap, spend_limit

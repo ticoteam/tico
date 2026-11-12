@@ -1,17 +1,26 @@
 """Pipeline judge matrix: python -m evals.pipeline_judge.run --models jev [--dry-run] [--out DIR].
 
-cases.json holds 34 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment as
-text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
-unsure. 17 are Dev (tests pass, screenshots match spec, review done) and 17 Marketing (lead has company and contact, campaign
-brief approved, landing page live). Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a
-draft, a placeholder page, a self-review. No customer data belongs in cases.json.
+cases.json holds 83 labeled cases for the requirement judge (backend/pipeline_judges.py): a requirement, the attachment
+as text (what a caption or OCR and the metadata say), the work's current version, and the right answer: met, not_met or
+unsure. 52 are Dev (tests pass, screenshots match spec, review done, spec, pre-release and Checked in production pages)
+and 31 Marketing (lead has company and contact, campaign brief approved, landing page live, Growth go-live and results
+pages). The page cases are real pages from the Acme test company, built as the page step builds them (attachment kind
+"page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*`
+(rc.4, three tasks from Spec to Validate, all good pages) and `long-spec-*` (the rc.4 spec grown to about 6,500 and
+12,000 characters, the length bots write), with `trap-*` cut from them. `--only acme-*,live-*,long-*,trap-*` runs just
+those. Traps: a missing file, an older work_version, the wrong screen, a lead with no email, a draft, a placeholder
+page, a self-review, a pre-release page without the reviews, without the checks or with the checks of an older commit, a
+review of an older commit or with nothing run, a Validate page on an older version or showing nothing, a spec with no
+acceptance criteria (and a long one with none). A case may be `allow_unsure` (met is right, unsure is allowed): an
+unsure answer on it is left out of the bar's counts (live-c-fixes-2-v2, a pre-release page whose reviews are of an
+earlier commit than its checks). No customer data belongs in cases.json.
 
-Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.8 or more,
-not_met at 0.2 or less, and unsure between (the engine's rule: unsure passes the call up to a person and never passes the
-work). A call that raises is retried once after RETRY_WAIT_S seconds; a call that fails twice is an error and fails the bar. Per
-model the report gives accuracy, false "met" count (a met verdict where the label says not_met or unsure: it must be 0 to
-pass), the unsure rate, the retries, cost, p50 and p95 latency; it is written as JSON and a markdown table into --out
-(evals/pipeline_judge/results by default).
+Each case is one call per model. The model answers one yes/no question with a probability; the verdict is met at 0.75 or
+more, not_met at 0.2 or less (backend/pipeline_judges.py MET_AT, NOT_MET_AT), and unsure between (the engine's rule:
+unsure passes the call up to a person and never passes the work). A call that raises is retried once after RETRY_WAIT_S
+seconds; a call that fails twice is an error and fails the bar. Per model the report gives accuracy, false "met" count
+(a met verdict where the label says not_met or unsure: it must be 0 to pass), the unsure rate, the retries, cost, p50
+and p95 latency; it is written as JSON and a markdown table into --out (evals/pipeline_judge/results by default).
 
 This makes real model calls, so it is NOT a pytest and never runs in CI. --dry-run sends nothing: it checks the cases and runs
 two fake models through the same scoring (an oracle that must pass, and a sloppy one that must fail the bar).
@@ -26,6 +35,7 @@ import sys
 import time
 from pathlib import Path
 
+from backend.pipeline_judges import MET_AT, NOT_MET_AT
 from clients import judge as J
 
 from . import adapter
@@ -34,7 +44,6 @@ HERE = Path(__file__).parent
 CASES = HERE / "cases.json"
 DOMAINS = ("dev", "marketing")
 LABELS = ("met", "not_met", "unsure")
-MET_AT, NOT_MET_AT = 0.8, 0.2
 ACCURACY_BAR = 0.9
 UNSURE_SLACK = 0.10
 P95_BAR_MS = 30_000
@@ -69,6 +78,8 @@ def problems(cases):
             out.append(f"{who}: requirement needs a name and a rubric")
         if case["attachment"] is None and case["expected"] != "not_met":
             out.append(f"{who}: no attachment can only be not_met")
+        if case.get("allow_unsure") and case["expected"] != "met":
+            out.append(f"{who}: only a met case may allow unsure")
         try:
             J.validate(adapter.state_for(case), adapter.QUESTIONS, f"{adapter.QUESTION_SET}@eval")
         except J.JudgeError as exc:
@@ -77,6 +88,12 @@ def problems(cases):
         if sum(1 for c in cases if c.get("domain") == domain) < 10:
             out.append(f"{domain}: fewer than 10 cases")
     return out
+
+
+def chosen(cases, only):
+    """The cases `only` names: ids, comma-separated, and a name ending in `*` takes every id that starts with the rest."""
+    names = [n.strip() for n in only.split(",") if n.strip()]
+    return [c for c in cases if any(c["id"] == n or (n.endswith("*") and c["id"].startswith(n[:-1])) for n in names)]
 
 
 def verdict(p):
@@ -126,24 +143,27 @@ def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
                 "ms": ms,
                 "retries": retries,
                 "trap": case.get("trap"),
+                "excused": bool(case.get("allow_unsure")) and got == "unsure",
             }
         )
-        if got != case["expected"]:
+        if got != case["expected"] and not rows[-1]["excused"]:
             mistakes.append(f"{case['id']}: expected {case['expected']}, got {got} (p={p:.2f})")
-    n = len(rows)
+    excused = [r["id"] for r in rows if r["excused"]]
+    counted = [r for r in rows if not r["excused"]]  # an allowed unsure is in no count of the bar
+    n = len(counted)
     false_met = [r["id"] for r in rows if r["got"] == "met" and r["expected"] != "met"]
     by_domain = {
         d: round(
-            sum(r["got"] == r["expected"] for r in rows if r["domain"] == d)
-            / max(1, sum(r["domain"] == d for r in rows)),
+            sum(r["got"] == r["expected"] for r in counted if r["domain"] == d)
+            / max(1, sum(r["domain"] == d for r in counted)),
             3,
         )
         for d in DOMAINS
     }
     times = [r["ms"] for r in rows if r["ms"]]
     labeled_unsure = sum(c["expected"] == "unsure" for c in cases) / max(1, n)
-    unsure_rate = round(sum(r["got"] == "unsure" for r in rows) / max(1, n), 3)
-    accuracy = round(sum(r["got"] == r["expected"] for r in rows) / max(1, n), 3)
+    unsure_rate = round(sum(r["got"] == "unsure" for r in counted) / max(1, n), 3)
+    accuracy = round(sum(r["got"] == r["expected"] for r in counted) / max(1, n), 3)
     p95 = percentile(times, 0.95)
     failed_bar = []
     if not n:
@@ -165,7 +185,8 @@ def score(name, judge, cases, pause=time.sleep, clock=time.monotonic):
         "accuracy_by_domain": by_domain,
         "false_met": len(false_met),
         "false_met_cases": false_met,
-        "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in rows),
+        "missed_met": sum(r["got"] != "met" and r["expected"] == "met" for r in counted),
+        "excused": excused,
         "unsure_rate": unsure_rate,
         "retries": sum(r["retries"] for r in rows),
         "errors": errors,
@@ -219,7 +240,7 @@ def main(argv=None, env=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--models", default="jev")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--only", help="one case id")
+    parser.add_argument("--only", help="case ids, comma-separated; one ending in * is a prefix (acme-*)")
     parser.add_argument("--out", default=str(HERE / "results"))
     args = parser.parse_args(argv)
     cases = load()
@@ -228,7 +249,10 @@ def main(argv=None, env=None):
         print("\n".join(found), file=sys.stderr)
         return 1
     if args.only:
-        cases = [c for c in cases if c["id"] == args.only]
+        cases = chosen(cases, args.only)
+        if not cases:
+            print(f"No case matches --only {args.only}", file=sys.stderr)
+            return 1
     if args.dry_run:
         judges = fake_judges(cases)
     else:

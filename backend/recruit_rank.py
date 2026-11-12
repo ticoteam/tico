@@ -83,6 +83,26 @@ def _stems(text):
     return {stem for stem, _ in _words(text)}
 
 
+# A word that says the team does not have what follows it, to the end of the clause.
+NEGATIONS = frozenset("no not never without nor dont doesnt didnt isnt arent wont cant".split())
+
+
+def _said(text):
+    """An answer's words as `_words` gives them, except that a clause break, and each word from a negation to the end of
+    its clause ("No ads, no email list yet"), hold their place as an empty stem: what the team says it does not do is
+    no reason to pick a card, and "on Google. No ads" is not "google ads" (Initech, Nov 11)."""
+    out = []
+    for clause in re.split(r"[.,;:!?()\n]+", str(text or "").lower().replace("'", "").replace("’", "")):
+        negated = False
+        for word in re.findall(r"[a-z0-9@]+", clause):
+            if word in NEGATIONS:
+                negated = True
+            elif len(word) > 2 and word not in STOP_WORDS:
+                out.append(("" if negated else _stem(word), word))
+        out.append(("", ""))
+    return out
+
+
 def _strings(value, limit=24):
     return [_text(item, 80) for item in value if _text(item, 80)][:limit] if isinstance(value, list) else []
 
@@ -158,7 +178,7 @@ def build(departments, cards):
         members = [card for card in out if card["department"] == row["id"]]
         leads = [card["template"] for card in members if card["lead"]]
         named = row["head"]
-        # A Team Manager is a lead too, so the head groups.yaml names keeps the seat when it is a lead; the first lead by
+        # A team's Manager is a lead too, so the head groups.yaml names keeps the seat when it is a lead; the first lead by
         # name stands in only for a head that is not one.
         if named in leads:
             row["head"] = named
@@ -239,11 +259,11 @@ def rank(catalog, department_id, briefing="", about=None, limit=MAX_BOTS):
     # The department's own name matches every card in it ("support" in Customer Support), so it says nothing.
     own = _stems(dept["name"] + " " + dept["id"])
     # Such a word keeps its place (an empty stem), so the words either side of it are not read as one phrase.
-    briefing_words = [("" if stem in own else stem, word) for stem, word in _words(_text(briefing, BRIEFING_LIMIT))]
+    briefing_words = [("" if stem in own else stem, word) for stem, word in _said(_text(briefing, BRIEFING_LIMIT))]
     # The team's strategy bets, when the caller sends them (`about.bets`, the Tico server's own recommender only), count
     # like "What you do": a bet on price brings in the pricing cards.
     about_text = _text(about.get("what"), BRIEFING_LIMIT) + " " + _text(about.get("bets"), BRIEFING_LIMIT)
-    about_words = [("" if stem in own else stem, word) for stem, word in _words(about_text)]
+    about_words = [("" if stem in own else stem, word) for stem, word in _said(about_text)]
     consumers = str(about.get("sells_to") or "") == "consumers"
     members = [card for card in catalog["cards"] if card["department"] == department_id]
     common = _common(members)

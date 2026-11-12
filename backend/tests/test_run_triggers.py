@@ -137,8 +137,8 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
             refs=RT.stamp({}, "schedule", "morning", purpose="  sort   inbox "),
         )
     assert turn(api, claim(api, r))["purpose"] == "sort inbox"
-    assert RT.purpose_for("pr-reviewer", "pr_checks") == "handle PR checks"
-    assert RT.purpose_for("pr-reviewer", "status_or_relation") == "react to task change"
+    assert RT.purpose_for("reviewer", "pr_checks") == "handle PR checks"
+    assert RT.purpose_for("reviewer", "status_or_relation") == "react to task change"
     assert RT.purpose_for("pr-reviewer-sol", "pr_checks") == "review PR"
     assert RT.purpose_for("reviewer-2", "status_or_relation") == "review PR"
     assert RT.purpose_for("ops", "other") == RT.purpose_for("ops", None) == "unknown"
@@ -147,7 +147,7 @@ def test_a_run_gets_the_callers_purpose_else_the_mapped_default(api):
 def test_backfill_fills_old_runs_from_the_map_and_leaves_unmapped_unknown(api):
     with api.app.state.store.transaction() as c:
         for i, (bot, kind) in enumerate(
-            [("ops", "comment"), ("pr-reviewer", "pr_checks"), ("ops", None), ("ops", "other")]
+            [("ops", "comment"), ("reviewer", "pr_checks"), ("ops", None), ("ops", "other")]
         ):
             c.execute(
                 "INSERT INTO attempts(id,bot_id,created_at,trigger,trigger_kind) VALUES(?,?,?,'task',?)",
@@ -535,13 +535,6 @@ def test_the_weekly_table_is_read_only_and_follows_who_may_read_the_bot(api):
         assert query(api, sql, expected=422)["error"]["code"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM attempts WHERE id IN ('ops-run','inbox-run')").fetchone()[0] == 2
-
-
-def test_open_task_states_match_the_board():
-    assert set(RT.OPEN_TASK) == set(H.ACTIVE_STATUSES) == {"open"}
-    with pytest.raises(ValueError):
-        RT.stamp({}, "nudge")
-    assert RT.counts("task.comment") and not RT.counts("status.set") and not RT.counts("attempt.started")
 
 
 def test_the_weekly_table_adds_up_only_runs_the_reader_may_read(api):

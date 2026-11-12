@@ -1,5 +1,5 @@
 name: cro-owner                     # the slug: it matches the repository bot-cro-owner and the label owner:cro-owner
-display_name: "Conversion Rate Optimization Owner"
+display_name: "CRO Owner"
 labels: [owner:cro-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
@@ -7,15 +7,23 @@ reads: []                        # other bot repositories this one may clone rea
 reasoning_effort: high
 max_run_minutes: 60
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# Declared off. Starting setup (or going live) switches on both, once, unless a person changed one first
+# (Onboarding.arm_routines). `tico bot create` seeds them once; from then on Tico's rows are the routines
+# (docs/routines.md).
 routines:
-  - id: weekly-conversion-check
-    title: Weekly conversion check
-    cron: "30 8 * * 1"
+  - id: watch
+    title: Watch CRO
+    cron: "0 7 * * *"
     timezone: America/Los_Angeles     # set this to the team's own timezone
-    template: playbooks/weekly-conversion-check.md
+    template: playbooks/watch.md
     labels: [priority:p2]
+    enabled: false
+  - id: find-ideas
+    title: Find CRO ideas
+    cron: "0 8 * * 2"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/find-ideas.md
+    labels: [priority:p3]
     enabled: false
 
 # What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
@@ -26,7 +34,7 @@ tools:
     identity: "Unauthenticated public sources"
     can: [read]
     note: "the team's conversion pages as a visitor sees them, and competitors' pages; no forms, no accounts, no checkouts"
-# Optional, uncomment when connected. Read only: a test is never started or stopped from here.
+# Uncomment when the team's product analytics is connected. Read is enough: a test is never started or stopped from here.
 #   - service: web-analytics
 #     identity: "the team's analytics account"
 #     can: [read]

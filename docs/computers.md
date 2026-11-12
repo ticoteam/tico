@@ -29,12 +29,17 @@ computer, and a run uses, in order, that computer's subscription for the run's A
 computer, then Tico Gateway when it is on. Otherwise the run waits.
 
 1. Open **Settings → Models** and click **Add subscription**.
-2. Pick the **Kind**: **Claude plan**, **ChatGPT plan**, or an Anthropic or OpenAI API key, and enter a **Name**, such as
-   *Claude Max*. For a plan, pick the **Owner**, the person whose plan it is; it defaults to you. An API key has no owner.
-3. For a plan, click **Connect**, open the link and sign in with the account that has the plan (paste back the code the
-   page shows, or enter the code Tico shows). Tico saves the result. Or paste it and click **Save**: the token from
-   `claude setup-token`, or Codex's `auth.json`. An API key is always pasted.
+2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
+   online, Tico starts the company's cloud computer first and the sheet says **Starting your computer**.
+3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
+   code: paste it in the sheet (a pasted code is sent by itself). For ChatGPT, copy the code the sheet shows and enter it
+   on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+
+The plan is named after itself (*Claude*, then *Claude 2*) and its owner is the person who signed in; change either
+under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
+behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
+`auth.json` (pasted, or picked with **Choose auth.json**). **Reconnect** is the same sheet from step 2.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
@@ -244,20 +249,22 @@ A **subscription** is one of the company's model logins or keys, saved once in T
 Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
 signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key.
 
-**Connect** signs a plan in without pasting. Tico picks an online computer on the latest release with that tool
+Adding a plan signs it in without pasting. Tico picks an online computer on the latest release with that tool
 installed, the person's own first, and runs the sign-in there: `claude setup-token`, or `codex login` in a folder of its
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
 computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
-the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer,
-**Connect** is off and pasting still works. A sign-in the command reports as failed saves nothing. If the sign-in cannot
+the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer
+online, a company with Tico Cloud computers has its shared one started (made first, if it never was) and kept on until
+the sign-in ends; if none is up within five minutes, or the company has no cloud computers, the sheet says **No
+computer online** and offers **Add a computer** and **Paste instead**. A sign-in the command reports as failed saves nothing. If the sign-in cannot
 accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
 from that page; a code from the previous attempt does not carry over.
 The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
 (code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
 raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
-Connecting a saved subscription is **Reconnect**, and asks first as a pasted value does. It belongs to the company. A plan's
+Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. It belongs to the company. A plan's
 **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
-person in the company, now or later. A plan is for its owner's own bots, not shared ones; the Add dialog says so. Owners
+person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
 and admins add, edit (name and owner), reconnect and remove them in **Settings > Models**; anyone who sees that page sees
 the list (name, kind, owner, status, computers, usage), never a value.
 
@@ -288,6 +295,23 @@ changes.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
 while a turn runs on a subscription, another bot's turn on the same computer could read it.
+
+#### Bots' models follow the plans
+
+When a Claude or ChatGPT plan is added, connected or reconnected, or one is removed or **Needs reconnect**, each bot made
+from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`). A start does the
+same, so a company that had a plan before this keeps up. With no plan, nothing moves. An API key is not a plan.
+
+| Role | Claude only | ChatGPT only | Both |
+| --- | --- | --- | --- |
+| Builder, Reviewer 1, managers, the Assistant, every other role | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| Reviewer 2 | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
+| Librarian, Rules, Updates, Automations and Finance Owners | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
+
+A model the catalog does not offer yet is replaced by the set's first offered model on the same tool. A bot whose model a
+person changed (Settings, the model picker, a manager bot or the Assistant) keeps it; undoing that change gives it back to
+the plans. Each move is a `bot.model_changed` event with `why: plans`. Decision models (pipeline judges, Decide) stay on
+the Gateway. On Tico Cloud, setup's **Done** waits for a plan or key.
 
 ### Bots sharing one ChatGPT sign-in run side by side
 

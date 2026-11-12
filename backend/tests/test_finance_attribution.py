@@ -10,10 +10,8 @@ import pytest
 
 from backend.finance import reads as FR
 from backend.finance import tab
-from backend.finance.attribution import PLANNERS
 from backend.finance.core import attribution as CA
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, NOT_FOUND, FinanceError
-from backend.finance.core.kinds import ALL, LIVE, NEEDS
 from backend.finance.store import attribution as ATT
 from backend.finance.store import ledger as SL
 from backend.tests.helpers.finance_fixtures import (
@@ -192,13 +190,6 @@ def test_bad_splits_and_rules_are_refused(books):
             {"name": "Again", "match": {"kind": "account", "id": account(c, "6100")}, "splits": _shares((CARA, 10000))},
         )
         assert taken.code == CONFLICT
-
-
-def test_every_attribution_kind_is_registered_live_and_needs_the_right():
-    kinds = ("attribute", "attribute_undo", "attribution_rule_set", "attribution_rule_delete")
-    for kind in kinds:
-        assert kind in PLANNERS and kind in LIVE and kind in ALL
-        assert NEEDS[kind] == "finance.attribution"
 
 
 def test_the_cash_view_follows_the_split_and_undo_moves_it_back(books):

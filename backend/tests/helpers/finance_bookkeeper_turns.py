@@ -10,7 +10,7 @@ from backend.tests.helpers.finance_fixtures import MERCURY, OWNER, FakeMercury, 
 from backend.tests.helpers.mcp import call, rpc
 
 
-CONFIG = {"template": "bookkeeper", "name": "bookkeeper", "runtime": "fake", "status": "active"}
+CONFIG = {"template": "finance-owner", "name": "finance-owner", "runtime": "fake", "status": "active"}
 
 
 def hire(api):
@@ -21,10 +21,10 @@ def hire(api):
     with store.transaction() as c:
         assert FA.ensure_setup(c, store.settings.owner_email)
         c.execute(
-            "INSERT INTO bots(id,slug,display_name,state) VALUES('bookkeeper','bookkeeper','Bookkeeper','active')"
+            "INSERT INTO bots(id,slug,display_name,state) VALUES('finance-owner','finance-owner','Bookkeeper','active')"
         )
-        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('bookkeeper','ana')")
-        BS.write(c, "bookkeeper", CONFIG)
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('finance-owner','ana')")
+        BS.write(c, "finance-owner", CONFIG)
         assert BK.grant_defaults(c)
         granted = act(c, OWNER, "view_grant", {"subject": BK.ACTOR, "what": "everything"})
         assert granted.status == "committed", granted

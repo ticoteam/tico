@@ -1,0 +1,306 @@
+[
+ {
+  "argv": [
+   "maintenance",
+   "set"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_set",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: name something to change: --schedule, --pause/--resume, --cap or a step's switch\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "maintenance",
+   "set",
+   "--schedule",
+   "hourly",
+   "--pause",
+   "--cap",
+   "2.5",
+   "--step",
+   "collect",
+   "--on",
+   "--frequency",
+   "run",
+   "--every",
+   "5",
+   "--unit",
+   "hours",
+   "--max-bots",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_set",
+    {
+     "custom_every": 5,
+     "custom_unit": "hours",
+     "enabled": true,
+     "frequency": "run",
+     "max_bots": 5,
+     "monthly_cap_usd": 2.5,
+     "operation_id": null,
+     "paused": true,
+     "schedule": "hourly",
+     "step": "collect"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "maintenance",
+    {
+     "schedule": "hourly",
+     "paused": true,
+     "monthly_cap_usd": 2.5,
+     "steps": [
+      {
+       "key": "collect",
+       "enabled": true,
+       "frequency": "run",
+       "custom_every": 5,
+       "custom_unit": "hours",
+       "max_bots": 5
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "run"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_run",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "maintenance/run",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "run",
+   "--step",
+   "collect"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_run",
+    {
+     "operation_id": null,
+     "step": "collect"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "maintenance/run",
+    {
+     "step": "collect"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "runs"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_runs",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "maintenance/runs",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "runs",
+   "--limit",
+   "5",
+   "--before",
+   "before-1"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_runs",
+    {
+     "before": "before-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "maintenance/runs?limit=5&before=before-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "set",
+   "--resume",
+   "--cap",
+   "12.5"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_set",
+    {
+     "monthly_cap_usd": 12.5,
+     "operation_id": null,
+     "paused": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "maintenance",
+    {
+     "paused": false,
+     "monthly_cap_usd": 12.5
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "maintenance",
+   "set",
+   "--pause",
+   "--resume"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico maintenance set: error: argument --resume: not allowed with argument --pause",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "maintenance",
+   "set",
+   "--step",
+   "dream",
+   "--off"
+  ],
+  "tools": [
+   [
+    "tico_maintenance_set",
+    {
+     "enabled": false,
+     "operation_id": null,
+     "step": "dream"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "maintenance",
+    {
+     "steps": [
+      {
+       "key": "dream",
+       "enabled": false
+      }
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

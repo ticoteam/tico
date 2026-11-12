@@ -18,9 +18,9 @@ Every bot's instructions carry this line, word for word:
 
 > Add a visual (chart, table, diagram, mockup, screenshot, clip or recording) to a reply when it makes the answer
 > clearer, never for a plain answer, and keep the text answer complete on its own. For brand assets, designed
-> graphics or edited video, file a task for bot:designer or bot:video-producer; do not buy them.
+> graphics or edited video, file a task for bot:designer or bot:video-owner; do not buy them.
 
-- **Design and Video Producer** (`designer`, `video-producer`) get the first sentence only, since the second sends
+- **Design and Video Owner** (`designer`, `video-owner`) get the first sentence only, since the second sends
   that work to them.
 - **The shared rules** say the same under "Visuals in replies" (`policies/shared-rules.md`), and add how to attach
   one: `--visual <file>` and `--title <caption>` on the reply or comment.
@@ -98,7 +98,7 @@ Which formats play, and how full screen looks, depend on the browser or app you 
 
 ## Attach a visual
 
-**CLI.** Add `--visual PATH --title "…"` to `tico message send`, `tico chat send` or `tico task comment`. Repeat
+**CLI.** Add `--visual PATH --title "…"` to `tico message send` or `tico task comment`. Repeat
 `--visual` for more than one; each `--title` goes with the `--visual` in the same place in the list.
 
 ```
@@ -111,7 +111,7 @@ outside the checkout, no symbolic links, no credential-like names. `ID@VERSION` 
 already in Tico instead: a file on that task, or in that thread for a message. A `--title` with no
 `--visual` is refused. A visual with no title shows its file name.
 
-**MCP.** `tico_message_send`, `tico_chat_send` and `tico_task_comment` take `visuals`, a list of up to 10:
+**MCP.** `tico_message_send` and `tico_task_comment` take `visuals`, a list of up to 10:
 `{"path": "reports/signups.png", "title": "…"}` for a file in the checkout, or `{"file": "<file id>@<version>",
 "title": "…"}` for a file already in Tico. A `path` works only from the tico tools on your bot's Computer.
 

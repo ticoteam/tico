@@ -37,7 +37,7 @@ PEOPLE = [
 
 
 BOTS = {
-    "coo": {"display_name": "Tico", "description": "The assistant.", "reports_to": None, "status": "active"},
+    "assistant": {"display_name": "Tico", "description": "The assistant.", "reports_to": None, "status": "active"},
     "legal": {
         "display_name": "Legal",
         "description": "Contracts, terms and legal risk.",

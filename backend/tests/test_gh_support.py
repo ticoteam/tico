@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[2] / "templates/catalog/support/software/gh-support"
+SCRIPT = Path(__file__).resolve().parents[2] / "templates/catalog/support-owner/software/gh-support"
 loader = importlib.machinery.SourceFileLoader("gh_support", str(SCRIPT))
 gh_support = importlib.util.module_from_spec(importlib.util.spec_from_loader("gh_support", loader))
 loader.exec_module(gh_support)

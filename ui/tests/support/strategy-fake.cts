@@ -131,7 +131,7 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
   const goals: Goal[] = [
     {id: 'g-co', title: 'Reach 100 paying customers', owner_id: 'company', parent_id: null, status: 'green', status_source: 'auto', rank: 1,
       kpis: [{id: 'k-cust', name: 'Paying customers', status: 'green', link: {kind: 'improve', baseline: 20, baseline_at: '2026-09-01', target: 100, deadline: '2026-12-31'}}]},
-    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:sales-lead', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
+    {id: 'g-sales', title: 'Book 40 demos a month', owner_id: 'bot:growth-manager', parent_id: 'g-co', status: 'yellow', status_source: 'auto', rank: 1, kpis: []},
   ];
   const db: StrategyDb = {people: fx.people, emps: fx.employees, groups: fx.groups, needs: [], goals};
   const writes: StrategyWrite[] = [];
@@ -188,7 +188,6 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     }
     // Market.
     if (p === '/api/v2/listening/stats') return listening === 200 ? json(listeningStats()) : refuse(listening, 'forbidden', 'Not yours');
-    if (p === '/api/v2/listening/destinations') return json(fixture<ListeningFixture>('redesign-listening.json').destinations);
     if (p === '/api/v2/market/briefings/latest') return json(briefing ? fixture('redesign-briefing.json') : {briefing: null});
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json(market ? mk.entities : {entities: [], total: 0});
@@ -197,10 +196,10 @@ async function openStrategy(browser: Browser, {viewport = PHONE, hash = '#/strat
     if (p === '/api/v2/market/value-chain') return json(market ? mk.chain : {layers: [], edges: []});
     if (p === '/api/company-docs') return json({documents: []});
     if (p === '/api/v2/librarian/setup') return json({market: null});
-    // The Strategy Bot beside the tabs, and Goals.
+    // The Strategy Owner beside the tabs, and Goals.
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+    if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     if (p === '/api/v2/goals/tree') return json({goals: db.goals, owners: {}, other_kpis: [], proposals: []});
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/goals' && method === 'POST') {

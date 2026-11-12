@@ -28,6 +28,7 @@ from . import recorder_installs
 from . import assistant_changes, why_here
 from . import teammate_access
 from . import task_followers
+from . import setup_failures
 from . import sources as SRC
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link, setup_handoff
@@ -67,7 +68,7 @@ from .observability import Observability, route as error_route
 from .execution import (
     AWAKE_GAP,
     Execution,
-    bot_repository,
+    runner_repository,
     flag_cut,
     reset_bot_sessions,
 )
@@ -97,6 +98,7 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .listening import PUSH_PATH as LISTENING_PUSH_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
@@ -218,7 +220,7 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
-        # The Assistant's routines it never had, the Bookkeeper once Finance is set up and the rest of what completes a
+        # The Assistant's routines it never had, the Finance Owner once Finance is set up and the rest of what completes a
         # company run with the start jobs, below (Onboarding.complete_company).
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
@@ -631,6 +633,14 @@ def create_app(settings=None):
                 exc.extra = {**getattr(exc, "extra", {}), **said}
         if getattr(exc, "extra", None) and str(exc.extra.get("link") or "").startswith("#/"):
             exc.extra = absolute_link(exc.extra, settings.public_url)
+        if setup_failures.step(request.method, getattr(request.scope.get("route"), "path", "")):
+            # A refused setup step leaves its category, status and ids on the server, and the answer carries the
+            # row's reference (backend/setup_failures.py).
+            ref = await asyncio.get_running_loop().run_in_executor(
+                None, setup_failures.record, store, request, exc.code, exc.status, getattr(exc, "extra", None)
+            )
+            if ref:
+                exc.extra = {**getattr(exc, "extra", {}), "ref": ref}
         if str(exc.code).startswith("task_"):
             # The engine's refusal, flat (docs/dev/pipelines-v3-cutover.md, "HTTP"): the rule, one line, what is
             # missing, the commands allowed next and the task's version.
@@ -799,6 +809,9 @@ def create_app(settings=None):
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
                 return await call_next(request)
+            # A listening's push address carries its own token (backend/listening.py).
+            if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
+                return await call_next(request)
             # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
             # no Tico identity: the route refuses anything not signed for that tool and a live run.
             if request.url.path.startswith(TOOL_PROXY_PATH):
@@ -876,12 +889,12 @@ def create_app(settings=None):
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
-                # Counsel sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
+                # The Rules Owner sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
                 if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
                     None, counsel.refused, store, who, request.url.path, request.method
                 ):
                     raise Problem("forbidden", counsel.REFUSED, 403)
-                # Counsel calls only its own routes (backend/counsel.py COUNSEL_ROUTES), and a Counsel run reads on them
+                # The Rules Owner calls only its own routes (backend/counsel.py COUNSEL_ROUTES), and a Rules Owner run reads on them
                 # only its own task, its read's document version and its own run (read_refused).
                 if counsel.is_counsel(who) and (
                     reason := await asyncio.get_running_loop().run_in_executor(
@@ -1312,6 +1325,10 @@ def create_app(settings=None):
 
             request_failure(request, 500, exc)
             telemetry.capture("request", exc, 500, route=error_route(request))
+            if setup_failures.step(request.method, getattr(request.scope.get("route"), "path", "")):
+                await asyncio.get_running_loop().run_in_executor(
+                    None, setup_failures.record, store, request, "server_error", 500, None, exc
+                )
             raise
         finally:
             if via_reset is not None:
@@ -1585,7 +1602,7 @@ def create_app(settings=None):
         viewer = (who.task_actor or who.actor) if who is not None else None
         # Another task it names is shown under the reader's whole rule, the one a direct read of that task uses.
         rule = auth.task_sql(c, who) if who is not None and visible_sql == "1" else visible_sql
-        value.update(H.task_view(c, row["id"], viewer, rule) or {})
+        value.update(H.task_view(c, row["id"], viewer, rule, inputs=True) or {})
         # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
         parent = TR.parent_of(c, row["id"])
         value["parent_id"] = (
@@ -2924,6 +2941,8 @@ def create_app(settings=None):
             raise Problem("status", "status is open, done or closed", 422)
         if snoozed not in (None, "hide", "only", "all"):
             raise Problem("snoozed", "snoozed is hide, only or all", 422)
+        if status == "all" and snoozed is None:
+            snoozed = "all"  # every task means the snoozed ones too: they are open, only set aside
         if number is not None and not 1 <= number <= 999_999_999:
             raise Problem("number", "number is a task number, from 1", 422)
         since = H.parse_ts(updated_since) if updated_since else None
@@ -3269,10 +3288,10 @@ def create_app(settings=None):
         reach.check(c, who, owner, "task", task_id=parent_id)
         asked_botops = None
         if request_id and who.via == "assistant":
-            # The Assistant handing a helper (BotOps, the Strategy Bot, the Librarian; assistant.HELPERS) what the
+            # The Assistant handing a helper (BotOps, the Strategy Owner, the Librarian; assistant.HELPERS) what the
             # person asked for in their own Assistant chat, citing that message (`--request-id turn`), only while the
             # owner lets the Assistant act without asking. BotOps then acts with the person's rights
-            # (delegated_identity, `assistant`); the Strategy Bot and the Librarian work it with their own rights, so
+            # (delegated_identity, `assistant`); the Strategy Owner and the Librarian work it with their own rights, so
             # what only the owner may change (strategy, goals) still reaches the owner as a proposal or a card.
             if H.actor_id(owner) not in assistant_mod.HELPERS or not H.is_bot(owner):
                 raise Problem(
@@ -3573,6 +3592,8 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
+        H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
@@ -4883,7 +4904,7 @@ def create_app(settings=None):
         with store.read() as c:
             if not built_on.computer(c, bot):
                 return None
-            repository = bot_repository(c, settings, bot)
+            repository = runner_repository(c, settings, bot)  # "" when Tico does not use it: history is only there
         service = getattr(app.state, "github_app", None)
         return service.repository_history(repository) if service and repository else None
 
@@ -4916,6 +4937,24 @@ def create_app(settings=None):
                 409,
             )
         options = [wanted] if wanted else [built] if built else placing.candidates(c, auth, bot)
+        from . import cloud_machines
+
+        if not options and (first := cloud_machines.first_home(c, bot)):
+            options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
+        if not options and cloud_machines.offered(c, settings) and cloud_machines.adopt(c, bot, who.actor):
+            # A Tico Cloud bot whose cloud machine has not enrolled yet: it is assigned there when it does
+            # (cloud_machines.enrolled), so nothing is refused while the machine is on its way.
+            machine = cloud_machines.coming(c, bot)
+            if machine and machine["status"] == "out_of_credit":
+                raise Problem("out_of_credit", f"Out of credit: {machine['label']} can't start. Add credit first", 409)
+            if machine and machine["status"] == "failed":
+                raise Problem(
+                    "cloud_computer_failed",
+                    f"{machine['label']} didn't start: {machine['words']}. See Settings > Computers",
+                    409,
+                )
+            if machine:
+                return {"bot": bot, "computer": machine["label"], "placed": False, "already": False, "waiting": True}
         if not options:
             raise Problem(
                 "no_computer",
@@ -5458,7 +5497,7 @@ def create_app(settings=None):
     finance_routes.install(app, store, auth, mutate)  # Finance: budgets, P&L, expenses, actions (backend/finance)
     from .entities import routes as entity_routes
 
-    entity_routes.install(app, store, auth, mutate)  # The Directory: `tico directory` (backend/entities/routes.py)
+    entity_routes.install(app, store, auth, mutate)  # Contacts: `tico contacts` (backend/entities/routes.py)
     from . import finance_ads_routes
 
     finance_ads_routes.install(app, store, auth, mutate)  # Finance: ad spend import settings on ad tools' pages
@@ -5493,6 +5532,9 @@ def create_app(settings=None):
     from .memory_history import MAX_REPORT_BYTES, install_memory_history
 
     install_memory_history(app, store, auth, mutate)
+    from . import template_refresh
+
+    template_refresh.install(app, store, auth, mutate)  # a bot follows its template (docs/updates.md)
     from . import dream
 
     dream.install(app, store, auth, mutate, task_create, cap_before_preflight)  # a bot's Dream (docs/learnings.md)
@@ -5659,9 +5701,9 @@ def create_app(settings=None):
     from .maintenance_health import install as install_health
 
     install_health(app, store, auth, mutate, settings)
-    from .task_manager import install as install_task_manager
+    from .general_manager import install as install_general_manager
 
-    install_task_manager(app, store, auth, mutate, onboarding, settings_admin, settings)
+    install_general_manager(app, store, auth, mutate, onboarding, settings_admin, settings)
     # A computer's screen in the app (backend/screen.py); its websockets go before the static mounts below.
     from .screen import install as install_screen
 

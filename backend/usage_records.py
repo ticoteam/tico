@@ -37,6 +37,8 @@ def _record(text):
 def ran_on(c, turn_ids):
     """Per run, the model that actually did the work: each counted segment, the fallback named, and the
     one maker when every segment agrees. A run's bot config names what was asked for, not what ran."""
+    from .models_preset import GATEWAY_RUNTIME
+
     ids = list(turn_ids)
     parts, fallbacks, chosen = {}, {}, {}
     for start in range(0, len(ids), 500):  # SQLite caps the parameters of one statement
@@ -61,8 +63,13 @@ def ran_on(c, turn_ids):
                         "effort": None,
                     }
                 ]
+        # A run the claim moved to the Gateway because the bot's own runtime is not signed in on its computer ran on
+        # the Gateway's harness, not the one the bot is set to (backend/models_preset.py on_gateway).
         for row in c.execute(
-            f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts WHERE id IN ({marks})", chunk
+            f"SELECT id,coalesce(json_extract(result,'$.fallback'),"
+            f"CASE WHEN json_extract(result,'$.waiting_for_sign_in')<>'' THEN '{GATEWAY_RUNTIME}' END),model "
+            f"FROM attempts WHERE id IN ({marks})",
+            chunk,
         ):
             fallbacks[row[0]] = row[1]
             chosen[row[0]] = _record(row[2])

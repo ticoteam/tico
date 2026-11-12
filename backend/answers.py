@@ -19,7 +19,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
-from . import hubdb_core
+from . import hubdb_core, pr_conflicts
 from . import task_engine as E
 from . import task_requirements as R
 from . import task_wakes
@@ -93,6 +93,8 @@ def ask_of(conn: "sqlite3.Connection", subject_id: str) -> Row | None:
     requirement = R.get(conn, requirement_id)
     if not visit or not requirement or requirement["kind"] not in ASKS:
         return None
+    if requirement["kind"] == "answer" and requirement.get("stage_id"):
+        return None  # a stage's answer takes no thumb (_ask)
     if requirement.get("visit_id"):
         if requirement["visit_id"] != visit_id:
             return None
@@ -177,6 +179,14 @@ def _may_answer(
     if kind == "page":
         _may_answer_page(conn, by, row, requirement, value, notes)
         return
+    if R.owners_answer(requirement):
+        # A stage's answer that names nobody is the owner's, given as they say done: by the owner, the manager or a
+        # person.
+        if not value:
+            _refuse(conn, by, "task_requirement", "Give an answer", task_id)
+        if by not in (row.get("owner_id"), _part(row, "pipeline").get("manager_id")) and not is_human(by):
+            _refuse(conn, by, "task_requirement", "Only the owner, the manager or a person answers this", task_id)
+        return
     person = R.person_of(conn, requirement, row["visit"]["id"])
     if kind == "ok" and value == AGAIN:
         newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
@@ -218,7 +228,8 @@ def _may_answer_page(
     conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, value: str, notes: str | None
 ) -> None:
     """A page takes ok or no, and only once Jev has looked and it waits on someone: the person it names after Jev passed
-    it, or a person deciding what Jev was unsure of or could not check. Never Jev's turn, never the owner's."""
+    it, a person deciding what Jev was unsure of or could not check, or the manager bot deciding what Jev was unsure of
+    twice (task_requirements._unsure_to_bots), who says why either way. Never Jev's turn, never the owner's."""
     task_id = row["id"]
     if value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "A page takes ok or no. To change it, attach a new version.", task_id)
@@ -229,26 +240,29 @@ def _may_answer_page(
             _refuse(conn, by, "task_requirement", task_asks.NOT_YOURS, task_id)
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
     standing = R.standing(conn, row, requirement, newest)
-    if standing.state != R.WAITING or standing.on in (R.JEV, R.GITHUB):
+    if standing.state != R.WAITING or R.outside(standing.on):
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is not waiting on anyone", task_id)
     person = standing.on
     if by != person and not (person is None and is_human(by)):
         _refuse(conn, by, "task_requirement", f"This is asked of {_name(conn, person)}", task_id)
     if value == NO and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say what to change", task_id)
+    if value == OK and standing.line.startswith(R.DECIDE) and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say why it meets the check", task_id)
+    if value == OK and R.asked_to_review(standing, by) and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say which commits you read and what you checked", task_id)
 
 
 def _page_version(
     conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
 ) -> int | None:
-    """The page version an answer on a page is for: the one attached now. A caller that names the page it was shown
+    """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
+    attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
     (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
     version number is another page."""
     if requirement["kind"] != "page":
         return None
-    from . import task_pages
-
-    page = task_pages.current(conn, row["visit"]["id"], requirement["id"])
+    page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
     if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
         _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
@@ -264,13 +278,32 @@ def _write(
     value: str,
     notes: str | None,
     page_version: int | None = None,
+    typed: Row | None = None,
 ) -> str:
+    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it. An
+    answer on a page keeps the commits it was given at (`_heads`)."""
     H = _h()
     answer_id = H.new_id()
+    settings: Row = (typed or {}).get("settings") or {}
+    name = str(settings["name"]) if settings.get("name") else None
+    value_type = R.answer_type(typed) if typed else None
+    heads = _heads(conn, row) if page_version is not None else None
     conn.execute(
-        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, H.now()),
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, name, value_type, "
+        "heads, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            answer_id,
+            row["visit"]["id"],
+            requirement_id,
+            str(by),
+            value,
+            notes,
+            page_version,
+            name,
+            value_type,
+            heads,
+            H.now(),
+        ),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
@@ -278,6 +311,16 @@ def _write(
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
+
+
+def _heads(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """The newest commits of the task's linked PRs, as an answer on a page keeps them: a person's OK counts only while
+    they are still the newest, and a bot's review of the commits after the reviews names the ones it read
+    (task_requirements._new_commits). None when the task links no PR Tico has read."""
+    import json
+
+    heads = R.heads_now(conn, row)
+    return json.dumps(heads, sort_keys=True) if heads else None
 
 
 def _wake_key(row: Row, answer_id: str) -> str:
@@ -340,6 +383,29 @@ def _tell_bot(
         _wake(conn, row, target, lead, key, requirement.get("shows"))
 
 
+def _done_ends_own_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """Saying done on a snoozed task: the snooze was a wait (for a repository, for an answer) that the done says is
+    over. When nothing else is missing, the snooze ends and the task moves now, not when the snooze runs out. Only the
+    one who set it ends it this way, and a person's done ends a bot's; a bot never ends a snooze a person set."""
+    row = E.task(conn, task_id)
+    snoozed = (row or {}).get("snooze")
+    if not row or not snoozed or R.unmet(conn, row):
+        return
+    setter = str(snoozed["by_id"])
+    if setter == str(by) or (is_human(by) and is_bot(setter)):
+        E.unsnooze(conn, task_id, by, "Done")
+
+
+def _answer_ends_bots_snooze(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A person answering an ask on a task a bot snoozed: a bot's snooze leaves the ask in their list (waiting_on.needs),
+    and the answer is what that snooze waited for, so it ends now and the task goes on, not when the date comes. A
+    person's own snooze is theirs to end."""
+    row = E.task(conn, task_id)
+    snoozed = (row or {}).get("snooze")
+    if row and snoozed and is_human(by) and is_bot(snoozed["by_id"]):
+        E.unsnooze(conn, task_id, by, "Answered")
+
+
 def answer(
     conn: "sqlite3.Connection",
     task_id: str,
@@ -362,28 +428,42 @@ def answer(
     value = str(value or "").strip()
     pinned = _page_version(conn, by, row, requirement, page_version)
     _may_answer(conn, by, row, requirement, value, notes, own_click=own_click)
+    if requirement["kind"] == "answer":
+        # One exact form: "080" is 80, a choice as the choice is spelled. What does not fit is refused in one line.
+        stored, why = R.typed(requirement, value)
+        if stored is None:
+            _refuse(conn, by, "task_requirement", why, task_id)
+        value = stored
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
-    same = (str(by), value, notes, pinned)
-    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version")) == same:
+    same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
+    kept = (newest or {}).get("heads")
+    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version"), kept) == same:
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out
-    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned)
+    typed = requirement if requirement["kind"] == "answer" else None
+    answer_id = _write(conn, row, requirement_id, by, value, notes, pinned, typed)
     if requirement["kind"] == "ok" and value != OK:
         from . import task_asks
 
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
+    if requirement["kind"] == "owner_done":
+        _done_ends_own_snooze(conn, task_id, by)
+    else:
+        _answer_ends_bots_snooze(conn, task_id, by)
     out = E.advance(conn, task_id)
     if out is None:
         # The task changed and stays: the never-stuck ladder starts again, before any wake this answer sends.
         E.changed(conn, task_id, by)
         out = E.task(conn, task_id) or row
         _tell_bot(conn, out, requirement, by, value, notes, _wake_key(out, answer_id))
-    if requirement["kind"] == "answer":
+        # A merge conflict held for this answer is the Builder's now, before the task moves on (pr_conflicts).
+        pr_conflicts.after_answer(conn, task_id)
+    if requirement["kind"] == "answer" and requirement.get("visit_id"):
         from . import strategy_merge
 
         merged: Any = strategy_merge
-        # A person's answer on an item the Strategy Bot merged is their answer to every original still asked of them,
+        # A person's answer on an item the Strategy Owner merged is their answer to every original still asked of them,
         # and the item is done. Any other task is left alone.
         if merged.on_answer(conn, by, task_id, value):
             out = E.task(conn, task_id) or out
@@ -420,6 +500,9 @@ def give_to(
         return E.reassign(conn, task_id, person, by, seen_version=row.get("version"))
     if kind not in ASKS:
         _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} can't name a person", task_id)
+    if kind == "answer" and requirement.get("stage_id"):
+        # A give is kept as an answer, and on a stage's answer any value meets it: the stage names who answers.
+        _refuse(conn, by, "task_requirement", f"{R.name_of(requirement)} is answered by who the stage names", task_id)
     visit = row["visit"]
     standing = R.standing(conn, row, requirement, R.newest_answers(conn, visit["id"]).get(requirement_id))
     if standing.state != R.WAITING:
@@ -512,6 +595,9 @@ def _ask(conn: "sqlite3.Connection", task_id: str, requirement_id: str, by: str)
         bot = row.get("owner_id")
     if not visit or requirement["kind"] not in ASKS:
         _refuse(conn, by, "task_requirement", "That is not an ask on this task", task_id)
+    if requirement["kind"] == "answer" and requirement.get("stage_id"):
+        # A thumb rates a bot's ask, and a send back would answer the stage's question with the reason.
+        _refuse(conn, by, "task_requirement", "A stage's answer takes no thumb", task_id)
     if not is_bot(bot):
         _refuse(conn, by, "task_requirement", "Only a bot's ask takes a thumb", task_id)
     return row, requirement, visit, str(bot)

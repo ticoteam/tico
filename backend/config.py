@@ -222,7 +222,7 @@ class Settings:
     company_name: str = DEFAULT_COMPANY_NAME
     app_name: str = PRODUCT_NAME
     assistant_name: str = ASSISTANT_NAME
-    assistant_bot: str = "coo"
+    assistant_bot: str = "assistant"
     owner_email: str = ""
     github_owner: str = ""
     credential_admins: tuple[str, ...] = ()
@@ -581,7 +581,7 @@ class Settings:
             company_name=company or DEFAULT_COMPANY_NAME,
             app_name=os.environ.get("TICO_APP_NAME", "").strip() or PRODUCT_NAME,
             assistant_name=os.environ.get("TICO_ASSISTANT_NAME", "").strip() or ASSISTANT_NAME,
-            assistant_bot=os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo",
+            assistant_bot=os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "assistant",
             owner_email=os.environ.get("TICO_OWNER_EMAIL", ""),
             # TICO_ROUTINES_GITHUB_OWNER is the older name for the same organization.
             github_owner=(

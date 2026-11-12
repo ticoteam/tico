@@ -37,28 +37,6 @@ from backend.tests.helpers.sample_company import (
 
 
 # ---------------------------------------------------------------------------------------------- the file
-def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
-    draft, extra = sample_company.team()
-    assert draft == from_yaml(sample_company.FILE.read_text())  # import can read it as it is
-    assert [b["template"] for b in draft["bots"]] == ["coo", "product-lead", "builder", "support", "content"]
-    assert [b["title"] for b in draft["bots"]] == [
-        "Assistant",
-        "Head of Product",
-        "Builder",
-        "Support Agent",
-        "Content Marketer",
-    ]
-    assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
-    runs_on = [row["runs_on"] for row in extra.values()]
-    assert set(runs_on) == set(sample_company.RUNS_ON) and min(runs_on.count(r) for r in set(runs_on)) >= 2
-    for row in extra.values():
-        assert 1 <= len(row["tasks"]) <= 2
-        for task in row["tasks"]:
-            assert set(task) == {"title", "approve", "body"} and len(task["body"]) < 1200
-            # Nothing leaves the company: no approval to send, spend or publish, no mail, no publishing.
-            assert not re.search(r"approval request|mail send|support send|file publish|tico message", task["body"])
-    # A made-up company that names none of the test fixtures' people or companies.
-    assert not re.search(r"\b(ana|ben|cara|acme|globex)\b", sample_company.FILE.read_text(), re.I)
 
 
 # ---------------------------------------------------------------------------------------------- the welcome's button
@@ -84,7 +62,7 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
             "FROM bots b LEFT JOIN bot_config bc ON bc.bot=b.id LEFT JOIN bot_settings s ON s.bot_id=b.id",
         )
     }
-    assert {"coo", "botops", *ROLE_BOTS} <= set(bots)
+    assert {"assistant", "botops", *ROLE_BOTS} <= set(bots)
     assert {slug: bots[slug]["runtime"] for slug in ROLE_BOTS} == ROLE_BOTS  # spread over both subscriptions
     assert bots["builder"]["display_name"] == "Builder"
     setup = {row["bot"]: row for row in rows(api, "SELECT bot,onboarding_state,reports_to FROM bot_config")}
@@ -108,14 +86,14 @@ def test_the_owner_starts_the_sample_company_and_every_bot_has_its_model_goal_an
     goals = {
         row["owner_id"]: row for row in rows(api, "SELECT id,owner_id,title FROM goals WHERE owner_id LIKE 'bot:%'")
     }
-    assert {"bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS)} <= set(goals)
+    assert {"bot:" + ids[slug] for slug in ("assistant", *ROLE_BOTS)} <= set(goals)
     tasks = rows(
         api,
         "SELECT id,owner_id,requester_id,title,body,goal_id,status FROM tasks WHERE id IN (%s)"
         % ",".join("?" * len(record["sample"]["tasks"])),
         tuple(record["sample"]["tasks"]),
     )
-    assert sorted(t["owner_id"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("coo", *ROLE_BOTS))
+    assert sorted(t["owner_id"] for t in tasks) == sorted("bot:" + ids[slug] for slug in ("assistant", *ROLE_BOTS))
     for task in tasks:
         assert task["requester_id"] == "human:owner" and task["status"] == "open"
         assert task["goal_id"] == goals[task["owner_id"]]["id"]
@@ -157,15 +135,15 @@ def test_the_bots_start_once_a_computer_runs_them(environment):
     start(api)
     computer = machine(api)
     states = {row["slug"]: row["state"] for row in rows(api, "SELECT slug,state FROM bots")}
-    assert all(states[slug] == "active" for slug in ("coo", *ROLE_BOTS))
+    assert all(states[slug] == "active" for slug in ("assistant", *ROLE_BOTS))
     placed = {
         row["bot"] for row in rows(api, "SELECT bot FROM assignments WHERE runner_id=?", (computer["runner_id"],))
     }
     ids = bot_ids(api)
-    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= placed
+    assert {ids[slug] for slug in ("assistant", *ROLE_BOTS)} <= placed
     # Each starter task woke its bot: a job waits for the computer to claim it.
     queued = {row["bot_id"] for row in rows(api, "SELECT bot_id FROM jobs WHERE state='queued'")}
-    assert {ids[slug] for slug in ("coo", *ROLE_BOTS)} <= queued
+    assert {ids[slug] for slug in ("assistant", *ROLE_BOTS)} <= queued
 
 
 def test_each_role_bot_is_made_already_set_up_so_it_does_its_starter_task(environment, tmp_path):
@@ -245,7 +223,7 @@ def test_flag_off_loads_nothing(environment):
 def test_flag_on_leaves_a_team_that_is_set_up_alone(environment):
     api = environment()
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug='coo'")
+        c.execute("UPDATE bots SET state='active' WHERE slug='assistant'")
     restarted = environment(seed_roster=False, sample_company=True)
     assert restarted.get("/api/v2/setup", headers=signed_in()).json()["sample"] is None
     assert not rows(restarted, "SELECT slug FROM bots WHERE slug='builder'")

@@ -21,9 +21,9 @@ Finish setup, and the wizard uses the same templates. A starter is created parke
 materializes the repository, and **Set up** opens its first conversation. Answer its questions and review its first draft.
 For another template, a task goes to BotOps to build the repository, apply the reviewed Instructions and check readiness.
 You can also ask BotOps for a custom bot in a DM; it takes the bot through placement and setup as you.
-Assistant, BotOps, Librarian, Strategy Owner, Task Manager, Finance Owner and Brand Owner are Built-in bots; they cannot be archived or deleted.
+Assistant, BotOps, Librarian, Strategy Owner, General Manager, Finance Owner and Design Owner are Built-in bots; they cannot be archived or deleted.
 
-The 124 role templates, in eleven groups with a Leadership extra, are described in
+The 108 role templates, in eleven groups with a Leadership extra, are described in
 [Starter bots](starter-bots.md), with the card fields and the quality bar this page's advice is
 measured against.
 
@@ -191,7 +191,7 @@ skill of that name is left alone unless you say to replace it. Nothing stays lin
 ## Message bots
 
 A message bot is assigned to one human on the roster. **Settings → Bots → Add from template** (and
-the Finish setup cards) show a human picker when the template is `inbox`. The chosen address is
+the Finish setup cards) show a human picker when the template is `inbox-manager`. The chosen address is
 appended to the instructions as `Mailbox: <email>`, and BotOps fills `{{mailbox}}` in
 `bot.yaml` from that line. The bot is created `planned`, with its gmail Tool at `read` and `draft`, one
 routine, the weekday 07:30 email brief in America/Los_Angeles (change its time zone on its automation in Automations),
@@ -239,7 +239,9 @@ hold next month too.
 ## 2. Repository anatomy
 
 A template produces this layout already; `templates/employee-repo/` is the generic version
-of it. Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
+of it. A bot made from a template keeps following it: after an update it takes the template's newer `AGENT.md`,
+`playbooks/`, `skills/`, `.claude/settings.json` and `knowledge/` pages, except a file it or a person changed since,
+which is kept and named in the refresh's event ([Bots follow their template](updates.md#bots-follow-their-template)). Copy it to `<workspace>/bot-<slug>` and fill it in. Tico picks the slug from the bot's
 name (lowercase, hyphenated, with -2, -3 when it is taken); nobody is asked for one. Slugs are stable: the slug appears in the repository name, in `bot.yaml` and in the bot's
 own paths, so renaming later is real work.
 
@@ -265,7 +267,7 @@ The runner checks these before it will run the bot, and the preflight script
 - **`AGENT.md` must not be the untouched template**, and it must contain an `## Owns` section with
   at least one non-empty bullet. Preflight fails otherwise.
 - **`state.md` must exist**, and **`bot.yaml` must parse with `name:` equal to the slug**
-  (`name: sales` in `bot-sales`).
+  (`name: sales` in `bot-inbound-sales-owner`).
 - **`runtime:` and `model:` in the file must match the server, or be left out.** A mismatch reads
   as "Configuration differs from server" and the bot does not run. The simplest repository omits
   both and lets Settings decide.
@@ -474,9 +476,9 @@ the flow format):
 A template may declare the same thing under `routines:` in its `bot.yaml`
 (`id`, `title`, `cron` or `on`, `timezone`, `template: playbooks/<file>.md`, and optionally
 `enabled: false`); `tico bot create` seeds the new bot's automations from it once, and from then on
-the automations are what run. The starter templates declare their first routine with `enabled: false`:
-it exists and is visible on the Automations page, and is switched on when the bot's setup starts (**Set up**, go-live),
-so nobody approves it separately. Quote `"on":` in the
+the automations are what run. The starter templates declare their routines with `enabled: false`:
+each exists and is visible on the Automations page, and all are switched on when the bot's setup starts (**Set up**,
+go-live), except one a person turned off or changed first, so nobody approves them separately. Quote `"on":` in the
 YAML; an unquoted `on` is read as a boolean.
 
 - **`cron`** is five fields, in the time zone you give (`tz`), not the computer's.
@@ -762,8 +764,8 @@ files and what to run. A branch that tracks another local branch is not pushed a
 ## 9. More than one environment
 
 The same slug can exist in two environments, and they are different bots: separate repositories,
-separate tasks, separate credentials, separate history. `bot-sales` in one environment's workspace
-has nothing to do with `bot-sales` in another's. Paths in instructions should therefore be written
+separate tasks, separate credentials, separate history. `bot-inbound-sales-owner` in one environment's workspace
+has nothing to do with `bot-inbound-sales-owner` in another's. Paths in instructions should therefore be written
 relative to the repository, or relative to the environment's workspace, never hard-coded to one
 computer's home directory.
 

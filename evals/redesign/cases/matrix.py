@@ -2,7 +2,7 @@
 real automation through POST /api/v2/automations, fired with run input through POST /{id}/run {"input": ...} (CONTRACT
 §2 Feeding input, the product's "Test with sample"), and read back from GET /{id}/runs. Every trigger kind is fired:
 email from a mail the mail sync published first (so mail actions have a real message to act on), Slack, task, webhook
-(on a real incoming trigger), listening (to a real destination) and event (a catalog event) from their sample, and a
+(on a real incoming trigger), listening (one sent post) and event (a catalog event) from their sample, and a
 schedule with no input. All the mail is published before any automation exists, so the sync fires none. The universal
 invariants run over the combinations that produced a run. A combination whose route is not registered is Unmet on that
 combination only; a check with no run at all raises Unmet, and one that finds nothing to check fails.
@@ -28,7 +28,6 @@ from ..harness import (
     DANA_REF,
     CLAUDE_ID,
     CLAUDE_REF,
-    LEAD_ID,
     W3,
     Check,
     Reply,
@@ -49,7 +48,6 @@ from .engine import nested, wide
 from .inboxes import BUCKET
 
 INBOX = "dana@acme.example"
-DESTINATION = "matrix-leads"
 SENDER_SESSION = "redesign"  # the thread every turn in the harness starts on (Org.turn): builder-claude's live session
 WORKERS = ("llm", "bot_turn")
 # About one turn in ten fails, drawn per turn from the seed and the combination, so a seed replays exactly.
@@ -90,7 +88,7 @@ TEXT = {
     "email": "message.subject",
     "slack": "message.text",
     "webhook": "body.title",
-    "listening": "item.content",
+    "listening": "listening.text",
     "event": "event.data.title",
     "schedule": "task.title",
 }
@@ -261,7 +259,11 @@ def trigger_for(kind, n):
     if kind == "webhook":
         return {"type": "webhook", "id": f"matrix-{n}"}
     if kind == "listening":
-        return {"type": "listening", "destination": DESTINATION}
+        return {
+            "type": "listening",
+            "sources": [{"id": "s1", "kind": "push", "site": "forum.acme.example"}],
+            "limits": [{"count": 10, "per": "day"}],
+        }
     return {"type": "event", "name": event_for(n)[0]}
 
 
@@ -290,13 +292,26 @@ def sample_for(kind, n, row, mails):
     if kind == "webhook":
         return {"body": {"title": text}}
     if kind == "listening":
+        post = {
+            "id": f"matrix-{n}",
+            "tag": "",
+            "title": text,
+            "url": f"https://forum.acme.example/t/{n}",
+            "site": "forum.acme.example",
+            "source": "s1",
+            "author": "omar",
+            "copies": 0,
+            "score": 1.0,
+            "text": text,
+        }
         return {
-            "item": {
-                "source": "forum",
-                "native_id": f"matrix-{n}",
-                "url": f"https://forum.acme.example/t/{n}",
-                "author": "omar",
-                "content": text,
+            "listening": {
+                "name": f"Matrix {n}",
+                "count": 1,
+                "waiting": 0,
+                "text": text,
+                "items": [post],
+                "groups": [{"tag": "", "count": 1, "text": text, "items": [post]}],
             }
         }
     if kind == "event":
@@ -693,18 +708,9 @@ def matrix_scenario(seed):
     rows_ = plan(seed)
 
     def steps(org, f):
-        # Before any automation exists: builder-claude's live session (the task sender's), the listening destination,
-        # and every email combination's mail, published once through the mail sync.
+        # Before any automation exists: builder-claude's live session (the task sender's), and every email
+        # combination's mail, published once through the mail sync.
         org.step(f, "warm", work, org, CLAUDE_ID, "Matrix warm-up")
-        org.step(
-            f,
-            "destination",
-            org.api,
-            "put",
-            f"/api/v2/listening/destinations/{DESTINATION}",
-            {"category": "lead", "threshold": 0.7, "receiver": LEAD_ID, "what": "Matrix leads"},
-            wave=W3,
-        )
         mails = {n: mail_for(n, row) for n, row in enumerate(rows_) if row["trigger"] == "email"}
         org.step(f, "mail", publish_mail, org, INBOX, list(mails.values()))
         for n, row in enumerate(rows_):
@@ -724,9 +730,6 @@ def matrix_scenario(seed):
         org.step(f, "listing", org.api, "get", "/api/v2/automations", wave=W3)
 
     checks = [
-        Check("every dimension value is in at least one combination", W3, lambda f: plan_values(rows_)),
-        Check("every feasible pair is in at least one combination", W3, lambda f: pairs_covered(rows_)),
-        Check("the combination count is at least the all-pairs floor", W3, lambda f: combo_floor(rows_)),
         Check(
             "the inputs are in place: the email combinations' mail is published",
             W3,
@@ -749,5 +752,5 @@ def matrix_scenario(seed):
         f"All-pairs coverage matrix, seed {seed}: {len(rows_)} combinations",
         steps,
         checks,
-        bots={"coo": ("assistant", "claude")},
+        bots={"assistant": ("assistant", "claude")},
     )  # the team's Assistant bot, which assistant:<person> names

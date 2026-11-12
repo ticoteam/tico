@@ -8,12 +8,12 @@ JOBS = {
     ),
     "task_manager_report": (
         "open",
-        "Task Manager: per department, list tasks that say Paused, held bots, runs waiting for their owner's review, "
+        "General Manager: per department, list tasks that say Paused, held bots, runs waiting for their owner's review, "
         "and duplicate tasks.",
     ),
     "bookkeeper_check": (
         "open",
-        "Bookkeeper: read its Finance work queue; open one Books check task only when something is new.",
+        "Finance Owner: read its Finance work queue; open one Books check task only when something is new.",
     ),
 }
 WAKES = {"heartbeat"}

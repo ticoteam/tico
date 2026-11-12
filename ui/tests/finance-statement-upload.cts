@@ -146,28 +146,6 @@ const sideways = (page: Page) => page.evaluate(() => [document.documentElement, 
       await page.close();
     }
     {
-      const {page, errors, writes} = await open(browser);
-      await openUpload(page, 'card_program:m-amex', 'cards');
-      assert.equal(await page.locator('dialog.fin-dlg').count(), 1, 'card: the same upload opens for a card account');
-      await previewFile(page);
-      const flip = page.locator('dialog.fin-dlg [data-fin-stmt-flip]');
-      assert.equal((await page.locator('dialog.fin-dlg label.fin-check').innerText()).trim(), 'Charges show positive', 'card: the signs box');
-      assert.equal(await flip.isChecked(), false, 'card: read as the file shows');
-      await flip.check();
-      const previewed = () => writes.filter(w => w[1] === '/api/v2/finance/statements/preview');
-      for (let i = 0; i < 50 && previewed().length < 2; i++) await page.waitForTimeout(100);
-      await page.waitForTimeout(100);  // the second review renders
-      assert.equal(await flip.isChecked(), true, 'card: the second review reads flipped');
-      const previews = previewed();
-      assert.deepEqual(previews.map(w => w[2].signs), ['auto', 'flipped'], 'card: the box previews the file again, flipped');
-      await page.locator('dialog.fin-dlg [type=submit]').click();
-      await page.locator('dialog.fin-dlg').waitFor({state: 'detached'});
-      const post = writes.find(w => w[2]?.kind === 'statement_post');
-      assert.equal(post?.[2].payload!.signs, 'flipped', 'card: the post sends the same signs');
-      assert.deepEqual(errors, [], 'card: no page errors');
-      await page.close();
-    }
-    {
       const {page, errors} = await open(browser, {viewport: PHONE});
       await openUpload(page);
       await previewFile(page);

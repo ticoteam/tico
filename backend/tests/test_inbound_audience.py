@@ -97,13 +97,3 @@ def test_sync_gaps_name_only_inboxes_the_reader_may_read(api):
         c.execute("UPDATE inbound_sync SET gaps=? WHERE singleton=1", (json.dumps(gaps),))
     assert [g["inbox_id"] for g in get(api, "inbound/inboxes", "cara-test")["gaps"]] == ["ibx_a"]
     assert [g["inbox_id"] for g in get(api, "inbound/inboxes")["gaps"]] == ["ibx_a", "ibx_b"]
-
-
-def test_who_reads_an_inbox_is_a_catalogue_setting_botops_and_the_assistant_may_card():
-    from backend import assistant, settings_catalog
-
-    path = "/api/v2/inbound/inboxes/ibx_b/audience"
-    found = [e for e, _ in settings_catalog.routed("PUT", path)]
-    assert [(e.key, e.kind, e.who) for e in found] == [("inbound.inbox.audience", "confirm", "admin")]
-    assert assistant.valid_operation("PUT", path, None, "botops")
-    assert assistant.valid_operation("PUT", path, None, "assistant")

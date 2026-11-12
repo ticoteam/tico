@@ -121,6 +121,10 @@ a.dash-big:hover strong{text-decoration:underline}
   .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
   .dash-error{margin:0 16px 8px}
   .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  /* Sole task and question actions in Home cards need a full finger-height hit area. */
+  .dash-list{gap:4px}
+  .dash-list li>a{display:flex;align-items:center;min-height:40px}
+  a.dash-big{min-height:40px}
   .dash-more{width:40px;height:40px}
   .dash-grip{width:32px;height:32px}
   .overview-tabs{padding:10px 12px}

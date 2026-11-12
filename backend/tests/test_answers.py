@@ -244,6 +244,42 @@ def test_a_snoozed_task_takes_the_answer_and_wakes_nobody(c, general):
     assert out["answer_id"] and out["snooze"] and _answer_wakes(c, row["id"]) == []
 
 
+def test_done_on_a_task_its_owner_snoozed_ends_the_snooze_and_moves_it_at_once(c, general):
+    # BotOps snoozed its setup task to wait for a repository, then said done in the same turn: the task was left open
+    # until the snooze ran out.
+    row = X.new_task(c, ANA, "Set up the Release Owner", assignee="bot:builder")
+    E.snooze(c, row["id"], "bot:builder", "waiting to go live", "2099-01-01T00:00:00Z", seen_version=row["version"])
+    seen = E.task(c, row["id"])["version"]
+    done = A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=seen)
+    assert (done["status"], done["snooze"]) == ("done", None)
+    ended = H._one(c, "SELECT ended_by_id FROM snoozes WHERE task_id=?", (row["id"],))
+    assert ended["ended_by_id"] == "bot:builder"
+    # A person saying done ends a bot's snooze the same way.
+    other = X.new_task(c, ANA, "Set up the Growth Owner", assignee="bot:builder")
+    E.snooze(c, other["id"], "bot:builder", "waiting to go live", seen_version=other["version"])
+    assert A.answer(c, other["id"], _owner_done(c, other), ANA, "done")["status"] == "done"
+
+
+def test_a_bot_saying_done_keeps_a_snooze_a_person_set(c, general):
+    row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
+    E.snooze(c, row["id"], ANA, "after the board call", "2099-01-01T00:00:00Z")
+    seen = E.task(c, row["id"])["version"]
+    out = A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=seen)
+    assert out["status"] == "open" and out["snooze"]["by_id"] == ANA
+    # Its done stands: when the snooze ends, the task moves on.
+    assert E.unsnooze(c, row["id"], ANA) and E.advance(c, row["id"])["status"] == "done"
+
+
+def test_done_while_something_else_is_missing_keeps_the_owners_snooze(c, general):
+    row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
+    _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Which plan?", choices=["Free"])
+    seen = E.task(c, row["id"])["version"]
+    E.snooze(c, row["id"], "bot:builder", "waiting on Ana", seen_version=seen)
+    seen = E.task(c, row["id"])["version"]
+    out = A.answer(c, row["id"], _owner_done(c, row), "bot:builder", "done", seen_version=seen)
+    assert out["status"] == "open" and out["snooze"]
+
+
 def test_a_bot_that_cannot_run_still_gets_the_wake(c, general):
     row = X.new_task(c, ANA, "Pick the signup plan", assignee="bot:builder")
     asked = _bot_ask(c, row["id"], "bot:builder", "answer", ANA, "Which plan?", choices=["Free"])
@@ -595,7 +631,7 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
     routes that is the person's name). Nothing is met and the task does not move. The OK route gives it."""
     from backend import task_asks as K
 
-    X.bot(c, "coo")
+    X.bot(c, "assistant")
     email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
     asked = K.ask_ok(
         c, "bot:builder", ANA, "Send this email?", shows=["email:e1"], subject="hq_reply:TK-1", content=email
@@ -605,7 +641,7 @@ def test_an_ok_bound_to_exact_content_is_never_a_plain_answer_only_given_from_it
     stage = E.task(c, task_id)["stage_id"]
     with pytest.raises(H.Refused, match="task_requirement: " + K.FROM_PREVIEW):
         H.task_answer(c, ANA, task_id, rid, "ok")  # a plain ok, even from the person it is asked of
-    for other in ("bot:builder", "bot:coo"):
+    for other in ("bot:builder", "bot:assistant"):
         # The task filed for it is private to its parties: a bot not asked does not even find it.
         with _refused("task_requirement|not-found"):
             H.task_answer(c, other, task_id, rid, "ok", seen_version=E.task(c, task_id)["version"])

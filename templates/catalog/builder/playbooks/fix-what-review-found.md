@@ -1,7 +1,7 @@
 # Fix what review found
 
-Triggered when a task you own enters Fixes 1 or Fixes 2. The reviewer's Review page is attached to the task, and its
-comments may also be on the pull request. Reviewers only comment; the fixes and the decisions are yours.
+Triggered when a task you own enters Fixes 1 or Fixes 2. The reviewer's Review page is listed under "From earlier
+stages" in your wake and in `tico task show`, and its comments may also be on the pull request. Reviewers only comment; the fixes and the decisions are yours.
 
 Outcome: each finding is acted on or answered with one line of reason, the checks pass at the new head, and the stage
 has what it needs: in Fixes 1 your done, in Fixes 2 the page that shows what was built.
@@ -13,7 +13,10 @@ has what it needs: in Fixes 1 your done, in Fixes 2 the page that shows what was
     tico task show <id>
     gh pr view <n> -R <repo> --comments
 
-`tico task show` lists the Review page with its file id; read it with `tico file read <file id>`.
+`tico task show` lists each Review page under "From earlier stages" with its file id; read it with
+`tico file read <file id>`. The pull request is listed there too. If the Review page this stage needs is not there
+(the line says "none was attached") or you cannot read it, do not say done: send the task back for it,
+`tico task move <id> "<Review stage>" -m "<what is missing>" --version N`.
 
 ## 2. Decide each one
 

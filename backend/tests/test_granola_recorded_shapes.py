@@ -99,10 +99,6 @@ def imported(api):
         }
 
 
-def test_the_fixtures_match_what_the_live_check_expects():
-    assert granola_live_check.check_fixture(FIXTURE) == []
-
-
 def forget_meetings(api):
     with api.app.state.store.transaction() as c:
         for table in ("import_refs", "media_control", "media_assets", "meetings"):

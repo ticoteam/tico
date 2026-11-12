@@ -180,7 +180,7 @@ def setup_attempt(api, bot="ops", operator="ana"):
     r = runner(api, operator)
     assign(api, r, bot)
     ready(api, r, [bot])
-    if bot == "coo":
+    if bot == "assistant":
         # Nobody chats with the assistant; a person hands it a task.
         msg = post(api, "tasks", {"owner": bot, "title": "Summarize", "body": "Please summarize the current work."})
     else:

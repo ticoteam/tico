@@ -27,7 +27,7 @@ const bots = [
   bot('cmo', 'AI CMO', 'p:ana'), bot('seo', 'SEO', 'b:cmo'), bot('sales', 'Sales', 'p:ana'),
   bot('support', 'Support', 'p:ana', {status: 'paused', onboarding_state: 'needs_setup'}),
   bot('old', 'Old bot', 'p:ana', {status: 'archived'}),
-  bot('coo', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox', helper: true}),
+  bot('assistant', 'Assistant', ''), bot('librarian', 'Librarian', ''), bot('botops', 'BotOps', ''), bot('strategy-owner', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('inbox', 'Inbox Manager', 'b:botops', {template: 'inbox-manager', helper: true}),
   bot('channel', 'Channel Inbox', 'b:botops', {helper: true}),
 ];
 const day = Date.now() - 2 * 86400000;
@@ -52,16 +52,16 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
       {id: 'g-cmo', title: 'Double organic signups', owner_id: 'bot:cmo', parent_id: 'g-top', status: 'yellow', status_source: 'auto', rank: 0, kpis: [activation, nps],
        checkin: {id: 'c1', body: 'The onboarding email went out late.', signal: 'at_risk', sender_id: 'bot:cmo', created_at: new Date(day).toISOString()}},
       {id: 'g-cmo2', title: LONG, owner_id: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: []},
-      {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:goal-manager', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
+      {id: 'g-gm', title: 'Every KPI read on time', owner_id: 'bot:strategy-owner', parent_id: null, status: 'green', status_source: 'auto', rank: 0, kpis: []},
     ];
     const other = [kpi('k-cash', 'Cash runway', {owner_id: 'human:ana', unit: 'months', target_label: '', link: undefined, status: 'none', latest: {value: 11, period_end: new Date(day).toISOString(), quality: 'measured'}})];
     const needs = [{id: 'kpi_red:k-act', title: 'Check why Activation is off track', body: null, subject: {type: 'kpi', id: 'k-act'}, created_at: day / 1000, actions: ['open'], kind: 'kpi_red', goal_id: 'g-cmo', goal_title: 'Double organic signups', kpi_id: 'k-act', kpi_name: 'Activation', reason: 'Activation 52% vs 58% needed on pace',
        task: {id: 't-red', title: 'Check why Activation is off track on Double organic signups', status: 'open'}},
       {id: 'proposal:p1', title: 'Activation target', body: null, subject: {type: 'proposal', id: 'p1'}, created_at: null, actions: ['decide'], kind: 'proposal', proposal: {id: 'p1', kind: 'kpi_target', goal_id: 'g-cmo', kpi_id: 'k-act', payload: {kind: 'improve', target: 60, deadline: '2027-12-31'},
-       reason: 'The deadline cannot be met at this pace', proposed_by: 'bot:goal-manager'}, kpi_name: 'Activation', goal_title: 'Double organic signups'}];
+       reason: 'The deadline cannot be met at this pace', proposed_by: 'bot:strategy-owner'}, kpi_name: 'Activation', goal_title: 'Double organic signups'}];
     const people = [{id: 'ana', name: 'Ana Silva', org_parent: '', inbox_bot: 'inbox'}, {id: 'ben', name: 'Ben Park', org_parent: 'p:ana', goals: 'Keep the board honest.'}];
     const detail = {kpi: activation, links: [{...activation.link, goal_title: 'Double organic signups', goal_owner: 'bot:cmo', target_label: activation.target_label, status: 'yellow', reason: activation.reason}],
-      readings: [47, 50, 52].map((v, i) => ({id: 'r' + i, value: v, period_end: new Date(day - (2 - i) * 7 * 86400000).toISOString(), quality: 'measured', evidence: i === 2 ? 'https://analytics.example/q/12' : '', actor: 'bot:goal-manager', superseded_by: null})),
+      readings: [47, 50, 52].map((v, i) => ({id: 'r' + i, value: v, period_end: new Date(day - (2 - i) * 7 * 86400000).toISOString(), quality: 'measured', evidence: i === 2 ? 'https://analytics.example/q/12' : '', actor: 'bot:strategy-owner', superseded_by: null})),
       definitions: [], checkins: [], proposals: [], may_edit: true, may_log: true};
     const archivedKpi = kpi('k-retired', 'Retired conversion', {owner_id: 'human:ana', archived_at: new Date(day).toISOString(), link: undefined});
     let archivedMayEdit = true;
@@ -83,7 +83,7 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
       if (p === '/api/humans') return json({people});
       if (p === '/api/issues') return json([]);
       if (p === '/api/status') return json({active: [], employees: []});
-      if (p === '/api/v2/status') return json({bots: [{bot: 'goal-manager', state: 'idle', last_turn_at: '2026-10-01T09:00:00Z', last_result: 'Updated KPI readings.'}]});
+      if (p === '/api/v2/status') return json({bots: [{bot: 'strategy-owner', state: 'idle', last_turn_at: '2026-10-01T09:00:00Z', last_result: 'Updated KPI readings.'}]});
       if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: other, proposals: []});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       if (p === '/api/v2/goals' && post) {
@@ -122,15 +122,15 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
 
     // Every person and every bot that is not archived, goal or not, nested as the org chart nests them; helper bots off it.
     const lines = await page.locator('#goal-tree > li').evaluateAll(els => (els as HTMLElement[]).map(el => el.classList.contains('gt-cont') ? '+' + el.dataset.goal : `${el.dataset.owner}@${el.style.getPropertyValue('--d')}`));
-    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Bot is a helper too
+    assert.deepEqual(lines, ['company@0', 'human:ana@0', 'human:ben@1', 'bot:cmo@1', '+g-cmo2', 'bot:seo@2', 'bot:sales@1', 'bot:support@1'], JSON.stringify(lines));   // the Strategy Owner is a helper too
     // The sidebar leaves the same helper bots off.
-    assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:goal-manager"]').count(), 0);
+    assert.equal(await page.locator('#tree [data-org="b:inbox"], #tree [data-org="b:channel"], #tree [data-org="b:strategy-owner"]').count(), 0);
     const row = (owner: string) => page.locator(`#goal-tree .gt-row[data-owner="${owner}"]:not(.gt-cont)`);
     assert.equal(await row('bot:sales').locator('.gt-goal').count(), 0, 'no goal: nothing written');
-    assert.equal(await page.locator('#goal-tree [data-owner="bot:goal-manager"]').count(), 0, 'its built-in goals are hidden, and no line of its own');
+    assert.equal(await page.locator('#goal-tree [data-owner="bot:strategy-owner"]').count(), 0, 'its built-in goals are hidden, and no line of its own');
     assert.equal(await page.locator('#nav-assistant, #nav-botops').count(), 0, 'Ask is the way in to both');
-    // No Strategy Bot chat beside the tree: Ask (the person's Assistant) is the way in.
-    assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Bot chat');
+    // No Strategy Owner chat beside the tree: Ask (the person's Assistant) is the way in.
+    assert.equal(await page.locator('#sbot, .gm-form, [data-gm-thread], [data-gm-on]').count(), 0, 'no Strategy Owner chat');
 
     // The search above the tree: every word somewhere in a line (its name or its goals' words), the lines above a match
     // kept for context, the rest taken out; a redraw keeps it, Escape clears it.
@@ -174,7 +174,7 @@ const kpi = (id: string, name: string, over?: Partial<Kpi>): Kpi => ({id, name, 
     assert.equal(await page.locator('#goal-needs').count(), 0, 'no cards on the page itself');
     await page.locator('#goal-needs-line [data-needs-review]').click();
     assert.match(await page.locator('#goal-needs-sheet[open]').innerText(), /Needs you\s*2[\s\S]*Activation on Double organic signups/i);
-    // Each line is the Strategy Bot's task, linked; the link opens the task, not the KPI.
+    // Each line is the Strategy Owner's task, linked; the link opens the task, not the KPI.
     assert.equal(await page.locator('#goal-needs .need-row [data-need-task]').getAttribute('href'), '#/task/t-red');
     await page.locator('#goal-needs [data-decide=confirm]').click();
     await until(() => page.locator('#goal-needs .kpi-prop').count().then(n => n === 0), 'proposal gone');

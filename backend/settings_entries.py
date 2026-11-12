@@ -26,7 +26,6 @@ SETTINGS_FILES = sorted(
         "settings-devices.ts",
         "settings-history.ts",
         "settings-hosted.ts",
-        "settings-listening.ts",
         "settings-people.ts",
         "settings-providers.ts",
         "settings-recurring.ts",
@@ -64,10 +63,10 @@ HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
 HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
 # System's other cards moved to the built-in bots' own Settings and to Settings > Security. Releases is on whichever bot
-# is the Release Manager: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
-RELEASES, TASK_MANAGER, SECURITY = (
-    "Release Manager > Settings > Releases",
-    "Task Manager > Settings",
+# is the Release Owner: its address reads the schedule and opens that bot (ui/app/settings.ts settingsMovedOut).
+RELEASES, GENERAL_MANAGER, SECURITY = (
+    "Release Owner > Settings > Releases",
+    "General Manager > Settings",
     "Settings > Security",
 )
 SYSTEM_JOBS = "#/automations/system-jobs"
@@ -1059,6 +1058,18 @@ ENTRIES = TEAM_RULES + [
         card=_card("bots"),
         words="shared cloud machine size always on pause after minutes grow storage disk",
     ),
+    S(
+        "cloud.shared_machine.replace",
+        "Replace the shared cloud machine",
+        COMPUTERS,
+        "admin",
+        "confirm",
+        "DELETE",
+        "cloud-machines/shared",
+        value="json",
+        card=_card("computers"),
+        words="replace shared cloud machine delete disk fresh broken stuck failed",
+    ),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S(
@@ -1093,7 +1104,7 @@ ENTRIES = TEAM_RULES + [
         "POST",
         "strategy-bot/checks",
         "on",
-        card="#/bot/goal-manager/settings",
+        card="#/bot/strategy-owner/settings",
     ),
     S(
         "strategy.level",
@@ -1105,7 +1116,7 @@ ENTRIES = TEAM_RULES + [
         "strategy-bot/level",
         "level",
         "int",
-        "#/bot/goal-manager/settings",
+        "#/bot/strategy-owner/settings",
     ),
     # Repositories
     S(
@@ -1282,25 +1293,25 @@ ENTRIES = TEAM_RULES + [
     ],
     S(
         "task_manager.on",
-        "Task Manager",
-        TASK_MANAGER,
+        "General Manager",
+        GENERAL_MANAGER,
         "owner",
         "direct",
         "POST",
-        "task-manager/turn-on",
+        "general-manager/turn-on",
         value="json",
-        card="#/bot/task-manager/settings",
+        card="#/bot/general-manager/settings",
     ),
     S(
         "task_manager.off",
-        "Task Manager off",
-        TASK_MANAGER,
+        "General Manager off",
+        GENERAL_MANAGER,
         "owner",
         "direct",
         "POST",
-        "task-manager/turn-off",
+        "general-manager/turn-off",
         value="json",
-        card="#/bot/task-manager/settings",
+        card="#/bot/general-manager/settings",
     ),
     # Webhooks
     S(
@@ -1408,29 +1419,6 @@ ENTRIES = TEAM_RULES + [
         "webhooks/{id}/update",
         value="json",
         card=HOOKS_OUT_CARD,
-    ),
-    # Listening
-    S(
-        "listening.destination",
-        "Listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "PUT",
-        "listening/destinations/{id}",
-        value="json",
-        card=_card("listening"),
-    ),
-    S(
-        "listening.destination.remove",
-        "Remove a listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "POST",
-        "listening/destinations/{id}/remove",
-        value="json",
-        card=_card("listening"),
     ),
     # Tasks
     S(

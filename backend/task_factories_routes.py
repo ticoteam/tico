@@ -4,7 +4,7 @@
 GET /api/v2/factories?period=1d|7d|30d: each live factory with how many of its tasks reached Done in the period (Closed
 never counts), and each live pipeline with its factory, how many open tasks the reader may read, what it files into,
 and its mark. POST /api/v2/factories makes one (the company's owner and Admins). GET /api/v2/pipelines/{id}/log: each
-push past, and each snooze a bot made with no end date, newest first.
+push past, each snooze a bot made with no end date, and each save of the pipeline (Tico's included), newest first.
 """
 
 from collections.abc import Callable
@@ -130,9 +130,33 @@ def create(c: Any, who: Any, body: M.FactoryNew) -> dict[str, Any]:
     return {"id": ident, "name": name, "goal": body.goal.strip(), "manager_id": None, "done": 0}
 
 
+def _and(words: list[str]) -> str:
+    """`A`, `A and B`, `A, B and C`."""
+    return words[0] if len(words) == 1 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def _save_text(c: Any, by: str, detail: dict[str, Any], pipeline_id: str) -> str:
+    """What a pipeline save says in the Log. Tico's move of untouched preset wording names the stages it moved (the goal
+    for the pipeline's own goal); a person's save says it was made or saved."""
+    who = H.actor_name(c, by)
+    moved = detail.get("newer_preset_text")
+    if not moved:
+        return f"{who} {'made' if detail.get('made') else 'saved'} the pipeline"
+    names = {
+        str(r["id"]): r["name"] for r in c.execute("SELECT id,name FROM stages WHERE pipeline_id=?", (pipeline_id,))
+    }
+    where: list[str] = []
+    for path in moved:
+        label = "the goal" if path.endswith("/goal") else names.get(path.split("/")[0])
+        if label and label not in where:
+            where.append(label)
+    return f"{who} updated check wording to the new default" + (f" on {_and(where)}" if where else "")
+
+
 def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
-    """The manager rail's Log (S10): each push past out of a stage of this pipeline, and each snooze a bot made with no
-    end date on one of its tasks, newest first. Tasks by title; a task the reader may not read is left out."""
+    """The manager rail's Log (S10): each push past out of a stage of this pipeline, each snooze a bot made with no end
+    date on one of its tasks, and each save of the pipeline (`pipeline.save`, written to events with the pipeline as its
+    target), newest first. Tasks by title; a task the reader may not read is left out."""
     t_visible = f"t.id IN (SELECT id FROM tasks WHERE {visible_sql})"
     lines: list[dict[str, Any]] = []
     for at, by, title, stage, why, tid in c.execute(
@@ -151,6 +175,13 @@ def log(c: Any, pipeline_id: str, visible_sql: str) -> list[dict[str, Any]]:
     ):
         text = f"{H.actor_name(c, by)} snoozed {title or 'a task'} with no end"
         lines.append({"at": at, "text": text, "task_id": tid, "by": by, "why": why or ""})
+    for at, by, detail in c.execute(
+        "SELECT created_at, actor, detail FROM events WHERE action='pipeline.save' AND target=? "
+        "ORDER BY created_at DESC LIMIT ?",
+        (pipeline_id, LOG_LIMIT),
+    ):
+        text = _save_text(c, by, H._json(detail, {}), pipeline_id)
+        lines.append({"at": at, "text": text, "task_id": None, "by": by, "why": ""})
     lines.sort(key=lambda line: line["at"] or "", reverse=True)
     return lines[:LOG_LIMIT]
 

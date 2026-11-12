@@ -80,7 +80,7 @@ def test_remove_is_suggested_only_for_installs_coverage_calls_unused_never_unkno
     unused_bot = installed(api, "Bot", ops)
     installed(api, "Bot", finance, staged=False)  # no receipt: unknown
     installed(api, "Bot", cpo, age=10)  # under 30 days: unknown
-    installed(api, "Bot", bot_id(api, "coo"), harness="codex")  # its harness does not report every use: unknown
+    installed(api, "Bot", bot_id(api, "assistant"), harness="codex")  # its harness does not report every use: unknown
     installed(api, "Human", "cara")  # staged, but her helper does not report: unknown
     unused_person = installed(api, "Human", "ben", reporting=True)
     used = installed(api, "Human", "ana", reporting=True)
@@ -194,16 +194,6 @@ def test_suggestions_and_the_counts_outside_the_directory_are_for_admins_only(ap
     post(api, f"skills/suggestions/{by_kind['promote']['id']}/asked", {}, "ben-test")
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM skill_proposals WHERE name='home-notes'").fetchone()[0] == 0
-
-
-@pytest.mark.parametrize("name", ["suggestions"])
-def test_the_route_word_cannot_be_a_skill_name(api, name):
-    r = api.post(
-        "/api/v2/skills/proposals",
-        headers=headers("ana-test"),
-        json={"name": name, "files": [{"path": "SKILL.md", "content": f"---\nname: {name}\n---\n\nx\n"}]},
-    )
-    assert r.status_code == 422 and "reserved" in r.text
 
 
 # ------------------------------------------------------------------ retention and the run

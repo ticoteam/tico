@@ -1,12 +1,12 @@
 # System routines
 
-System routines are the jobs Tico runs on its own, such as the Task Manager report. They appear in one list, separate from bot routines, which are [Automations](routines.md) now. Learn runs in [Maintenance](maintenance.md), with its switch and schedule there; its nightly timer and read-only Automations mirror are retired.
+System routines are the jobs Tico runs on its own, such as the General Manager report. They appear in one list, separate from bot routines, which are [Automations](routines.md) now. Learn runs in [Maintenance](maintenance.md), with its switch and schedule there; its nightly timer and read-only Automations mirror are retired.
 
-Open **Automations → System jobs** (`#/automations/system-jobs`), a built-in row beside Maintenance; old `#/settings/system`, `#/settings/rules` and `#/settings/routines` links land there too. **Task Manager** is on the Task Manager's **Settings** tab. The same jobs also show read-only on the Automations page. Everyone who can open Automations sees the flat list of built-in jobs, without group headings. The Task Manager's report shows its schedule as **Hourly on weekdays, 08:00–18:00**, and its row says when the Task Manager is paused.
+Open **Automations → System jobs** (`#/automations/system-jobs`), a built-in row beside Maintenance; old `#/settings/system`, `#/settings/rules` and `#/settings/routines` links land there too. **General Manager** is on the General Manager's **Settings** tab. The same jobs also show read-only on the Automations page. Everyone who can open Automations sees the flat list of built-in jobs, without group headings. The General Manager's report shows its schedule as **Hourly on weekdays, 08:00–18:00**, and its row says when the General Manager is paused.
 
 Wake rules are automations now: **What wakes bots** (the built-in rules, read-only) and one **What wakes ...** automation per bot, team, department or task, on the Automations page. A task that is a bot's turn, a person's message, an ask, an answer, an OK asked or given, a needs-action flag and a reply always wake.
 
-**Task Manager** shows whether it is on, its last run, and each department's last check, item count and open check task. The owner pauses and resumes it.
+**General Manager** shows whether it is on, its last run, and each department's last check, item count and open check task. The owner pauses and resumes it.
 
 Search by name, trigger (**WHEN**), action (**THEN**), or department.
 
@@ -34,7 +34,7 @@ The list refreshes when you open the tab and at most once a minute while it stay
 | Row | Who can change it | Available controls |
 |---|---|---|
 | **KPI stale asks**, **Books check** | Owner or admin | On or off, schedule presets, **Run now** |
-| **Task Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
+| **General Manager report** | Owner or admin | On or off, schedule presets, **Run now** |
 | **Start fresh when the topic changes** | Owner or admin | On or off |
 | Housekeeping and other fixed built-ins | No switch or schedule editor on this page | Fixed operation; housekeeping cannot be switched off |
 
@@ -47,7 +47,7 @@ Choose from the presets offered on the row:
 | Row | Presets |
 |---|---|
 | **KPI stale asks**, **Books check** | Every 15 minutes, Hourly, Every 4 hours, Daily at a time |
-| **Task Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
+| **General Manager report** | Hourly on weekdays 08:00 to 18:00 (the default), Hourly, Every 4 hours, Daily at a time |
 
 Times use company time (Pacific). Leave the time field or press Enter to save it. These rows offer no cron expressions or custom intervals.
 
@@ -72,13 +72,13 @@ When the Gateway did not answer, a line under the pill says what ran instead and
 
 **$ this month** adds up what the job's Decide calls cost since the first of the month (UTC). The job shares the team's monthly Decide cap with the other Decide users, so the figure is one slice of that cap.
 
-## Task Manager report
+## General Manager report
 
-**Task Manager report** (key `task_manager_report`) builds one report per department in plain code and wakes the
-[Task Manager](task-manager.md) only for a department that has something. Its run record reads "3 departments, 7 items"
+**General Manager report** (key `task_manager_report`) builds one report per department in plain code and wakes the
+[General Manager](general-manager.md) only for a department that has something. Its run record reads "3 departments, 7 items"
 or "Nothing to do". The default preset runs hourly on weekdays between 08:00 and 18:00 in the team's time zone; a weekend
-or evening tick does not run. It finds nothing while the Task Manager bot is paused. Details, the checks and the
-`tico task-manager` commands are on [Task Manager](task-manager.md).
+or evening tick does not run. It finds nothing while the General Manager bot is paused. Details, the checks and the
+`tico general-manager` commands are on [General Manager](general-manager.md).
 
 ## The jobs
 
@@ -96,10 +96,10 @@ The jobs that must happen within seconds (due times, recovery and outside polls)
 |---|---|---|---|
 | **Heartbeat** | Runs its steps in one short beat: the [never-stuck check](tasks.md#when-a-bot-stops-early), which moves and wakes tasks; updates and digests; the turn fixer, run housekeeping and the other recovery checks; GitHub sync, repository waits and personal alerts. See [Heartbeat](heartbeat.md). | Every 10 seconds, or the interval set there |  |
 | **KPI stale asks** | Asks whoever keeps a KPI for a reading when it goes out of date, and a goal's owner when a KPI goes off track. | Hourly |  |
-| **Task Manager report** | Looks for quiet tasks, overdue asks, held bots and similar, and opens one "Task check" task per department for the [Task Manager](task-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |  |
-| **Books check** | Reads the [Bookkeeper](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Bookkeeper is paused. | Hourly | a Bookkeeper bot |
-| **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Bookkeeper](bookkeeper.md) only when something new is found. Not a switch: the Bookkeeper's pause stops it. | Daily | a Bookkeeper bot |
-| **Rules digest** | Once a week, opens the Bookkeeper's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly | a Bookkeeper bot |
+| **General Manager report** | Looks for quiet tasks, overdue asks, held bots and similar, and opens one "Task check" task per department for the [General Manager](general-manager.md) only when there is something. Nothing to report is a quiet run: no task, no model call. | Hourly on weekdays, 08:00 to 18:00 |  |
+| **Books check** | Reads the [Finance Owner](bookkeeper.md)'s Finance work queue in plain code and opens one "Books check" task for it only when something is new. Nothing new is a quiet run: no task, no model call. Opens nothing while the Finance Owner is paused. | Hourly | a Finance Owner bot |
+| **Books watch** | Reads runway, unusual spend, duplicate charges, price increases and unused subscriptions in plain code and opens one "Watch" task for the [Finance Owner](bookkeeper.md) only when something new is found. Not a switch: the Finance Owner's pause stops it. | Daily | a Finance Owner bot |
+| **Rules digest** | Once a week, opens the Finance Owner's "Rules digest" task for the posting rules made in the last seven days. No new rules is a quiet run. Not a switch. | Weekly | a Finance Owner bot |
 | **Page monitors** | Reads each competitor page the Librarian or owner watches (at most 50 a day, the longest unchecked first) and files a market insight only when one changed. See [Market watch](market-watch.md). | Daily | a watched page |
 | **Goal colours** | Works out every goal's colour again as its data ages. | Hourly |  |
 | **Gateway key check** | Asks the Tico AI Gateway whether this server's key still works and how much of the month's cap is used. | Hourly | a Gateway key |
@@ -120,7 +120,7 @@ The jobs that must happen within seconds (due times, recovery and outside polls)
 | **Outside text check** | Screens outside text a restart left waiting. | Every 10 seconds | |
 | **Finance upkeep** | Posts Finance's waiting events, Gateway usage and prepaid costs, ends expired holds, watches documents and opens next month's period. | Every 10 seconds | |
 | **Hourly deadlines** | Turns off a webhook that failed for five days, retires replaced computers, hands a person a support ticket or screened item that waited an hour, and keeps unsent a held write nobody decided in time. | Hourly | |
-| **Strategy note check** | Starts the Strategy Bot's Monday note above Passive and pauses it at Passive. | Hourly | a Strategy Bot |
+| **Strategy note check** | Starts the Strategy Owner's Monday note above Passive and pauses it at Passive. | Hourly | a Strategy Owner |
 | **Tico Cloud check** | Reads this company's Tico Cloud access from HQ and renews its file hosting keys. | Every minute on Tico Cloud, else hourly | a Gateway key |
 | **Workspace key check** | Checks a pending or failing Google Workspace key again until it works or its hour is up. | Every 10 seconds | a Workspace key |
 | **Inbound mail** | Brings in mail and bills from HQ, and deletes inbound mail older than 90 days. | Every 15 seconds | |

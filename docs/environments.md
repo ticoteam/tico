@@ -21,7 +21,7 @@ lowercase letters, digits and single hyphens.
 | `local-owner.token` | 0600 | `env create --local` | 32 url-safe random bytes: the loopback owner session credential |
 | `hub.sqlite`, `-wal`, `-shm` | as SQLite writes them | `backend.manage initialize`, then the server | This team's database |
 | `blobs/` | 0700 | `env create --local` | Attachments, meeting files and generated files |
-| `registry/` | 0700 | `env create --local` | Seed data: `employees.yaml`, `people.yaml`, `hub-access.yaml`, copied from `templates/environment-registry/` with this team's names filled in. The seed roster is two bots, `coo` (the assistant) and `botops`, both `planned`; every other bot is picked from the templates during [Finish setup](onboarding.md) |
+| `registry/` | 0700 | `env create --local` | Seed data: `employees.yaml`, `people.yaml`, `hub-access.yaml`, copied from `templates/environment-registry/` with this team's names filled in. The seed roster is two bots, `assistant` (the assistant) and `botops`, both `planned`; every other bot is picked from the templates during [Finish setup](onboarding.md) |
 | `logs/` | 0700 | `env create --local` | `api.log` and `tico-<job>.log` |
 | `runner.json` | 0600 | `enroll` | This computer's registration for this environment |
 | `state-<runner_id>/` | 0700 | the runner | `runner.sqlite`, `heartbeat`, `runtimes.json`, `runner-revision`, locks, warm sessions, routine checkouts |

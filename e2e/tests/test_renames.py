@@ -56,10 +56,6 @@ def test_a_key_the_answer_gained_is_left_out_only_under_its_parent():
     assert renames.drop_added(body, ["rows.owner_name"]) == {"owner_name": 1, "rows": [{"id": 3}]}
 
 
-def test_the_codemod_map_can_be_read():
-    assert renames.load(Path(__file__).resolve().parents[2] / "scripts/cleanup/renames.yaml")["fields"]
-
-
 @pytest.mark.parametrize("text", ["colums: {a: b}\n", "fields: {a: a}\n", "fields: {a: ''}\n", "tables: {a: 3}\n"])
 def test_a_malformed_map_is_refused(tmp_path, text):
     path = tmp_path / "bad.yaml"

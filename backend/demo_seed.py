@@ -110,7 +110,7 @@ def write_registry(settings):
             {
                 "name": slug,
                 "display_name": settings.assistant_name
-                if slug == "coo"
+                if slug == "assistant"
                 else D.BOT_NAMES.get(slug) or card.get("name", slug),
                 "reports_to": reports_to,
                 "status": "active",
@@ -124,10 +124,10 @@ def write_registry(settings):
             {"defaults": {"reasoning_effort": "high", "max_run_minutes": 60}, "employees": employees}, sort_keys=False
         )
     )
-    people = [dict(person, **({"inbox_bot": "inbox"} if person["id"] == "ben" else {})) for person in D.PEOPLE]
+    people = [dict(person, **({"inbox_bot": "inbox-manager"} if person["id"] == "ben" else {})) for person in D.PEOPLE]
     (registry / "people.yaml").write_text(
         yaml.safe_dump(
-            {"default_user": "ana", "teams": {"leadership": {"root": "coo"}}, "people": people}, sort_keys=False
+            {"default_user": "ana", "teams": {"leadership": {"root": "assistant"}}, "people": people}, sort_keys=False
         )
     )
     (registry / "hub-access.yaml").write_text(
@@ -276,7 +276,7 @@ class Builder:
                                     "instructions": "",
                                 }
                                 for slug, template, _ in D.BOTS
-                                if slug not in ("coo", "botops")
+                                if slug not in ("assistant", "botops")
                             },
                         }
                     ),
@@ -315,7 +315,7 @@ class Builder:
                     "configuration_valid": True,
                     "problems": [],
                 }
-                for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "goal-manager"]
+                for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]
             }
             readiness = {
                 "schema_version": 1,
@@ -365,8 +365,8 @@ class Builder:
                 },
             ).raise_for_status()
         # The Linux box hosts Inbox alone; the Mac hosts the other bots.
-        for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "goal-manager"]:
-            target = self.linux if slug == "inbox" else self.mac
+        for slug in [*(slug for slug, _, _ in D.BOTS), "librarian", "strategy-owner"]:
+            target = self.linux if slug == "inbox-manager" else self.mac
             with self.store.read() as c:
                 have = c.execute("SELECT runner_id,generation FROM assignments WHERE bot=?", (slug,)).fetchone()
             if have and have["runner_id"] == target["runner_id"]:
@@ -390,7 +390,7 @@ class Builder:
                     G.set_status(c, who, row["id"], colour, why)
                 elif parent:
                     # A goal under another starts with no colour until the owner of the one above accepts it;
-                    # accepting it and letting the Strategy Bot set it leaves it automatic.
+                    # accepting it and letting the Strategy Owner set it leaves it automatic.
                     G.set_status(c, "human:ana", row["id"], "green", "Accepted")
                     G.hand_back(c, "human:ana", row["id"])
                 for name, unit, target, values, days in measures:
@@ -426,7 +426,11 @@ class Builder:
                     "help" if doc["category"].startswith("External") else doc["category"].split("/")[-1].strip().lower()
                 )
                 service.insert(
-                    c, "human:ana", doc["title"], doc["content"], folder + "/" + doc["id"].split("-", 1)[-1] + ".md"
+                    c,
+                    "human:ana",
+                    doc["title"],
+                    doc["content"],
+                    folder + "/" + doc["id"].split("-", 1)[-1] + ".md",
                 )
             for url, title, note in D.LINKS:
                 docs.add_link(c, "human:ana", docs.LinkCreate(url=url, title=title, description=note))
@@ -592,7 +596,7 @@ class Builder:
             last = None
             for sender, text in lines:
                 self.clock.at += timedelta(minutes=2)
-                if bot == "coo":
+                if bot == "assistant":
                     # Ana's own Assistant: the product answers it, so only her words are seeded.
                     self.call("POST", "assistant/messages", {"text": text}, token=TOKENS[sender])
                 elif sender.startswith("human:"):
@@ -763,12 +767,12 @@ class Builder:
                         }
                         body = "\n".join("- " + line for line in week["done"])
                         row = updates.post(
-                            c, person, body, kind=kind, day=day.isoformat(), slides=slides, drafted_by="coo"
+                            c, person, body, kind=kind, day=day.isoformat(), slides=slides, drafted_by="assistant"
                         )
                     else:
                         lines = content["daily"][(7 - back + position) % 2]
                         body = "\n".join("- " + line for line in lines)
-                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), drafted_by="coo")
+                        row = updates.post(c, person, body, kind=kind, day=day.isoformat(), drafted_by="assistant")
                     posted.append((row, at))
             # Everything older than yesterday is read; the last day's stays unread so the page has a badge.
             edge = self.now - timedelta(hours=30)
@@ -787,8 +791,8 @@ class Builder:
         def work(c):
             # The routine turns of the last week are the scheduled runs (demo_sections/schedules.py), so these are left
             # out for those bots. The Inbox's routine is off, and its turns stay.
-            scheduled = {routine[0] for routine in D.ROUTINES} | {"goal-manager"}
-            scheduled.discard("inbox")
+            scheduled = {routine[0] for routine in D.ROUTINES} | {"strategy-owner"}
+            scheduled.discard("inbox-manager")
             for bot, hours, trigger, summary, tokens_in, tokens_out in D.TURNS:
                 if trigger == "routine" and bot in scheduled:
                     continue
@@ -881,7 +885,7 @@ class Builder:
             for number in range(count):
                 bot, title = next(tasks)
                 up = manager.get(bot)
-                asker = "bot:" + up if up and not up.startswith("human:") else "bot:coo"
+                asker = "bot:" + up if up and not up.startswith("human:") else "bot:assistant"
                 work.append(
                     (
                         start + timedelta(weeks=week, hours=15 + number * (7 * 24 - 20) / count),
@@ -986,7 +990,7 @@ class Builder:
             {
                 "channel": "CDEMOTEAM1",
                 "name": D.SLACK["channel"],
-                "readers": [D.SLACK["channel"]],
+                "readers": ["support-owner"],  # the Support Owner reads the #support channel
                 "post": False,
                 "note": D.SLACK["note"],
             },
@@ -1000,7 +1004,7 @@ class Builder:
         def work(c):
             c.execute(
                 "INSERT INTO mail_agent_instructions VALUES(?,?,?,?)",
-                ("inbox", D.INBOX_INSTRUCTIONS, self.linux["runner_id"], H.now()),
+                ("inbox-manager", D.INBOX_INSTRUCTIONS, self.linux["runner_id"], H.now()),
             )
             timestamp = str(int(self.ago(hours=1).timestamp())) + ".000001"
             for index, (name, kind, text) in enumerate(D.SLACK["thread"]):
@@ -1026,18 +1030,20 @@ class Builder:
                     ),
                 )
             conv = H.open_conversation(
-                c, H.KEEPER, [H.KEEPER, "bot:support"], kind="chat", subject=D.SLACK["subject"], scope="direct"
+                c, H.KEEPER, [H.KEEPER, "bot:support-owner"], kind="chat", subject=D.SLACK["subject"], scope="direct"
             )
-            message = H.feed(c, "bot:support", D.SLACK["feed"], conv)
+            message = H.feed(c, "bot:support-owner", D.SLACK["feed"], conv)
             c.execute(
                 "INSERT INTO slack_threads(channel,thread_ts,bot,conversation_id,created_at,last_routed_at) VALUES(?,?,?,?,?,?)",
-                ("CDEMOTEAM1", timestamp, "support", conv["id"], H.now(), H.now()),
+                ("CDEMOTEAM1", timestamp, "support-owner", conv["id"], H.now(), H.now()),
             )
             c.execute(
                 "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (message["id"], "CDEMOTEAM1", timestamp, "support", D.SLACK["draft"], "ready", H.now(), H.now()),
+                (message["id"], "CDEMOTEAM1", timestamp, "support-owner", D.SLACK["draft"], "ready", H.now(), H.now()),
             )
-            c.execute("INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support", timestamp, H.now(), 1))
+            c.execute(
+                "INSERT INTO slack_reads VALUES(?,?,?,?,?)", ("CDEMOTEAM1", "support-owner", timestamp, H.now(), 1)
+            )
 
         self.write(work)
 
@@ -1152,7 +1158,7 @@ class Builder:
 
     def routine_tasks(self, done=D.ROUTINE_DONE):
         """A routine's task is read and closed a couple of hours on: the Librarian's task for each live meeting (before the
-        sections), or the goal-manager's bet review of the market briefing (after them, once the scheduler has made it)."""
+        sections), or the strategy-owner's bet review of the market briefing (after them, once the scheduler has made it)."""
 
         def work(c):
             rows = c.execute(

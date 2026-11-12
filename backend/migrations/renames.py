@@ -92,12 +92,18 @@ def _wave_order(wave):
     return (0, int(wave), "") if str(wave).isdigit() else (1, 0, str(wave))
 
 
+_ORDERED = [None, {}]  # [the COLUMNS it was built from, the map]: tests patch COLUMNS, so the tuple is the key
+
+
 def _column_renames():
-    """{table: [(old, new)]} in wave order, so a chain across waves (a -> b in one, b -> c in a later one) is followed."""
-    out = {}
-    for table, old, new, _wave in sorted(COLUMNS, key=lambda entry: _wave_order(entry[3])):
-        out.setdefault(table, []).append((old, new))
-    return out
+    """{table: [(old, new)]} in wave order, so a chain across waves (a -> b in one, b -> c in a later one) is followed.
+    Built once per COLUMNS: every database a process opens asks, and callers only read it."""
+    if _ORDERED[0] is not COLUMNS:
+        out = {}
+        for table, old, new, _wave in sorted(COLUMNS, key=lambda entry: _wave_order(entry[3])):
+            out.setdefault(table, []).append((old, new))
+        _ORDERED[:] = [COLUMNS, out]
+    return _ORDERED[1]
 
 
 def current_table(table):

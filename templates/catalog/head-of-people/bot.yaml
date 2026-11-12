@@ -1,0 +1,35 @@
+name: head-of-people                     # the slug: it matches the repository bot-head-of-people and the label owner:head-of-people
+display_name: "Head of People"
+labels: [owner:head-of-people]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-people-summary
+    title: Weekly people summary
+    cron: "30 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-people-summary.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []
+# Optional, uncomment when connected. The handbook is read through the Librarian (`tico doc ask`) and the roster
+# through `tico team show`, which every run already has. There is deliberately no HR-system entry: a human copies
+# anything a system needs.
+# tools:
+#   - service: slack
+#     identity: the team workspace
+#     can: [read]
+#     channels: [people]
+#     dms: false
+#     env: SLACK_BOT_TOKEN
+#     note: "reads one internal people channel to see requests that arrive outside tasks; never posts, never reads DMs"

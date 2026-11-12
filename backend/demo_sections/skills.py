@@ -41,7 +41,7 @@ SKILLS = [
         ],
     ),
     (
-        "release-notes",
+        "release-notes-writer",
         "Turns merged pull requests into owner-facing release notes",
         "List merged pull requests since the last tag. Group by area. Plain words, no internal names.",
         [],
@@ -92,32 +92,37 @@ PENDING = [
 ]
 
 BOT_INSTALLS = {
-    "refund-check": ["support", "support-qa", "escalations", "returns"],
-    "calibration-redo": ["support", "technical-support"],
-    "release-notes": ["release-notes", "product-manager"],
-    "weekly-spend": ["paid-media", "spend-watcher", "marketing-lead"],
+    "refund-check": [
+        "support-owner",
+        "support-quality-analyst",
+        "escalations-manager",
+        "returns-and-refunds-specialist",
+    ],
+    "calibration-redo": ["support-owner", "technical-support-engineer"],
+    "release-notes-writer": ["release-notes-writer", "product-manager"],
+    "weekly-spend": ["search-ads-owner", "fpa-analyst", "growth-manager"],
 }
-PEOPLE_INSTALLS = {"refund-check": ["ben"], "weekly-spend": ["cara", "ana"], "release-notes": ["eli"]}
+PEOPLE_INSTALLS = {"refund-check": ["ben"], "weekly-spend": ["cara", "ana"], "release-notes-writer": ["eli"]}
 # (skill outside the directory, bot, uses every third day): warranty-lookup is busy enough to suggest submitting it.
 UNLISTED = [
-    ("warranty-lookup", "support", 3),
-    ("warranty-lookup", "technical-support", 1),
-    ("lens-order", "returns", 1),
+    ("warranty-lookup", "support-owner", 3),
+    ("warranty-lookup", "technical-support-engineer", 1),
+    ("lens-order", "returns-and-refunds-specialist", 1),
 ]
 
 # (skill, actor, uses over the month, trigger): spread over 30 days, newest first.
 USES = [
-    ("refund-check", ("Bot", "support"), 46, "model"),
-    ("refund-check", ("Bot", "escalations"), 9, "model"),
-    ("refund-check", ("Bot", "returns"), 14, "model"),
+    ("refund-check", ("Bot", "support-owner"), 46, "model"),
+    ("refund-check", ("Bot", "escalations-manager"), 9, "model"),
+    ("refund-check", ("Bot", "returns-and-refunds-specialist"), 14, "model"),
     ("refund-check", ("Human", "ben"), 5, "model"),
-    ("calibration-redo", ("Bot", "support"), 21, "model"),
-    ("calibration-redo", ("Bot", "technical-support"), 8, "person"),
-    ("release-notes", ("Bot", "release-notes"), 4, "model"),
-    ("release-notes", ("Human", "eli"), 2, "person"),
-    ("weekly-spend", ("Bot", "paid-media"), 4, "model"),
+    ("calibration-redo", ("Bot", "support-owner"), 21, "model"),
+    ("calibration-redo", ("Bot", "technical-support-engineer"), 8, "person"),
+    ("release-notes-writer", ("Bot", "release-notes-writer"), 4, "model"),
+    ("release-notes-writer", ("Human", "eli"), 2, "person"),
+    ("weekly-spend", ("Bot", "search-ads-owner"), 4, "model"),
     ("weekly-spend", ("Human", "cara"), 3, "person"),
-    ("weekly-spend", ("Bot", "spend-watcher"), 1, "nested"),
+    ("weekly-spend", ("Bot", "fpa-analyst"), 1, "nested"),
 ]
 
 
@@ -225,8 +230,8 @@ def seed(b):
                 ),
             )
         # Two installs that have been staged a month and never used, so the page shows the flag.
-        for slug in ("support-qa", "marketing-lead"):
-            name = "refund-check" if slug == "support-qa" else "weekly-spend"
+        for slug in ("support-quality-analyst", "growth-manager"):
+            name = "refund-check" if slug == "support-quality-analyst" else "weekly-spend"
             c.execute(
                 "INSERT OR REPLACE INTO skill_receipts (target_type, target_id, skill_id, sha256, source, staged_at) VALUES (?,?,?,?,?,?)",
                 ("Bot", bots[slug], skills[name]["id"], skills[name]["sha256"], "runner", staged),

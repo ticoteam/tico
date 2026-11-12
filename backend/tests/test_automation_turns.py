@@ -29,9 +29,9 @@ def test_an_llm_step_waits_for_the_bots_turn_in_its_own_room_and_goes_on(api):
     assert done["steps"][0]["cost"] == done["cost"]
     with api.app.state.store.read() as c:
         told = c.execute(
-            "SELECT body, refs FROM messages WHERE recipient_id='bot:coo' ORDER BY created_at DESC"
+            "SELECT body, refs FROM messages WHERE recipient_id='bot:assistant' ORDER BY created_at DESC"
         ).fetchone()
-    # The answer reaches coo as quoted data, never as the automation's own words.
+    # The answer reaches assistant as quoted data, never as the automation's own words.
     assert '<data n="1" field="reply.text">\nA draft\n</data n="1">' in told["body"]
     assert json.loads(told["refs"])["automation_run"] == run["id"]
 
@@ -64,9 +64,9 @@ def test_an_assistant_step_makes_the_persons_assistant_room_on_first_use(api):
     get(api, "people/nobody/assistant", expected=404)
 
 
-def test_a_market_change_made_in_an_automations_turn_names_the_turn_and_the_match(api):
-    """A listening match reaches the graph only through the Librarian's turn: what the turn files through the market
-    routes is shown on the graph with the turn, the run and the match it came from."""
+def test_a_market_change_made_in_an_automations_turn_names_the_turn(api):
+    """What a listening sends reaches the graph only through the Librarian's turn: what the turn files through the
+    market routes is shown on the graph with the turn and the run it came from."""
     from backend.tests.helpers.market import _librarian
 
     _librarian(api)
@@ -76,18 +76,19 @@ def test_a_market_change_made_in_an_automations_turn_names_the_turn_and_the_matc
     flow = {
         "name": "Market · tools",
         "owner": "bot:librarian",
-        "trigger": {"type": "listening", "destination": "tools"},
+        "trigger": {
+            "type": "listening",
+            "sources": [],
+            "rules": [],
+            "limits": [{"count": 5, "per": "day"}],
+            "at": "08:00",
+            "tz": "UTC",
+        },
         "steps": [{"id": "update", "type": "bot_turn", "bot": "librarian", "prompt": "Update the graph."}],
     }
     aid = post(api, "automations", flow)["id"]
-    heard = {
-        "id": "li_1",
-        "destination": "tools",
-        "url": "https://news.acme.example/mapper",
-        "source": "news",
-        "author": "Acme News",
-        "content": "Acme Mapper launched.",
-    }
+    heard = {"text": "Acme Mapper launched.", "count": 1, "items": [], "groups": []}
+    url = "https://news.acme.example/mapper"
     run = post(api, f"automations/{aid}/run", {"input": {"listening": heard}})["run"]
     before = get(api, "market/graph")
     attempt = claim(api, r)
@@ -95,7 +96,7 @@ def test_a_market_change_made_in_an_automations_turn_names_the_turn_and_the_matc
     seen = post(
         api,
         "market/evidence",
-        {"source_url": heard["url"], "source_kind": "news", "quote": "Launched."},
+        {"source_url": url, "source_kind": "news", "quote": "Launched."},
         token=attempt["token"],
     )["evidence"]["id"]
     post(
@@ -110,7 +111,6 @@ def test_a_market_change_made_in_an_automations_turn_names_the_turn_and_the_matc
         "automation": aid,
         "run": run["id"],
         "turn": {"attempt": attempt["id"], "bot": "librarian", "task": run["steps"][0]["outputs"]["turn"]["task"]},
-        "match": {"id": "li_1", "destination": "tools", "url": heard["url"], "source": "news"},
     }
     # A change by hand names no turn.
     post(api, "market/entities", {"type": "product", "name": "Acme Atlas", "evidence_ids": [seen]})

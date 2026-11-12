@@ -57,13 +57,12 @@
   prompt: "Turn the market posts from listening (launches, funding, lawsuits, complaints about named companies) into tasks for me."
   mode: new
   expect:
-    trigger: {type: listening, destination: "*"}
+    trigger: {type: listening}
     steps:
-      - {type: decide, set: listening-item}
-      - type: filter
-        rules:
-          - when: [{field: d1.market, op: is, value: "yes", min: 0.7}]
-            then: [create_task]
+      - type: paths
+        paths:
+          - when: [{field: item.tag, op: is, value: market}]
+            steps: [{type: action, do: create_task}]
 
 - id: support-slack-triage
   title: "Slack support: bugs to Engineering Lead, the rest answered"

@@ -20,7 +20,7 @@ declare const pendingWrites: Map<string, string>;
 declare const CLOUD_SUPPORT: {view: unknown; read: Promise<unknown> | null};
 declare function loadSettings(): Promise<void>;
 
-const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Ace', assistant_bot: 'coo',
+const CONFIG = {environment_id: 'acme', company_name: 'Acme', app_name: 'Acme Hub', assistant_name: 'Ace', assistant_bot: 'assistant',
   public_url: 'https://acme.test', runner_url: 'https://acme.test', github_owner: '', local: false, release: '',
   onboarding_needed: false, providers_configured: true};
 

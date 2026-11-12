@@ -32,7 +32,6 @@ RENAMES = [
     (V2 + "/integrations", V2 + "/tools", None),
     (V2 + "/ops/timing", V2 + "/operations/timing", None),
     (V2 + "/judge", V2 + "/decisions", None),
-    (V2 + "/listening/judge", V2 + "/listening/decide", None),
     (V2 + "/onboarding/departments", V2 + "/setup/groups", None),
     (V2 + "/getting-started", V2 + "/setup/getting-started", None),
     (V2 + "/onboarding", V2 + "/setup", None),

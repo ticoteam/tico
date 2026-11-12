@@ -18,7 +18,7 @@ from .fake_github import Delivery
 from .fake_jev import FAIL, NOT_MET, UNSURE
 from .scenarios import expect
 from .software import ENGINEERING, PRODUCT, SoftRig, soft_rig
-from .world import ANA, BUILDER, EM, PM, RELEASE, REVIEWER_1, REVIEWER_2, Refusal
+from .world import ANA, BUILDER, EM, PM, PPM, RELEASE, REVIEWER_1, REVIEWER_2, Refusal
 
 REF_1, REF_2 = "acme/app#1", "acme/app#2"
 
@@ -60,11 +60,12 @@ def covered() -> set[int]:
 def idea_to_done(r: SoftRig) -> None:
     from backend import task_engine as E
 
-    # 1. A person files the idea and moves it to Spec by hand. The PM attaches a spec, Jev passes it, a person OKs it.
+    # 1. A person files the request: it is not held by hand, and goes into Spec by itself on the next pass. The PM
+    #    attaches a spec, Jev passes it, a person OKs it.
     p = r.idea("Export to CSV")
     r.at(p, "Ideas")
-    expect([s for s, _ in r.waits(p)] == ["by_hand"], f"Ideas waits on {r.waits(p)}, not a person's hand")
-    r.by_hand(p)
+    expect([s for s, _ in r.waits(p)] == ["room"], f"a person's request in Ideas waits on {r.waits(p)}, not room")
+    r.check()
     r.at(p, "Spec")
     expect(r.owner(p) == PM, f"Spec's owner is {r.owner(p)}")
     r.says(p, "No page attached")
@@ -100,7 +101,7 @@ def idea_to_done(r: SoftRig) -> None:
     r.pr(e, 2)
     r.settle()
     r.says(e, "Checks running")
-    expect(("github", None) in r.waits(e), f"running checks wait on {r.waits(e)}, not GitHub")
+    expect(("source", "github") in r.waits(e), f"running checks wait on {r.waits(e)}, not GitHub")
     r.settle(r.gh.ci_s)
 
     # 4. Review 1 at the head; a new commit puts it back to the reviewer (scenario 28), who attaches again.
@@ -143,22 +144,25 @@ def idea_to_done(r: SoftRig) -> None:
     expect(r.gh.state(1)["queue_state"] == "queued" and r.gh.state(2)["queue_state"] == "queued", "not both queued")
     r.says(e, "In the merge queue")
 
-    # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Manager is
-    # told once, the manager once. Queue again waits for the new commit's checks.
+    # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Owner is
+    # told once, the manager once. No bot may queue the new commit (the OK was for the old one): it goes back to
+    # Fixes 2. A person may queue it, once its checks pass.
     r.gh.push(2)
     r.settle()
     r.at(e, "Merge")
     r.says(e, "Dropped from the merge queue: A new commit was pushed")
     expect(r.waits(e) == [("bot", RELEASE)], f"the drop waits on {r.waits(e)}")
     removed = [w for w in r.wakes(e, RELEASE) if w[0].startswith("queue_removed")]
-    expect(len(removed) == 1, f"the Release Manager was told {len(removed)} times: {removed}")
+    expect(len(removed) == 1, f"the Release Owner was told {len(removed)} times: {removed}")
     changed = [w for w in r.wakes(e, EM) if w[0].startswith("changed_after_ok")]
     expect(len(changed) == 1, f"the manager was told of the change after the OK {len(changed)} times")
     out = r.queue_again(e)
+    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while checks run: {out!r}")
     expect(f"The checks on {REF_2} are still running" in out.detail, out.detail)
     r.settle(r.gh.ci_s)
-    expect(not isinstance(r.queue_again(e), Refusal), "queue again once green was refused")
+    expect(not isinstance(r.queue_again(e, ANA), Refusal), "the person's queue again once green was refused")
     r.effects()
     r.settle()
     expect(len([w for w in r.wakes(e, RELEASE) if w[0].startswith("queue_removed")]) == 1, "told again")
@@ -170,13 +174,10 @@ def idea_to_done(r: SoftRig) -> None:
     r.gh.merge(2)
     r.settle()
 
-    # 8. Release: a pre-release does not count (D3, off by default); the release does.
+    # 8. Release: a published pre-release containing the merge counts (prereleases are on by default).
     r.at(e, "Release")
-    r.says(e, "Waiting for a release of acme/app")
+    r.says(e, "Waiting for the next release of acme/app")
     r.gh.publish("v1.1.0-rc.1", prerelease=True)
-    r.settle(300)
-    r.at(e, "Release")
-    r.gh.publish("v1.1.0")
     r.settle(300)
     expect(r.row(e)["status"] == "done", f"the Engineering task is {r.row(e)['status']}: {r.lines(e)}")
 
@@ -216,7 +217,7 @@ def presets(r: SoftRig) -> None:
     engineering = r.w.read(lambda c: PS.read(c, r.preset(ENGINEERING)["id"]))
     expect([s["name"] for s in product["stages"]] == list(S.PRODUCT_STAGES), f"Product: {product['stages']}")
     expect([s["name"] for s in engineering["stages"]] == list(S.ENGINEERING_STAGES), "Engineering's stages")
-    expect(product["manager_id"] == PM and engineering["manager_id"] == EM, "the managers")
+    expect(product["manager_id"] == PPM and engineering["manager_id"] == EM, "the managers")
     for record in (product, engineering):
         for stage in record["stages"]:
             expect(stage["owner"], f"{stage['name']} has no owner")
@@ -231,9 +232,9 @@ def presets(r: SoftRig) -> None:
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
     expect(owners == want, f"owners {owners}")
     expect(stages["In development"]["on_enter"] == {"file_into": ENGINEERING}, "In development files")
-    expect(stages["Merge"]["on_enter"] == {"queue_prs": True}, "Merge queues")
+    expect(stages["Merge"]["on_enter"] == {"act": "github.queue"}, "Merge queues")
     for name, kind in (("Merge", "pr_merged"), ("Release", "in_release")):
-        found = [q for q in stages[name]["requirements"] if q["kind"] == kind]
+        found = [q for q in stages[name]["requirements"] if q["condition"] == kind]
         expect(found and not found[0]["can_push_past"], f"{name}'s {kind} can be pushed past")
 
 
@@ -317,7 +318,7 @@ def push_past_pr_merged(r: SoftRig) -> None:
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
-    ideas = [r.idea(f"Idea {i}") for i in range(1, 4)]
+    ideas = [r.idea(f"Idea {i}", by=PM) for i in range(1, 4)]  # the PM's own: held by hand
     for p in ideas[:2]:
         r.by_hand(p)
         r.at(p, "Spec")
@@ -422,7 +423,7 @@ def handoff_loop(r: SoftRig) -> None:
 # ----------------------------------------------------------------------------- the merge queue
 @case(
     "queue-removed-three-choices",
-    "GitHub drops a PR: the Release Manager is told once; queue again (refused while red), fix it, or send it back",
+    "GitHub drops a PR: the Release Owner is told once; queue again (refused while red), fix it, or send it back",
     covers=(30,),
 )
 def queue_removed_three_choices(r: SoftRig) -> None:
@@ -447,13 +448,16 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     out = r.queue_again(e)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while red: {out!r}")
     expect(f"Checks failed on {REF_1}" in out.detail, out.detail)
-    # (b) the Release Manager pushes a fix; while its checks run, still refused; green, queued again.
+    # (b) a fix is pushed: the person's OK was for the old commit, so the Release Owner may not queue it (it goes
+    # back to Fixes 2); a person may, once its checks pass.
     r.gh.push(1)
     r.settle()
     out = r.queue_again(e)
+    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and f"The checks on {REF_1} are still running" in out.detail, f"{out!r}")
     r.settle(r.gh.ci_s)
-    expect(not isinstance(r.queue_again(e), Refusal), "queue again once green was refused")
+    expect(not isinstance(r.queue_again(e, ANA), Refusal), "the person's queue again once green was refused")
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "queued", f"not queued again: {r.gh.state(1)}")
@@ -608,7 +612,7 @@ def queue_entry_vanishes(r: SoftRig) -> None:
     "A webhook sent before the merge arrives after it, its PR still open: merged stays merged",
 )
 def late_webhook_after_merge(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     r.preset(ENGINEERING)
     e = r.task(ANA, "Late hook", ENGINEERING)
@@ -672,10 +676,10 @@ def github_5xx_for_hours(r: SoftRig) -> None:
     r.gh.down_until = S._h().shift(r.w.now(), seconds=6 * 3600)
     r.settle(3600)
     r.says(e, "In the merge queue")
-    expect(("github", None) in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
+    expect(("source", "github") in r.waits(e), f"an hour of 5xx waits on {r.waits(e)}, not GitHub")
     r.settle(3600 + 10)
     r.says(e, f"GitHub hasn't answered about {REF_1} for 2 hours")
-    expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Manager")
+    expect(r.waits(e) == [("bot", RELEASE)], f"two hours of 5xx wait on {r.waits(e)}, not the Release Owner")
     r.settle(4 * 3600)  # GitHub is back: the read gets through and the wait is GitHub's again
     r.says(e, "In the merge queue")
     r.gh.land_after_s = 0
@@ -713,12 +717,112 @@ def jev_unsure(r: SoftRig) -> None:
     r.at(p, "In development")
 
 
+@case(
+    "jev-unsure-bot-first",
+    "Jev unsure of a Review page: back to the reviewer once, then the pipeline's manager decides with why; no person",
+)
+def jev_unsure_bot_first(r: SoftRig) -> None:
+    from backend import answers as A
+    from backend import task_requirements as R
+
+    _, e = r.to_development("Tags")
+    r.pr(e, 1)
+    r.settle(r.gh.ci_s)
+    r.at(e, "Review 1")
+    review = r.page(REVIEWER_1, "Review 1: tags", verdict=UNSURE)
+    r.attach(e, review, REVIEWER_1)
+    r.jev()
+    r.check()
+    r.says(e, R.FIX_OR_EXPLAIN)
+    expect(r.waits(e) == [("bot", REVIEWER_1)], f"Jev's first unsure left it waiting on {r.waits(e)}")
+    r.attach(e, r.page(REVIEWER_1, "Review 1: tags, read and run", verdict=UNSURE, page=review), REVIEWER_1)
+    r.jev()
+    r.check()
+    r.says(e, R.DECIDE)
+    expect(r.waits(e) == [("bot", EM)], f"Jev's second unsure left it waiting on {r.waits(e)}, not the manager")
+    rid = r.requirement(e, "page")
+    version = r.version(e)
+    why = "It names the head, says what was run, and nothing blocks"
+    r.ok(EM, lambda c: A.answer(c, e, rid, EM, "ok", why, seen_version=version), "the manager OKs the review")
+    r.settle()
+    r.at(e, "Fixes 1")
+
+
+def _github_says(r: SoftRig, number: int, conflicts: bool | None) -> None:
+    """GitHub's pull_request webhook for the PR at its head through backend/github.py, which keeps whether it conflicts
+    with its base branch (None: GitHub has not worked it out yet, as after a push). The rig's GitHub sends only what
+    item_metadata reads."""
+    from backend import github as G
+
+    pr: dict[str, Any] = {
+        "html_url": f"https://github.com/{S.REPO}/pull/{number}",
+        "number": number,
+        "state": "open",
+        "head": {"sha": r.gh.head(number), "ref": f"pr-{number}"},
+    }
+    if conflicts is not None:
+        pr["mergeable"] = not conflicts
+    with r.w.tx() as c:
+        G.pull_request(c, {"action": "synchronize", "pull_request": pr}, read_refresh=True)
+
+
+@case("conflict-in-review", "A PR conflicts while a reviewer holds Review 2: the Builder's turn, then the manager's")
+def conflict_in_review(r: SoftRig) -> None:
+    from backend import task_engine as E
+
+    _p, e = r.to_development("Bulk export")
+    r.pr(e, 1)
+    r.settle(r.gh.ci_s)
+    r.at(e, "Review 1")
+    r.ok(ANA, lambda c: E.move(c, e, "Review 2", ANA, "Reviewed in the call"), "Ana drags it to Review 2")
+    r.attach(e, r.page(REVIEWER_2, "Review 2: bulk export", verdict=UNSURE), REVIEWER_2)
+    r.jev()
+    r.check()
+    r.says(e, "Jev is unsure")
+
+    # The PR conflicts (Acme, Nov 11): the Builder is woken at once; the reviewer, who cannot push, gets a quiet line.
+    before = len(r.wakes(e, REVIEWER_2))
+    _github_says(r, 1, conflicts=True)
+    r.check()
+    r.at(e, "Review 2")
+    r.says(e, f"{REF_1} conflicts with its base branch")
+    expect(("bot", BUILDER) in r.waits(e), f"the conflict waits on {r.waits(e)}")
+    told = [w for w in r.wakes(e, BUILDER) if w[0].startswith("conflict:")]
+    expect(len(told) == 1 and "rebase its branch" in told[0][2], f"the Builder was told {told}")
+    noted = [w for w in r.wakes(e, REVIEWER_2) if w[0].startswith("conflict:")]
+    expect(len(noted) == 1 and "not yours to fix" in noted[0][2], f"the reviewer was told {noted}")
+
+    # The Builder's runs end with nothing pushed: the ladder tries it again, then hands it to the manager bot.
+    for _ in range(2000):
+        if (r.visit(e).get("level") or "owner") != "owner":
+            break
+        if r.queued(e, BUILDER):
+            r.ran(e, BUILDER)
+            r.check()
+            continue
+        r.later(10)
+    expect(r.visit(e).get("level") == "manager", f"the ladder left it at {r.visit(e).get('level')}")
+    expect(r.wakes(e, EM), "the manager bot was not told")
+    chased = [w for w in r.wakes(e, REVIEWER_2)[before:] if not w[0].startswith("conflict:")]
+    expect(not chased, f"the reviewer was chased: {chased}")
+    r.at(e, "Review 2")
+
+    # The rebase is pushed: the conflict is gone, and the review is of the old commit, so it is the reviewer's again.
+    r.gh.push(1)
+    r.settle()
+    _github_says(r, 1, conflicts=None)
+    r.check()
+    r.at(e, "Review 2")
+    r.says(e, "New commits since the review")
+    expect(r.waits(e) == [("bot", REVIEWER_2)], f"after the rebase it waits on {r.waits(e)}")
+
+
 # ----------------------------------------------------------------------------- built on the base
 @case(
     "webhooks-out-of-order", "Webhooks repeated and out of order: the newest fact wins, each taken once", covers=(32,)
 )
 def webhooks_out_of_order(r: SoftRig) -> None:
-    from backend import task_facts as TF
+    from backend.item_sources import github as TF
 
     task = r.task(ANA, "Wire up the API", assignee=BUILDER)
     r.pr(task, 7)

@@ -310,7 +310,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("warm-discard-{}", uuid::Uuid::new_v4().simple()));
         let warm = WarmSessions::new(dir, 8);
-        let attempt = json!({"bot": "tico-counsel", "conversation": {"id": "c-chat"}, "config": {"harness": "antigravity"}});
+        let attempt = json!({"bot": "rules-owner", "conversation": {"id": "c-chat"}, "config": {"harness": "antigravity"}});
         let make = |home: &Path, _: &Env| {
             AntigravityHost::new(home, vec!["agy".into()], mpsc::unbounded_channel().0)
         };

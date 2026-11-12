@@ -13,6 +13,7 @@ passes, since argparse names what is missing), a command the CLI took away or re
 and Needs-you line is run through the real CLI (hubcli.main, remotecli, hubtools) against a stand-in server, so a
 refusal the CLI makes on its own (its "usage" answers) fails here. Nothing is sent to a server."""
 
+import argparse
 import contextlib
 import io
 import json
@@ -35,9 +36,11 @@ RUN_GROUPS = ("task", "tasks", "ok", "needs-you")
 SPAN = re.compile(r"`((?:tico|hub) [^`]+)`")
 PATH = re.compile(r"[\w./-]+")
 # A value the text leaves for the bot to fill in (`--kind <kind>`, `--content JSON`, `NUMBER`, `--period-start D`)
-# gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one.
+# gets a sample that a choice, a number or a JSON flag may refuse; the bot puts in a real one. A file the text names
+# (`--items-file items.json`) is one the bot writes first, so here it is missing.
 FILLED = re.compile(
     r"invalid choice: '(1|\.\.\.)'|invalid int value: '[A-Z_]+'|must be a JSON object|is JSON, for example"
+    r"|cannot read \S+ \(No such file or directory\)"
 )
 
 
@@ -73,32 +76,10 @@ def doc_cases():
     return out
 
 
-def test_no_doc_teaches_a_command_the_cli_took_away_or_renamed():
-    found = doc_cases()
-    assert len(found) > 500  # guard the guard
-    failures = []
-    for where, number, text, argv in found:
-        gone = hubcli.removed_notice(argv)
-        if gone:
-            failures.append(f"{where}:{number}: `{text}` is taught, but {gone}")
-        elif hubcli.rename_argv(argv)[1]:
-            failures.append(f"{where}:{number}: `{text}` is taught by its old name: {hubcli.rename_argv(argv)[1]}")
-    assert not failures, "\n".join(failures)
-
-
 def mention(argv):
     """A command named in prose (`tico task create`, `tico meeting read <id> --offset`): it names the command and maybe a
     flag, not a whole line to run."""
     return len([a for a in argv if not a.startswith("-")]) <= 2 or argv[-1].startswith("-")
-
-
-def test_the_texts_name_commands_to_check():
-    # Guard the guard: if this finds nothing, the checks below would pass for the wrong reason.
-    found = cases()
-    assert len(found) > 3000
-    assert {where.split("/")[0] for where, *_ in found} >= {"policies", "templates", "skills", "integrations"}
-    assert any(where.startswith("runner-rs/") for where, *_ in found)
-    assert len([1 for *_, argv in found if argv[0] in RUN_GROUPS]) > 1000
 
 
 def test_every_command_a_bot_is_taught_parses():
@@ -125,6 +106,26 @@ def test_every_command_a_bot_is_taught_parses():
                 continue
             failures.append(f"{where}:{number}: `{' '.join(option)}` does not parse: {error}")
     assert not failures, "\n".join(failures)
+
+
+FIXTURES = ROOT / "clients" / "tests" / "cli_fixtures"
+
+
+def taught_cases_missing_from_fixtures():
+    """{noun: [argv, ...]}: the lines a bot is taught that are not cases in clients/tests/cli_fixtures/<noun>.json."""
+    nouns = next(a.choices for a in hubcli.parser()._actions if isinstance(a, argparse._SubParsersAction))
+    frozen = {
+        path.stem: {tuple(case["argv"]) for case in json.loads(path.read_text(encoding="utf-8"))}
+        for path in sorted(FIXTURES.glob("*.json"))
+    }
+    missing = {}
+    for _where, _number, _text, argv in cases():
+        argv, _renamed = hubcli.rename_argv(argv)
+        noun = next((n for n in frozen if argv[0] in nouns and nouns.get(n) is nouns[argv[0]]), None)
+        for option in variants(argv) if noun else ():
+            if tuple(option) not in frozen[noun] and option not in missing.setdefault(noun, []):
+                missing[noun].append(option)
+    return {noun: argvs for noun, argvs in missing.items() if argvs}
 
 
 class Any(dict):

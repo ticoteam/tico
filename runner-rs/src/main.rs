@@ -28,6 +28,8 @@ mod backlog;
 mod browser_exit;
 mod capture;
 mod checkout_groups;
+#[cfg(test)]
+mod cli_contract;
 mod client;
 mod cloud_machine;
 mod commands;

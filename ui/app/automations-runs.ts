@@ -88,6 +88,8 @@ async function auRunsLoad(state: AutomationsState, more = false): Promise<void> 
     r.next = page.next || null;
     if (!more) state.lastRun = r.rows[0] || null;
     if (state.openRun) { r.open.add(state.openRun); state.openRun = null; }
+    // A listening's newest send opens with the list: its counts and what it sent are what the tab is for.
+    else if (!more && state.lst && r.rows[0] && !r.open.size) r.open.add(r.rows[0].id);
   } catch (e) { r.error = errorMessage(e, ''); }
   r.loading = false;
   if (automationsState() === state && state.view === 'runs') auDrawPane();
@@ -176,7 +178,7 @@ function auRunsDraw(pane: HTMLElement): void {
         <td class="au-rt"><span class="nav-icon" aria-hidden="true">${open ? 'expand_more' : 'chevron_right'}</span>${esc(auRunTime(run.started_at))}</td>
         <td><span class="au-dot ${dot}" role="img" aria-label="${esc(AU_RUN_STATUS[run.status] || run.status)}"></span></td>
         <td class="au-ro">${esc(auRunOutcome(run))}</td><td class="au-n">${esc(auMoney(run.cost))}</td></tr>`
-        + (open ? `<tr class="au-rx"><td colspan="4">${auRunSteps(run).map(s => `<div class="au-sl">${auTag(s.type)}<span>${esc(auRunStepText(s))}</span>
+        + (open ? `<tr class="au-rx"><td colspan="4">${lstRunHTML(run)}${auRunSteps(run).map(s => `<div class="au-sl">${auTag(s.type)}<span>${esc(auRunStepText(s))}</span>
           ${s.cost ? `<span class="au-n muted">${esc(auMoney(s.cost))}</span>` : ''}</div>`).join('') || '<span class="muted">No steps</span>'}
           ${run.version != null && run.version !== au.cur?.version ? `<div class="au-sl muted">v${esc(run.version)}</div>` : ''}</td></tr>` : '');
     }).join('')}</tbody></table>

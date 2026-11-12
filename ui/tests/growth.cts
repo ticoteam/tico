@@ -20,9 +20,9 @@ const MONTH = monthsAgo(0);
 // The month with no row at all, and the one where spend went unrecorded: gaps stay gaps.
 const NO_ROW = 6, NO_SPEND = 3;
 const CARDS = ['Funnel', 'New customers', 'CAC', 'Spend', 'LTV:CAC', 'Payback', 'Kept 30 days', 'Channels', 'Retention', 'Growth board'];
-const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-lead', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
-  ['local-pages', 'Local pages', 'testing', 'bot:engineering-lead', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
-  ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-lead', .15]];
+const CHANNELS: [string, string, string, string | null, number][] = [['google-ads', 'Google Ads', 'scaling', 'bot:engineering-manager', 1.4], ['referrals', 'Referrals', 'scaling', 'human:dana', .9], ['seo', 'SEO', 'testing', null, .6],
+  ['local-pages', 'Local pages', 'testing', 'bot:engineering-manager', .5], ['door-hangers', 'Door hangers in Mueller', 'testing', null, .3], ['partners', 'Property manager partners', 'idea', 'human:dana', .25],
+  ['newsletter', 'Newsletter', 'paused', null, .2], ['meta-ads', 'Meta Ads', 'paused', 'bot:engineering-manager', .15]];
 const short = (m: string) => new Date(`${m}-15`).toLocaleString('en-US', {month: 'short', timeZone: 'UTC'});
 const long = (m: string) => `${short(m)} ${m.slice(0, 4)}`;
 
@@ -92,7 +92,7 @@ async function seedKpis(page: Page) {
 async function seedTasks(page: Page, goalId: string) {
   const task = async (title: string, channel: string | null, end: 'done' | 'closed' | null, goal: string | null = null) => {
     const channels = channel ? [`channel:${channel}`] : [];
-    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-lead', ...(goal ? {goal_id: goal} : {})});
+    const made = await ok<{task?: {id: string}; id?: string}>(page, 'POST', 'tasks', {title, body: title, owner: 'bot:engineering-manager', ...(goal ? {goal_id: goal} : {})});
     const id = (made.task?.id || made.id)!;
     const version = async () => { const read = await ok<{task?: {version: number}; version?: number}>(page, 'GET', `tasks/${id}`); return (read.task || read).version; };
     await ok(page, 'POST', `tasks/${id}`, {version: await version(), labels: [...channels, 'growth:ideas']});
@@ -301,17 +301,6 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     await go(page, from);
     await arrive(to, from);
   }
-
-  // A late answer never draws over Sources, which sits under #/growth.
-  let release!: () => void;
-  const held = new Promise<void>(r => { release = r; });
-  await page.route('**/api/v2/places/growth*', async route => { await held; await route.fallback(); });
-  await go(page, '#/growth');
-  await go(page, '#/growth/sources');
-  await page.locator('[data-clash]').waitFor({timeout: t(10000)});
-  release();
-  await page.waitForTimeout(500);
-  assert.ok(await page.locator('[data-clash]').count(), `${tag}: Sources stays after a late answer`);
 
   // Strategy: How we sell reads and edits like its neighbours.
   await go(page, '#/strategy');

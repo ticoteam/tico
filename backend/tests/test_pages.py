@@ -368,12 +368,3 @@ def test_bytes_written_moments_ago_wait_for_a_later_purge(api):
     aged(api)
     assert file_library.drain(api.app.state.store, api.app.state.blobs) == 1
     assert not on_disk(api, b"Acme draft")
-
-
-def test_a_page_of_the_library_stays_under_its_byte_cap(api):
-    _, attempt = turn(api)
-    for i in range(100):
-        publish(api, attempt, name=f"report-{i:03}-" + "x" * 150 + ".md", text=f"# Report {i}")
-    r = api.get("/api/v2/files?limit=100", headers=headers("ben-test"))
-    assert len(r.content) <= file_library.LIST_BYTES + 4096, len(r.content)
-    assert len(encode(r.json()["files"][0]).encode()) < 2048

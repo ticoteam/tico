@@ -21,10 +21,10 @@ with its kind, urgency (a date or "none"), risk in one line and proposed owner. 
 ## 3. Read the legal team
 
 For each legal bot in `tico team show`: `tico update list --bot <slug>` and its newest `reports/` file. Take:
-- from `legal-review`: contracts waiting for a human and notice deadlines inside 30 days;
-- from `compliance`: filings and renewals inside 30 days, and anything overdue;
-- from `privacy`: open data subject requests and their response dates;
-- from `legal-ops`, `paralegal`, `ip-paralegal`, `corporate-secretary`: blocked work and deadlines.
+- from `contracts-manager`: contracts waiting for a human and notice deadlines inside 30 days;
+- from `compliance-manager`: filings and renewals inside 30 days, and anything overdue;
+- from `privacy-manager`: open data subject requests and their response dates;
+- from `legal-operations-manager`, `paralegal`, `ip-paralegal`, `corporate-secretary`: blocked work and deadlines.
 Where a bot is absent, read the same from `knowledge/obligations.md` and the open tasks, and say which.
 
 ## 4. Pick the owner's decisions

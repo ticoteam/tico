@@ -8,14 +8,29 @@ run it and `docs/how-it-works.md` describes the system.
 ## Work queue
 Engineering work on Tico is GitHub issues on ticoteam/tico, worked from a Claude Code session until
 none are left: read `skills/tico-tickets/SKILL.md` before filing, picking or merging anything. A
-bot's own work is tasks, never issues.
+Tico bot's work is its task, never issues (next section).
+
+## A Tico bot on a Tico task
+A Tico bot working a task on this repository follows these where the rest of this file differs:
+- The task is the work queue. Never file, pick or close GitHub issues, and never use the tico-tickets skill.
+- Run `scripts/dev_setup.sh` once in each clone or worktree, and again after a pull that changes a lock file.
+- Test only what the change can break, one file at a time: `.venv/bin/python -m pytest -q -n 2 <file>`. Never the
+  whole suite, `scripts/pr_checks.py local` or `scripts/remote.py` (bots have no access to it); PR checks run the rest.
+  Mark the PR ready with `gh pr ready`.
+- Never skip the pre-push hook. If it cannot run, say on the task what is missing.
+- Never enqueue or merge: Tico queues the PR when the task reaches Merge. Never tag, and never cut or change a release.
+- Never edit `.github/workflows/`: the push is refused. Say so on the task; a person lands that part.
+- Branches are `tico/<first 8 of the task id>-<slug>`, as Tico's task worktrees name them.
+- Tico opens the branch's draft PR at its first push and links it: edit it with `gh pr edit`, never `gh pr create`.
 
 ## Tests
 `python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked
-`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cts`). On a fresh computer, a bot's runner
-included, run `npm ci && npx playwright install chromium` and install `backend/requirements-dev.txt` in a venv
-first: runner images ship neither. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
-Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
+`@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cts`). In a fresh clone or worktree, a bot's
+runner included, run `scripts/dev_setup.sh` first (`--browser` readies the browser scripts: Google Chrome when it is on PATH,
+else Playwright's Chromium): runner images ship no dev tools. The browser scripts run on Google Chrome, so leave
+`TICO_BROWSER_CHANNEL` unset (Tico computers have Chrome). A computer without Chrome (rare; a person's laptop) runs
+`scripts/dev_setup.sh --browser` for Playwright's Chromium and sets `TICO_BROWSER_CHANNEL=` (empty).
+On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
 pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap
@@ -58,18 +73,18 @@ never ship around a known failure. If a test may fail, it shouldn't exist.
 ## Before you push
 Turn on the pre-push hook once per clone: `git config core.hooksPath .githooks`. It is expected in every clone, bots' included.
 Each push runs `scripts/check.sh` (the checks for what you changed) and `scripts/check_conflicts.sh`, which stops the push
-when the branch would not merge into origin/main and names the files. Skip once with `git push --no-verify`; the PR checks
-run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
+when the branch would not merge into origin/main and names the files. A person may skip it once with `git push --no-verify`
+(a bot never does); the PR checks run the same static checks, so a skipped failure still shows there. CONTRIBUTING.md lists where the local gate differs from CI.
 
 ## How we work
-Trunk-based: branches are `<who>/<topic>`, one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
-(`gh pr create --draft`) and push freely; when done, run `python3 scripts/pr_checks.py local --ready`, which runs the
+Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
+(`gh pr create --draft`) and push freely; when done, a person runs `python3 scripts/pr_checks.py local --ready`, which runs the
 tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
-marks the PR ready after a pass. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+marks the PR ready after a pass. A Tico bot never runs that script: it marks its PR ready with `gh pr ready` after its own tests (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
-`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. A bot's
-Dev ticket is not merged by its builder: Tico queues it at the approved head, and a red queue run or a conflict goes to
-the pipeline manager (backend/merge_arm.py, docs/releasing.md#tico-merges).
+`gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
+enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
+Release Owner (docs/pipelines-v3.md).
 After a queue failure, fix it and get green PR checks before enqueuing again.
 Don't rebase or merge main to be current; rebase only when GitHub reports a conflict. If the queue removes the PR,
 read why before you push again. Never use `--admin` or the REST merge endpoint: both skip the queue.
@@ -78,8 +93,8 @@ own, at any hour, whenever main has merged work past the newest release (docs/re
 tag. Stable takes a release automatically when its notes list no High risk item; one with a High risk item, or every
 one while the repository variable `RELEASE_NEEDS_PERSON` is `on`, waits for a person's `approved` label or `/approve`
 (docs/releasing.md#approval). Hotfixes (`hotfix.yml`) are for
-major production issues only. No bot tags or rolls out Tico releases; the Engineering pipeline's manager owns getting
-reviewed work merged.
+major production issues only. No bot tags or rolls out Tico releases; the Engineering pipeline's Release Owner sees
+reviewed work through the merge queue.
 
 ## Hit every surface
 The commonest defect in Tico is a change that works where it was tested and is missing everywhere else. Before

@@ -45,7 +45,7 @@ positive replies per unique send at 7 days. Guardrails: opt-outs; stop an arm ea
 
 ## Could not read
 
-The CRM was not connected, so the open-deal check for this week's contacts used the account list and the note of the sales lead (`sales-lead`) only.
+The CRM was not connected, so the open-deal check for this week's contacts used the account list and the note of the sales lead (`growth-manager`) only.
 
 ## Sources
 

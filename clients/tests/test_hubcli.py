@@ -1,7 +1,8 @@
 """The `tico` CLI as a bot runs it: `scripts/hub` in a subprocess, remote-only.
 
 The command surface (docs/history/hub-v2.md §5) and the exit codes are the contract every bot's AGENT.md
-depends on: 0 fine, 2 refused or a non-retryable API error, 1 anything else. The real HTTP round
+depends on: 0 fine, 2 refused or a non-retryable API error, 1 may retry; 4 needs sign-in, 5 not found and 64 usage
+(docs/cli.md). The real HTTP round
 trip is `runner_support/tests/test_conformance.py`; here the API is a stub or absent.
 """
 
@@ -20,104 +21,16 @@ from unittest import mock
 
 import pytest
 
-from clients import hubcli
+from clients import cli_spec, hubcli
 from clients.tico import APIError, Client
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-ALIASES = {"automations", "bots", "rule", "tasks"}
-SUBCOMMANDS = [
-    "whoami",
-    "alerts",
-    "inbound",
-    "letter",
-    "mail",
-    "email",
-    "company-page",
-    "audiences",
-    "editions",
-    "readers",
-    "meeting",
-    "message",
-    "conversation",
-    "thread",
-    "note",
-    "feedback",
-    "file",
-    "page",
-    "card",
-    "pin",
-    "doc",
-    "chat",
-    "assistant",
-    "tag",
-    "task",
-    "replay",
-    "goal",
-    "kpi",
-    "proposal",
-    "rules",
-    "strategy",
-    "brand",
-    "growth",
-    "lens",
-    "market",
-    "listening",
-    "tool",
-    "automation",
-    "audit",
-    "event-types",
-    "trigger",
-    "relay",
-    "call",
-    "sleep",
-    "ok",
-    "notice",
-    "settings",
-    "release",
-    "webhook",
-    "brief",
-    "mcp",
-    "origin",
-    "needs-you",
-    "run",
-    "team",
-    "seat",
-    "org",
-    "health",
-    "changelog",
-    "update",
-    "grokbot",
-    "external",
-    "calendar",
-    "sql",
-    "db",
-    "classify",
-    "gateway",
-    "decision",
-    "template",
-    "bot",
-    "repo",
-    "skill",
-    "agent",
-    "human",
-    "group",
-    "setup",
-    "api",
-    "computer",
-    "credential",
-    "slack",
-    "support",
-    "finance",
-    "directory",
-    "task-manager",
-    "maintenance",
-    "roadmap",
-    "service-key",
-]
 
 
 def run_hub(*args, env=None):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+    # The child is told who it is only by `env`: a person's own TICO_PROFILE in the shell that runs the
+    # suite would otherwise be refused in a bot's turn before the request is ever sent.
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     done = subprocess.run(
         [sys.executable, str(HUB), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60
     )
@@ -570,12 +483,6 @@ def test_product_repository_cli_confirms_without_a_terminal_only_with_the_exact_
 
 
 class Parser(unittest.TestCase):
-    def test_every_subcommand_is_still_there(self):
-        text = hubcli.parser().format_help()
-        # The plural aliases (`tasks`, `bots`, ...) sit in the same braces; the commands themselves keep their order.
-        choices = text.split("{", 1)[1].split("}", 1)[0].split(",")
-        self.assertEqual([c for c in choices if c not in ALIASES], SUBCOMMANDS)
-
     def test_a_task_is_open_done_or_closed_and_update_edits_fields_only(self):
         from clients import hubtools
 
@@ -616,7 +523,7 @@ class Stub(BaseHTTPRequestHandler):
     def do_GET(self):
         self.seen.append(("GET", self.path, self.headers.get("Authorization"), None))
         if self.path == "/api/v2/me":
-            return self.reply(200, {"actor": "bot:coo", "kind": "bot", "id": "coo"})
+            return self.reply(200, {"actor": "bot:assistant", "kind": "bot", "id": "assistant"})
         if self.path.startswith("/api/v2/roadmap"):
             return self.reply(200, {"ok": True})
         if self.path.startswith("/api/v2/decisions/readout"):
@@ -655,7 +562,6 @@ class Stub(BaseHTTPRequestHandler):
             part in self.path
             for part in (
                 "/requesters",
-                "/publication-preview",
                 "/moderate",
                 "/roadmaps/settings",
                 "/waits",
@@ -680,7 +586,7 @@ class AgainstAStub(unittest.TestCase):
         cls.env = {
             "HUB_API_URL": f"http://127.0.0.1:{cls.server.server_port}",
             "HUB_TOKEN": "turn-token",
-            "HUB_BOT": "coo",
+            "HUB_BOT": "assistant",
         }
 
     @classmethod
@@ -694,7 +600,7 @@ class AgainstAStub(unittest.TestCase):
     def test_whoami_is_the_api_identity_under_the_turn_token(self):
         code, out = run_hub("whoami", env=self.env)
         self.assertEqual(code, 0)
-        self.assertEqual(out["actor"], "bot:coo")
+        self.assertEqual(out["actor"], "bot:assistant")
         self.assertEqual(Stub.seen[0][2], "Bearer turn-token")
 
     def test_task_update_sends_the_version_it_was_given_and_never_reads_one(self):
@@ -713,7 +619,7 @@ class AgainstAStub(unittest.TestCase):
         for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
             Stub.seen.clear()
             code, out = run_hub(*argv, env=self.env)
-            self.assertEqual(code, 1, out)
+            self.assertEqual(code, 64, out)  # usage (docs/cli.md)
             self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
             self.assertIn("--version N", out["detail"])
             self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
@@ -760,7 +666,7 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
         self.assertEqual(
             (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
-            ("bot:coo", "grok", "review", "T1"),
+            ("bot:assistant", "grok", "review", "T1"),
         )
         # With no value, the server picks the company's check model.
         code, out = run_hub(
@@ -768,15 +674,7 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(code, 0, out)
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
-        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:coo", "auto"))
-
-    def test_decision_readout_reads_the_days_asked(self):
-        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
-        self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
-        self.assertIn(("GET", "/api/v2/decisions/readout?days=14"), [(m, p) for m, p, _, _ in Stub.seen])
-        code, out = run_hub("decision", "readout", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(Stub.seen[-1][1], "/api/v2/decisions/readout", "the server's default, 7 days")
+        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:assistant", "auto"))
 
     def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
         code, out = run_hub(
@@ -864,50 +762,6 @@ class AgainstAStub(unittest.TestCase):
         code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
         self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
 
-    def test_an_ask_is_rated_through_its_task_and_approval_is_no_feedback_subject(self):
-        from clients import hubtools
-
-        code, out = run_hub("task", "thumbs", "T1", "r-2", "down", "--note", "Don't ask, just archive", env=self.env)
-        self.assertEqual(code, 0, out)
-        rated = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/asks/r-2/thumbs"]
-        self.assertEqual(rated, [{"up": False, "note": "Don't ask, just archive"}])
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["task", "thumbs", "T1", "r-2", "sideways"])
-        for argv in (["feedback", "give", "approval", "a-1", "up"], ["feedback", "markers", "approval", "a-1"]):
-            with self.assertRaises(SystemExit):
-                hubcli.parser().parse_args(argv)
-        hubcli.parser().parse_args(["feedback", "markers", "ask", "v-1:r-2"])
-        give = hubtools.BY_NAME["tico_feedback_give"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        markers = hubtools.BY_NAME["tico_feedback_markers"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        self.assertEqual((give, markers), (["message", "task"], ["message", "task", "ask"]))
-
-    def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
-        from clients import hubtools
-
-        argv = ("webhook", "create", "--name", "Ops", "--url", "https://hooks.example.test/x", "--pipelines", "General")
-        code, out = run_hub(*argv, env=self.env)
-        self.assertEqual(code, 0, out)
-        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/webhooks"][-1]
-        self.assertEqual(posted["filter"], {"pipelines": ["General"]})
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["webhook", "update", "w-1", "--task-types", "Bug"])
-        self.assertIn(
-            "pipelines", hubtools.BY_NAME["tico_webhook_create"]["inputSchema"]["properties"]["filter"]["properties"]
-        )
-
-    def test_settings_ask_is_gone_and_release_now_keeps_its_route(self):
-        from clients import hubtools
-
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["settings", "ask", "team.rules.admin_sql", "on"])
-        self.assertNotIn("tico_settings_ask", hubtools.BY_NAME)
-        code, out = run_hub("release", "now", "--note", "hotfix", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual([b for m, p, _, b in Stub.seen if p == "/api/v2/release/now"], [{"note": "hotfix"}])
-        for name in ("tico_release_now", "tico_release_schedule"):
-            self.assertNotIn("Pending Release", hubtools.BY_NAME[name]["description"])
-            self.assertNotIn("ticket", hubtools.BY_NAME[name]["description"])
-
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):
             return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
@@ -920,55 +774,6 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(run_hub("task", "snooze", "T1", "-m", "On ice", "--version", "3", env=self.env)[0], 0)
         self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"version": 3, "why": "On ice"})
-
-    def test_roadmap_commands_send_what_their_tools_send(self):
-        def last(method, path):
-            return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
-
-        for argv in (
-            ["task", "requesters", "T1", "--limit", "5"],
-            ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
-            ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
-            ["task", "requester-remove", "T1", "R1"],
-            [
-                "task",
-                "publication-preview",
-                "T1",
-                "--visibility",
-                "public",
-                "--public-title",
-                "Exports",
-                "--label",
-                "roadmap",
-            ],
-            ["task", "comment-moderate", "T1", "C1", "hide"],
-            ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
-            ["roadmap", "settings"],
-            ["roadmap", "settings", "--label", "roadmap", "--suggestion-limit", "5", "--no-bot-public-approval"],
-            ["roadmap", "settings", "--label", ""],
-        ):
-            code, out = run_hub(*argv, env=self.env)
-            self.assertEqual(code, 0, (argv, out))
-        self.assertIn("limit=5", last("GET", "/api/v2/tasks/T1/requesters")[0])
-        self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/requesters")[1],
-            {"email": "jane@acme.example", "organization": "Acme", "important": True},
-        )
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1")[1], {"important": False})
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1/delete")[1], {})
-        self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/publication-preview")[1],
-            {"visibility": "public", "public_title": "Exports", "labels": ["roadmap"]},
-        )
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/comments/C1/moderate")[1], {"action": "hide"})
-        self.assertTrue(
-            {"sort=size", "direction=asc"} <= set(last("GET", "/api/v2/roadmap-tasks")[0].split("?")[1].split("&"))
-        )
-        self.assertTrue(any(m == "GET" and p == "/api/v2/roadmaps/settings" for m, p, _, _ in Stub.seen))
-        settings = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/roadmaps/settings"]
-        self.assertEqual(
-            settings, [{"labels": ["roadmap"], "suggestion_limit": 5, "bot_public_approval": False}, {"labels": []}]
-        )
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)
@@ -988,7 +793,7 @@ never: []
 runtime: codex
 """
 AGENT = "# {{bot_name}}\n\nYou are {{bot_name}} at {{company_name}} ({{app_name}}).\n\n## Owns\n- the blog\n"
-NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "coo"}
+NAMES = {"company_name": "Acme Ltd", "app_name": "Acme OS", "assistant_name": "Ada", "assistant_bot": "assistant"}
 ONBOARDING = {
     "names": NAMES,
     "answers": {
@@ -1100,6 +905,11 @@ class BotSetup(unittest.TestCase):
         self.assertTrue(any(self.workspace.iterdir()), "the local build is kept")
         self.client.github = APIError("github_not_connected", "GitHub is not connected.", 409, False)
         self.assertIn("skipped", self.remotecli.github_repository(self.client, "seo", self.workspace))
+        # Chosen repositories only, or a name someone else took: nothing is made or adopted; the bot stays here.
+        for code in ("github_selected_repos", "github_repo_taken", "github_repo_exists"):
+            self.client.github = APIError(code, "No repository was made for seo.", 409, False)
+            answer = self.remotecli.github_repository(self.client, "seo", self.workspace)
+            self.assertEqual(answer, {"skipped": "No repository was made for seo."})
 
     def test_creating_a_bot_the_server_has_not_registered_keeps_it_local(self):
         from clients.tico import APIError
@@ -1167,23 +977,6 @@ def test_create_sends_its_pipeline_and_parent_the_same_from_the_cli_and_mcp(monk
             hubcli.parser().parse_args(argv + gone)
 
 
-def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
-    from clients import remotecli
-    from clients.hubtools import BY_NAME
-
-    sent = []
-    monkeypatch.setitem(BY_NAME['tico_bot_keep_tasks_going'], 'fn', lambda api, args: sent.append(args))
-    for argv in (
-        ['bot', 'keep-tasks-going', 'ops'],
-        ['bot', 'keep-tasks-going', 'ops', 'unlimited'],
-        ['bot', 'keep-tasks-going', 'ops', 'off'],
-        ['bot', 'keep-tasks-going', 'ops', '3'],
-    ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
-    assert 'limit' not in sent[0]
-    assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
-
-
 def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
     from clients import remotecli
     from clients.hubtools import BY_NAME
@@ -1207,7 +1000,8 @@ def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
     sent = []
     monkeypatch.setitem(BY_NAME['tico_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
     for argv in (['computer', 'turns-at-once', 'rig-1', 'automatic'], ['computer', 'turns-at-once', 'rig-1', '3']):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args)
     assert [row['limit'] for row in sent] == [None, 3]
     assert all(row['computer'] == 'rig-1' for row in sent)
 
@@ -1224,12 +1018,15 @@ def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch)
         ['bot', 'browser-exit', 'ops', 'none'],
         ['bot', 'browser-exit', 'ops', 'rig-1'],
         ['computer', 'browser-exit', 'rig-1', 'on', '--bots', 'ops,cpo'],
+        ['computer', 'browser-exit', 'rig-1', 'off'],
         ['computer', 'browser-exit', 'rig-1'],
     ):
-        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args) if cli_spec.of(args) else remotecli.via_tool(None, args)
     assert ['computer' in row for row in sent[:3]] == [False, True, True]
     assert [row.get('computer') for row in sent[1:3]] == [None, 'rig-1']
-    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and 'sharing' not in sent[4]
+    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and sent[4]['sharing'] is False
+    assert 'sharing' not in sent[5]
 
 
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
@@ -1648,6 +1445,61 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
     assert argv == ["message", "send", "Deploy done", "--fyi"] and "is now" in said
 
 
+class _Me:
+    def get(self, path, **kw):
+        return {"actor": "bot:ops"}
+
+
+def test_org_models_reaches_its_tool_and_is_not_renamed(monkeypatch, capsys):
+    """`tico org models` is not renamed to `tico team show` (only bare `tico org` is) and reaches tico_org_models."""
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME["tico_org_models"], "fn", lambda api, args: sent.append(args) or {"models": []})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: _Me())
+    monkeypatch.setenv("HUB_API_URL", "https://synthetic.invalid/api/v2")
+    for argv in (["org", "models"], ["org", "order", "ops"], ["org", "reports-to", "bot:ops", "human:ana"]):
+        assert hubcli.rename_argv(argv) == (argv, None)
+    assert hubcli.main(["org", "models"]) == 0
+    assert len(sent) == 1
+    assert "is now" not in capsys.readouterr().err
+
+
+def test_check_names_leaves_every_org_subcommand_alone():
+    """`tico bot check-names --fix` rewrites old spellings; `tico org <sub>` is live, so none of them is rewritten."""
+    import json
+    from pathlib import Path
+
+    exempt = json.loads((Path(hubcli.__file__).with_name("renames.json")).read_text())["commands_exempt"]
+    org = next(a for a in hubcli.parser()._actions if getattr(a, "choices", None) and "org" in a.choices)
+    subs = next(a for a in org.choices["org"]._actions if getattr(a, "choices", None)).choices
+    assert {("org", sub) for sub in subs} <= {tuple(e) for e in exempt}
+
+
+def test_chat_send_runs_message_send_with_a_notice(monkeypatch):
+    """`tico chat send` was the same as `tico message send`; the old line runs it, harness commands included."""
+    argv, said = hubcli.rename_argv(["chat", "send", "ops", "/compact", "--conversation", "c1", "--command"])
+    assert argv == ["message", "send", "ops", "/compact", "--conversation", "c1", "--command"] and "is now" in said
+    args = hubcli.parser().parse_args(argv)
+    assert (args.fn, args.conversation, args.command) == ("message send", "c1", True)
+
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME["tico_message_send"], "fn", lambda api, args: sent.append(args) or {})
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: _Me())
+    monkeypatch.setenv("HUB_API_URL", "https://synthetic.invalid/api/v2")
+    remotecli.run(args)
+    assert (sent[0]["to"], sent[0]["text"], sent[0]["conversation_id"], sent[0]["command"]) == (
+        "ops",
+        "/compact",
+        "c1",
+        True,
+    )
+
+
 @pytest.mark.parametrize(
     "argv, instead",
     [
@@ -1660,7 +1512,6 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
         (["task", "answers", "t1"], "tico task show <id>, under To leave"),
         (["approval", "approve", "ap1"], "tico task answer"),
         (["approval", "request", "--kind", "send"], "tico task ask"),
-        (["task", "wait", "t1", "--on", "task:t2"], "tico task file"),
         (["task", "check-back", "t1", "--in", "2h"], "tico task snooze"),
         (["task", "later", "t1", "--handled"], "tico task snooze"),
         (["task", "defer", "t1", "--handled"], "tico task snooze"),
@@ -1668,9 +1519,6 @@ def test_hub_notice_list_is_not_the_renamed_notice_send():
         (["task", "waive-qa", "t1"], "tico task move"),
         (["task", "types"], "tico task show"),
         (["task", "type", "create", "--name", "Ops"], "tico task show"),
-        (["pipeline"], "tico task show"),
-        (["pipeline-manager", "eng", "ops"], "tico task show"),
-        (["requirements", "s1"], "tico task show"),
         (["task", "stuck"], "tico task list"),
         (["growth", "idea", "create", "--title", "Referral"], "tico task create"),
     ],
@@ -1729,10 +1577,10 @@ def test_botops_settings_commands_run_as_the_person_who_asked(monkeypatch):
     commands = [
         ["release", "schedule", "--off"],
         ["release", "now", "--note", "hotfix"],
-        ["task-manager", "on"],
-        ["task-manager", "schedule", "daily", "--at", "09:00"],
-        ["task-manager", "run"],
-        ["task-manager", "bot", "off"],
+        ["general-manager", "on"],
+        ["general-manager", "schedule", "daily", "--at", "09:00"],
+        ["general-manager", "run"],
+        ["general-manager", "bot", "off"],
         ["maintenance", "set", "--step", "learn", "--off"],
         ["team", "budget", "--hour", "5"],
         ["trigger", "create", "Orders"],
@@ -1790,10 +1638,13 @@ def test_settings_cli_passes_an_id_addressed_routine_as_the_requester(monkeypatc
 
 def test_a_plain_webhook_header_sends_no_secret_key():
     """BotOps' requests refuse any key named like a secret (backend/botops_act.py), so a plain header leaves it out."""
-    from clients import hubtools
-
-    fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
-    assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
+    args = hubcli.parser().parse_args(
+        ["webhook", "update", "ep_1", "--header", "X-Team: acme", "--secret-header", "X-Key: k"]
+    )
+    assert cli_spec.of(args).prepare(args)[1]["headers"] == [
+        {"name": "X-Team", "value": "acme"},
+        {"name": "X-Key", "secret": True, "value": "k"},
+    ]
 
 
 def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
@@ -2009,7 +1860,6 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
 
 def test_finance_has_no_card_fill_command():
     """Card fill is not offered to bots (hubtools.UNLISTED), so the CLI has no command for it either."""
-    assert "card-fill" not in hubcli.__doc__
     with pytest.raises(SystemExit):
         hubcli.parse(hubcli.parser(), ["finance", "card-fill"])
 
@@ -2045,7 +1895,10 @@ def test_strategy_show_section_how_prints_the_section_or_says_nothing_is_publish
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
     assert capsys.readouterr().out == "- Motion: self serve\n"
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how", "--json"]))
-    assert json.loads(capsys.readouterr().out) == published
+    assert json.loads(capsys.readouterr().out) == {
+        "section": "how",
+        "text": "- Motion: self serve",
+    }  # the tool's answer
     published["current"] = None
     remotecli.main(hubcli.parser().parse_args(["strategy", "show", "--section", "how"]))
     assert capsys.readouterr().out == "Nothing published yet.\n"
@@ -2342,11 +2195,6 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "tico_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
-
-
-def test_tico_help_is_the_teamwork_help(capsys):
-    assert hubcli.main(["help"]) == 0
-    assert "task" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])

@@ -6,18 +6,18 @@ instead of building a team first. Sample Co sells Brightbook, a small booking ap
 | Bot | Runs on | Its goal | Its first task |
 |---|---|---|---|
 | Assistant | Claude | The owner knows the team and what each bot does | Write a one-page welcome to Sample Co |
-| Head of Product | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
+| Product Lead | Claude | Text-message reminders are specified and agreed | Write a one-page brief for the reminders |
 | Builder | ChatGPT | Text-message reminders have a build plan | Plan how to build the reminders (there is no code) |
 | Support Agent | ChatGPT | Every customer question has a reply ready within a day | Draft replies to three made-up customer questions |
-| Content Marketer | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
+| Content Owner | ChatGPT | One useful post for salon owners drafted each week | Draft a short post on cutting no-shows |
 
-BotOps, the Librarian and the Strategy Bot are built in as on every Tico, and follow the company's default model.
+BotOps, the Librarian and the Strategy Owner are built in as on every Tico, and follow the company's default model.
 
 These are real bots on the person's own subscriptions, not [demo mode](demo.md). Each first task takes a few minutes,
 puts its result on the task as one comment, and then asks the owner one Yes/No question on the task, **Approve the
 welcome note?** and so on (`tico task ask <id> --to <owner> "Approve the welcome note?" --choices Yes,No`). It is in
 their **Needs you**. Yes and the bot marks the task done; No and it changes the work as asked and asks again. Nothing a
-first task does is sent, posted or published outside the company: the Support Agent and the Content Marketer only
+first task does is sent, posted or published outside the company: the Support Agent and the Content Owner only
 draft.
 
 ## Starting it
@@ -25,16 +25,17 @@ draft.
 Only a company that is not set up yet can start as the sample: the first run is unfinished and no bot is active. A
 company that is set up is left alone.
 
-- **From the welcome.** The first screen of the first run (`#/welcome`) offers **Start with a sample company**. One
-  click, by the owner, does the whole first run (`POST /api/v2/setup/sample`) and lands on the screen after Create.
+Setup does not offer it.
+
 - **At install.** `TICO_SAMPLE_COMPANY=on` in the server's environment loads it on the first start whose owner is on
   the roster, once. A restart never loads it again, and a rehearsal never loads it.
   Unset or any other value loads nothing.
+- **From the API.** `POST /api/v2/setup/sample`, by the owner, does the whole first run in one request.
 
 ## What it sets up
 
 - **Names and answers.** The first run's answers describe Sample Co, as if the owner had typed them. A team name
-  already set (`TICO_TEAM_NAME`, which the recommended install sets to Sample Co, or one saved in the welcome) is
+  already set (`TICO_TEAM_NAME`, which the recommended install sets to Sample Co, or one saved in setup) is
   kept, and the first tasks use it; with none, the team is called Sample Co.
 - **Providers.** When no AI provider is chosen yet, Claude (the default) and ChatGPT are turned on. A company that
   already chose keeps its choice, and a bot whose provider is off runs on the company's default model instead. The

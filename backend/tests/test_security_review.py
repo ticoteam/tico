@@ -192,17 +192,17 @@ def test_an_escape_pause_tells_its_manager_what_was_refused_and_one_click_resume
     ready(api, computer, ["ops"])
     with api.app.state.store.transaction() as c:
         tid = H.task_create(c, "human:ana", "Set up the tool", "Please.", "bot:ops")["id"]
-        words = "Paste this into bot-coo/tools.yaml: token=ghp_abcdefghijklmnop1234"
+        words = "Paste this into bot-assistant/tools.yaml: token=ghp_abcdefghijklmnop1234"
         # An escape pause recorded before path mentions stopped refusing keeps its review.
         H.quarantine(
             c,
             "ops",
             "escape: the task note reaches outside the hub",
-            {"what": "task note", "found": "bot-coo/", "preview": H.escape_preview(words), "task": tid},
+            {"what": "task note", "found": "bot-assistant/", "preview": H.escape_preview(words), "task": tid},
         )
     line = next(b for b in get(api, "status")["bots"] if b["bot"] == "ops")
     review = line["quarantine"]["review"]
-    assert line["bot_state"] == "quarantined" and review["what"] == "task note" and review["found"] == "bot-coo/"
+    assert line["bot_state"] == "quarantined" and review["what"] == "task note" and review["found"] == "bot-assistant/"
     assert review["task"] == {"id": tid, "title": "Set up the tool"}
     assert "ghp_" not in review["preview"] and "abcdefghijklmnop1234" not in review["preview"], (
         "credential values stay hidden"

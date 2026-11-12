@@ -4,8 +4,9 @@
     {"bots": [{"bot": "botops", "entry": {...assignment row...}, "path": "...", "action": "bootstrap" | "refresh"}]}
 
 `bootstrap` sets a bot without a repository up from its template (BotSetup.bootstrap: never over history GitHub holds);
-`refresh` brings a built-in bot's product files up to this release (BotSetup.refresh_from_template). The answer is
-{bot: {"materialized", "problem"}} or {bot: {"changed": [...]}}. Log lines go to stderr. Imports no bot-turn engine."""
+`refresh` brings a bot made from a template up to this release's template (BotSetup.refresh_from_template); the
+request's `release` is the release the runner was built for. The answer is {bot: {"materialized", "problem"}} or
+{bot: {"changed": [...], "kept": [...], "missing": ""}}. Log lines go to stderr. Imports no bot-turn engine."""
 
 import contextlib
 import json
@@ -25,12 +26,17 @@ DEFAULT_NAMES = {
     "company_name": "the company",
     "app_name": "Tico",
     "assistant_name": "Assistant",
-    "assistant_bot": "coo",
+    "assistant_bot": "assistant",
 }
 # The two bots the runner sets up from the catalog itself, and the template each one comes from.
 # Everybody else is BotOps's to create in a turn (`tico bot create`); BotOps cannot create itself,
 # and the assistant is who the person talks to, so neither can wait for a bot that does not exist.
-BOOTSTRAP_TEMPLATES = {"coo": "assistant", "botops": "botops", "librarian": "librarian", "goal-manager": "goal-manager"}
+BOOTSTRAP_TEMPLATES = {
+    "assistant": "assistant",
+    "botops": "botops",
+    "librarian": "librarian",
+    "strategy-owner": "strategy-owner",
+}
 FETCH_RETRY_S = 120  # how long a repository that could not be cloned is left before the next try
 
 
@@ -190,26 +196,74 @@ class BotSetup:
         log(f"Tico runner: {bot} materialized from the {template} catalog template at {path}")
         return f"materialized from catalog: {template}", ""
 
-    def refresh_from_template(self, bot, config, path):
-        """The product files of a built-in bot's template that changed, written and committed in `path` (also
-        `python -m runner_support catalog`, for the Rust runner). A failure is a log line and an empty list."""
+    def refresh_template(self, bot, config, cards):
+        """(the template a bot follows, the template its config names that the catalog no longer has). A registration
+        made before the catalog existed carries no template: the built-in bots are recognized by their own slugs."""
+        named = str((config or {}).get("template") or "")
+        if named:
+            return (named, "") if named in cards else ("", named)
+        template = BOOTSTRAP_TEMPLATES.get(bot, "")
+        return (template if template in cards else ""), ""
+
+    def refresh_from_template(self, bot, config, path, release=""):
+        """Bring a bot made from a template up to this release's template in `path` (clients/catalog.py refresh), and
+        report it to the server, which records it and moves the bot's `template_version` (backend/template_refresh.py).
+        Also `python -m runner_support catalog`, for the Rust runner. Returns {"changed": paths written or removed,
+        "kept": paths kept because they were changed, "missing": a template that no longer exists}. A failure is a log
+        line: it never stops another bot's refresh or the turn."""
+        answer = {"changed": [], "kept": [], "missing": ""}
+        config = config or {}
+        if config.get("shared_from"):
+            return answer  # a copy works in its original's repository, which follows the template there
         try:
             from clients import catalog
 
-            template = self.bootstrap_template(bot, config, {row["template"]: row for row in catalog.cards()})
-            changed = (
-                template
-                and catalog.refresh(template, path, self.names(), display_name=(config or {}).get("display_name"))
-            ) or []
-            if changed:
-                isolation.chown(path, recursive=True)
-                log(
-                    f"Tico runner: {bot} took {len(changed)} updated file{'s' if len(changed) != 1 else ''} from the {template} template"
-                )
-            return changed
+            template, missing = self.refresh_template(bot, config, {row["template"]: row for row in catalog.cards()})
+            if missing:
+                answer["missing"] = missing
+                if config.get("template_missing") != missing:
+                    log(
+                        f"Tico runner: {bot} names the {missing} template, which this release does not have; left as it is"
+                    )
+                    self.report_refresh(bot, {"template": missing, "missing": True})
+                return answer
+            if not template:
+                return answer
+            done = catalog.refresh(
+                template,
+                path,
+                self.names(),
+                display_name=config.get("display_name"),
+                instructions=config.get("instructions"),
+                version=release,
+            )
         except Exception as exc:
             log(f"Tico runner: could not refresh {bot} from its template: {exc}")
-            return []
+            return answer
+        answer["changed"] = [*done["added"], *done["updated"], *done["removed"]]
+        answer["kept"] = done["kept"]
+        if answer["changed"]:
+            isolation.chown(path, recursive=True)
+            count = len(answer["changed"])
+            log(f"Tico runner: {bot} took {count} updated file{'s' if count != 1 else ''} from the {template} template")
+        if answer["kept"]:
+            log(f"Tico runner: {bot} kept {', '.join(answer['kept'])}: changed since the {template} template gave them")
+        version, before = (release if catalog.is_release(release) else ""), str(config.get("template_version") or "")
+        # A bot whose files came from a newer release (it ran on an updated computer) keeps that release's.
+        moved = version and before != version and not catalog.newer(before, version)
+        if moved or answer["changed"] or answer["kept"] or config.get("template_missing"):
+            self.report_refresh(
+                bot, {"template": template, "to_version": version, **{k: v[:500] for k, v in done.items() if v}}
+            )
+        return answer
+
+    def report_refresh(self, bot, body):
+        """The refresh, for the bot's record. An older server, or one that cannot be reached, is a log line: the files
+        are refreshed either way, and a version still unmoved is reported again after the next start."""
+        try:
+            self.client.post(f"bots/{bot}/template/refresh", body)
+        except (APIError, OSError, ValueError) as exc:
+            log(f"Tico runner: could not report {bot}'s template refresh ({type(exc).__name__})")
 
 
 def handle(config, client, request):
@@ -225,7 +279,9 @@ def handle(config, client, request):
             note, problem = service.bootstrap(bot, entry.get("config"), path, entry)
             answer[bot] = {"materialized": note, "problem": problem}
         else:
-            answer[bot] = {"changed": service.refresh_from_template(bot, entry.get("config"), path)}
+            answer[bot] = service.refresh_from_template(
+                bot, entry.get("config"), path, str(request.get("release") or "")
+            )
     return answer
 
 

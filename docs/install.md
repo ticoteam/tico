@@ -106,11 +106,11 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
-   below, pick **Marketing** and keep **Content Marketer** (`content`) checked; untick the other suggestions if you want only it.
+   below, pick **Marketing** and keep **Content Owner** (`content-owner`) checked; untick the other suggestions if you want only it.
 3. **Add computer**: choose *A Linux or cloud server (Docker)*, press **Add computer**, and run the line it shows on this computer.
    It joins the server's own Docker network, so it needs no domain, and the computer shows online in a few seconds.
-4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, Task Manager,
-   Finance Owner, Rules Owner, Brand Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
+4. **Create my team.** Ten built-in bots are created automatically: Assistant, BotOps, Librarian, Strategy Owner, General Manager,
+   Finance Owner, Rules Owner, Design Owner, Updates Owner and Automations Owner. Each other role you picked waits as a Recruiting seat;
    recruiting one creates a bot in **Needs setup** until you talk to it. A switched-on Inbox Manager is the exception: it is made as a bot linked to its mailbox.
 5. **Sign in to your models.** For either Claude and ChatGPT subscription choice, sign in to each model subscription you chose:
    Claude Code and Codex (ChatGPT through Codex). One signed-in model is enough for the first result; Health lists the others
@@ -126,7 +126,7 @@ The Computer step shows sign-in commands for your provider choice ([Finish setup
 
 ### Your first result
 
-One bot, one fictional input, one reviewed draft: **Content Marketer** writes a short blog post about a made-up product, a
+One bot, one fictional input, one reviewed draft: **Content Owner** writes a short blog post about a made-up product, a
 person reviews it, and the person who asked closes the task. [Demo mode](demo.md) does not run bots, so do this on an install
 like the one above.
 
@@ -140,12 +140,12 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    With no spending limit set (the default) there is no cap. A bot that reaches an hourly, daily, weekly or monthly limit (its own, its group's or the team's) takes no new work
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
    Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
-2. **Hire Content Marketer.** On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired
+2. **Hire Content Owner.** On the team chart, open each seat and press **Hire** on its template, in any order. A seat hired
    before its manager reports to the nearest hired manager above it until that manager is hired, then moves under it. On
-   Content Marketer's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
+   Content Owner's page, press **Start onboarding**. Paste the [sample answers](#sample-answers-for-content-marketer)
    and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
-3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
+3. **Give it one task.** On **Tasks**, press **+** (New task) and assign Content Owner: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
    no claims. Return a draft on this task.”
 4. **Review the draft.** When it finishes, the bot marks the task **Done** with a note, and the draft file (`post.md`, from its
@@ -156,11 +156,11 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
 Success: a draft file on the task, read by a person, and a task its requester closed, with the computer online and no blocking
 Health issue.
 
-**Next: meeting notes.** Once this works, add **Project Coordinator** (`meeting-notes`, in **Operations**, or **Settings > Bots >
+**Next: meeting notes.** Once this works, add **Project Coordinator** (`project-coordinator`, in **Operations**, or **Settings > Bots >
 Add from template**), add a fictional transcript with **Meetings > Add notes > Paste** ([Meetings](meetings.md)), and ask it for a
 summary with decisions and action items. Close that task the same way.
 
-### Sample answers for Content Marketer
+### Sample answers for Content Owner
 
 Paste this into its Setup DM (or replace it with your own facts):
 

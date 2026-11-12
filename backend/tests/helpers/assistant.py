@@ -14,8 +14,8 @@ def say(api, text, token="ana-test", expected=200):
 def assistant_turn(api, person, text="Please plan my week around the launch", busy_bots=None):
     """The assistant bot's runner turn for a message this person sent in their Assistant room."""
     r = runner(api)
-    assign(api, r, "coo")
-    ready(api, r, ["coo"])
+    assign(api, r, "assistant")
+    ready(api, r, ["assistant"])
     say(api, text, person)
     body = {} if busy_bots is None else {"busy_bots": busy_bots}
     return r, post(api, "jobs/claim", body, token=r["token"])["attempt"]

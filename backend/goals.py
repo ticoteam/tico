@@ -8,11 +8,11 @@ optional. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 A goal links to KPIs (backend/kpis.py) and its colour is set automatically from them, by the Goal
 Manager, or from its owner's check-ins and its tasks when it has none. A person may override that:
 the colour they set sticks (`status_source` is `person`, with their note) until a person hands it
-back, and the Strategy Bot may only *suggest* a different one. Every colour is stored with who set
+back, and the Strategy Owner may only *suggest* a different one. Every colour is stored with who set
 it (`status_by`) and how (`status_source`, auto or person), in `goals` and in its history rows.
 
 Rows are appended, never deleted: `dropped` is a status. Every change leaves a `history_events` row (subject_type
-`goal`, `status_by`/`status_source` in its `data`), as a task's changes do. Changes to a definition or a target that the Strategy Bot wants are
+`goal`, `status_by`/`status_source` in its `data`), as a task's changes do. Changes to a definition or a target that the Strategy Owner wants are
 proposals (`goal_proposals`) that the goal's or KPI's owner confirms.
 """
 
@@ -29,15 +29,15 @@ STATUSES = COLOURS + ("done", "dropped")
 AUTO_STATUSES = COLOURS + ("gray",)  # what the arithmetic may say; gray is no data
 LIVE = ("red", "yellow", "green")  # statuses a goal is still worked under; None is unscored
 COMPANY = "company"  # the owner of a company goal
-GOAL_MANAGER = "goal-manager"  # the built-in bot that keeps the KPIs and sets the automatic colours
-AUTO_ACTOR = "bot:" + GOAL_MANAGER  # who an automatic status says set it
+STRATEGY_OWNER = "strategy-owner"  # the built-in bot that keeps the KPIs and sets the automatic colours
+AUTO_ACTOR = "bot:" + STRATEGY_OWNER  # who an automatic status says set it
 SIGNALS = ("on_track", "at_risk", "off_track")
 SIGNAL_COLOUR = {"on_track": "green", "at_risk": "yellow", "off_track": "red"}
 CHECKIN_DAYS = 21  # a check-in colours a goal for three weeks
 TASK_DAYS = 14  # no task done for two weeks, on a goal at least that old: yellow
 SOURCES = ("measured", "estimate")  # legacy names of a reading's quality; a connector name is a source
-# goal_why: the Strategy Bot's one line tying a goal to the company's vision (backend/company.py). recovery: the
-# Strategy Bot's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
+# goal_why: the Strategy Owner's one line tying a goal to the company's vision (backend/company.py). recovery: the
+# Strategy Owner's bot-task changes to get a red or stalled goal back on track, at level 2 (backend/strategy_suggest.py).
 # strategy_draft: a change to the team's strategy draft and its bets, from any bot, the owner's to confirm.
 # strategy_realign: the goals of bets a publish retired or rewrote, filed by Tico for the owner (backend/strategy.py).
 # brand_draft: sections for the brand draft from any bot, an admin's to confirm (backend/brand.py).
@@ -407,7 +407,7 @@ def _before_drop(conn, goal_id):
 
 def reopen(conn, actor, goal_id, status=None, note="", undo=False):
     """A done or dropped goal back in the live list. `status` is a colour, which sticks as one set by hand does, or
-    `auto`: the colour it had is put back and the Strategy Bot works it out again (a goal that never had one gets it
+    `auto`: the colour it had is put back and the Strategy Owner works it out again (a goal that never had one gets it
     from its data, if any). The goals that moved up when it was dropped stay where they are. The history says it was
     reopened, and why. `undo` is the "Goal removed" toast's Undo: a dropped goal gets back the colour it had, with its
     note, setter and time when a person set it, read from the history; it takes no colour or note."""
@@ -665,11 +665,11 @@ def kpi_unlink(conn, actor, goal_id, kpi_id):
 
 
 def arm_pass(conn):
-    """The Strategy Bot's daily pass starts paused, like a starter bot's first routine, and may start once a
+    """The Strategy Owner's daily pass starts paused, like a starter bot's first routine, and may start once a
     KPI exists. Once: a person who pauses it afterwards is not overruled."""
     from . import routines
 
-    sid = f"{GOAL_MANAGER}:kpi-pass"
+    sid = f"{STRATEGY_OWNER}:kpi-pass"
     row = routines.row(conn, sid)
     if not row or row["deleted_at"] or row["enabled"] or not conn.execute("SELECT 1 FROM kpis LIMIT 1").fetchone():
         return False
@@ -766,7 +766,7 @@ def score(conn, row, at=None):
 def apply_auto(conn, goal_id, at=None):
     """Set a goal's automatic colour, unless a person set one. A goal a person set only gets a visible suggestion when
     the arithmetic disagrees, never a change. Done and dropped goals are left alone. Nothing at all while the owner has
-    the Strategy Bot's regular checks off (backend/strategy_bot.py `checks`): turning them back on works every colour
+    the Strategy Owner's regular checks off (backend/strategy_bot.py `checks`): turning them back on works every colour
     out again. Returns what happened, or None."""
     row = goal(conn, goal_id)
     if not row or row["status"] in ("done", "dropped"):
@@ -830,7 +830,7 @@ def apply_auto(conn, goal_id, at=None):
 
 
 def refresh(conn, goal_ids=None, at=None):
-    """The Strategy Bot's status pass: every live goal (or the ones named) gets its automatic colour
+    """The Strategy Owner's status pass: every live goal (or the ones named) gets its automatic colour
     worked out again, which is how time passing turns fresh data stale."""
     rows = [goal(conn, g) for g in goal_ids] if goal_ids else goals(conn, live_only=True)
     changed, suggested = [], []
@@ -846,7 +846,7 @@ def refresh(conn, goal_ids=None, at=None):
 
 
 def hand_back(conn, actor, goal_id):
-    """A person lets the Strategy Bot set the colour again: the override ends and it is worked out now."""
+    """A person lets the Strategy Owner set the colour again: the override ends and it is worked out now."""
     H._writer(conn, actor)
     row = goal(conn, goal_id)
     if not row:
@@ -929,7 +929,7 @@ def _payload_error(conn, kind, goal_id, kpi_id, payload):
         return "name a KPI this is about (a KPI Tico computes itself has no definition to change)"
     try:
         if kind == "goal_wording":
-            # A bet alone links the goal to the strategy bet it serves (the Strategy Bot's goals per bet).
+            # A bet alone links the goal to the strategy bet it serves (the Strategy Owner's goals per bet).
             if not (payload.get("title") or payload.get("body") or payload.get("bet_id")):
                 return "propose a new title, body or bet_id"
             if payload.get("bet_id"):
@@ -1074,7 +1074,7 @@ WHY_REPLACED = "Replaced by a newer Why"
 
 
 def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason=""):
-    """A change somebody may not make themselves (the Strategy Bot, above all, may not change a target it
+    """A change somebody may not make themselves (the Strategy Owner, above all, may not change a target it
     is judged against): stored for the goal's or KPI's owner to confirm. The same proposal twice is one."""
     H._writer(conn, actor)
     payload = payload if isinstance(payload, dict) else {}
@@ -1166,7 +1166,7 @@ def proposal(conn, proposal_id):
 def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, moves=None, target=None):
     """The owner confirms (the change is made, as them) or rejects. Only a pending proposal is decided, once. A Why may
     be confirmed as edited: `why` is the line they kept. A recovery is confirmed with one of its options (`option`, the
-    Strategy Bot's pick when None), made as the Strategy Bot (backend/strategy_suggest.py). A strategy realignment is
+    Strategy Owner's pick when None), made as the Strategy Owner (backend/strategy_suggest.py). A strategy realignment is
     confirmed with `moves`, per goal: keep, retire, or a bet id (backend/strategy.py). An Add a KPI suggestion may be
     confirmed with the person's own `target` for the link, checked as any link's target is, in place of its own."""
     H._writer(conn, actor)
@@ -1314,8 +1314,8 @@ REASON_MAX = 280  # one line: a tweet's length is room for "no billing yet, don'
 
 
 def add_reason(conn, actor, proposal_id, note):
-    """The reason someone adds after turning a suggestion down ("Tell the Strategy Bot why?"): theirs alone, once, while
-    the rejection has none. One line; the Strategy Bot reads it before suggesting again (tico proposal list --status rejected)."""
+    """The reason someone adds after turning a suggestion down ("Tell the Strategy Owner why?"): theirs alone, once, while
+    the rejection has none. One line; the Strategy Owner reads it before suggesting again (tico proposal list --status rejected)."""
     H._writer(conn, actor)
     row = proposal(conn, proposal_id)
     if not row:

@@ -37,34 +37,34 @@ def chart(api):
         ],
     )
     for bot in ("ops", "finance", "doc-updater"):
-        report_to(api, bot, "coo")
+        report_to(api, bot, "assistant")
 
 
 def test_the_order_is_kept_for_everyone_and_a_new_report_goes_last(api):
     chart(api)
-    assert order(api, "coo") == ["doc-updater", "finance", "ops"]  # nobody placed them: by name
-    put(api, "org/order/coo", {"reports": ["ops", "doc-updater", "finance"]})
-    assert order(api, "coo") == order(api, "coo", token="cara-test") == ["ops", "doc-updater", "finance"]
+    assert order(api, "assistant") == ["doc-updater", "finance", "ops"]  # nobody placed them: by name
+    put(api, "org/order/assistant", {"reports": ["ops", "doc-updater", "finance"]})
+    assert order(api, "assistant") == order(api, "assistant", token="cara-test") == ["ops", "doc-updater", "finance"]
     places = {
         e["name"]: e.get("report_position") for e in api.get("/api/employees", headers=headers("cara-test")).json()
     }
     assert places["ops"] == 0 and places["finance"] == 2 and places["cpo"] is None
     # Naming two swaps just those two; the others keep their places.
-    put(api, "org/order/coo", {"reports": ["finance", "ops"]})
-    assert order(api, "coo") == ["finance", "doc-updater", "ops"]
+    put(api, "org/order/assistant", {"reports": ["finance", "ops"]})
+    assert order(api, "assistant") == ["finance", "doc-updater", "ops"]
     # A new report goes last, whatever its name; one that leaves and comes back is new again.
-    report_to(api, "cpo", "coo")
-    assert order(api, "coo") == ["finance", "doc-updater", "ops", "cpo"]
-    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:coo")
+    report_to(api, "cpo", "assistant")
+    assert order(api, "assistant") == ["finance", "doc-updater", "ops", "cpo"]
+    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:assistant")
     assert [n["key"] for n in coo["children"]] == ["b:finance", "b:doc-updater", "b:ops", "b:cpo"], "Updates too"
     report_to(api, "ops", "human:ben")
-    report_to(api, "ops", "coo")
-    assert order(api, "coo") == ["finance", "doc-updater", "cpo", "ops"]
+    report_to(api, "ops", "assistant")
+    assert order(api, "assistant") == ["finance", "doc-updater", "cpo", "ops"]
     # Humans are ordered under a human the same way, and only direct reports can be named.
     put(api, "org/order/ana", {"reports": ["cara", "ben"]})
     assert order(api, "human:ana")[:2] == ["cara", "ben"]
     for wrong in (["nobody"], ["ben"], ["ops", "ops"]):
-        put(api, "org/order/coo", {"reports": wrong}, expected=422)
+        put(api, "org/order/assistant", {"reports": wrong}, expected=422)
     get(api, "org/order/nobody", expected=404)
     report_to(api, "finance", "inbox")  # only Ana sees the mail bot: to Cara it is nobody
     get(api, "org/order/inbox", token="cara-test", expected=404)
@@ -73,14 +73,14 @@ def test_the_order_is_kept_for_everyone_and_a_new_report_goes_last(api):
 
 def test_only_someone_who_may_put_reports_there_orders_them(api):
     chart(api)
-    put(api, "org/order/coo", {"reports": ["ops", "finance", "doc-updater"]})
+    put(api, "org/order/assistant", {"reports": ["ops", "finance", "doc-updater"]})
     # Cara is a member nothing reports up to: she sees the order and may not change it.
-    view = get(api, "org/order/coo", token="cara-test")
+    view = get(api, "org/order/assistant", token="cara-test")
     assert view["can_order"] is False
-    put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="cara-test", expected=403)
+    put(api, "org/order/assistant", {"reports": ["finance", "ops"]}, token="cara-test", expected=403)
     # Nor may she move a report onto another manager: nothing moves, and the order stays.
     report_to(api, "ops", "human:cara", token="cara-test", expected=403)
-    assert order(api, "coo") == ["ops", "finance", "doc-updater"]
+    assert order(api, "assistant") == ["ops", "finance", "doc-updater"]
     from backend.tests.helpers.api import restrict
 
     # The person who runs the COO may order its reports, though nothing reports up to him; Cara still may not.
@@ -88,42 +88,44 @@ def test_only_someone_who_may_put_reports_there_orders_them(api):
 
     as_member(api, "ben@acme.example")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='coo'")
-    put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="ben-test")
-    put(api, "org/order/coo", {"reports": ["ops", "finance"]}, token="cara-test", expected=403)
-    assert order(api, "coo") == ["finance", "ops", "doc-updater"]
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='assistant'")
+    put(api, "org/order/assistant", {"reports": ["finance", "ops"]}, token="ben-test")
+    put(api, "org/order/assistant", {"reports": ["ops", "finance"]}, token="cara-test", expected=403)
+    assert order(api, "assistant") == ["finance", "ops", "doc-updater"]
     # A report he may not see keeps its place when he orders the others.
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
-    assert order(api, "coo", token="ben-test") == ["finance", "doc-updater"]
-    put(api, "org/order/coo", {"reports": ["doc-updater", "finance"]}, token="ben-test")
-    assert order(api, "coo") == ["doc-updater", "ops", "finance"], "Ops stays where it was, between them"
+    assert order(api, "assistant", token="ben-test") == ["finance", "doc-updater"]
+    put(api, "org/order/assistant", {"reports": ["doc-updater", "finance"]}, token="ben-test")
+    assert order(api, "assistant") == ["doc-updater", "ops", "finance"], "Ops stays where it was, between them"
     # Once the COO reports to her, she may order its reports.
-    report_to(api, "coo", "human:cara")
-    assert get(api, "org/order/coo", token="cara-test")["can_order"] is True
-    put(api, "org/order/coo", {"reports": ["finance", "ops"]}, token="cara-test")
+    report_to(api, "assistant", "human:cara")
+    assert get(api, "org/order/assistant", token="cara-test")["can_order"] is True
+    put(api, "org/order/assistant", {"reports": ["finance", "ops"]}, token="cara-test")
     # A bot orders its own reports, and no other bot's.
-    _, _, coo = setup_attempt(api, "coo")
+    _, _, coo = setup_attempt(api, "assistant")
     _, _, ops = setup_attempt(api, "ops")
-    put(api, "org/order/coo", {"reports": ["doc-updater", "ops", "finance"]}, token=coo["token"])
-    put(api, "org/order/coo", {"reports": ["ops"]}, token=ops["token"], expected=403)
-    assert order(api, "coo") == ["doc-updater", "ops", "finance"]
+    put(api, "org/order/assistant", {"reports": ["doc-updater", "ops", "finance"]}, token=coo["token"])
+    put(api, "org/order/assistant", {"reports": ["ops"]}, token=ops["token"], expected=403)
+    assert order(api, "assistant") == ["doc-updater", "ops", "finance"]
 
 
 def test_reports_that_join_go_last_in_the_order_they_came_whatever_their_names(api):
     from backend.tests.helpers.bot_contact import bot
 
     chart(api)
-    put(api, "org/order/coo", {"reports": ["ops", "doc-updater", "finance"]})
-    bot(api, "zulu", "Zulu", reports_to="coo")
-    bot(api, "alpha", "Alpha", reports_to="coo")
-    assert order(api, "coo") == ["ops", "doc-updater", "finance", "zulu", "alpha"]
+    put(api, "org/order/assistant", {"reports": ["ops", "doc-updater", "finance"]})
+    bot(api, "zulu", "Zulu", reports_to="assistant")
+    bot(api, "alpha", "Alpha", reports_to="assistant")
+    assert order(api, "assistant") == ["ops", "doc-updater", "finance", "zulu", "alpha"]
     report_to(api, "zulu", "human:ben")  # leaves, and comes back last
-    report_to(api, "zulu", "coo")
+    report_to(api, "zulu", "assistant")
     assert (
-        order(api, "coo") == order(api, "coo", token="cara-test") == ["ops", "doc-updater", "finance", "alpha", "zulu"]
+        order(api, "assistant")
+        == order(api, "assistant", token="cara-test")
+        == ["ops", "doc-updater", "finance", "alpha", "zulu"]
     )
-    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:coo")
+    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:assistant")
     names = slugs(api)
     assert [names.get(n["key"].removeprefix("b:"), n["key"]) for n in coo["children"]] == [
         "ops",
@@ -171,12 +173,12 @@ def test_reports_nobody_placed_follow_one_rule_humans_then_a_bots_order_then_nam
         ],
     )
     for slug in ("ops", "finance", "doc-updater"):
-        report_to(api, slug, "coo")
+        report_to(api, slug, "assistant")
     with api.app.state.store.transaction() as c:  # a bot's own `order`, from its definition
         for slug, place in (("ops", 1), ("finance", 2)):
             config = BS.read(c, slug)
             BS.write(c, slug, {**config, 'order': place})
-    assert order(api, "coo") == ["ops", "finance", "doc-updater"], "ordered bots first, lowest first, then names"
+    assert order(api, "assistant") == ["ops", "finance", "doc-updater"], "ordered bots first, lowest first, then names"
     assert [r for r in order(api, "human:ana") if r in ("zoe", "eli", "bea")] == ["bea", "eli", "zoe"], (
         "by name, accents and case aside, not as the roster lists them"
     )
@@ -184,8 +186,8 @@ def test_reports_nobody_placed_follow_one_rule_humans_then_a_bots_order_then_nam
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO registry_metadata VALUES('report_order',?)",
-            (encode({"bot:doc-updater": {"manager": "bot:coo", "position": 0}}),),
+            (encode({"bot:doc-updater": {"manager": "bot:assistant", "position": 0}}),),
         )
-    assert order(api, "coo") == ["doc-updater", "ops", "finance"]
-    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:coo")
+    assert order(api, "assistant") == ["doc-updater", "ops", "finance"]
+    coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:assistant")
     assert [n["key"] for n in coo["children"]] == ["b:doc-updater", "b:ops", "b:finance"], "Updates the same"

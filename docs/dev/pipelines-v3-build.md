@@ -40,14 +40,14 @@ pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), facto
               settings_version, created_at, updated_at, retired_at
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
-              task_limit, expected_minutes, expected_bots_only (0|1), on_enter (json), created_at,
-              updated_at, retired_at
+              requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
+              on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
-requirements  id, stage_id | visit_id (exactly one), kind, settings (json), can_push_past (0|1),
+requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
               who_oks (none|people_only|people_with_exceptions), person_id, added_by_id, by_bot (0|1),
               line, shows (json), choices (json), position, created_at, withdrawn_at
-              kind: owner_done | ok | page | pr_open | checks_pass | pr_merged | in_release |
-                    linked_done | answer
+              kind: owner_done | ok | page | item | linked_done | answer
+              source and condition on an item only (github: pr_open | checks_pass | pr_merged | in_release)
               answer is never on a stage. person_id only on ok, page, answer (C29).
               unique (visit_id, added_by_id) where by_bot = 1 and withdrawn_at is null (C15)
 visits        id, task_id, stage_id, entered_at,
@@ -61,7 +61,8 @@ snoozes       id, task_id, visit_id, by_id, why, until_at (null = no end), creat
               ended_by_id        one open snooze per task
 links         id, from_task_id, to_task_id, visit_id, kind (sub_task|handoff), created_at
               a task has at most one row as to_task_id
-effects       id, visit_id, kind (queue_pr|dequeue_pr), key (unique), state (owed|done|failed|moot),
+effects       id, visit_id, kind (act|undo), source, action, item_type, item_key (nocase), pinned,
+              key (unique), state (owed|done|failed|moot),
               tries, last_error, created_at, updated_at
 task_move_guards   id = 1, open (0|1), task_id      the guard the trigger reads: open for one task
 tasks         + pipeline_id, stage_id, assignee_id      (status, owner_id, version exist)
@@ -154,7 +155,7 @@ def task(conn, task_id) -> dict | None
     # None for a task that is not on the engine.
 def pipeline(conn, pipeline_id), stages(conn, pipeline_id), stage(conn, stage_id)
 def next_stage(conn, task_row) -> dict | None      # the next work stage, or Done after the last
-def has_room(conn, stage_row, extra=0) -> bool     # snoozed tasks hold no slot
+def has_room(conn, stage_row, extra=0, task_row=None) -> bool  # snoozed tasks hold no slot; a sub-task rides its filer's
 def owner_for(stage_row, assignee, current=None)   # who owns a task in a stage
 def depth(conn, task_id) -> int
 def check_version(conn, by, task_row, seen_version, cascade=False) -> None   # task_changed; a bot must send one
@@ -224,7 +225,10 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 `fill_open_slots` and pushes to screens.
 
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
-never-stuck check does it, on its next pass.
+never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
+Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
+next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
+stage owned by each task's assignee (Growth's Ideas): every task there rests.
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -266,14 +270,15 @@ def people_only(requirement) -> bool
 id), `line` (what is missing, one sentence), `name`, `requirement`, and `met`. A kind reads tables only. It never calls
 GitHub, Jev or a computer.
 
-The nine kinds: `owner_done`, `ok`, `answer`, `linked_done`, and Product and Engineering's `page`, `pr_open`,
-`checks_pass`, `pr_merged`, `in_release`. `SETTINGS` lists the settings keys each kind takes; `pipeline_settings` refuses
+The six kinds: `owner_done`, `ok`, `answer`, `linked_done`, and Product and Engineering's `page` and `item`. An
+`item` names a source and one of its conditions (`backend/item_sources/`: GitHub's `pr_open`, `checks_pass`,
+`pr_merged`, `in_release`). A condition gives its name, settings and whether it is never pushed past. `SETTINGS` lists the settings keys each kind takes; `pipeline_settings` refuses
 any other key.
 
 ## waiting_on.py
 
 ```python
-STATES = ("snoozed", "person", "paused", "bot", "jev", "github", "tasks", "room", "by_hand")   # headline order
+STATES = ("snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand")   # headline order
 
 def waiting_on(conn, task_id) -> list[Wait]
 def waiting_on_many(conn, task_ids) -> dict[str, list[Wait]]
@@ -415,7 +420,8 @@ It is the only caller of `move()` with `by=SYSTEM`, through `advance`.
 
 What `rules_hold` reads for each rule:
 
-1. Every open task has at least one wait.
+1. Every open task has at least one wait, and no `tasks` wait names a sub-task whose `room` wait is for the full stage
+   the filer is in.
 2. Every bot's turn on a task that is not snoozed has a live run, a queued wake, a next try time, or a level above
    `owner`.
 3. Every person's turn is in that person's `needs` exactly once: one `task` entry for the task's own work, and one
@@ -425,7 +431,7 @@ What `rules_hold` reads for each rule:
 5. At most one handoff per visit; no handed-off task still open after its visit was left by Back or Close; no
    `queue_pr` effect of such a visit without its `dequeue_pr`.
 6. In a stage with a limit, the open tasks that came in by a forward move since the stage last changed, and were never
-   snoozed there, number at most the limit.
+   snoozed there, number at most the limit. A sub-task filed while its filer was in the stage is not counted.
 7. No wake is queued for a task that is snoozed, Done or Closed.
 
 ## answers.py
@@ -499,7 +505,8 @@ pipeline_settings.check(conn, record) -> list[str]           # every problem, as
 pipeline_settings.may_change(conn, by, pipeline_row) -> bool # owner, Admins, the pipeline's owner and manager
 pipeline_settings.PRESETS: dict[str, dict]                   # general (phase 1), product, engineering
 pipeline_settings.preset(conn, key) -> dict                  # a preset's record for this org, manager filled in
-pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made
+pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made;
+                                                             # unedited wording follows the preset (EARLIER)
 ```
 
 General's ids are fixed: pipeline `general`, stages `general-todo`, `general-done`, `general-closed`.
@@ -516,7 +523,7 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
 ```
 
 - `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the
-  Product pipeline") or `{"queue_prs": true}` (refused until phase 3).
+  Product pipeline") or `{"act": "github.queue"}` (a source action).
 - A row with an id is changed in place; without one it is made: a stage as `<pipeline id>-<slug of its name>` (`-2`,
   `-3` on a clash), a requirement as `H.new_id()`. A stage left out is retired (refused while it holds open tasks), a
   requirement left out is withdrawn. A requirement's kind does not change in place. A requirement id is listed once in
@@ -537,14 +544,16 @@ Release 0.6. The shared base is on `chris/pe-base`; the full contract (owners, t
 (`20261110213830_product_engineering_facts.py`):
 
 ```
-pr_facts           id, repo (nocase), number, state (open|closed|merged), draft, head_sha, head_seen_at,
+item_metadata      id, source, item_type, item_key (nocase), title, fields (json: a PR's state (open|closed|merged), draft, head_sha, head_seen_at,
                    checks_state (none|pending|success|failure), checks (json), checks_started_at,
                    merged_sha, merged_at, queue_state (none|queued|auto_merge|removed), queued_at,
                    removed_at, removed_reason, failing_check, failing_check_url,
-                   fact_version (ms), read_at, created_at, updated_at        unique (repo, number)
-releases           id, repo, tag, commit_sha, prerelease, published_at, fact_version, read_at, created_at
+                   ...), metadata_version (ms), read_at, due_at, read_error, refused_at, gone_at, final_at,
+                   created_at, updated_at
+                   unique (source, item_type, item_key)
+releases           id, repo, tag, commit_sha, prerelease, published_at, metadata_version, read_at, created_at
                    unique (repo, tag)
-release_reads      repo (pk), read_at, fact_version     a read happened, even with no releases (C31)
+release_reads      repo (pk), read_at, metadata_version     a read happened, even with no releases (C31)
 release_commits    release_id, commit_sha, included, checked_at              pk (release_id, commit_sha)
 github_deliveries  id (X-GitHub-Delivery), event, received_at               kept 7 days
 requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json), attached_by_id, created_at,
@@ -552,30 +561,73 @@ requirement_pages  id, visit_id, requirement_id, file_id, version, heads (json),
 page_verdicts      id, file_id, version, rubric_hash, verdict (null|met|not_met|unsure|failed), p, reasons,
                    model, cost_usd, tries, last_error, next_try_at, created_at, updated_at
                    unique (file_id, version, rubric_hash)
-effects            + repo, number, head_sha, next_try_at
+effects            + next_try_at (the item and its pinned head are on every effect)
 ```
 
-Modules: `task_facts.py` (facts, the `GitHub` protocol), `page_verdicts.py` (Jev's verdict store and step),
-`task_pages.py` (attach), `merge_queue.py` (queue, queue again, pull), `pipeline_seats.py` (roles to bots, the OK
+Modules: `item_sources/github.py` (the GitHub source: metadata, the `GitHub` protocol, the queue action),
+`item_metadata.py` (every source's saved metadata), `source_actions.py` (act, undo, retries), `page_verdicts.py` (Jev's verdict store and step),
+`task_pages.py` (attach), `pipeline_seats.py` (roles to bots, the OK
 person). Tests and the rig use `backend/tests/helpers/fake_github.py`.
 
 ### Standings of the Product and Engineering kinds
 
-`owner` is the task's owner (for Merge, the stage owner: Release Manager). A requirement never calls GitHub or Jev.
+`owner` is the task's owner (for Merge, the stage owner: Release Owner). A requirement never calls GitHub or Jev.
 
 ```
 page          no page attached                          not_met  owner   No page attached
               at_head and a linked PR's head moved      not_met  owner   New commits since the review
               verdict owed                               waiting  jev     Jev is checking
-              verdict failed (3 tries)                   waiting  person  Jev couldn't check this
+              verdict failed (3 tries), a bot holds it,  waiting  manager Decide if it meets the check: OK it or send it
+                manager bot set (not the holder)                          back, and say why. Jev couldn't check this:
+                                                                          <error> [The check: <rubric>]
+              verdict failed otherwise (people only:     waiting  person  Jev couldn't check this: <error> (once per
+                every version)                                            visit, then not_met on the owner)
               not_met                                    not_met  owner   Jev sent it back: <reasons>
-              unsure                                     waiting  person  Jev is unsure: <reasons>
-              met, person_id set, no OK for this version waiting  person  OK <name> (version <n>)
-              person said no for this version            not_met  owner   Sent back: <notes>
+              unsure, a person OKs it anyway             waiting  person  [Version <n>, after the send back: "<notes>". ]
+                (people only or naming one: every version)               Jev is unsure: <reasons>
+              unsure, a bot holds it, first this visit   not_met  owner   Not yet met: fix it or explain it on the page.
+                                                                          Jev is unsure: <reasons> [The check: <rubric>]
+              unsure again this visit, manager bot set   waiting  manager Decide if it meets the check: OK it or send it
+                (not the holder)                                          back, and say why. Jev is unsure: <reasons>
+              unsure otherwise (a person holds it, no    waiting  person  Jev is unsure: <reasons> (once per visit, then
+                manager bot, the manager holds it)                        not_met on the owner)
+              met, person_id set, no OK for this version waiting  person  [Version <n>, after the send back: "<notes>". ]
+                                                                          OK <name> (version <n>)
+              person said no for this version            not_met  owner   Sent back: <notes>[ Attach the new version; Tico
+                                                                          asks the person.] (one end mark, never two)
               met and OK'd for this version              met              OK'd
               met, no person                             met              Jev passed it
+```
+
+A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
+bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
+newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
+at <sha>): read only them, against what the reviews found and the spec. OK them or send them back, and say what you
+read." That bot answers on the page (`tico task answer <id> <requirement> ok|no -m ...`, notes required either way):
+the answer keeps the commits it was given at (`answers.heads`). Its OK makes those commits reviewed, and the person's
+ask then starts "<bot> reviewed the commits since the reviews: <notes>." Its no is `not_met` on the owner: "<bot>
+sent back the new commits: <notes>". A round is one set of commits it answered at; after `DELTA_ROUNDS` (2) rounds in
+a visit, or with no such bot, the person is asked with "New commits since the reviews (now at <sha>): not reviewed by
+a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits (`task_requirements._after_ok`,
+C22). After a new commit, `item_sources.github.same_changes` compares what each moved PR changes (`github_pr_diffs`,
+read once per commit by the re-read's `_refresh_diffs` through `GitHub.pr_diff`: GitHub's compare `<base>...<sha>`,
+hashed by `diff_id` from the added and removed lines of each file); until both are read the page waits on GitHub
+("Reading what the commits since <name>'s OK change"). The same lines: met, "OK'd by <name>; the commits since change
+the same lines". Other lines: the delta review above, its rounds counted from the OK; the reviewer's OK at the newest
+commits is met ("OK'd by <name>; <bot> read the commits since"). After its no, with no such bot, or with the rounds
+spent, the OK is gone: the ask starts "New commits since <name>'s OK." and goes to that person. Back from Merge with no
+page attached on the visit (`page_for`), the OK and page of the Fixes 2 visit before Merge count; when that OK is gone,
+the Builder is asked to attach the page again. In Merge a bot's `requeue` of a moved head needs the same lines
+(`COMPARING` while unread, else `SENT_BACK_FOR_NEW`). Answers from before `heads` was kept stand. The Builder's wake says "not
+reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
+asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
+`tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push
+past.
+
+```
 pr_open       no PR linked                               not_met  owner   No PR linked
-              no fact yet                                waiting  github  Reading the PR from GitHub
+              no metadata yet                            waiting  github  Reading the PR from GitHub
               every PR closed without merging            not_met  owner   <ref> was closed without merging
               an open or merged PR                       met              PR open
 checks_pass   a check failed                             not_met  owner   Checks failed on <ref>: <names>
@@ -593,7 +645,7 @@ pr_merged     effect owed                                waiting  github  Queuin
 in_release    a PR not merged                            waiting  github  Not merged yet
               releases never read                        waiting  github  Reading releases
               repo publishes none (C31)                  met              This repo doesn't publish releases
-              merged, no release holds it yet            waiting  github  Waiting for a release of <repo>
+              merged, no release holds it yet            waiting  github  Waiting for the next release of <repo>
               in a counted release                       met              In <tag>
 ```
 
@@ -601,7 +653,16 @@ With many PRs the first unmet one, in link order, gives the line.
 
 ### Choices made while building
 
-- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset.
+- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
+  request in Ideas takes the room first, by itself (G5, Nov 10).
+- **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
+  manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
+  when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
+  bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace
+  the stages wholesale (`pipeline_settings._loosens_people_only`); and when it retires a pipeline that has one. A
+  forward move counts every jumped stage as not met, so no bot jumps one; a task never moves into another pipeline;
+  and a bot never files a task straight into a stage past one (`task_engine.enter`'s `start`). The rubric, the push-
+  past switch and the stages after it stay a bot's to change. An untouched preset made before is tightened by `_fill`.
 - **Closing a Product task** closes the Engineering tasks it filed, except one whose PR merged: its work is in the code,
   so it stays open to reach a release or be closed by its owner (`stage_effects.merged_work`, scenario 24). Undoing a
   stage's filing skips it the same way.
@@ -609,10 +670,10 @@ With many PRs the first unmet one, in link order, gives the line.
 - **Queue again** (`tico task queue`) covers a PR GitHub refused to queue as well as one it dropped from the queue.
 - **A drop from the merge queue is the owner's turn at once**, with the reason (one wake per drop). There is no separate
   "after 3 drops" step: the owner already has the turn.
-- **GitHub down for days:** the facts wait, the stage turns Late after its expected time and the manager bot looks once,
+- **GitHub down for days:** the metadata waits, the stage turns Late after its expected time and the manager bot looks once,
   then a person's list at 3 times the expected time (rig case `github-down-for-days`).
-- **The Release Manager** is the bot the release schedule names, else the first active bot made from `release-owner`.
-  `release-notes` is the Release Notes Writer and never stands in.
+- **The Release Owner** is the bot the release schedule names, else the first active bot made from `release-owner`.
+  `release-notes-writer` is the Release Notes Writer and never stands in.
 
 ## Tests and the rig
 

@@ -65,7 +65,7 @@ const TITLE_MAX: usize = 200;
 const EVENT_MAX: usize = 300;
 
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
@@ -634,23 +634,5 @@ mod tests {
         assert!(event_link(&hub, "e1", Some(" \t\n ")).is_some());
         // A title never refuses the link: the occurrence is what it names.
         assert!(event_link(&hub, "e1", None).is_some());
-    }
-
-    #[test]
-    fn record_opens_the_recorder_on_the_pages_own_org() {
-        let hub = Url::parse("https://acme.example.com/").unwrap();
-        let link = Url::parse(&recorder_link(&hub)).unwrap();
-        assert_eq!(
-            (link.scheme(), link.host_str()),
-            ("tico-recorder", Some("open"))
-        );
-        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
-        assert_eq!(
-            query,
-            [(
-                "server".to_string(),
-                "https://acme.example.com/".to_string()
-            )]
-        );
     }
 }

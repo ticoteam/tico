@@ -1,0 +1,211 @@
+[
+ {
+  "argv": [
+   "proposal",
+   "create",
+   "--kind",
+   "goal_wording"
+  ],
+  "tools": [
+   [
+    "tico_proposal_create",
+    {
+     "kind": "goal_wording",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "proposals",
+    {
+     "kind": "goal_wording",
+     "goal_id": null,
+     "kpi_id": null,
+     "payload": {},
+     "reason": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'proposal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "proposal",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_proposal_list",
+    {
+     "operation_id": null,
+     "status": "pending"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "proposals?status=pending",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "proposal",
+   "list",
+   "--status",
+   "pending",
+   "--goal",
+   "goal-id-1",
+   "--kpi",
+   "kpi-id-1"
+  ],
+  "tools": [
+   [
+    "tico_proposal_list",
+    {
+     "goal_id": "goal-id-1",
+     "kpi_id": "kpi-id-1",
+     "operation_id": null,
+     "status": "pending"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "proposals?status=pending&goal_id=goal-id-1&kpi_id=kpi-id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "proposal",
+   "decide",
+   "id-1",
+   "confirm"
+  ],
+  "tools": [
+   [
+    "tico_proposal_decide",
+    {
+     "decision": "confirm",
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "proposals/id-1/decide",
+    {
+     "decision": "confirm",
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'proposal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "proposal",
+   "decide",
+   "id-1",
+   "confirm",
+   "--note",
+   "note-1",
+   "--option",
+   "5",
+   "--on-behalf-of",
+   "on-behalf-of-1"
+  ],
+  "tools": [
+   [
+    "tico_proposal_decide",
+    {
+     "decision": "confirm",
+     "id": "id-1",
+     "note": "note-1",
+     "on_behalf_of": "on-behalf-of-1",
+     "operation_id": null,
+     "option": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goal-proposals/id-1/decide",
+    {
+     "decision": "confirm",
+     "note": "note-1",
+     "option": 5
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'proposal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "proposal",
+   "create",
+   "--kind",
+   "goal_wording",
+   "--goal",
+   "g1",
+   "--payload",
+   "{\"title\": \"Ship 0.6\"}",
+   "--reason",
+   "clearer"
+  ],
+  "tools": [
+   [
+    "tico_proposal_create",
+    {
+     "goal_id": "g1",
+     "kind": "goal_wording",
+     "operation_id": null,
+     "payload": {
+      "title": "Ship 0.6"
+     },
+     "reason": "clearer"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "proposals",
+    {
+     "kind": "goal_wording",
+     "goal_id": "g1",
+     "kpi_id": null,
+     "payload": {
+      "title": "Ship 0.6"
+     },
+     "reason": "clearer"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"KeyError: 'proposal'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ }
+]

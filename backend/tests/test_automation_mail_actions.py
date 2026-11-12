@@ -432,7 +432,7 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     slack_msg = {
         "message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}
     }
-    auto = {"id": automate(api, NOTE), "flow": {"owner": "person:ana"}, "assistant_bot": "coo"}
+    auto = {"id": automate(api, NOTE), "flow": {"owner": "person:ana"}, "assistant_bot": "assistant"}
     with store.transaction() as c:
         c.execute(
             "INSERT INTO automation_runs(id,automation_id,version,started_at,status,saved_state) "
@@ -863,7 +863,11 @@ def test_two_rules_that_fired_and_a_destinations_mail_action_settle_into_one_rec
 # ---------------------------------------------------------------------------------------------- a choose turn's reply
 CHOOSE = {"to": ["legal", "sales"], "default": "sales", "mode": "draft"}
 ROUTES = [
-    {"id": "legal", "name": "Legal", "then": [{"do": "wake_bot", "args": {"bot": "coo", "text": "Routed to legal."}}]},
+    {
+        "id": "legal",
+        "name": "Legal",
+        "then": [{"do": "wake_bot", "args": {"bot": "assistant", "text": "Routed to legal."}}],
+    },
     {"id": "sales", "name": "Sales", "then": []},
 ]
 

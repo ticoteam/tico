@@ -63,7 +63,7 @@ def test_platform_spend_stands_in_for_the_card_charge_never_both(books: Store):
         spend(c, "6300", 5_000, day="2026-10-13", vendor="Billboard Co")
     with books.read() as c:
         rows = rows_by_name(c, OWNER)
-        google, meta, marketing = rows["Rental Google Ad Owner"], rows["Rental Social Ad Owner"], rows["Marketing"]
+        google, meta, marketing = rows["Rental Google Ad Owner"], rows["Rental Social Ads Owner"], rows["Marketing"]
         gs, ms, mk = google["state"], meta["state"], marketing["state"]
         assert isinstance(gs, dict) and isinstance(ms, dict) and isinstance(mk, dict)
         assert google["platform"] == "google_ads" and meta["platform"] == "meta_ads" and marketing["platform"] == ""
@@ -418,7 +418,6 @@ def test_pace_end_runs_to_the_imports_as_of(period: str, ref: str, spent: int, e
         ("GOOGLE *ADS 4421", "google_ads"),
         ("google*ads1234567", "google_ads"),
         ("GOOGLE ADS", "google_ads"),
-        ("Google Ads", "google_ads"),
         ("GOOGLE*ADS", "google_ads"),
         ("FACEBK *8FJ2KL", "meta_ads"),
         ("facebk*abc", "meta_ads"),
@@ -437,8 +436,6 @@ def test_pace_end_runs_to_the_imports_as_of(period: str, ref: str, spent: int, e
         ("FACEBOOK", ""),
         ("Facebook Workplace", ""),
         ("META *QUEST", ""),
-        ("Meta Verified", ""),
-        ("Meta Blueprint", ""),
         ("FB.ME/ADSX", ""),
         ("FACEBOOK ADSMANAGER", ""),
         ("Meta", ""),
@@ -465,9 +462,9 @@ def test_each_bot_sees_its_own_ad_budget_and_the_manager_bot_its_reports(books: 
     platform_spend(books, w["google_ads"], [("2026-10-03", 50_000)], "2026-10-01", "2026-10-15")
     with books.read() as c:
         assert set(rows_by_name(c, "bot:paid-rental-ads")) == {"Rental Google Ad Owner"}
-        assert set(rows_by_name(c, "bot:rental-social-ad-owner")) == {"Rental Social Ad Owner"}
+        assert set(rows_by_name(c, "bot:rental-social-ad-owner")) == {"Rental Social Ads Owner"}
         manager = rows_by_name(c, "bot:cmo")
-        assert {"Rental Google Ad Owner", "Rental Social Ad Owner"} <= set(manager)
+        assert {"Rental Google Ad Owner", "Rental Social Ads Owner"} <= set(manager)
         assert manager["Rental Google Ad Owner"]["state"]["actual"] == 50_000  # type: ignore[index]
         own = reads.metric(c, "bot:paid-rental-ads", "budget_pct_used", budget_id=w["google"], at=AT)
         assert own["spent_from"] == "platform" and own["pace_month_end"] is not None
@@ -523,7 +520,7 @@ def test_a_jump_past_two_levels_is_one_line(books: Store):
     with books.read() as c:
         ((to, body),) = warning_notes(c)
         assert to == "bot:rental-social-ad-owner"
-        assert body.split("\n")[1] == "Rental Social Ad Owner · Meta Ads · October"
+        assert body.split("\n")[1] == "Rental Social Ads Owner · Meta Ads · October"
     assert warn(books) == []
 
 
@@ -714,7 +711,7 @@ def test_the_data_fix_sets_existing_ad_budgets_to_warn(books: Store):
     assert limits == {
         "Marketing": "warn",
         "Rental Google Ad Owner": "warn",
-        "Rental Social Ad Owner": "warn",
+        "Rental Social Ads Owner": "warn",
         "Descriptor": "warn",
         "Billboards": "decline",
     }

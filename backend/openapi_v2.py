@@ -45,7 +45,7 @@ TAGS = {
     "Docs": "The team's docs (docs/docs.md): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them.",
     "Assistant": "The signed-in person's own private Assistant chat (docs/assistant.md): ask, and confirm what it proposes.",
     "Goals": "What every person and bot is for (docs/goals-and-kpis.md): "
-    "goals with a colour the Strategy Bot works out from their KPIs, "
+    "goals with a colour the Strategy Owner works out from their KPIs, "
     "unless a person set one; check-ins in the owner's words; proposals the owner confirms.",
     "KPIs": "Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, "
     "evidence and a quality, never edited; a correction supersedes the old one.",
@@ -732,8 +732,8 @@ STABLE = [
         "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and "
         "why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since "
         "filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), "
-        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
-        "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
+        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by "
+        "ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
         "answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in "
         "full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
         "TaskList",
@@ -835,7 +835,8 @@ STABLE = [
         "Tasks",
         "answerAsk",
         "Answer a requirement: ok, no (send it back, with a note), again (look again), or the answer to a question; "
-        "carries answer_id",
+        "a stage's answer may be named by its name instead of its id, and takes a whole number in its range, one of "
+        "its choices, or text; carries answer_id",
         "TaskResult",
     ),
     (
@@ -919,7 +920,7 @@ STABLE = [
         "get",
         "Pipelines",
         "getPipelineLog",
-        "The manager rail's Log: each push past, and each snooze a bot made with no end date, newest first",
+        "The manager rail's Log: each push past, each snooze with no end date, and each pipeline save, newest first",
         "PipelineLog",
     ),
     (
@@ -960,7 +961,7 @@ STABLE = [
         "get",
         "Pipelines",
         "getReleaseSchedule",
-        "The daily release: on or off, its hours, the Release Manager and Technical Writer, the next hour, how many "
+        "The daily release: on or off, its hours, the Release Owner and Technical Writer, the next hour, how many "
         "tasks you may read wait for a release, and what you may do",
         "ReleaseSchedule",
     ),
@@ -969,7 +970,7 @@ STABLE = [
         "patch",
         "Pipelines",
         "updateReleaseSchedule",
-        "Turn the daily release on or off, set its hours, or name the Release Manager and Technical Writer (owner, Admins)",
+        "Turn the daily release on or off, set its hours, or name the Release Owner and Technical Writer (owner, Admins)",
         "ReleaseSchedule",
     ),
     (
@@ -977,7 +978,7 @@ STABLE = [
         "post",
         "Pipelines",
         "releaseNow",
-        "Ask the Release Manager for a release now: one task, or the open one named, or why nothing was sent",
+        "Ask the Release Owner for a release now: one task, or the open one named, or why nothing was sent",
         "ReleaseNowResult",
     ),
     ("/api/v2/tasks/{tid}/files", "get", "Tasks", "listTaskFiles", "Files and versions on a task", "TaskFileList"),
@@ -1077,6 +1078,18 @@ STABLE = [
         "Queue again: put the PRs GitHub took out of the merge queue (or refused) back in it at their newest commit. "
         "The stage owner, the pipeline's manager or any person. 409 task_stage off a stage that queues PRs, "
         "task_requirement when nothing was taken out or its checks are running or failing",
+        "TaskResult",
+    ),
+    (
+        "/api/v2/tasks/{tid}/release",
+        "post",
+        "Tasks",
+        "releaseTask",
+        "Cut the release the task waits for, the way its In a release names (`release_with`: run the release "
+        "workflow, or create the tag `tag`), through Tico's GitHub App on the next Heartbeat. The stage owner, the "
+        "pipeline's manager or any person; a bot only once a person signed off before release. 409 task_stage off a "
+        "stage that waits for a release, task_needs_person with no person's sign-off, task_requirement with no way set, "
+        "no tag named, nothing merged, already released, or an earlier ask still waiting",
         "TaskResult",
     ),
     (
@@ -1572,7 +1585,7 @@ STABLE = [
         "get",
         "Assistant",
         "getAssistant",
-        "The caller's Assistant (the Strategy Bot, for the owner): their private room id, "
+        "The caller's Assistant (the Strategy Owner, for the owner): their private room id, "
         "whether it is on, the recent messages "
         "and what waits for their OK",
         "Assistant",
@@ -1658,10 +1671,10 @@ STABLE = [
         "get",
         "Goals",
         "getStrategyBot",
-        "The Strategy Bot's name, whether its regular checks run, how much it does (its level, "
+        "The Strategy Owner's name, whether its regular checks run, how much it does (its level, "
         "with each level's sentence and "
         "who changed it when), and how many items it put in each person's Needs you today against its cap of 5 "
-        "(everyone's for the owner, admins and the Strategy Bot; your own for anyone else)",
+        "(everyone's for the owner, admins and the Strategy Owner; your own for anyone else)",
         "StrategyBotView",
     ),
     (
@@ -1669,9 +1682,9 @@ STABLE = [
         "post",
         "Goals",
         "setStrategyBotLevel",
-        "Settings > Strategy Bot, \"How much your Strategy Bot does\": the owner picks Passive (1), "
+        "Settings > Strategy Owner, \"How much your Strategy Owner does\": the owner picks Passive (1), "
         "Suggests actions (2) or Acts on "
-        "its own (3) on their own click, logged with who and when. No admin or bot may, the Strategy Bot included",
+        "its own (3) on their own click, logged with who and when. No admin or bot may, the Strategy Owner included",
         "StrategyBotView",
     ),
     (
@@ -1679,7 +1692,7 @@ STABLE = [
         "post",
         "Goals",
         "setStrategyBotChecks",
-        "Settings > Strategy Bot, \"Regular checks\": the owner turns the KPI pass and the "
+        "Settings > Strategy Owner, \"Regular checks\": the owner turns the KPI pass and the "
         "automatic goal colours on or off, "
         "on their own click. Off, neither runs until they are turned back on. No admin or bot may",
         "StrategyBotView",
@@ -1689,7 +1702,7 @@ STABLE = [
         "post",
         "Goals",
         "mergeStrategyBotAsks",
-        "The Strategy Bot only, at level 2 or 3: one item in a person's Needs you for 2 to 10 "
+        "The Strategy Owner only, at level 2 or 3: one item in a person's Needs you for 2 to 10 "
         "tasks where bots ask them the "
         "same thing. The originals leave their Needs you while it is open; their one answer goes to each bot that asked, "
         "and an item that ends unanswered puts the originals back. Counts toward its 5 a day",
@@ -1700,7 +1713,7 @@ STABLE = [
         "post",
         "Goals",
         "recordStrategyBotLevel3Offer",
-        "The Strategy Bot only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
+        "The Strategy Owner only: record that its Monday note offered level 3. Refused (422) unless level3_offer.due: 10 "
         "recoveries approved in a row with its pick unchanged, and no offer in 30 days. It never raises its own level",
         "StrategyBotLevel3OfferResult",
     ),
@@ -1709,9 +1722,9 @@ STABLE = [
         "post",
         "Goals",
         "makeStrategyBotDecision",
-        "The Strategy Bot only, at level 3: one decision made alone, with its reason: "
+        "The Strategy Owner only, at level 3: one decision made alone, with its reason: "
         "bot tasks created, moved to the top of "
-        "their queue, given to another bot or closed, under one action id in the Strategy Bot log. A person's task, a bot "
+        "their queue, given to another bot or closed, under one action id in the Strategy Owner log. A person's task, a bot "
         "offline or a refusal becomes one proposal in the owner's "
         "Needs you instead, never dropped",
         "StrategyBotLogEntry",
@@ -1721,7 +1734,7 @@ STABLE = [
         "get",
         "Goals",
         "listStrategyBotLog",
-        "The Strategy Bot log, newest first: each decision it made alone and each thing it proposed because it stays the "
+        "The Strategy Owner log, newest first: each decision it made alone and each thing it proposed because it stays the "
         "owner's (cost, publishing, outside sends, adding or removing bots, goal and KPI targets, the vision, a bot's "
         "instructions, a person's task), with the reason. The owner only; anyone else is refused (403)",
         "StrategyBotLog",
@@ -1731,7 +1744,7 @@ STABLE = [
         "post",
         "Goals",
         "undoStrategyBotDecision",
-        "The owner, on their own click, undoes one decision the Strategy Bot made alone: each task goes back where nobody "
+        "The owner, on their own click, undoes one decision the Strategy Owner made alone: each task goes back where nobody "
         "changed it since, a later change is kept and named, a task it made is closed, and each bot is told",
         "StrategyBotLogEntry",
     ),
@@ -1750,7 +1763,7 @@ STABLE = [
         "Goals",
         "updateCompany",
         "The owner, on their own click: change the Vision (written to the strategy draft) and/or the Description; never "
-        "an admin or a bot, the Strategy Bot included. Each change is kept with who and when",
+        "an admin or a bot, the Strategy Owner included. Each change is kept with who and when",
         "CompanyResult",
     ),
     (
@@ -1762,11 +1775,11 @@ STABLE = [
         "CompanyHistory",
     ),
     (
-        "/api/v2/goal-manager/turn-on",
+        "/api/v2/strategy-owner/turn-on",
         "post",
         "Goals",
         "turnOnGoalManager",
-        "Owner only: add the Strategy Bot from the catalog or restore it, and activate it",
+        "Owner only: add the Strategy Owner from the catalog or restore it, and activate it",
         None,
     ),
     (
@@ -1801,7 +1814,7 @@ STABLE = [
         "Goals",
         "getGoalsNeedsYou",
         "Red KPIs on goals the caller owns, stale KPIs they own, and definitions or targets they are asked to confirm; for a person "
-        "each is a Strategy Bot task (`task`), the one Tasks and Decide show",
+        "each is a Strategy Owner task (`task`), the one Tasks and Decide show",
         "GoalsNeedsYou",
     ),
     (
@@ -1809,7 +1822,7 @@ STABLE = [
         "post",
         "Goals",
         "refreshGoalStatuses",
-        "The Strategy Bot's status pass (or the owner's): work automatic colours out again. "
+        "The Strategy Owner's status pass (or the owner's): work automatic colours out again. "
         "A colour a person set only gets a suggestion",
         "GoalRefreshView",
     ),
@@ -1818,7 +1831,7 @@ STABLE = [
         "post",
         "Goals",
         "readBackGoalChanges",
-        "The Strategy Bot only, in the owner's own chat: Tico writes the read-back of up to 20 "
+        "The Strategy Owner only, in the owner's own chat: Tico writes the read-back of up to 20 "
         "changes to goals, measures and "
         "suggestions as its reply and stores the exact saves. The owner's yes to it (a plain yes, or a yes to some by number) "
         "within 30 minutes lets exactly those saves through (each step's method, path and body, sent as it is), cited "
@@ -1874,7 +1887,7 @@ STABLE = [
         "post",
         "Goals",
         "handBackGoalStatus",
-        "\"Let Strategy Bot set it\": end a colour set by hand; the automatic colour is worked out at once",
+        "\"Let Strategy Owner set it\": end a colour set by hand; the automatic colour is worked out at once",
         "GoalResult",
     ),
     (
@@ -1940,7 +1953,7 @@ STABLE = [
         "Goals",
         "createGoalProposal",
         "Propose a change the caller may not make: goal wording, a KPI for a goal, a definition, a target, or a flag; "
-        "the Strategy Bot at level 2 or 3, a recovery for a red or stalled goal (evidence, "
+        "the Strategy Owner at level 2 or 3, a recovery for a red or stalled goal (evidence, "
         "options of bot-task changes, its pick)",
         "GoalProposalResult",
     ),
@@ -1951,8 +1964,8 @@ STABLE = [
         "decideGoalProposal",
         "A person's own decision, made by whoever owns the goal or KPI: confirm makes the change as them, reject drops it. "
         "An Add a KPI suggestion may be confirmed with a `target` for the link (as a goal's KPI target), used in place of its own. "
-        "A recovery applies exactly the chosen option (`option`, else the Strategy Bot's pick) in "
-        "the Strategy Bot's name; what "
+        "A recovery applies exactly the chosen option (`option`, else the Strategy Owner's pick) in "
+        "the Strategy Owner's name; what "
         "can't be done comes back as a new recovery saying why",
         "GoalProposalResult",
     ),
@@ -1963,7 +1976,7 @@ STABLE = [
         "addGoalProposalReason",
         "After a reject, the person who turned the suggestion down adds one line on why (at most 280 characters), once, "
         "while it has none; a pending or confirmed suggestion, anyone else, a second reason or an empty one is refused. "
-        "The Strategy Bot reads it before suggesting again",
+        "The Strategy Owner reads it before suggesting again",
         "GoalProposalResult",
     ),
     (
@@ -2135,28 +2148,28 @@ STABLE = [
         None,
     ),
     (
-        "/api/v2/task-manager",
+        "/api/v2/general-manager",
         "get",
         "Health",
-        "getTaskManager",
-        "People and bots: whether the Task Manager is on, its hourly report's switch, schedule and last run, and each "
+        "getGeneralManager",
+        "People and bots: whether the General Manager is on, its hourly report's switch, schedule and last run, and each "
         "department's last check and open check task",
         None,
     ),
     (
-        "/api/v2/task-manager/turn-on",
+        "/api/v2/general-manager/turn-on",
         "post",
         "Health",
-        "turnOnTaskManager",
-        "Owner only: add the Task Manager from the catalog (or wake a paused one) and activate it",
+        "turnOnGeneralManager",
+        "Owner only: add the General Manager from the catalog (or wake a paused one) and activate it",
         None,
     ),
     (
-        "/api/v2/task-manager/turn-off",
+        "/api/v2/general-manager/turn-off",
         "post",
         "Health",
-        "turnOffTaskManager",
-        "Owner only: pause the Task Manager",
+        "turnOffGeneralManager",
+        "Owner only: pause the General Manager",
         None,
     ),
     (
@@ -2317,6 +2330,7 @@ NEEDS_ITEM = obj(
     message_id={"type": "string", "description": "A mention's message"},
     conversation_id={"type": "string", "description": "The thread a mention was written in"},
     root_id={"type": "string", "description": "A mention's root thread: the rail row it moves"},
+    href={"type": "string", "description": "A paused cause a person fixes in the app: where (Connect GitHub)"},
 )
 
 # Who wrote a line (backend/sources.py): a message's, a search hit's and a task history entry's `source`.
@@ -2584,12 +2598,44 @@ SCHEMAS = {
         waits=items(ref("TaskWait")) | {"description": "On the task's own read: every wait, headline first"},
         to_leave=items(ref("TaskRequirement"))
         | {"description": "On the task's own read: every requirement of the stage and each added to this visit"},
+        inputs=items(
+            obj(
+                {
+                    "kind": {"enum": ["pr", "page", "done", "missing", "signoff"]},
+                    "line": "s",
+                    "stage": "s",
+                    "by": "n",
+                    "url": "n",
+                    "file_id": "s",
+                    "version": "i",
+                    "ref": "s",
+                    "answer": {"enum": ["ok", "no"]},
+                    "notes": "s",
+                    "task_id": "s",
+                },
+                required=["kind", "line"],
+            )
+        )
+        | {
+            "description": "On the task's own read: what earlier stages handed on, oldest first (stage_inputs.of): "
+            "its PRs, each earlier stage's page, what an owner said when it said done, a page that was never "
+            "attached, and each OK or send back a person gave on work this task filed (`signoff`: answer, notes, "
+            "the page version)"
+        },
         next={
             "oneOf": [obj({"id": "s", "name": "s"}), {"type": "null"}],
             "description": "On the task's own read: the stage a forward move goes to",
         },
         snooze={"oneOf": [obj({"until": "n", "by": "s", "why": "n"}), {"type": "null"}]},
         filed_by={"type": ["string", "null"], "description": "The task that filed this one"},
+        values={
+            "type": "object",
+            "description": "On the task's own read: the newest answer to each of its stages' named answers, by name, "
+            "on any visit: {value, type, by, at, stage_id}; a number's value is a whole number",
+            "additionalProperties": obj(
+                {"value": {"type": ["string", "integer"]}, "type": "s", "by": "s", "at": "s", "stage_id": "s"}
+            ),
+        },
         filed=items(obj({"id": "s", "kind": "s", "status": "s", "title": "n"}))
         | {"description": "The tasks this one filed; title is null for one the reader may not read"},
         cover={
@@ -2631,7 +2677,7 @@ SCHEMAS = {
         {
             "state": {
                 "type": "string",
-                "enum": ["snoozed", "person", "paused", "bot", "jev", "github", "tasks", "room", "by_hand"],
+                "enum": ["snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand"],
             },
             "who": "n",
             "line": "s",
@@ -2641,6 +2687,10 @@ SCHEMAS = {
             "ask": "b",
         },
         required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        href={
+            "type": ["string", "null"],
+            "description": "A paused bot's cause: the app page that shows it (#/settings/computers, #/settings/billing)",
+        },
         running={
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
@@ -2661,6 +2711,16 @@ SCHEMAS = {
             # A page requirement: the page attached now, at the version an OK of it is for.
             "page": obj({"file_id": "s", "version": "i", "ref": "s"}, required=["file_id", "version", "ref"]),
             "answer": {"oneOf": [obj({"id": "s", "value": "s", "note": "n", "by": "s", "at": "s"}), {"type": "null"}]},
+            # A stage's answer: how it is named and what it takes. Absent on every other requirement.
+            "typed": obj(
+                {
+                    "name": "s",
+                    "type": {"enum": ["text", "number", "choice"]},
+                    "min": {"type": ["integer", "null"]},
+                    "max": {"type": ["integer", "null"]},
+                    "question": "s",
+                }
+            ),
             "may": items({"enum": ["done", "ok", "no", "again", "answer", "give", "undo", "withdraw", "thumbs"]})
             | {"description": "What this reader may do with it: a hint, the engine decides"},
         },
@@ -2862,6 +2922,15 @@ SCHEMAS = {
             "goals": "s",
             "turns_at_once": {"type": ["integer", "null"]},
             "task_flow": ref("TaskFlow"),
+            "routines": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "name": {"type": "string"}, "on": {"type": "boolean"}},
+                },
+                "description": "For a caller who can read it: the bot's routines (its automations, the first 20) and "
+                "whether each is on now",
+            },
             "cant_run": {
                 "type": ["object", "null"],
                 "properties": {
@@ -2876,6 +2945,7 @@ SCHEMAS = {
                             "resume_company",
                             "unlock_cloud",
                             "add_credit",
+                            "open_computers",
                             None,
                         ]
                     },
@@ -3051,8 +3121,8 @@ SCHEMAS = {
             },
             "routine": {
                 "type": ["string", "null"],
-                "description": "The template's first routine when this call "
-                "armed it (on, unless a person turned it off); null when setup had armed it already",
+                "description": "The first of the template's routines this call turned on (one a person "
+                "turned off stays off); null when it turned none on",
             },
         },
         required=["bot", "onboarding_state", "changed"],
@@ -3169,7 +3239,7 @@ SCHEMAS = {
     ),
     "PipelineLog": obj(
         {
-            "log": items(obj({"at": "s", "text": "s", "task_id": "s", "by": "n", "why": "s"})),
+            "log": items(obj({"at": "s", "text": "s", "task_id": "n", "by": "n", "why": "s"})),
             "learned": items(obj({"at": "s", "text": "s"})),
         }
     ),
@@ -3821,8 +3891,11 @@ SCHEMAS = {
         on_fallback={
             "type": "array",
             "items": {"type": "object"},
-            "description": "Bots whose latest run in the last day ran on a fallback harness (the caller may read "
-            "them): bot, harness, since (when the unbroken run of fallback turns began)",
+            "description": "Bots whose latest run in the last day ran on something other than what they are set to "
+            "(the caller may read them): bot, harness (what ran it), model (the model that did the work, or null), "
+            "waiting_for_sign_in (the runtime it is set to, when the Gateway ran it because that runtime is not signed "
+            "in on its computer, else null), set_to {runtime, model}, line (one plain sentence), changed_at (when the "
+            "unbroken run of such turns began)",
         },
         limited={
             "type": "array",
@@ -3920,7 +3993,7 @@ SCHEMAS = {
                     obj({"room_id": "s", "bot": "s", "name": "s"}, required=["room_id", "bot", "name"]),
                     {"type": "null"},
                 ],
-                "description": "The owner's earlier chat with the Strategy Bot, read-only (GET "
+                "description": "The owner's earlier chat with the Strategy Owner, read-only (GET "
                 "/api/v2/conversations/{room_id}/messages); null for everyone else, or none",
             },
         },
@@ -4018,11 +4091,11 @@ SCHEMAS = {
             "status_at": "n",
             "status_source": {
                 "type": ["string", "null"],
-                "description": "auto: worked out by the Strategy Bot; person: set by hand and kept until handed back",
+                "description": "auto: worked out by the Strategy Owner; person: set by hand and kept until handed back",
             },
             "suggest_status": {
                 "type": ["string", "null"],
-                "description": "On a colour set by hand: the colour the Strategy Bot would choose, when it differs",
+                "description": "On a colour set by hand: the colour the Strategy Owner would choose, when it differs",
             },
             "suggest_note": "n",
             "suggest_at": "n",
@@ -4290,7 +4363,7 @@ SCHEMAS = {
             "asked_today": {
                 "type": "object",
                 "additionalProperties": {"type": "integer"},
-                "description": "{person actor: items the Strategy Bot put in their Needs you today (UTC)}",
+                "description": "{person actor: items the Strategy Owner put in their Needs you today (UTC)}",
             },
             "level3_offer": ref("StrategyBotLevel3Offer"),
         },
@@ -4344,7 +4417,7 @@ SCHEMAS = {
         {
             "task": {
                 "type": "object",
-                "description": "The merged item: the Strategy Bot's task, waiting on the person",
+                "description": "The merged item: the Strategy Owner's task, waiting on the person",
             },
             "originals": items(
                 obj(
@@ -5351,7 +5424,7 @@ STABLE.extend(
             "get",
             "Finance",
             "listFinanceSubscriptions",
-            "The subscriptions the caller sees: recurring charges the daily look suggests and the Bookkeeper confirms, each "
+            "The subscriptions the caller sees: recurring charges the daily look suggests and the Finance Owner confirms, each "
             "with its cadence, expected amount and monthly cost in cents, next charge, card, seats and attribution, and the "
             "monthly total of the active ones. status narrows them",
             "FinanceSubscriptions",
@@ -7368,7 +7441,7 @@ STABLE.extend(
             'get',
             'Strategy',
             'listStrategyGuides',
-            'The question guides the Strategy Bot drafts with',
+            'The question guides the Strategy Owner drafts with',
             None,
         ),
         (
@@ -8607,7 +8680,7 @@ STABLE.extend(
             'post',
             'Rules',
             'readRuleDocument',
-            'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it',
+            'Add a document for the Rules Owner to read: a file you can read, or a public link (saved as a file version); the Rules Owner suggests the rules in it',
             None,
         ),
         (
@@ -8615,7 +8688,7 @@ STABLE.extend(
             'post',
             'Rules',
             'askRules',
-            'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task',
+            'A can-I question: the active rules that share words with it, cited, and the Rules Owner\'s answer on a task',
             None,
         ),
         (

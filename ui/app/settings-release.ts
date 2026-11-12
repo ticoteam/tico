@@ -1,5 +1,5 @@
-/* ui/app/settings-release.ts — The built-in bots' cards on their bot page's Settings (Releases on the Release Manager's,
-   Task Manager's and the Strategy Bot's), Settings > Security's Screening card, and the board's Release now
+/* ui/app/settings-release.ts — The built-in bots' cards on their bot page's Settings (Releases on the Release Owner's,
+   General Manager's and the Strategy Owner's), Settings > Security's Screening card, and the board's Release now
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -23,13 +23,13 @@ interface SettingsReleaseSchedule {
 // waiting tasks the caller may read; an open Release task's id (`already_open`) comes only to someone who may read it.
 interface SettingsReleaseNowAnswer { sent?: boolean; tasks?: number; reason?: string | null; task?: string | null; }
 
-// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Manager and
+// The daily release (docs/pipelines-v3.md D13): on or off, one or two company times, the Release Owner and
 // Technical Writer ("" finds each by its starter template), the next and last hour, and how many tasks wait for a
 // release. Owners and admins change it (`can_change`); `can_release` may ask for a release now.
 let RELEASE_VIEW: SettingsReleaseSchedule | null = null, RELEASE_AT = 0;
 // The last answer under the card (Saved, or what Release now did) survives the repaint the fresh schedule causes.
 let RELEASE_NOTE: {text: string; failed: boolean; task?: string | null} = {text: '', failed: false};
-const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Manager'};
+const RELEASE_REASONS: Record<string, string> = {already_open: 'A release task is open', no_release_manager: 'No Release Owner'};
 const releaseTasks = (n: number | undefined) => `${n ?? 0} task${n === 1 ? '' : 's'}`;
 async function releaseScheduleLoad(force?: boolean): Promise<SettingsReleaseSchedule> {
   if (!force && RELEASE_VIEW && Date.now() - RELEASE_AT < 60000) return RELEASE_VIEW;
@@ -55,7 +55,7 @@ function releaseNowButtonHTML(v: SettingsReleaseSchedule): string {
   return '<button type="button" class="ghost" data-release-now>Release now</button>';
 }
 // The request is filed whether or not anything waits (the count shows only what the caller may read, so it never
-// decides the button); the Release Manager closes it when nothing does. The note goes with it.
+// decides the button); the Release Owner closes it when nothing does. The note goes with it.
 function releaseNoteHTML(v: SettingsReleaseSchedule): string {
   return v.can_release ? '<input type="text" data-release-note maxlength="1000" placeholder="Note" aria-label="Release note">' : '';
 }
@@ -66,7 +66,7 @@ function releaseCardHTML(v: SettingsReleaseSchedule): string {
     : `<span class="tnum">${esc(t)}</span>`;
   const on = v.can_change ? `<label class="sysr-switch">${peopleSwitch('data-release-on', v.on, false, 'Daily release')}<span>${v.on ? 'On' : 'Off'}</span></label>`
     : `<span>${v.on ? 'On' : 'Off'}</span>`;
-  const manager = v.can_change ? releaseBotPick('bot', v.bot, v.release_manager, 'Release Manager') : `<span>${esc(v.release_manager ? empName(v.release_manager) : 'None')}</span>`;
+  const manager = v.can_change ? releaseBotPick('bot', v.bot, v.release_manager, 'Release Owner') : `<span>${esc(v.release_manager ? empName(v.release_manager) : 'None')}</span>`;
   const writer = v.can_change ? releaseBotPick('writer', v.writer, v.technical_writer, 'Technical Writer') : `<span>${esc(v.technical_writer ? empName(v.technical_writer) : 'None')}</span>`;
   return `<div class="sb-rows rel-rows">
     <div class="sb-row"><span>Daily</span><div class="rel-line">${on}</div><span></span></div>
@@ -92,7 +92,7 @@ async function releaseSave(body: Record<string, unknown>): Promise<void> {
   try { RELEASE_VIEW = await patch('/v2/release-schedule', body); RELEASE_AT = Date.now(); releaseCardPaint(); releaseStatus('Saved'); }
   catch (e) { releaseCardPaint(); releaseStatus(errorMessage(e, 'Try again'), true); }
 }
-// One press asks the Release Manager; the answer says whether a task was filed, an open one woken, or why not.
+// One press asks the Release Owner; the answer says whether a task was filed, an open one woken, or why not.
 async function releaseNow(button: HTMLButtonElement | null, note = ''): Promise<{text: string; failed: boolean; task?: string | null}> {
   if (button) button.disabled = true;
   let text = '', failed = false, task: string | null = null;
@@ -147,24 +147,24 @@ async function renderReleaseCard(): Promise<void> {
   if (Array.isArray(RELEASE_VIEW?.times)) releaseCardPaint();
 }
 
-// The Task Manager (backend/task_manager.py): a built-in helper that checks each department's tasks on a schedule
+// The General Manager (backend/general_manager.py): a built-in helper that checks each department's tasks on a schedule
 // and files one check task per department with what it found. The owner pauses and resumes it.
-interface SettingsTaskManagerDepartment {
+interface SettingsGeneralManagerDepartment {
   department: string;
   name: string;
   checked?: string | null;
   items: number;
   task?: { id: string; title?: string } | null;
 }
-interface SettingsTaskManagerView {
+interface SettingsGeneralManagerView {
   on: boolean;
   state?: string;
   bot?: string;
   last_run?: { started_at?: string | null; finished_at?: string | null } | null;
-  departments?: SettingsTaskManagerDepartment[];
+  departments?: SettingsGeneralManagerDepartment[];
 }
-let TASK_MANAGER_VIEW: SettingsTaskManagerView | null = null;
-function taskManagerHTML(v: SettingsTaskManagerView): string {
+let GENERAL_MANAGER_VIEW: SettingsGeneralManagerView | null = null;
+function generalManagerHTML(v: SettingsGeneralManagerView): string {
   const owner = S.me?.role === 'owner';
   const state = v.on ? 'On' : v.state === 'paused' ? 'Paused' : 'Off';
   const last = v.last_run && (v.last_run.finished_at || v.last_run.started_at);
@@ -180,17 +180,17 @@ function taskManagerHTML(v: SettingsTaskManagerView): string {
       ${toggle}${botPageView()?.slug === v.bot ? '' : `<a class="ghost" href="#/bot/${encodeURIComponent(String(v.bot))}">Open</a>`}</div>
     <div class="tm-list">${rows}</div><p class="settings-cell-note" role="status" data-tm-status></p>`;
 }
-function taskManagerPaint(): void {
-  const el = document.querySelector<HTMLElement>('#set-task-manager'), card = document.querySelector<HTMLElement>('#set-task-manager-card');
-  if (!el || !card || !TASK_MANAGER_VIEW) return;
+function generalManagerPaint(): void {
+  const el = document.querySelector<HTMLElement>('#set-general-manager'), card = document.querySelector<HTMLElement>('#set-general-manager-card');
+  if (!el || !card || !GENERAL_MANAGER_VIEW) return;
   card.hidden = false;
-  el.innerHTML = taskManagerHTML(TASK_MANAGER_VIEW);
+  el.innerHTML = generalManagerHTML(GENERAL_MANAGER_VIEW);
   el.onclick = async ev => {
     const toggle = eventElement(ev)?.closest<HTMLButtonElement>('[data-tm-toggle]'); if (!toggle) return;
     toggle.disabled = true;
     try {
-      await post('/v2/task-manager/turn-' + toggle.dataset.tmToggle, {});
-      TASK_MANAGER_VIEW = await get<SettingsTaskManagerView>('/v2/task-manager'); taskManagerPaint();
+      await post('/v2/general-manager/turn-' + toggle.dataset.tmToggle, {});
+      GENERAL_MANAGER_VIEW = await get<SettingsGeneralManagerView>('/v2/general-manager'); generalManagerPaint();
     } catch (e) {
       toggle.disabled = false;
       // The status line is drawn with the card above.
@@ -198,11 +198,11 @@ function taskManagerPaint(): void {
     }
   };
 }
-async function renderTaskManagerCard(): Promise<void> {
-  if (!document.querySelector('#set-task-manager')) return;
-  // An install without the Task Manager answers 404; the card stays hidden.
-  try { TASK_MANAGER_VIEW = await get<SettingsTaskManagerView>('/v2/task-manager'); } catch { return; }
-  if (Array.isArray(TASK_MANAGER_VIEW?.departments)) taskManagerPaint();
+async function renderGeneralManagerCard(): Promise<void> {
+  if (!document.querySelector('#set-general-manager')) return;
+  // An install without the General Manager answers 404; the card stays hidden.
+  try { GENERAL_MANAGER_VIEW = await get<SettingsGeneralManagerView>('/v2/general-manager'); } catch { return; }
+  if (Array.isArray(GENERAL_MANAGER_VIEW?.departments)) generalManagerPaint();
 }
 
 // Screening (backend/screening.py): a switch per detector (patterns, decision model), a mode per door outside text comes
@@ -292,17 +292,17 @@ async function renderScreeningCard(): Promise<void> {
 }
 
 // A built-in bot's own card on its page's Settings tab (ui/app/bot-page.ts), drawn only on that bot's page: the Task
-// Manager's checks, the Strategy Bot's levels (the owner's alone), and Releases on whichever bot the release schedule
-// names or finds as its Release Manager. Each keeps the permissions it had in Settings: the server's answers decide.
+// Manager's checks, the Strategy Owner's levels (the owner's alone), and Releases on whichever bot the release schedule
+// names or finds as its Release Owner. Each keeps the permissions it had in Settings: the server's answers decide.
 function botBuiltinCardsHTML(slug: string): string {
-  if (slug === 'task-manager') return '<section class="card" id="set-task-manager-card" hidden><header><h2>Task Manager</h2><span class="pill">Built-in</span></header><div id="set-task-manager"></div></section>';
-  if (slug === 'goal-manager' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
+  if (slug === 'general-manager') return '<section class="card" id="set-general-manager-card" hidden><header><h2>General Manager</h2><span class="pill">Built-in</span></header><div id="set-general-manager"></div></section>';
+  if (slug === 'strategy-owner' && settingsStrategyBotShown()) return `<section class="card" id="set-strategy-bot-card"><header><h2>${esc(strategyBotName())}</h2><span class="pill">Built-in</span></header>
     <div id="set-strategy-bot">${skelRows(3, {card: true, dot: false})}</div></section>`;
   return '';
 }
 async function botBuiltinCardsMount(slug: string): Promise<void> {
-  if (slug === 'task-manager') void renderTaskManagerCard();
-  if (slug === 'goal-manager') void renderSettingsStrategyBot();
+  if (slug === 'general-manager') void renderGeneralManagerCard();
+  if (slug === 'strategy-owner') void renderSettingsStrategyBot();
   const host = document.querySelector<HTMLElement>('#bot-builtin-cards');
   try { await releaseScheduleLoad(); } catch { return; }   // a team with no schedule to read has no Releases card
   if (botPageView()?.slug !== slug || !host?.isConnected || (RELEASE_VIEW?.bot || RELEASE_VIEW?.release_manager) !== slug) return;

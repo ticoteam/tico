@@ -661,6 +661,9 @@ def start_turn(
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
     due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
+    from . import bookkeeper
+
+    where = bookkeeper.filing(c, H.bot_actor(bot))
     task = H.task_create(
         c,
         actor,
@@ -670,6 +673,8 @@ def start_turn(
         due=due,
         lint=False,
         deduplicate=False,
+        pipeline=where[0],  # the Finance Owner's routines run in Finance, at Review (bookkeeper.filing)
+        stage=where[1],
         routine=True,
         trigger="other",
         trigger_source="automation:" + auto["id"],
@@ -722,13 +727,6 @@ FIND = {
         "created_at",
         "id",
         2,
-    ),
-    "listening": (
-        "SELECT i.id, i.destination, l.url, l.author, l.content, i.created_at AS at FROM intake_items i "
-        "JOIN listen_items l ON l.id=i.item_id WHERE {after} AND l.content LIKE ?",
-        "i.created_at",
-        "i.id",
-        1,
     ),
     "docs": (
         "SELECT id, path, title, updated_at AS at FROM docs WHERE archived=0 AND {after} "

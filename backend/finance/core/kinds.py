@@ -719,7 +719,7 @@ SHAPES: dict[str, tuple[Field, ...]] = {
             "invoice_id",
             "str",
             "posts accounts receivable debit, income credit; with an email on file and a "
-            "Bookkeeper mailbox, returns the email's text under a send approval",
+            "Finance Owner mailbox, returns the email's text under a send approval",
         ),
     ),
     "invoice_remind": (
@@ -728,12 +728,12 @@ SHAPES: dict[str, tuple[Field, ...]] = {
             "stage",
             "int",
             "days past its due date: 1, 7, 30, 60 or 90; each stage is reminded once, and only "
-            "once the invoice is that late; needs a Bookkeeper mailbox and an email on "
+            "once the invoice is that late; needs a Finance Owner mailbox and an email on "
             "file",
         ),
     ),
     "invoice_delivery": (
-        ("invoice_id", "str", "the invoice whose email the Bookkeeper sent or tried to"),
+        ("invoice_id", "str", "the invoice whose email the Finance Owner sent or tried to"),
         ("stage?", "int", "a reminder's stage (1, 7, 30, 60 or 90); left out for the invoice's own email"),
         ("delivered", "bool", "true when the email went out; false with a reason when it did not"),
         ("reason?", "str", "why it did not go (required when delivered is false)"),
@@ -950,7 +950,7 @@ WORDS: dict[str, str] = {
     "invoice_create": "Draft an invoice.",
     "invoice_send": "Send an invoice: it posts to receivables, and returns its email (text, recipients, send approval).",
     "invoice_remind": "Remind the customer an unpaid invoice is late (once per stage), by email under a send approval.",
-    "invoice_delivery": "Report whether the Bookkeeper's invoice email went out: delivered, or why it did not.",
+    "invoice_delivery": "Report whether the Finance Owner's invoice email went out: delivered, or why it did not.",
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.",
     "invoice_void": "Void an invoice.",

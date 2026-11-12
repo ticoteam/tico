@@ -54,7 +54,7 @@ const closed = async (page: Page) => {
 // counsel_run): only that run cites the document it was asked to read.
 async function counselRun(hub: RealHubSupport.Hub): Promise<{token: string; who: string}> {
   const runner = {token: hub.runner, who: 'the runner'};
-  const {attempt} = await call<{attempt?: {id: string; token: string}}>(hub, runner, 'POST', '/v2/jobs/claim', {bot: 'tico-counsel', start_places: true});
+  const {attempt} = await call<{attempt?: {id: string; token: string}}>(hub, runner, 'POST', '/v2/jobs/claim', {bot: 'rules-owner', start_places: true});
   assert.ok(attempt, 'Counsel has a run to claim');
   await call(hub, runner, 'POST', `/v2/attempts/${attempt.id}/started`, {thread_id: 'local-thread'});
   return {token: attempt.token, who: 'Counsel run'};
@@ -74,10 +74,10 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await ready(page);
 
     // Counsel is a hidden helper: on the roster, but not on the Team list, and its bot page has no composer.
-    assert.ok(await page.evaluate(() => S.emps.some(e => e.name === 'tico-counsel')), 'Counsel is on the roster');
+    assert.ok(await page.evaluate(() => S.emps.some(e => e.name === 'rules-owner')), 'Counsel is on the roster');
     await page.locator('[data-org^="b:"]').first().waitFor({timeout: t(15000)});
-    assert.equal(await page.locator('[data-org="b:tico-counsel"], #side a[href="#/bot/tico-counsel"]').count(), 0, 'Counsel is not on the Team list');
-    await go(page, '#/bot/tico-counsel');
+    assert.equal(await page.locator('[data-org="b:rules-owner"], #side a[href="#/bot/rules-owner"]').count(), 0, 'Counsel is not on the Team list');
+    await go(page, '#/bot/rules-owner');
     await page.locator('#bot-thread .thv-scroll').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('#bot-thread textarea').count(), 0, 'no composer on its page');
     assert.equal(await page.locator('#btabs [data-bt="dm"]').count(), 0, 'and no DM tab');
@@ -96,7 +96,7 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await done.waitFor({timeout: t(15000)});
     const taskId = (await done.getAttribute('data-ru-read'))!;
     const task = await call<{task?: {owner_id: string}; owner_id?: string}>(hub, 'dana', 'GET', '/v2/tasks/' + taskId);
-    assert.equal((task.task || task).owner_id, 'bot:tico-counsel', 'a Counsel task');
+    assert.equal((task.task || task).owner_id, 'bot:rules-owner', 'a Counsel task');
     assert.match((await modal.locator('[data-ru-task]').getAttribute('href'))!, new RegExp(taskId));
     await modal.locator('[data-ru-close]').first().click();
 
@@ -142,8 +142,8 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
                   file: {id: (await call<{files: {id: string; title: string}[]}>(hub, 'dana', 'GET', '/v2/files?limit=50')).files.find(f => f.title === 'Northwind Messaging Terms')!.id, version: 1},
                   run: await counselRun(hub)};
     const open = await suggest(hub, read, 'Keep a consent record for five years.', {}, {section: '4. Messaging', quote: QUOTE});
-    const logs = await suggest(hub, read, 'Delete raw logs after 30 days.', {bots: ['engineering-lead']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
-    const optout = await suggest(hub, read, 'Every customer text has an opt-out line.', {bots: ['engineering-lead']});
+    const logs = await suggest(hub, read, 'Delete raw logs after 30 days.', {bots: ['engineering-manager']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
+    const optout = await suggest(hub, read, 'Every customer text has an opt-out line.', {bots: ['engineering-manager']});
     assert.ok([open, logs, optout].every(r => r.status === 'suggested'));
 
     // Suggested: no document name or quote on the rows; the row with no Who can't be added until one is picked.
@@ -154,8 +154,8 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     assert.ok(await row.locator('[data-ru-accept]').isDisabled(), 'Add waits for a Who');
     // Counsel is a helper, never a Who: not among the row's choices.
     const whoChoices = await row.locator('[data-ru-who] option').evaluateAll(os => os.map(o => (o as HTMLOptionElement).value + ' ' + o.textContent));
-    assert.ok(whoChoices.some(v => v.includes('engineering-lead')), 'bots are offered');
-    assert.ok(!whoChoices.some(v => /counsel/i.test(v)), 'Counsel is not offered as Who');
+    assert.ok(whoChoices.some(v => v.includes('engineering-manager')), 'bots are offered');
+    assert.ok(!whoChoices.some(v => /counsel|rules.owner/i.test(v)), 'Counsel is not offered as Who');
     const groupText = (await group.textContent())!;
     assert.ok(!groupText.includes(QUOTE) && !groupText.includes('Northwind Messaging Terms'), 'no quote or document on the rows');
 
@@ -173,8 +173,8 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
       await new Promise(r => setTimeout(r, 0));
       return [...(el.querySelectorAll('.ru-addsel option') as unknown as Iterable<HTMLOptionElement>)].map(o => o.value + ' ' + o.textContent);
     });
-    assert.ok(panelChoices.some(v => v.includes('engineering-lead')) && !panelChoices.some(v => /counsel/i.test(v)),
-      "Counsel is not offered in the panel's Who");
+    assert.ok(panelChoices.some(v => v.includes('engineering-manager')) && !panelChoices.some(v => /counsel|rules.owner/i.test(v)),
+      "the Rules Owner is not offered in the panel's Who");
 
     // Add all adds the two rows with a Who and leaves the one without waiting; its panel stays on it.
     await group.locator('[data-ru-add-all]', {hasText: 'Add all 2'}).click();
@@ -184,20 +184,20 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await page.locator(`#ru-side form[data-rule="${open.id}"]`).waitFor({timeout: t(5000)});
 
     // Pick a Who, and the row's Add works; the open panel on that rule closes rather than show the old suggestion.
-    await row.locator('[data-ru-who]').selectOption('bots:engineering-lead');
+    await row.locator('[data-ru-who]').selectOption('bots:engineering-manager');
     assert.ok(await row.locator('[data-ru-accept]').isEnabled());
     await row.locator('[data-ru-accept]').click();
     await group.waitFor({state: 'detached', timeout: t(15000)});
     await closed(page);
     const added = await call<Rule>(hub, 'dana', 'GET', '/v2/rules/' + open.id);
     assert.equal(added.status, 'active');
-    assert.deepEqual(added.who.bots.map(b => b.id), ['engineering-lead']);
+    assert.deepEqual(added.who.bots.map(b => b.id), ['engineering-manager']);
     assert.equal(added.cite.quote, QUOTE);
 
     // The same for a row's Skip and for Add all, each with its rule's panel open.
-    const skipped = await suggest(hub, read, 'Send texts only from the approved short code.', {bots: ['engineering-lead']});
-    const bulk = await suggest(hub, read, 'Stop texting a number that replies STOP.', {bots: ['engineering-lead']});
-    const bulk2 = await suggest(hub, read, 'Name the business in every text.', {bots: ['engineering-lead']});
+    const skipped = await suggest(hub, read, 'Send texts only from the approved short code.', {bots: ['engineering-manager']});
+    const bulk = await suggest(hub, read, 'Stop texting a number that replies STOP.', {bots: ['engineering-manager']});
+    const bulk2 = await suggest(hub, read, 'Name the business in every text.', {bots: ['engineering-manager']});
     // Away and back, each tab drawn before the next, so Suggested reads the new rows.
     await go(page, '#/rules/external');
     await page.locator('.ru-tabs a.cur[data-ru-tab="external"]').waitFor({timeout: t(10000)});
@@ -223,13 +223,13 @@ const suggest = (hub: RealHubSupport.Hub, read: ReadCtx, text: string, who: Who,
     await page.keyboard.press('Escape');
     await page.context().close();
 
-    // A teammate who can't read the file (the Release Manager, a bot with no access to the Engineering Lead's files)
+    // A teammate who can't read the file (the Release Owner, a bot with no access to the Engineering Lead's files)
     // sees the rule but not its quote.
     assert.deepEqual((await call<Rule>(hub, 'release-manager', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
     // The browser requires a person's sign-in. Restrict the source before using
     // a person outside its readers, preserving the bot's API privacy check too.
-    const access = await call<{see: unknown; read: unknown; write: unknown; revision: unknown}>(hub, 'dana', 'GET', '/v2/bots/engineering-lead/access');
-    await call(hub, 'dana', 'PUT', '/v2/bots/engineering-lead/access', {
+    const access = await call<{see: unknown; read: unknown; write: unknown; revision: unknown}>(hub, 'dana', 'GET', '/v2/bots/engineering-manager/access');
+    await call(hub, 'dana', 'PUT', '/v2/bots/engineering-manager/access', {
       see: access.see, read: {people: ['dana']}, write: access.write, revision: access.revision,
     });
     assert.deepEqual((await call<Rule>(hub, 'priya', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
@@ -254,7 +254,7 @@ async function shots(browser: Browser, hub: RealHubSupport.Hub, read: ReadCtx, r
   const dir = process.env.RULES_SHOTS!;
   fs.mkdirSync(dir, {recursive: true});
   await suggest(hub, read, 'Texts go out only between 8am and 9pm in the recipient’s time zone.', {});
-  await suggest(hub, read, 'Delete raw message logs after 30 days.', {bots: ['engineering-lead']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
+  await suggest(hub, read, 'Delete raw message logs after 30 days.', {bots: ['engineering-manager']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
   const groups = await call<{id: string; name: string}[] | {groups?: {id: string; name: string}[]}>(hub, 'dana', 'GET', '/v2/groups');
   const team = (Array.isArray(groups) ? groups : groups.groups || []).find(g => g.name === 'Engineering');
   await suggest(hub, read, 'Every marketing text says how to opt out.', team ? {groups: [team.id]} : {all_bots: true});

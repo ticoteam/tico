@@ -1,5 +1,5 @@
 """Finance: Tico's own books for the previous full month and this month to date, four monthly budgets (one near its
-limit), six invoices, bills and finance rules. The Bookkeeper's books view is granted six days before the build, and its
+limit), six invoices, bills and finance rules. The Finance Owner's books view is granted six days before the build, and its
 first rule proposal, made four days before it, waits for Ana's OK.
 
 The books are dated from the build's own moment (`b.now`): the previous full month, then this month up to the build, so
@@ -19,9 +19,8 @@ from ..finance import actions as FA
 from ..finance import reads as RD
 
 OWNER = "human:ana"
-BOOKKEEPER = "bot:bookkeeper"
-ACCOUNTS_PAYABLE = "bot:accounts-payable"
-FINANCE_LEAD = "bot:finance-lead"
+FINANCE_OWNER = "bot:finance-owner"
+ACCOUNTS_PAYABLE = "bot:accounts-payable-specialist"
 
 # A date in CONTENT is (month, day): "prev" is the previous full month and "this" the build's month. Days run 1 to 28
 # so every month has them. Memos and descriptions may use {date}, {month} and {through} (the day before
@@ -85,9 +84,9 @@ CONTENT = {
         "source_id": "gateway-usage",
         "memo": "Gateway usage, {month}",
         "by_teammate": [
-            ("bot:sales-lead", 21460),
-            ("bot:support-lead", 9640),
-            ("bot:marketing-lead", 18825),
+            ("bot:growth-manager", 21460),
+            ("bot:success-manager", 9640),
+            ("bot:growth-manager", 18825),
             ("bot:product-manager", 31210),
         ],
     },
@@ -106,7 +105,7 @@ CONTENT = {
         {"key": "ridgeline", "name": "Ridgeline Dental Group", "email": "office@ridgeline.example"},
         {"key": "mapleridge", "name": "Maple Ridge Parks Dept", "email": "ap@mapleridge.example"},
     ],
-    # Drafted by the bookkeeper and sent by Ana. ACME-1001 is paid; ACME-1003 is overdue and ar-followup chases it.
+    # Drafted by the bookkeeper and sent by Ana. ACME-1001 is paid; ACME-1003 is overdue and accounts-receivable-specialist chases it.
     # The others fall due later this month, so only ACME-1003 is late on any day in the first half of the month.
     "invoices": [
         {
@@ -182,7 +181,7 @@ CONTENT = {
         {
             "vendor": "fernway",
             "number": "FA-1015",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("prev", 16),
             "due": ("prev", 28),
             "amount": 270000,
@@ -194,7 +193,7 @@ CONTENT = {
         {
             "vendor": "fernway",
             "number": "FA-1031",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("prev", 20),
             "due": ("prev", 28),
             "amount": 270000,
@@ -206,7 +205,7 @@ CONTENT = {
         {
             "vendor": "kiln",
             "number": "KR-5504",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("prev", 1),
             "due": ("prev", 28),
             "amount": 112500,
@@ -218,7 +217,7 @@ CONTENT = {
         {
             "vendor": "quillwork",
             "number": "QW-7741",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("prev", 1),
             "due": ("prev", 15),
             "amount": 29900,
@@ -242,7 +241,7 @@ CONTENT = {
         {
             "vendor": "fernway",
             "number": "FA-1042",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("this", 1),
             "due": ("this", 28),
             "amount": 270000,
@@ -253,7 +252,7 @@ CONTENT = {
         {
             "vendor": "kiln",
             "number": "KR-5520",
-            "by": BOOKKEEPER,
+            "by": FINANCE_OWNER,
             "date": ("this", 1),
             "due": ("this", 28),
             "amount": 112500,
@@ -276,13 +275,19 @@ CONTENT = {
     # One monthly budget each, starting this month. Spend this month is judged against them; the previous month is
     # history, so its spend is not a budget's concern.
     "budgets": [
-        {"name": "Paid advertising", "account": "6300", "owner": "bot:marketing-lead", "amount": 300000, "by": OWNER},
+        {
+            "name": "Paid advertising",
+            "account": "6300",
+            "owner": "bot:growth-manager",
+            "amount": 300000,
+            "by": OWNER,
+        },
         {
             "name": "Render cloud hosting",
             "account": "5600",
             "owner": "bot:product-manager",
             "amount": 150000,
-            "by": FINANCE_LEAD,
+            "by": OWNER,
         },
         {"name": "Marketplace fees", "account": "6200", "owner": OWNER, "amount": 100000, "by": OWNER},
         {"name": "Freight in", "account": "5400", "owner": ACCOUNTS_PAYABLE, "amount": 250000, "by": OWNER},
@@ -323,12 +328,12 @@ CONTENT = {
             "on": ("prev", 1),
         },
     ],
-    # The Bookkeeper's first rule proposal. A bot's rule needs a person's OK, so it waits for Ana. It is made four days
+    # The Finance Owner's first rule proposal. A bot's rule needs a person's OK, so it waits for Ana. It is made four days
     # before the build.
     "proposal": {
         "kind": "posting",
         "name": "Freight bills go to 5400",
-        "by": BOOKKEEPER,
+        "by": FINANCE_OWNER,
         "words": "Bills from Keelson Freight Forwarding post to Freight in.",
         "when": {"counterparty": "Keelson Freight Forwarding"},
         "outcome": {"outcome": "post", "account": "5400"},
@@ -342,9 +347,9 @@ CONTENT = {
         ],
         "proposed": ("ago", 4),
     },
-    # The Bookkeeper's books view: Ana grants it on Finance's Access page six days before the build, and marks the
-    # Bookkeeper's ask done. The Bookkeeper's entries follow it, since it can only post to accounts it can see.
-    "view": {"granted": ("ago", 6), "note": "The Bookkeeper can see the books (Everything)."},
+    # The Finance Owner's books view: Ana grants it on Finance's Access page six days before the build, and marks the
+    # Finance Owner's ask done. The Finance Owner's entries follow it, since it can only post to accounts it can see.
+    "view": {"granted": ("ago", 6), "note": "The Finance Owner can see the books (Everything)."},
     "chase": {
         "title": "Chase ACME-1003 from Tidewater Coffee Co.",
         "body": (
@@ -455,8 +460,7 @@ def _setup(c, cal):
     FA.ensure_setup(c, CONTENT["owner_email"], cal.at(opened, hour=8))
     bookkeeper.grant_defaults(c)
     _act(c, cal, OWNER, "right_grant", {"teammate": ACCOUNTS_PAYABLE, "right": "finance.ap"}, "right-ap", opened)
-    _act(c, cal, OWNER, "right_grant", {"teammate": FINANCE_LEAD, "right": "finance.budgets"}, "right-budgets", opened)
-    for who in (ACCOUNTS_PAYABLE, FINANCE_LEAD):
+    for who in (ACCOUNTS_PAYABLE,):  # the Finance Owner's own view comes later (_bookkeeper_view)
         _act(
             c,
             cal,
@@ -510,7 +514,7 @@ def _books(c, cal):
     _journal(
         c,
         cal,
-        BOOKKEEPER,
+        FINANCE_OWNER,
         "topup",
         tu["date"],
         tu["memo"],
@@ -521,7 +525,7 @@ def _books(c, cal):
         _journal(
             c,
             cal,
-            BOOKKEEPER,
+            FINANCE_OWNER,
             f"store-{i}",
             week["date"],
             week["memo"],
@@ -532,7 +536,7 @@ def _books(c, cal):
     _journal(
         c,
         cal,
-        BOOKKEEPER,
+        FINANCE_OWNER,
         "store-this-month",
         st["date"],
         st["memo"],
@@ -543,7 +547,7 @@ def _books(c, cal):
         _journal(
             c,
             cal,
-            BOOKKEEPER,
+            FINANCE_OWNER,
             f"marketplace-{i}",
             pay["date"],
             pay["memo"],
@@ -557,7 +561,7 @@ def _books(c, cal):
     sub = CONTENT["subscriptions"]
     rows = [("1000", sum(amount for _, amount in sub["lines"]), "Subscription payments")]
     rows += [("4500", -amount, label) for label, amount in sub["lines"]]
-    _journal(c, cal, BOOKKEEPER, "subscriptions", sub["date"], sub["memo"], rows, codes)
+    _journal(c, cal, FINANCE_OWNER, "subscriptions", sub["date"], sub["memo"], rows, codes)
     use = CONTENT["usage"]
     lines = [_line(codes["5100"], amount, "AI services", {"teammate": who}) for who, amount in use["by_teammate"]]
     lines.append(_line(codes["1100"], -sum(amount for _, amount in use["by_teammate"]), "Gateway credit used"))
@@ -581,7 +585,7 @@ def _billing(c, cal):
         res = _act(
             c,
             cal,
-            BOOKKEEPER,
+            FINANCE_OWNER,
             "contact_create",
             {"name": v["name"], "kind": "vendor", "emails": [v["email"]]},
             f"vendor-{v['key']}",
@@ -592,7 +596,7 @@ def _billing(c, cal):
         res = _act(
             c,
             cal,
-            BOOKKEEPER,
+            FINANCE_OWNER,
             "contact_create",
             {"name": cu["name"], "kind": "customer", "emails": [cu["email"]]},
             f"customer-{cu['key']}",
@@ -604,7 +608,7 @@ def _billing(c, cal):
         made = _act(
             c,
             cal,
-            BOOKKEEPER,
+            FINANCE_OWNER,
             "invoice_create",
             {
                 "customer_id": customers[inv["customer"]],
@@ -622,7 +626,7 @@ def _billing(c, cal):
             _act(
                 c,
                 cal,
-                BOOKKEEPER,
+                FINANCE_OWNER,
                 "invoice_record_payment",
                 {
                     "invoice_id": invoice_id,
@@ -674,18 +678,18 @@ def _rule_payload(rule, codes):
 
 
 def _bookkeeper_view(c, cal):
-    """Ana gives the Bookkeeper the books and marks its ask done. The grant comes before the Bookkeeper's first entry:
+    """Ana gives the Finance Owner the books and marks its ask done. The grant comes before the Finance Owner's first entry:
     a journal line on an account the poster cannot see is refused (handlers.may_write)."""
     ask = bookkeeper.ask_for_view(c, OWNER)
     if ask is None:
-        raise AssertionError("finance demo: the Bookkeeper's view was asked for before the demo's own ask")
+        raise AssertionError("finance demo: the Finance Owner's view was asked for before the demo's own ask")
     view = CONTENT["view"]
     _act(
         c,
         cal,
         OWNER,
         "view_grant",
-        {"subject_kind": "teammate", "subject": BOOKKEEPER, "what": "everything"},
+        {"subject_kind": "teammate", "subject": FINANCE_OWNER, "what": "everything"},
         "view-bookkeeper",
         view["granted"],
     )
@@ -699,11 +703,11 @@ def _rules_and_tasks(c, cal):
     chase = CONTENT["chase"]
     due = cal.day(next(i for i in CONTENT["invoices"] if i["number"] == chase["invoice"])["due"])
     body = chase["body"].format(due=cal.long(due), by=cal.long(cal.now.date() + timedelta(days=7)))
-    hubdb.task_create(c, OWNER, chase["title"], body, "bot:ar-followup", allow_planned=True)
+    hubdb.task_create(c, OWNER, chase["title"], body, "bot:accounts-receivable-specialist", allow_planned=True)
 
 
 def _propose_rule(c, cal, rule):
-    """The Bookkeeper's proposal: a bot's rule waits for a person's OK, so it lands in Ana's Needs you."""
+    """The Finance Owner's proposal: a bot's rule waits for a person's OK, so it lands in Ana's Needs you."""
     _act(
         c,
         cal,

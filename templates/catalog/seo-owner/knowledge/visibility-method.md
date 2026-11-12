@@ -1,6 +1,6 @@
 # Visibility method
 
-The standing method behind `playbooks/weekly-visibility-report.md`. `prompts.md` holds the questions and `pages.md`
+The standing method behind the SEO Watch routine (`playbooks/watch.md`) and the SEO bets. `prompts.md` holds the questions and `pages.md`
 the pages. This file holds what is true about how search and AI answers work, so each run does not re-derive it. Every
 figure carries its source and the year it was read. Check a figure at its source before you quote it in a report.
 

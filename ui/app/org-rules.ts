@@ -5,7 +5,7 @@
    page is read, a team has dozens of rules), /rules/due, /rule-sources and /bots/<slug>/rules. A rule
    says whether the caller may change it (`can_edit`), so the panels show its controls only then; the server checks
    again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so. Add document
-   starts a Counsel review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
+   starts a Rules Owner review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
    quote shows in its side panel, never on its row.
    Addresses: #/rules[/external|/due|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>], and on Internal
    ?party=<party>[&rule=<id>] (a party as docs/reach.md writes it: *, group:<id>, human:<id>, bot:<id>). The filters stay on
@@ -69,7 +69,7 @@ interface RuleDue {
   ended_on?: string | null;
   replaced_by?: string | null;
 }
-/** A rule as the rules API lists or reads it. `who` and `with` are the scope editor's; `cite` is Counsel's quote. */
+/** A rule as the rules API lists or reads it. `who` and `with` are the scope editor's; `cite` is the Rules Owner's quote. */
 interface RuleRow {
   id: string;
   kind: RuleKind;
@@ -218,7 +218,7 @@ const ruHref = (tab: string | null, q: Record<string, string> = {}) => {
 
 // ----------------------------------------------------------------- names
 const ruGroups = () => (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-// The Assistant and its helpers (Counsel among them) are in no bot picker (ui/app/sidebar.ts isHiddenBot).
+// The Assistant and its helpers (the Rules Owner among them) are in no bot picker (ui/app/sidebar.ts isHiddenBot).
 const ruBots = () => (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.id)).map(e => ({id: e.id, name: botDisplayName(e.id)}))
   .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 const ruPeople = () => (S.people || []).filter((p: RuPerson) => !p.hidden && !p.archived).map(p => ({id: p.id, name: p.name || p.email || p.id}))
@@ -977,7 +977,7 @@ function ruDrawSuggested(filters: HTMLElement, list: HTMLElement) {
     if (!group) { group = {name, rows: []}; groups.set(key, group); }
     group.rows.push(r);
   }
-  // A suggestion with no Who yet (Counsel may leave it open) is added only once its picker names one; Add all adds the
+  // A suggestion with no Who yet (the Rules Owner may leave it open) is added only once its picker names one; Add all adds the
   // rows that have one and leaves the rest waiting.
   list.innerHTML = [...groups].map(([key, g]) => `<section class="ru-sg" data-group="${esc(key)}"><header><h2>${esc(g.name)}</h2><span class="spacer"></span>
         <button class="primary small" type="button" data-ru-add-all="${esc(key)}" hidden></button></header>
@@ -1571,16 +1571,16 @@ async function ruAddOpen({kind = 'internal', who = null, after = null}: {kind?: 
 
 // ----------------------------------------------------------------- Add document
 // One file from Files (one the viewer can read) or a public link, From (an existing one, or a new name with its kind),
-// and an optional description. POST /rules/read opens Counsel's task; the dialog then says Counsel is reading it and
+// and an optional description. POST /rules/read opens the Rules Owner's task; the dialog then says the Rules Owner is reading it and
 // links the task. Asked again while that task is open, the server returns it (`existing`), and the dialog says so. When
-// screening holds the document (`screening: "hold"`), Counsel is given none of its text, and the dialog says that instead.
-const RU_DOC_SKIP = new Set(['image', 'media']);   // Files kinds Counsel reads no text from
+// screening holds the document (`screening: "hold"`), the Rules Owner is given none of its text, and the dialog says that instead.
+const RU_DOC_SKIP = new Set(['image', 'media']);   // Files kinds the Rules Owner reads no text from
 const RU_DOC_PICKS = 6;
 const ruIsLink = (v: string) => /^https?:\/\/\S+$/i.test(v);
-// A refusal as one line: Counsel off, or the server's own reason (a file Counsel can't read and why, a link that didn't
+// A refusal as one line: The Rules Owner off, or the server's own reason (a file the Rules Owner can't read and why, a link that didn't
 // open and why, a file or From that isn't there), which is already one line for the person.
 function ruDocError(e: unknown) {
-  if (errorCode(e) === 'counsel_off') return 'Counsel is off.';
+  if (errorCode(e) === 'counsel_off') return 'The Rules Owner is off.';
   return ruError(e);
 }
 async function ruDocOpen() {
@@ -1674,9 +1674,9 @@ async function ruDocOpen() {
     const title = esc(out.file?.title || pick?.title || link);
     form.innerHTML = `${head}
       ${out.screening === 'hold'
-        ? `<p class="ru-held" data-ru-read="${esc(out.task_id)}">Screening held <b>${title}</b>. Counsel won't suggest rules from it.</p>`
-        : `<p class="ru-done" data-ru-read="${esc(out.task_id)}">${out.existing ? `Counsel is already reading <b>${title}</b>.` : `Counsel is reading <b>${title}</b>.`}</p>
-      ${out.truncated ? '<p class="ru-warn">Long document: Counsel reads only the start.</p>' : ''}`}
+        ? `<p class="ru-held" data-ru-read="${esc(out.task_id)}">Screening held <b>${title}</b>. The Rules Owner won't suggest rules from it.</p>`
+        : `<p class="ru-done" data-ru-read="${esc(out.task_id)}">${out.existing ? `The Rules Owner is already reading <b>${title}</b>.` : `The Rules Owner is reading <b>${title}</b>.`}</p>
+      ${out.truncated ? '<p class="ru-warn">Long document: The Rules Owner reads only the start.</p>' : ''}`}
       <div class="ru-foot"><a href="#/task/${encodeURIComponent(out.task_id)}" data-ru-task>Open task ›</a><span class="spacer"></span><button class="primary" type="button" data-ru-close>Done</button></div>`;
     form.querySelectorAll('[data-ru-close], [data-ru-task]').forEach(b => { b.addEventListener('click', () => dlg.close()); });
   };

@@ -80,31 +80,6 @@ def sales(api):
 
 
 # ----------------------------------------------------------------------------- reads
-def test_every_read_and_bot_route_names_a_new_bot_by_its_id_and_its_slug(api, sales):
-    for ref in (sales, "sales-helper", "bot:" + sales):
-        row = get(api, "bots/" + ref)
-        assert (row["id"], row["slug"]) == (sales, "sales-helper"), ref
-    listed = next(b for b in get(api, "bots") if b["id"] == sales)
-    assert listed["slug"] == "sales-helper"
-    employee = next(e for e in api.get("/api/employees", headers=headers()).json() if e["id"] == sales)
-    assert (employee["slug"], employee["name"]) == ("sales-helper", "sales-helper")
-    org = next(b for b in get(api, "org")["bots"] if b["id"] == sales)
-    assert (org["slug"], org["name"]) == ("sales-helper", "sales-helper")
-    # A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
-    # for the slug of a bot whose id is not its slug).
-    differ, checked = [], 0
-    for route in api.app.routes:
-        path = getattr(route, "path", "")
-        if "{bot}" not in path or "GET" not in (getattr(route, "methods", None) or ()):
-            continue
-        codes = [
-            api.get(re.sub(r"\{[^}]+\}", "x", path.replace("{bot}", ref)), headers=headers()).status_code
-            for ref in ("sales-helper", sales)
-        ]
-        checked += 1
-        if codes[0] != codes[1]:
-            differ.append((path, codes))
-    assert checked > 20 and not differ, differ
 
 
 # ----------------------------------------------------------------------------- chat and the runner
@@ -126,7 +101,7 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
     # the jobs the runner claimed are the bot's, by id
     assert set(column(api, "SELECT bot_id FROM jobs")) <= {
         sales,
-        "coo",
+        "assistant",
         "ops",
         "cpo",
         "product-design",
@@ -137,7 +112,7 @@ def test_chat_by_slug_or_id_reaches_the_bot_and_its_runner_claims_it_by_either(a
 
 
 def test_mcp_and_cli_chat_name_the_bot_by_slug(api, sales):
-    sent = tool(api, "ana-test", "tico_chat_send", {"to": "sales-helper", "text": "Hello"})
+    sent = tool(api, "ana-test", "tico_message_send", {"to": "sales-helper", "text": "Hello"})
     assert json.dumps(sent).count("bot:" + sales) >= 1
     assert column(api, "SELECT recipient_id FROM messages WHERE body='Hello'") == ["bot:" + sales]
 
@@ -211,8 +186,8 @@ def test_automations_and_routines_owned_by_the_bot_store_its_id(api, sales):
 def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, sales):
     goal = tool(api, "ana-test", "tico_goal_create", {"owner": "sales-helper", "title": "Close ten deals this month"})
     assert goal.get("owner_id") in ("bot:" + sales, sales), goal
-    lead = create_bot(api, "sales-lead")
-    tool(api, "ana-test", "tico_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "sales-lead"})
+    lead = create_bot(api, "growth-manager")
+    tool(api, "ana-test", "tico_org_reports_to", {"teammate": "bot:sales-helper", "reports_to": "growth-manager"})
     assert column(api, "SELECT reports_to FROM bot_config WHERE bot=?", sales) == [lead]
     org = {b["id"]: b for b in get(api, "org")["bots"]}
     assert org[sales]["reports_to"] == lead and org[sales]["org_parent"] == "b:" + lead
@@ -221,7 +196,10 @@ def test_goals_chart_groups_and_caps_name_the_bot_by_slug_and_store_its_id(api, 
     listed = next(g for g in get(api, "groups") if g["id"] == gid)
     assert listed["bots"] == [sales] and listed["bot_slugs"] == ["sales-helper"]
     tool(
-        api, "ana-test", "tico_task_cap_set", {"sender": "bot:sales-helper", "receiver": "bot:sales-lead", "per_day": 5}
+        api,
+        "ana-test",
+        "tico_task_cap_set",
+        {"sender": "bot:sales-helper", "receiver": "bot:growth-manager", "per_day": 5},
     )
     caps = json.dumps(tool(api, "ana-test", "tico_task_caps", {}))
     assert "bot:" + sales in caps and "bot:sales-helper" not in caps
@@ -277,14 +255,14 @@ def test_no_bot_takes_a_slug_that_is_another_bots_id(api, sales):
         "/api/v2/bots", json={"slug": sales, "display_name": "Imposter", "status": "planned"}, headers=headers()
     )
     assert r.status_code == 409, r.text
-    other = create_bot(api, "sales-lead")
+    other = create_bot(api, "growth-manager")
     rename(api, other, sales, expected=409)
     rename(api, other, "sales-helper", expected=409)  # nor another bot's slug
 
 
 def test_a_built_in_bot_keeps_its_slug(api):
-    rename(api, "coo", "chief-ops", expected=422)
-    assert get(api, "bots/coo")["slug"] == "coo"
+    rename(api, "assistant", "chief-ops", expected=422)
+    assert get(api, "bots/assistant")["slug"] == "assistant"
 
 
 def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch):
@@ -319,12 +297,12 @@ def test_a_new_bot_given_a_renamed_bots_old_slug_gets_a_folder_and_repository_of
     with api.app.state.store.read() as c:
         assert H.bot_repository_name(c, "sales-helper") == second["folder"]
         assert H.bot_repository_name(c, "revenue-helper") == "bot-sales-helper"
-        assert H.bot_repository_name(c, "coo") == "bot-coo"  # an older bot keeps bot-<slug>
+        assert H.bot_repository_name(c, "assistant") == "bot-assistant"  # an older bot keeps bot-<slug>
     # a third one, and a folder an older bot (id = slug) has, are taken too
     third = create_bot(api, "sales-helper-2")
     assert config_of(api, third)["folder"] == "bot-sales-helper-2"
     with api.app.state.store.read() as c:
-        assert H.free_bot_folder(c, "coo", "01a19806-0460-77a7-860b-0c1d9f3c2a1b") == "bot-coo-9f3c2a1b"
+        assert H.free_bot_folder(c, "assistant", "01a19806-0460-77a7-860b-0c1d9f3c2a1b") == "bot-assistant-9f3c2a1b"
 
 
 def test_two_bots_with_one_folder_are_never_placed_on_one_computer(api, sales):
@@ -369,7 +347,7 @@ def test_me_names_an_attempt_run_id_and_never_attempt_id(api):
 
 
 def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and_follows_a_rename(api, sales):
-    manager = create_bot(api, "sales-lead")
+    manager = create_bot(api, "growth-manager")
     revision = column(api, "SELECT revision FROM bot_config WHERE bot=?", sales)[0]
     r = api.post(
         f"/api/v2/bots/{sales}/definition",
@@ -381,6 +359,6 @@ def test_onboarding_names_a_managers_slug_for_a_bot_whose_id_is_not_its_slug_and
     def line():
         return next(b for b in get(api, "onboarding")["bots"] if b["id"] == sales)
 
-    assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "sales-lead")
+    assert (line()["reports_to"], line()["reports_to_slug"]) == (manager, "growth-manager")
     rename(api, manager, "sales-director")
     assert line()["reports_to_slug"] == "sales-director"

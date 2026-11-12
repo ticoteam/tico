@@ -13,7 +13,7 @@ import pytest
 
 from fastapi.testclient import TestClient
 
-from backend import flight, github, listening, message_bots, start_jobs
+from backend import flight, github, message_bots, start_jobs
 from backend.app import create_app
 from backend.observability import Observability
 from backend.onboarding import Onboarding
@@ -37,10 +37,9 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
 
     monkeypatch.setattr(Onboarding, "ensure_librarian", job("librarian", wait=True))
     monkeypatch.setattr(Onboarding, "ensure_goal_manager", job("goal_manager"))
-    monkeypatch.setattr(Onboarding, "ensure_task_manager", job("task_manager"))
+    monkeypatch.setattr(Onboarding, "ensure_general_manager", job("general_manager"))
     monkeypatch.setattr(Onboarding, "ensure_counsel", job("counsel"))
     monkeypatch.setattr(Onboarding, "ensure_brand_owner", job("brand_owner"))
-    monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
     monkeypatch.setattr(Observability, "capture", lambda self, source, exc: captured.append((source, exc)))
@@ -70,10 +69,9 @@ def test_a_server_answers_while_its_start_jobs_run_and_waits_for_them_to_stop(tm
     assert ran == [
         "librarian",
         "goal_manager",
-        "task_manager",
+        "general_manager",
         "counsel",
         "brand_owner",
-        "market",
         "message_bots",
         "ship_deployed",
     ]
@@ -94,14 +92,13 @@ def test_a_failed_start_job_is_captured_and_the_next_one_still_runs(tmp_path, mo
         raise failure
 
     monkeypatch.setattr(Onboarding, "ensure_librarian", broken)
-    monkeypatch.setattr(listening, "seed_market", lambda *a, **k: ran.append("market"))
     monkeypatch.setattr(message_bots, "backfill", lambda *a, **k: ran.append("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", lambda *a, **k: ran.append("ship_deployed"))
     monkeypatch.setattr(Observability, "capture", lambda self, source, exc: captured.append((source, exc)))
     app = create_app(api_settings(tmp_path))
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
-    assert ran == ["market", "message_bots", "ship_deployed"]
+    assert ran == ["message_bots", "ship_deployed"]
     assert captured == [("librarian", failure)]
 
 
@@ -120,7 +117,6 @@ def startup_jobs(tmp_path, monkeypatch):
 
     completes = job("complete_company")
     onboarding = SimpleNamespace(complete_company=lambda c, failed=None: completes(c))
-    monkeypatch.setattr(listening, "seed_market", job("market"))
     monkeypatch.setattr(message_bots, "backfill", job("message_bots"))
     monkeypatch.setattr(github, "ship_deployed", job("ship_deployed"))
     telemetry = SimpleNamespace(capture=lambda source, exc: captured.append((source, exc)))
@@ -173,7 +169,6 @@ def test_start_jobs_wait_for_write_admission_instead_of_skipping_jobs(startup_jo
         assert str(failures[0]) == "database is locked"
     expected = [
         "complete_company",
-        "market",
         "message_bots",
         "ship_deployed",
     ]
@@ -196,7 +191,7 @@ def test_a_permanent_admission_failure_is_captured_and_the_next_job_still_runs(s
 
     monkeypatch.setattr(store, "_take", unavailable)
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
-    assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
+    assert startup_jobs.ran == ["message_bots", "ship_deployed"]
     assert startup_jobs.captured == [("complete_company", failure)]
 
 
@@ -213,5 +208,5 @@ def test_a_database_that_stays_busy_ends_the_wait_and_the_job_is_captured(startu
     monkeypatch.setattr(start_jobs, "ADMISSION_WAIT", 0)
     monkeypatch.setattr(store, "_take", locked_once_past_the_deadline)
     start_jobs.run(store, startup_jobs.onboarding, startup_jobs.telemetry)
-    assert startup_jobs.ran == ["market", "message_bots", "ship_deployed"]
+    assert startup_jobs.ran == ["message_bots", "ship_deployed"]
     assert startup_jobs.captured == [("complete_company", busy)]

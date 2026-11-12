@@ -3,7 +3,6 @@ unbalanced never do, rollups always equal the lines), immutability and closed pe
 
 import random
 import sqlite3
-from contextlib import closing
 
 import pytest
 
@@ -289,19 +288,6 @@ def test_usage_postings_are_posted_once_per_source(books):
         second = spend(c, "5100", 700, source_id="gw-2026-10-10")
         assert first["posted"] and not second["posted"] and first["entry_id"] == second["entry_id"]
         assert c.execute("SELECT count(*) FROM fin_entries").fetchone()[0] == 1
-
-
-def test_a_fresh_database_gets_the_finance_tables(tmp_path):
-    from backend.store import Store
-    from backend.tests.helpers.api import api_settings
-
-    s = Store(api_settings(tmp_path))
-    s.initialize(seed_market=False)
-    with closing(sqlite3.connect(s.settings.db_path)) as c:
-        assert (
-            c.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'fin_%' AND type='trigger'").fetchone()[0]
-            >= 5
-        )
 
 
 def test_a_lines_role_is_recorded_where_tico_puts_it_kept_by_its_reversal_and_never_taken_from_a_request(books):

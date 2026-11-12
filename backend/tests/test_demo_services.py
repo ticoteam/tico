@@ -101,9 +101,9 @@ def _letters_carry_the_mailing_address_and_reach_their_owners(built):
         for name, item in items.items():
             owners[name] = api.get(f"/api/v2/tasks/{item['task_id']}").json()["task"]["owner_id"]
         assert owners == {
-            "letter-fcc-lab": "bot:compliance",
-            "letter-state-tax": "bot:finance-lead",
-            "letter-invoice": "bot:accounts-payable",
+            "letter-fcc-lab": "bot:compliance-manager",
+            "letter-state-tax": "bot:finance-owner",
+            "letter-invoice": "bot:accounts-payable-specialist",
         }
 
 
@@ -136,7 +136,11 @@ def _github_and_slack_show_as_connected(built):
 
 def _bots_declare_their_mcp_tools_as_ready(built):
     with as_ana(built) as api:
-        for slug, service in (("issue-triage", "linear"), ("sales-ops", "crm"), ("support", "helpdesk")):
+        for slug, service in (
+            ("qa-owner", "linear"),
+            ("sales-operations-manager", "crm"),
+            ("support-owner", "helpdesk"),
+        ):
             tools = {tool["service"]: tool for tool in api.get(f"/api/v2/bots/{slug}/tools").json()["tools"]}
             assert tools[service]["status"] == "ready"
 
@@ -207,7 +211,7 @@ def _the_demo_sends_nothing_with_its_gateway_key(built):
             assert api.get("/api/v2/billing/statements/2026-09.csv").status_code == 200
             assert api.get("/api/v2/hosted-servers").json()["state"] == "none"
             assert api.post("/api/v2/hosted-servers/pv-0123456789abcdef/start").status_code == 409
-            assert api.get("/api/v2/bots/coo/pause-state").json()["company_paused"] is False
+            assert api.get("/api/v2/bots/assistant/pause-state").json()["company_paused"] is False
             assert api.post("/api/v2/gateway/search", json={"query": "projector"}).status_code == 409
         assert sent == []
 

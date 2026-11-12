@@ -162,7 +162,12 @@ def test_a_wake_rule_takes_no_destination_to_or_next_so_an_edit_adding_one_is_re
     steps = copy.deepcopy(before["steps"])
     rule = steps[0]["rules"][0]
     dests = [
-        {"id": "legal", "name": "Legal", "color": "red", "then": [{"do": "note", "args": {"bot": "coo", "text": "Hi"}}]}
+        {
+            "id": "legal",
+            "name": "Legal",
+            "color": "red",
+            "then": [{"do": "note", "args": {"bot": "assistant", "text": "Hi"}}],
+        }
     ]
     body = {"steps": steps}
     if edit == "to":

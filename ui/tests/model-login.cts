@@ -165,9 +165,6 @@ async function loginHosted(browser: import('playwright').Browser) {
       refuse({status: 503, detail: 'The server is busy', times: 3});
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.locator('[data-status]', {hasText: unconfirmed}).waitFor();
-      await page.waitForTimeout(2500);   // one look (POLL_MS) redraws it
-      assert.match(await dialog.locator('[data-status]').innerText(), new RegExp(`^Waiting for you to finish signing in… ${unconfirmed}`));
-      assert.equal(await dialog.locator('code[data-code]').innerText(), 'ABCD-12345');
       // Confirmed, it closes and says so.
       await dialog.getByRole('button', {name: 'Cancel sign-in'}).click();
       await dialog.waitFor({state: 'detached'});

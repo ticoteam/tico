@@ -1301,7 +1301,7 @@ mod tests {
             "#!/bin/sh\ncat \"$SESSION\" > \"$LOG\"\ncat \"$FIXTURE\"\n",
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        let host = MuseCodeHost::new("assistant", vec![cmd], None, dir.join("state"), tx);
         host.start();
         let mut settings = Settings {
             cwd: dir.display().to_string(),
@@ -1364,7 +1364,7 @@ mod tests {
              echo '{\"payload_type\":\"run.terminal.completed\",\"payload\":{\"terminal\":\"completed\",\"text\":\"done\"}}'\n",
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        let host = MuseCodeHost::new("assistant", vec![cmd], None, dir.join("state"), tx);
         host.start();
         let mut settings = Settings {
             cwd: dir.display().to_string(),
@@ -1376,7 +1376,7 @@ mod tests {
             ("HOME", "/home/x"),
             ("HUB_API_URL", "https://hub.test"),
             ("HUB_TOKEN", "tok-secret"),
-            ("HUB_BOT", "coo"),
+            ("HUB_BOT", "assistant"),
             ("LINEAR_API_KEY", "lin-secret"),
             ("OUT", &dir.display().to_string()),
         ] {
@@ -1447,7 +1447,7 @@ mod tests {
         let dir = temp("fake-muse");
         let cmd = script(&dir, "muse", "#!/bin/sh\necho '{\"payload_type\":\"run.output.delta\",\"payload\":{\"text\":\"Working\"}}'\nexec sleep 30\n");
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        let host = MuseCodeHost::new("assistant", vec![cmd], None, dir.join("state"), tx);
         host.start();
         let mut settings = Settings {
             cwd: dir.display().to_string(),
@@ -1484,7 +1484,7 @@ mod tests {
             "#!/bin/sh\ncat \"$FIXTURE\"\nsleep 20 &\nexec sleep 30\n",
         );
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = MuseCodeHost::new("coo", vec![cmd], None, dir.join("state"), tx);
+        let host = MuseCodeHost::new("assistant", vec![cmd], None, dir.join("state"), tx);
         host.start();
         let mut settings = Settings {
             cwd: dir.display().to_string(),
@@ -1512,31 +1512,6 @@ mod tests {
         );
         assert!(host.inner().turn.is_none() && host.inner().stopper.is_none());
         std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn tool_calls_follow_the_real_muse_stream() {
-        let proposed = |task: &str| json!({"event": {"kind": "proposed", "task_kind": task}});
-        assert_eq!(
-            tool_started(
-                "task.lifecycle.proposed",
-                &proposed("tool.mcp__tico__tico_task_list")
-            )
-            .as_deref(),
-            Some("mcp__tico__tico_task_list")
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),
-            None
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.started", &json!({"task_id": "t"})),
-            None
-        );
-        assert_eq!(
-            tool_started("tool.bash.started", &json!({"tool_name": "bash"})).as_deref(),
-            Some("bash")
-        );
     }
 
     #[test]
@@ -1678,7 +1653,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("repo")).unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::new(
-            "coo",
+            "assistant",
             vec![bin.clone()],
             Some("echo".into()),
             dir.join("state"),
@@ -1694,7 +1669,7 @@ mod tests {
             .env
             .insert("HUB_API_URL".into(), "http://127.0.0.1:9".into());
         settings.env.insert("HUB_TOKEN".into(), "tok-test".into());
-        settings.env.insert("HUB_BOT".into(), "coo".into());
+        settings.env.insert("HUB_BOT".into(), "assistant".into());
         let thread = host.start_thread(&settings);
         for text in ["first", "second"] {
             host.start_turn(&thread, text, None).unwrap();
@@ -1730,7 +1705,7 @@ mod tests {
         let (tx, _rx) = mpsc::unbounded_channel();
         let data = dir.join("data");
         let host = MuseCodeHost::on_config(
-            "coo",
+            "assistant",
             vec!["muse".into()],
             None,
             dir.join("state"),
@@ -1818,7 +1793,7 @@ mod tests {
         let cmd = script(&dir, "muse", "#!/bin/sh\ntouch \"$OUT\"\n");
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = MuseCodeHost::on_config(
-            "coo",
+            "assistant",
             vec![cmd],
             None,
             dir.join("state"),

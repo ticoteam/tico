@@ -11,7 +11,7 @@ interface Created {url: string; body: Record<string, string>}
   let allowed = true, created: Created[] = [], opened: string[] = [], dialog: unknown, resolveCatalog!: (value: unknown) => void,
     submitHandlerAtShow: ((event: {preventDefault(): void}) => unknown) | undefined;
   const submit = {}, status = {classList:{add(){},remove(){},toggle(){}}} as {classList: {add(): void; remove(): void; toggle(): void}; textContent?: string},
-    button = {dataset:{recruitCreate:'support'}} as {dataset: {recruitCreate: string}; onclick?: () => Promise<void>};
+    button = {dataset:{recruitCreate:'support-owner'}} as {dataset: {recruitCreate: string}; onclick?: () => Promise<void>};
   const results = {innerHTML:'',querySelectorAll:()=>[button],replaceChildren(){}};
   const form = {querySelector:()=>submit,elements:{title:{get value(){return values.title;},focus(){}},brief:{get value(){return values.brief;},focus(){}}}} as {
     querySelector(): unknown; elements: unknown; onsubmit?: (event: {preventDefault(): void}) => unknown};
@@ -33,14 +33,14 @@ interface Created {url: string; body: Record<string, string>}
   for (const helper of ['errors.js','dom.js']) vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app',helper),'utf8'),context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../../build/ui/app/recruit.js'),'utf8'),context);
   context.recruitSeat=async (id: string)=>{opened.push(id);};
-  const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support'});
+  const opening = context.settingsRecruitFlow({title:values.title,brief:values.brief,template:'support-owner'});
   assert.equal(typeof submitHandlerAtShow,'function','submission is intercepted before the form is shown');
   let prevented = false;
   form.onsubmit!({preventDefault(){prevented=true;}});
   assert.equal(prevented,true,'a valid prefilled form cannot default-submit while the catalog is pending');
   assert.equal(results.innerHTML,'','pending submission does not offer candidates');
   assert.equal(created.length,0,'pending submission cannot create a bot');
-  resolveCatalog({cards:[{slug:'support',template:'support',name:'Support Agent',summary:'Answer support tickets',instructions:'Template rules'}]});
+  resolveCatalog({cards:[{slug:'support-owner',template:'support-owner',name:'Support Agent',summary:'Answer support tickets',instructions:'Template rules'}]});
   await opening;
   assert.equal(created.length,0,'opening an external handoff cannot create a bot');
   prevented=false;
@@ -55,7 +55,7 @@ interface Created {url: string; body: Record<string, string>}
   await button.onclick!();
   assert.equal(created.length,1);
   assert.equal(created[0]!.url,'/v2/bots');
-  assert.equal(created[0]!.body.template,'support');
+  assert.equal(created[0]!.body.template,'support-owner');
   assert.equal(created[0]!.body.status,'planned');
   assert.match(created[0]!.body.instructions!,/Template rules[\s\S]*Answer tickets using our team docs/);
   assert.match(created[0]!.body.instructions!,/Reviewer: Support lead/);

@@ -31,8 +31,8 @@
             line: "OK to merge tico PR 2041 into main"
             missing: ["OK to merge tico PR 2041 into main"]
             since: "2026-11-02T14:00:00Z"
-            task: {id: 2b41f6c0-1000-4000-8000-000000000012, number: 2041, title: "tico PR 2041: runner retry backoff", status: open, version: 3, pipeline_id: engineering, stage_id: review, owner: "bot:pr-reviewer"}
-            ask: {requirement_id: e2b1d5e3-6100-4000-8000-0000000000a2, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:pr-reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
+            task: {id: 2b41f6c0-1000-4000-8000-000000000012, number: 2041, title: "tico PR 2041: runner retry backoff", status: open, version: 3, pipeline_id: engineering, stage_id: review, owner: "bot:reviewer"}
+            ask: {requirement_id: e2b1d5e3-6100-4000-8000-0000000000a2, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
           - kind: ask
             id: e3c2e6f4-6100-4000-8000-0000000000a3
             task_id: 4c7d1e93-1000-4000-8000-000000000013
@@ -40,8 +40,8 @@
             line: "Should the staging banner stay on through the holiday week?"
             missing: ["Should the staging banner stay on through the holiday week?"]
             since: "2026-11-02T11:00:00Z"
-            task: {id: 4c7d1e93-1000-4000-8000-000000000013, number: 91, title: "Staging banner over the holidays", status: open, version: 2, pipeline_id: engineering, stage_id: doing, owner: "bot:engineering-lead"}
-            ask: {requirement_id: e3c2e6f4-6100-4000-8000-0000000000a3, kind: answer, line: "Should the staging banner stay on through the holiday week?", met: false, who: "human:dana", asked_by: "bot:engineering-lead", choices: ["Keep it", "Take it down on Nov 10"], shows: [], answer: null, may: [answer, give, thumbs]}
+            task: {id: 4c7d1e93-1000-4000-8000-000000000013, number: 91, title: "Staging banner over the holidays", status: open, version: 2, pipeline_id: engineering, stage_id: doing, owner: "bot:engineering-manager"}
+            ask: {requirement_id: e3c2e6f4-6100-4000-8000-0000000000a3, kind: answer, line: "Should the staging banner stay on through the holiday week?", met: false, who: "human:dana", asked_by: "bot:engineering-manager", choices: ["Keep it", "Take it down on Nov 10"], shows: [], answer: null, may: [answer, give, thumbs]}
           - kind: ask
             id: e4d3f7a5-6100-4000-8000-0000000000a4
             task_id: 9f7e3a2c-1000-4000-8000-000000000010
@@ -146,7 +146,7 @@
           - "Runner queue ping from Check health failed twice on Nov 2."
         waiting_on_you: {count: 5}
         bots_down: []
-        what_bots_said: "Copywriter sent launch email draft 2 for your review. Release Manager is waiting on your OK to publish v0.5.0. CEO Bot asked you which goal it owns."
+        what_bots_said: "Copywriter sent launch email draft 2 for your review. Release Owner is waiting on your OK to publish v0.5.0. CEO Bot asked you which goal it owns."
     - match: '^needs-you show'
       out:
         actor: "human:dana"
@@ -273,10 +273,10 @@
       out:
         people:
           - {id: dana, name: "Dana Okafor", title: "Founder", team: leadership, primary_for: ["*"], about: "Decides direction, hiring and OKs."}
-          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing, finance], about: "Signs off prices, discounts and any spend over $1,000."}
+          - {id: priya, name: "Priya Shah", title: "CFO", team: finance, primary_for: [pricing-analyst, finance], about: "Signs off prices, discounts and any spend over $1,000."}
         bots:
           - {id: website, display_name: Website, description: "Maintains the site and opens its pull requests.", team: engineering, reports_to: dana, template: website}
-          - {id: engineering-lead, display_name: Engineering Lead, description: "Triages build failures and opens engineering tasks.", team: engineering, reports_to: dana, template: engineering-lead}
+          - {id: engineering-manager, display_name: Engineering Lead, description: "Triages build failures and opens engineering tasks.", team: engineering, reports_to: dana, template: engineering-manager}
         org_groups:
           - {id: leadership, name: Leadership}
           - {id: engineering, name: Engineering}
@@ -291,7 +291,7 @@
         pipeline: {id: engineering, name: Engineering}
         stage: {id: doing, name: Doing, kind: work, by_hand: false}
         owner_id: "bot:website"
-        requester: "bot:engineering-lead"
+        requester: "bot:engineering-manager"
         created: "2026-10-14T09:00:00Z"
         updated: "2026-10-14T09:00:00Z"
         turn: {state: bot, who: "bot:website", line: "Website: fix the preview deploy", since: "2026-10-14T09:00:00Z"}
@@ -525,7 +525,7 @@
         pipeline: {id: engineering, name: Engineering}
         stage: {id: doing, name: Doing, kind: work, by_hand: false}
         owner_id: "human:dana"
-        requester: "bot:engineering-lead"
+        requester: "bot:engineering-manager"
         turn: {state: person, who: "human:dana", line: "Dana: fix the preview deploy", since: "2026-10-14T09:00:00Z"}
         to_leave: []
         comments: []

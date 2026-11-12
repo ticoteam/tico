@@ -3,7 +3,7 @@
 A company starts with four built-in bots: the assistant, which is each person's private Assistant
 chat (backend/assistant.py) and works in the background (Slack routing, meetings' Auto delivery),
 BotOps, which builds every other bot, the Librarian, which answers questions from the company's
-docs (backend/librarian.py), and the Strategy Bot, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
+docs (backend/librarian.py), and the Strategy Owner, which keeps the KPIs (docs/goals-and-kpis.md). Onboarding
 names the company, asks the first-run questions, and records the org chart the owner builds department by
 department (the suggestions are backend/recruit.py), and on completion defines the chosen bots. A starter is
 created at once, `needs_onboarding`, and its repository is materialized by the computer; every other template is
@@ -35,8 +35,8 @@ from . import bot_settings as BS
 KEY = "onboarding"
 BOTOPS = "botops"
 LIBRARIAN = "librarian"
-GOAL_MANAGER = G.GOAL_MANAGER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
-ASSISTANT_TEMPLATE_SLUG = "coo"
+STRATEGY_OWNER = G.STRATEGY_OWNER  # keeps the KPIs and sets goals' automatic colours (docs/goals-and-kpis.md)
+ASSISTANT_TEMPLATE_SLUG = "assistant"
 CARD_FILE = "card.yaml"
 INSTRUCTIONS_FILE = "AGENT.md"
 # Filled wherever a person reads a card: a template names itself after the assistant, and
@@ -71,6 +71,8 @@ EMPTY_ANSWERS = {
     "briefings": {},
     # Where the company serves (a company file's company.regions); [] is none given.
     "regions": [],
+    # The default chart's teams setup's Your team step switched off (company_import.default_chart); [] keeps them all.
+    "teams_off": [],
 }
 ANSWER_LABELS = (
     ("building", "What we're building"),
@@ -212,6 +214,9 @@ def _card(document, instructions):
             if isinstance(item, dict)
         ],
         "example_output": str(document.get("example_output") or ""),
+        # A bot from this card goes live at the end of its own setup (`Onboarding.onboarded`), as a seat bot does: the
+        # growth channel packs, whose setup files their first ideas.
+        "live_after_setup": bool(document.get("live_after_setup")),
         "approval_required": [],  # compatibility field; sending follows the sending policy
         "starter": bool(document.get("first_routine")) and bool(document.get("onboarding")),
         "instructions": instructions,
@@ -477,11 +482,27 @@ def setup_body(slug, choice, answers):
             + choice["display_name"]
             + " up.",
             "",
-            "- slug: " + slug,
+            "- slug: "
+            + slug
+            + " (already registered: pass it, `tico bot create "
+            + slug
+            + " --template "
+            + choice["template"]
+            + "`, or a second bot is made)",
             "- template: " + choice["template"],
             "- display name: " + choice["display_name"],
             "- requested description and limits: " + (choice.get("description") or "not specified"),
             "Use this request's scope. Do not inherit a previous bot's tools, repository or Routines.",
+            *(
+                [
+                    "",
+                    "This bot is a seat on the company chart: take it live yourself once its repository is committed "
+                    f"(`tico bot go-live {slug}`). If go-live says it is waiting for the repository, Tico finishes "
+                    "it by itself within a minute or two. This task is done only once the bot is active.",
+                ]
+                if choice.get("goes_live")
+                else []
+            ),
             "",
             "Instructions the owner reviewed, for AGENT.md:",
             "",
@@ -609,9 +630,11 @@ class Onboarding:
             **record,
             "home": home,
             "bots": self._bots(c),
-            "machine": self._machine(c),
+            "machine": self._machine(c, self.settings),
             "needed": needed(c, who, record),
             "company_import_failed": company_import.failure(c),
+            # The chart a setup with no roles picked creates, by team, for the Your team step; nothing once completed.
+            "default_chart": [] if record["completed"] else company_import.default_teams(self, c, home),
         }
 
     def _bots(self, c):
@@ -660,7 +683,9 @@ class Onboarding:
         )
 
     @staticmethod
-    def _machine(c):
+    def _machine(c, settings=None):
+        from . import cloud_machines
+
         recent = H.shift(H.now(), seconds=-60)
         runners = [
             {
@@ -672,7 +697,8 @@ class Onboarding:
                 "SELECT id,label,last_seen_at FROM runners_with_state WHERE revoked_at IS NULL ORDER BY created_at"
             )
         ]
-        return {"runners": runners, "enrolled": bool(runners)}
+        # A Tico Cloud company's bots get a cloud computer each, so setup asks for none.
+        return {"runners": runners, "enrolled": bool(runners), "cloud": bool(cloud_machines.offered(c, settings))}
 
     # ------------------------------------------------------------------ writes
     def save(self, c, who, body):
@@ -714,6 +740,8 @@ class Onboarding:
         )
         if "regions" not in body.answers.model_fields_set:  # a client that never asks keeps where the company serves
             answers["regions"] = record["answers"].get("regions") or []
+        if "teams_off" not in body.answers.model_fields_set:  # and the teams it switched off
+            answers["teams_off"] = record["answers"].get("teams_off") or []
         if (
             not names["website"]
             and not answers["building"]
@@ -743,7 +771,7 @@ class Onboarding:
 
     def complete(self, c, who, models=None, seats=True, finish=True):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (BotOps, the
-        Librarian, the Strategy Bot and the Assistant) are created as bots, Active from day one, and every other role is
+        Librarian, the Strategy Owner and the Assistant) are created as bots, Active from day one, and every other role is
         laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or BotOps task until
         someone recruits it. `seats` False creates every pick as a bot, as the sample company does
         (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
@@ -805,6 +833,10 @@ class Onboarding:
                 self.admin.update_bot(
                     c, who, bot_id, M.BotDefinitionUpdate(reports_to=parent, expected_revision=row["revision"])
                 )
+        if first:
+            # A new company's built-ins take their lines from setup, not from the seed roster: each one whose pick
+            # names no manager gets the built-ins' own (ensure_general_team).
+            self.ensure_general_team(c, laid=[slug for slug, choice in plan.items() if not choice.get("reports_to")])
         # The team builder builds the chart by group: each bot goes in the group of its template, made if the team
         # has none yet (backend/groups.py).
         before = set(Groups._roster(c)["org_groups"])
@@ -929,7 +961,7 @@ class Onboarding:
                     choice["display_name"],
                 ),
                 # The owner reviewed the setup description and edited duties/limits before it became a seat.
-                # Keep those words instead of asking the Strategy Bot to replace them on the first open.
+                # Keep those words instead of asking the Strategy Owner to replace them on the first open.
                 "description_by": who.actor,
                 "reports_to": line(choice),
             }
@@ -938,7 +970,7 @@ class Onboarding:
         return {**laid, **lifecycle.lay_out(c, who.actor, rows)}
 
     def start_sample(self, c, who):
-        """The welcome's "Start with a sample company": this new company becomes Tico's sample company
+        """POST /api/v2/setup/sample: this new company becomes Tico's sample company
         (backend/sample_company.py). The owner only; refused once the company is set up."""
         self._owner(who)
         from . import sample_company
@@ -949,7 +981,7 @@ class Onboarding:
         """A starter template's bot, as first run creates it: it records the template and its version,
         waits for the computer to materialize its repository (`materialize`), seeds its first routine
         off, and is `needs_onboarding` until it says its setup is done. Starting the setup turns that
-        routine on (`arm_first_routine`). Nothing claims work for it before then except a message from
+        routine on (`arm_routines`). Nothing claims work for it before then except a message from
         a person (execution.candidate)."""
         declared = self._declared(c, slug)
         declared.update(template=template, template_version=releases.version(), materialize=True)
@@ -966,9 +998,11 @@ class Onboarding:
     def onboarded(self, c, who, slug, arm=True, summary=""):
         """Mark onboarding complete: a person above the bot on the org chart (its manager, their managers, the owner)
         says it is done learning, so it becomes Active, its routines run and its work is claimed (backend/lifecycle.py).
-        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage. A member's bot counts toward
-        their limit from here on, so the limit is checked now. `arm` False leaves its first routine off (the sample
-        company's bots, set up by the sample's own answers)."""
+        The bot's own call is its "I'm ready" (`lifecycle.ready`) and changes no stage, except for a bot whose card
+        goes live after its setup (`live_after_setup`, the growth channel packs): its own call completes onboarding, as
+        a seat bot goes live with no person step, so the ideas its setup files next are not refused. A member's bot
+        counts toward their limit from here on, so the limit is checked now. `arm` False leaves its first routine off
+        (the sample company's bots, set up by the sample's own answers)."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not H.bot(c, slug):
             raise Problem("not_found", "Bot not found", 404)
@@ -980,13 +1014,17 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"] or "",
                     "stage": lifecycle.ACTIVE,
                     "changed": False,
-                    "routine": self._arm_built_in_starter(c, who, slug),
+                    "routine": self._arm_on_own_setup(c, who, slug),
                 }
             # Its own setup-done says no summary: the one it gave with `tico bot ready --summary` stays, as it was
             # (no new ready event, `at` unchanged).
             given = str(summary or "").strip()
             earlier = lifecycle.ready_of(self._declared(c, slug))
-            if not given and earlier:
+            live = bool((self._card_of(c, slug) or {}).get("live_after_setup"))
+            if live:
+                if given:
+                    lifecycle.ready(c, who, slug, given)
+            elif not given and earlier:
                 return {
                     "bot": slug,
                     "stage": lifecycle.ONBOARDING,
@@ -994,12 +1032,13 @@ class Onboarding:
                     "onboarding_state": row["onboarding_state"],
                     "changed": False,
                 }
-            return {
-                **lifecycle.ready(c, who, slug, given),
-                "onboarding_state": row["onboarding_state"],
-                "changed": False,
-            }
-        if not lifecycle.may_complete(self.auth, c, who, slug):
+            else:
+                return {
+                    **lifecycle.ready(c, who, slug, given),
+                    "onboarding_state": row["onboarding_state"],
+                    "changed": False,
+                }
+        elif not lifecycle.may_complete(self.auth, c, who, slug):
             raise Problem(
                 "forbidden",
                 "Only a person above this bot on the org chart (its manager, their managers or "
@@ -1012,7 +1051,7 @@ class Onboarding:
                 "onboarding_state": row["onboarding_state"] or "",
                 "stage": lifecycle.ACTIVE,
                 "changed": False,
-                "routine": self._arm_built_in_starter(c, who, slug),
+                "routine": self._arm_on_own_setup(c, who, slug),
             }
         if self.auth.member_bot(c, slug):
             limit = Access.load_access(c, self.settings)["member_bot_limit"]
@@ -1029,26 +1068,39 @@ class Onboarding:
         c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (ONBOARDED, slug))
         H.event(c, who.actor, "bot.onboarded", slug, {})
         H.setup_finished(c, slug)
-        # A bot whose setup was never started (Finish with defaults on Overview) gets its first routine as Start setup
-        # would have given it; once only, so one already armed or turned off by a person is left alone.
-        routine = self.arm_first_routine(c, who, slug) if arm else None
+        # A bot whose setup was never started (Finish with defaults on Overview) gets its routines as Start setup
+        # would have given them; once only, so ones already armed or turned off by a person are left alone.
+        armed = self.arm_routines(c, who, slug) if arm else []
         return {
             "bot": slug,
             "onboarding_state": ONBOARDED,
             "stage": lifecycle.ACTIVE,
             "changed": True,
-            "routine": routine,
+            "routine": armed[0]["id"] if armed else None,
         }
 
-    def _arm_built_in_starter(self, c, who, slug):
-        """A starter card that is also built in (`bootstrap`, the Brand Owner) is never parked, so no Start setup arms its
-        first routine: its setup-done does, once (`arm_first_routine`; one a person turned off stays off). Its routine
-        stays off until then, so it runs only once the setup it needs (the brand book) exists. Returns the key or None."""
-        template = self._declared(c, slug).get("template")
-        card = next((card for card in read_cards(self.settings) if card["template"] == template), None)
-        if not template or not card or not (card.get("bootstrap") and card.get("starter")):
+    def _arm_on_own_setup(self, c, who, slug):
+        """A bot that is never parked arms its routines at its own setup-done when nothing armed them before
+        (`arm_routines`: once; one a person turned off stays off). A starter card that is also built in (`bootstrap`, the
+        Design Owner) waits for it, so its routine runs only once the setup it needs (the brand book) exists; a seat bot's
+        go-live armed them already, unless they were not built yet then. Returns the first armed routine's key or None."""
+        from .setup_live import GOES_LIVE
+
+        declared = self._declared(c, slug)
+        card = self._card_of(c, slug, declared)
+        if not card:
             return None
-        return self.arm_first_routine(c, who, slug)
+        if not (card.get("bootstrap") and card.get("starter")) and not declared.get(GOES_LIVE):
+            return None
+        armed = self.arm_routines(c, who, slug)
+        return armed[0]["id"] if armed else None
+
+    def _card_of(self, c, slug, declared=None):
+        """The card of the template the bot was built from, or None."""
+        template = (declared if declared is not None else self._declared(c, slug)).get("template")
+        if not template:
+            return None
+        return next((card for card in read_cards(self.settings) if card["template"] == template), None)
 
     def attach_template(self, c, who, slug, template, instructions, *, queue_build=False, title_prefix=""):
         """Starters are built by their Computer; custom bots get a BotOps task."""
@@ -1145,33 +1197,38 @@ class Onboarding:
         return True
 
     def turn_on_goal_manager(self, c, who):
-        """The same for the built-in Strategy Bot (docs/strategy-bot.md)."""
-        return self._turn_on(c, who, GOAL_MANAGER, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
+        """The same for the built-in Strategy Owner (docs/strategy-bot.md)."""
+        return self._turn_on(c, who, STRATEGY_OWNER, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
-        Librarian, the Strategy Bot, the Task Manager, Counsel, the Brand Owner, and the Bookkeeper once Finance is set
-        up), the Assistant's routines it never had, General's manager once the Task Manager exists
-        (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
+        Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
+        up), the Assistant's routines it never had, General's manager once the General Manager exists
+        (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
+        the bots that follow the company's plans (plan_models.follow). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
         company) and a computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
         what a person changed alone.
 
         Each step runs in its own savepoint. `failed(step, exc)` takes a step's failure and the next step runs; with no
         `failed` the failure is raised (the caller's transaction then keeps nothing)."""
-        from . import bookkeeper, pipeline_settings
+        from . import bookkeeper, pipeline_settings, plan_models
 
-        # In order: a later step reads a bot an earlier one makes (General's manager is the Task Manager).
+        # In order: a later step reads a bot an earlier one makes (General's manager is the General Manager).
         steps = (
             ("librarian", self.ensure_librarian),
             ("goal_manager", self.ensure_goal_manager),
-            ("task_manager", self.ensure_task_manager),
+            ("general_manager", self.ensure_general_manager),
             ("counsel", self.ensure_counsel),
             ("brand_owner", self.ensure_brand_owner),
             ("bookkeeper", lambda c: bookkeeper.ensure(c, self, self.auth)),
+            ("general_team", self.ensure_general_team),
             ("builtin_routines", self.ensure_builtin_routines),
+            ("seat_routines", self.arm_live_seats),
+            ("seat_repositories", self.seat_repositories),
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
+            ("plan_models", lambda c: plan_models.follow(c, self.settings, H.KEEPER)),
         )
         for name, step in steps:
             c.execute("SAVEPOINT complete_company")
@@ -1195,35 +1252,59 @@ class Onboarding:
         return self._ensure_builtin(c, LIBRARIAN, "Librarian", "librarian.turned_on")
 
     def ensure_goal_manager(self, c):
-        """The same for the Strategy Bot: a company from before it was built in gets it once it can run it."""
-        return self._ensure_builtin(c, GOAL_MANAGER, strategy_bot.name(c), "goal_manager.turned_on")
+        """The same for the Strategy Owner: a company from before it was built in gets it once it can run it."""
+        return self._ensure_builtin(c, STRATEGY_OWNER, strategy_bot.name(c), "goal_manager.turned_on")
 
-    def ensure_task_manager(self, c):
-        """The same for the Task Manager (docs/task-manager.md): a company from before it was built in gets it once it can
-        run it. It is a helper outside the org chart, so no chart or seat changes."""
-        return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
+    def ensure_general_manager(self, c):
+        """The same for the General Manager (docs/general-manager.md): a company from before it was built in gets it once it can
+        run it. Its team and lines are `ensure_general_team`'s."""
+        return self._ensure_builtin(c, "general-manager", "General Manager", "task_manager.turned_on")
 
     def ensure_bookkeeper(self, c):
-        """The same for the Bookkeeper (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
-        checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
-        return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
+        """The same for the Finance Owner (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
+        checks that and adds its defaults). A helper outside the org chart, like the General Manager."""
+        return self._ensure_builtin(c, "finance-owner", "Finance Owner", "bookkeeper.turned_on")
 
     def ensure_counsel(self, c):
-        """The same for Counsel (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
+        """The same for the Rules Owner (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
         was built in gets it once it can run it, and it is outside the org chart."""
-        return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
+        return self._ensure_builtin(c, H.RULES_OWNER, "Rules Owner", "counsel.turned_on")
 
     def ensure_brand_owner(self, c):
-        """The same for the Brand Owner: a company from before it was built in gets it once it can run it. It sits outside
+        """The same for the Design Owner: a company from before it was built in gets it once it can run it. It sits outside
         the org chart like the other built-ins. A company that already hired a bot
         under its slug (a Brand Manager) keeps that bot as it is and gets no second one (`_ensure_builtin`). Its monthly
         audit starts off and goes on when its setup is done (`onboarded`)."""
-        return self._ensure_builtin(c, H.BRAND_OWNER, "Brand Owner", "brand_owner.turned_on")
+        return self._ensure_builtin(c, H.DESIGN_OWNER, "Design Owner", "brand_owner.turned_on")
 
-    def turn_on_task_manager(self, c, who):
-        """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
+    def ensure_general_team(self, c, laid=()):
+        """Every built-in has one manager: the General Manager's team (Groups.GENERAL_TEAM) reports to it, and it, the
+        Assistant and the Finance Owner report to the owner. Only a line nobody set is filled, so a built-in added in a later release
+        gets its manager on the next start and a line a person changed stays. `laid` names the built-ins a new company's
+        setup lays out now (complete()): theirs replaces the line the seed roster gave (BotOps is seeded under the
+        Assistant, before the General Manager exists), which nobody chose. The General group gets no lead: a
+        lead sets its group's reach and limits (backend/reach.py, backend/usage.py), which stay with people."""
+        manager, owner = H.bot(c, Groups.GENERAL_MANAGER), self.auth.owner_id(c)
+        if not owner or not manager or manager["state"] == "archived":
+            return
+        who, top = self.auth.owner_identity(c), "human:" + owner
+        lines = {slug: manager["id"] for slug in Groups.GENERAL_TEAM}
+        lines |= {Groups.GENERAL_MANAGER: top, self.settings.assistant_bot: top, "finance-owner": top}
+        for slug, line in lines.items():
+            bot = H.bot(c, slug)
+            row = c.execute("SELECT revision, reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            if not bot or bot["state"] == "archived" or not row:
+                continue
+            if row["reports_to"] == line or (row["reports_to"] and slug not in laid):
+                continue
+            self.admin.update_bot(
+                c, who, slug, M.BotDefinitionUpdate(reports_to=line, expected_revision=row["revision"])
+            )
+
+    def turn_on_general_manager(self, c, who):
+        """Bring the General Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
-        return self._turn_on(c, who, "task-manager", "task-manager", "Task Manager", "task_manager.turned_on")
+        return self._turn_on(c, who, "general-manager", "general-manager", "General Manager", "task_manager.turned_on")
 
     def _ensure_builtin(self, c, slug, name, event):
         if not load(c)["completed"] or not providers.configured(providers.load(c, self.settings)):
@@ -1316,7 +1397,7 @@ class Onboarding:
                 M.BotDefinitionUpdate(status="active", expected_revision=self.admin._config(c, slug)["revision"]),
             )
         self._seed_routines(c, who, slug, template)
-        if slug == GOAL_MANAGER:
+        if slug == STRATEGY_OWNER:
             G.arm_pass(c)  # KPIs already exist: its daily pass may start
         H.event(c, who.actor, event, slug, {"restored": restored, "placed": placed})
         return {"bot": slug, "state": H.bot(c, slug)["state"], "restored": restored, "placed": placed}
@@ -1411,9 +1492,63 @@ class Onboarding:
                 c.execute("RELEASE builtin_routines")
         return made
 
+    def arm_live_seats(self, c):
+        """At startup (an update): a seat bot that went live while going live armed none of its routines (0.6 rc.4 and
+        before looked for them where only built-ins keep them) gets them on now, as `arm_routines` turns them on, once:
+        it records that, so the next start does nothing. Only a routine nobody changed since BotOps made it goes on
+        (routines.untouched: every switch or edit is on the automation's audit trail), so one a person turned off stays
+        off. A paused or archived bot is a person's stop and is left alone. Returns the (bot, key) pairs it turned on."""
+        from .setup_live import GOES_LIVE
+
+        try:
+            who = self.auth.owner_identity(c)
+        except Problem:
+            return []
+        armed = []
+        for bot in c.execute(
+            f"SELECT bc.bot, {BS.CONFIG} AS config FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
+            "WHERE b.state='active'"
+        ).fetchall():
+            declared = _json(bot["config"], {}) or {}
+            if not declared.get(GOES_LIVE) or declared.get("routine_armed"):
+                continue
+            # Best effort per bot, as ensure_builtin_routines: one bot's failure does not stop the others.
+            c.execute("SAVEPOINT seat_routines")
+            try:
+                armed += [(bot["bot"], routine["id"]) for routine in self.arm_routines(c, who, bot["bot"])]
+                c.execute("RELEASE seat_routines")
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO seat_routines")
+                c.execute("RELEASE seat_routines")
+        return armed
+
+    def seat_repositories(self, c):
+        """At startup (an update) and at the end of a first run: each bot that fills a seat and whose repository access
+        nobody has chosen gets its template's (repositories.seat_default: the Builder and the Release Owner write on
+        every repository In use, the reviewers, QA Owner, Product Owner, Product Manager and Engineering Manager read). A bot a person
+        changed, or one the company's New bots get put on All repos in use, is left as it is, so this does something
+        once per bot at most. An archived bot is left alone. Audited as the system's. Returns the bots it changed."""
+        from . import repositories
+
+        changed = []
+        for (bot,) in c.execute(
+            "SELECT DISTINCT s.filled_by FROM seats s JOIN bots b ON b.id=s.filled_by "
+            "WHERE s.filled_by<>'' AND b.state<>'archived' ORDER BY s.filled_by"
+        ).fetchall():
+            # Best effort per bot, as arm_live_seats: one bot's failure does not stop the others.
+            c.execute("SAVEPOINT seat_repositories")
+            try:
+                if repositories.seat_default(c, self.settings.catalog_dir, bot, "system"):
+                    changed.append(bot)
+                c.execute("RELEASE seat_repositories")
+            except (Problem, ValueError):
+                c.execute("ROLLBACK TO seat_repositories")
+                c.execute("RELEASE seat_repositories")
+        return changed
+
     def start_setup(self, c, who, slug):
-        """A person who manages a parked starter says anything to it: its setup has begun, so its first routine
-        goes on (`arm_first_routine`). Anyone else's message to it changes nothing."""
+        """A person who manages a parked starter says anything to it: its setup has begun, so its routines go on
+        (`arm_routines`). Anyone else's message to it changes nothing. Returns the first armed routine's key or None."""
         slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         row = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if (
@@ -1422,37 +1557,43 @@ class Onboarding:
             and who.role in ("owner", "human")
             and (self.auth.bot_manager(c, who, slug) or self.auth.operator(c, who, slug))
         ):
-            return self.arm_first_routine(c, who, slug)
+            armed = self.arm_routines(c, who, slug)
+            return armed[0]["id"] if armed else None
         return None
 
-    def arm_first_routine(self, c, who, slug):
-        """Setting a bot up turns its first routine on: the template seeds it off, and starting the setup
-        (Start setup, go-live) is the go-ahead, so nobody approves it separately. Once only: a routine a
-        person explicitly turns off before or after activation stays off. Returns the routine's key, or None."""
+    def arm_routines(self, c, who, slug):
+        """Setting a bot up turns on the routines its template came with: the template seeds them off, and starting the
+        setup (Start setup, go-live) is the go-ahead, so nobody approves them separately. Once per bot, and only a
+        routine nobody has changed since it was made (routines.untouched): one a person turned off, edited or left as a
+        draft stays as it is. A built-in bot's routines are started by the server's own rules (the Strategy Owner's KPI
+        pass once a KPI exists), so going live starts none of them, unless it is a starter (the Design Owner). Returns the
+        routines it turned on, `{id, name}` each (the id is the template's key)."""
         declared = self._declared(c, slug)
-        if declared.get("routine_armed") or not declared.get("template"):
-            return None
-        first = next(iter(self._template_routines(c, declared["template"])), None)
-        sid = (
-            first
-            and c.execute("SELECT id FROM schedules WHERE bot=? AND routine_key=?", (slug, first["id"])).fetchone()
-        )
-        # The routine as it is now: its automation once it moved (backend/routines.py `row`).
-        found = sid and routines.row(c, sid["id"])
-        if not found or found["deleted_at"]:
-            return None
-        declared["routine_armed"] = first["id"]
+        template = declared.get("template")
+        if declared.get("routine_armed") or not template:
+            return []
+        card = next((card for card in read_cards(self.settings) if card["template"] == template), {})
+        if card.get("bootstrap") and not card.get("starter"):
+            return []
+        found = [
+            (entry, where)
+            for entry in self._template_routines(c, template)
+            if (where := routines.seeded(c, slug, entry))
+        ]
+        if not found:
+            return []  # not built yet: a later go-live or setup turns them on
+        declared["routine_armed"] = [entry["id"] for entry, _ in found]
         self._write_config(c, slug, declared)
-        explicitly_disabled = c.execute(
-            "SELECT 1 FROM events WHERE action='routine.updated' AND target=? "
-            "AND json_extract(detail,'$.enabled')=0 LIMIT 1",
-            (found["id"],),
-        ).fetchone()
-
-        if not found["enabled"] and not explicitly_disabled:
-            routines.update(c, who.actor, found["id"], {"enabled": True})
-            H.event(c, who.actor, "bot.routine_armed", slug, {"routine": first["id"]})
-        return first["id"]
+        armed = []
+        for entry, (sid, row) in found:
+            if row["enabled"] or not routines.untouched(c, sid, row):
+                continue
+            routines.switch_on(c, who.actor, sid, row)
+            H.event(
+                c, who.actor, "bot.routine_armed", slug, {"routine": entry["id"], "automation": row.get("automation")}
+            )
+            armed.append({"id": entry["id"], "name": row.get("name") or row.get("title") or entry["title"]})
+        return armed
 
     def on_runner_enrolled(self, c, runner_id, operator):
         """Enrolling the owner's Mac after the wizard finishes wires it up too, so the order
@@ -1616,8 +1757,8 @@ class Onboarding:
         """Create the bot, or bring an existing definition up to the chosen name. A bot that
         is already running is never demoted back to planned."""
         summary = str(card.get("summary") or "")
-        if slug == GOAL_MANAGER:
-            # "Strategy Bot", or the owner's name for it: never back
+        if slug == STRATEGY_OWNER:
+            # "Strategy Owner", or the owner's name for it: never back
             choice = {**choice, "display_name": strategy_bot.name(c)}
         found = H.resolve_bot(c, slug)
         bot_id = (found or {}).get("id", slug)

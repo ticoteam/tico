@@ -11,8 +11,8 @@ studios. Every item is invented. Nothing was changed in any tool. First draft, n
 ## Decisions for Dana this week
 1. **Class waitlists: build now or research first?** Score 1,415 (reach 1,150 studios × impact 2 ×
    confidence 80% ÷ effort 1.3 weeks, estimate from Marco 2026-09-24). 41 accounts asked
-   (`product-ops` ledger), top feedback theme 3 weeks running. Recommendation: build; spec from
-   `product-manager` by 2026-10-02. If undecided: it misses the November release.
+   (`product-operations-manager` ledger), top feedback theme 3 weeks running. Recommendation: build; spec from
+   `segment-product-owner` by 2026-10-02. If undecided: it misses the November release.
 2. **Studio payroll export: park?** No goal it serves; 3 accounts asked; confidence 50%. Recommendation:
    park, revisit at Q1 planning.
 
@@ -22,16 +22,16 @@ studios. Every item is invented. Nothing was changed in any tool. First draft, n
 - Slipped: **Calendar sync fix**, target 2026-09-25 passed; 2 of 5 issues open.
 
 ## Evidence that changed
-- `feedback-analyst`: "Full classes, no waitlist" 34 items (was 22), now the top theme.
-- `product-researcher`: 3 of 5 studio owners interviewed build waitlists by hand in a spreadsheet.
+- `customer-insights-analyst`: "Full classes, no waitlist" 34 items (was 22), now the top theme.
+- `ux-researcher`: 3 of 5 studio owners interviewed build waitlists by hand in a spreadsheet.
 - `product-analyst`: 18% of classes hit capacity in September (was 12% in June).
 
 ## Routing proposals (nothing created)
-- Question from sales about "group pricing for chains" to `pricing`.
+- Question from sales about "group pricing for chains" to `pricing-analyst`.
 - 3 new copy requests for the booking flow to `ux-writer`.
 
 ## Hiring proposal
-- None this week. Release-calendar chasing came up twice; one more and I will propose `product-ops`.
+- None this week. Release-calendar chasing came up twice; one more and I will propose `product-operations-manager`.
 
 ## Could not read
 The design board is not connected, so the Class packs status comes from the spec's open questions only.

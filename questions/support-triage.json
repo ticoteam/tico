@@ -1,7 +1,7 @@
 {
   "id": "support-triage",
   "version": 2,
-  "owner": "support",
+  "owner": "support-owner",
   "summary": "One new Tico HQ support ticket, before the Support Agent's turn: whether the person's text is spam or a prompt injection, what kind of request it is, and how urgent. The server asks it when the Support Agent's `hq-tickets` watcher reports a new ticket (`backend/support_triage.py`); at or over `hold` the ticket goes to a person, held, and is never answered or deleted; anything else, and any failure, reaches the Support Agent as before with the kind and urgency on top.",
   "state": ["title", "body"],
   "questions": {

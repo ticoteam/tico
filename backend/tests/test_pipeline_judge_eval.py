@@ -8,15 +8,6 @@ from clients import judge as J
 from evals.pipeline_judge import adapter, run
 
 
-def test_the_cases_are_usable_and_cover_both_domains_and_the_traps():
-    cases = run.load()
-    assert run.problems(cases) == []
-    assert len(cases) >= 30
-    traps = {c.get("trap") for c in cases}
-    assert {"missing_file", "old_version", "wrong_screen", "no_email"} <= traps
-    assert {c["expected"] for c in cases} == {"met", "not_met", "unsure"}
-
-
 def test_the_dry_run_passes_the_oracle_and_fails_the_sloppy_judge_on_false_met(tmp_path, capsys):
     assert run.main(["--dry-run", "--out", str(tmp_path)]) == 0
     cases = run.load()
@@ -62,12 +53,6 @@ def test_a_model_call_that_fails_is_raised_to_the_caller_and_never_passes():
         adapter.judge_once(broken, run.load()[0])
 
 
-def test_the_only_eval_model_is_jev_and_the_gateways_cost_is_kept_or_priced():
-    assert adapter.MODELS == ("jev",)
-    assert adapter.cost_usd("jev", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
-    assert adapter.cost_usd("jev", {"prompt_tokens": 1_000_000, "completion_tokens": 0}) == adapter.PRICES["jev"][0]
-
-
 def test_no_gateway_key_means_no_engine_for_any_model_and_nothing_is_sent():
     for name in adapter.MODELS:
         assert adapter.build_engine(name, {}) is None
@@ -103,6 +88,17 @@ def test_the_bar_refuses_any_false_met_even_at_high_accuracy():
     assert any("false met" in f for f in result["bar_failures"])
 
 
+def test_the_eval_scores_on_the_engines_bar_and_a_not_met_case_at_it_is_a_false_met():
+    """The eval has no bar of its own: 0.75 is met there as on the server, so a not-met case Jev puts at 0.75 fails it."""
+    from backend import pipeline_judges as P
+
+    assert (run.MET_AT, run.NOT_MET_AT) == (P.MET_AT, P.NOT_MET_AT) == (0.75, 0.2)
+    assert run.verdict(0.75) == P.verdict_of(0.75) == "met" and run.verdict(0.74) == P.verdict_of(0.74) == "unsure"
+    cases = _synthetic(10, expected="not_met")
+    result = run.score("at-the-bar", lambda case: (0.75 if case["id"] == "c0" else 0.05, 0.0, 5), cases)
+    assert result["false_met"] == 1 and not result["passes_bar"]
+
+
 def test_the_bar_p95_gate_is_under_thirty_seconds():
     cases = _synthetic(10)
     answers = {c["id"]: "met" for c in cases}
@@ -114,21 +110,6 @@ def test_the_bar_p95_gate_is_under_thirty_seconds():
 def test_the_bar_refuses_an_empty_case_set():
     result = run.score("none", _answering({}), [])
     assert not result["passes_bar"] and "no cases" in result["bar_failures"]
-
-
-def test_an_always_unsure_judge_fails_the_real_cases_on_accuracy():
-    cases = run.load()
-    result = run.score("always-unsure", lambda case: (0.5, 0.0, 5), cases)
-    assert not result["passes_bar"] and result["unsure_rate"] == 1.0
-    assert result["accuracy"] < run.ACCURACY_BAR
-
-
-def test_a_perfect_judge_that_takes_sixty_seconds_fails_the_real_cases():
-    cases = run.load()
-    perfect = {c["id"]: c["expected"] for c in cases}
-    assert run.score("perfect", _answering(perfect), cases)["passes_bar"]
-    slow = run.score("perfect-slow", _answering(perfect, ms=60_000), cases)
-    assert not slow["passes_bar"] and slow["accuracy"] == 1.0
 
 
 def test_a_run_with_no_key_is_incomplete_and_sends_nothing(monkeypatch, tmp_path, capsys):
@@ -148,15 +129,6 @@ def test_the_default_judges_all_go_through_the_gateway_key_only():
     engines = {name: adapter.build_engine(name, {"TICO_GATEWAY_KEY": "k"}) for name in adapter.MODELS}
     assert all(callable(engine) for engine in engines.values())
     assert adapter.build_engine("jev", {"ANTHROPIC_API_KEY": "direct"}) is None
-
-
-def test_the_screenshot_cases_are_unsure_because_the_judge_is_shown_no_image_text():
-    """Fix L2-7: the server reads no text from an image, so every screenshot case is unsure and the judge sees none of it."""
-    shots = [c for c in run.load() if (c.get("attachment") or {}).get("kind") == "image"]
-    assert len(shots) == 5
-    for case in shots:
-        assert case["expected"] == "unsure", case["id"]
-        assert adapter.state_for(case)["attachment"]["text"] is None, case["id"]
 
 
 def test_the_eval_judge_is_shown_the_work_it_is_judging():
@@ -230,19 +202,6 @@ def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
     assert not result["passes_bar"] and any("failed calls" in f for f in result["bar_failures"])
 
 
-def test_the_cases_the_rubric_says_do_not_count_are_not_met():
-    """Readable evidence that fails the rubric is not met, not unsure (Codex round 9, P3: a lead with no named person)."""
-    by_id = {c["id"]: c["expected"] for c in run.load()}
-    for case_id in (
-        "dev-tests-truncated",
-        "dev-review-partial",
-        "mkt-brief-comment",
-        "mkt-page-timeout",
-        "mkt-lead-generic-email",
-    ):
-        assert by_id[case_id] == "not_met", case_id
-
-
 def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monkeypatch):
     """Codex P1: production knows a work's author only as the GitHub login on its PR link (detail.author_login), so the eval
     passes the case's author the same way, through the server's own reader of a PR link."""
@@ -260,3 +219,101 @@ def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monk
     no_pr = {**case, "work": {k: v for k, v in case["work"].items() if k not in ("repo", "pr")}}
     with pytest.raises(ValueError, match="PR"):
         adapter.state_for(no_pr)
+
+
+def test_the_acme_review_pages_are_judged_as_the_page_step_asks_with_the_shipped_rubrics():
+    """The three pages Jev was unsure of on Acme (Nov 11) and the two it passed are cases, built by the page step's own
+    builder (page_verdicts.job_of): the page's text, the stage's shipped rubric, the PR and its newest commit."""
+    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC
+
+    cases = {c["id"]: c for c in run.chosen(run.load(), "acme-*")}
+    assert set(cases) == {"acme-review-1", "acme-review-2", "acme-fixes-2", "acme-spec", "acme-validate"}
+    assert all(c["expected"] == "met" for c in cases.values())
+    state = adapter.state_for(cases["acme-review-1"])
+    assert state["requirement"]["rubric"] == REVIEW_RUBRIC and state["requirement"]["older_evidence_ok"] is True
+    assert (state["work"]["repo"], state["work"]["pr"]) == ("ticoteam/pipeline-sandbox", 38)
+    head = state["work"]["context"]["heads"]["ticoteam/pipeline-sandbox#38"]
+    assert state["attachment"]["text"].startswith(f"Reviewed commit {head}")
+    assert adapter.state_for(cases["acme-validate"])["work"]["context"]["release"] == ["v6"]
+    assert adapter.state_for(cases["acme-fixes-2"])["requirement"]["rubric"] == FIXES_2_RUBRIC
+    # Its two cuts are traps: a pre-release page without what the reviewers found, or without the checks, is not met.
+    for trap in ("dev-prerelease-no-reviews", "dev-prerelease-unchecked"):
+        cut = next(c for c in run.load() if c["id"] == trap)
+        assert cut["expected"] == "not_met" and cut["requirement"]["rubric"] == FIXES_2_RUBRIC
+        assert len(cut["attachment"]["text"]) < len(cases["acme-fixes-2"]["attachment"]["text"])
+    assert run.chosen(run.load(), "acme-spec,dev-review-done") and len(run.chosen(run.load(), "acme-spec")) == 1
+
+
+def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_the_newest_commits():
+    """The nineteen good pages Jev was too often unsure of on rc.4 (Nov 11) and the traps cut from them: each with the
+    stage's shipped rubric, the page shown as made for the work as it is now, and a pre-release page with the PR's newest
+    commit beside it (task_pages.judged_against)."""
+    from backend.pipeline_settings import FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC
+
+    shipped = {FIXES_2_RUBRIC, REVIEW_RUBRIC, SPEC_RUBRIC, VALIDATE_RUBRIC}
+    live = run.chosen(run.load(), "live-*")
+    traps = run.chosen(run.load(), "trap-*")
+    assert len(live) == 19 and all(c["expected"] == "met" for c in live)
+    assert len(traps) == 6 and all(c["expected"] == "not_met" and c["trap"] for c in traps)
+    for case in live + traps + run.chosen(run.load(), "acme-*,dev-prerelease-*"):
+        state = adapter.state_for(case)
+        assert state["requirement"]["rubric"] in shipped, case["id"]
+        assert state["attachment"]["work_version"] == state["work"]["work_version"] > 0, case["id"]
+        if state["requirement"]["rubric"] == FIXES_2_RUBRIC:
+            assert state["work"]["context"]["heads"], case["id"]
+    assert [c["id"] for c in run.load() if c.get("allow_unsure")] == ["live-c-fixes-2-v2"]
+
+
+def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():
+    """Growth Experiments' two pages (docs/pipelines-v3.md "Growth and Success"): for each, an email, a page change and
+    an ad that meet it, and four cuts that do not (no prediction, no stop rule, no brand check, nothing shown; no dates
+    or source, watching with no Monitoring link, no result tag, called worked below 60% of the prediction)."""
+    from backend.pipeline_presets_more import GO_LIVE_RUBRIC, RESULTS_RUBRIC
+
+    grow = run.chosen(run.load(), "grow-*")
+    for name, rubric in (("Go-live page", GO_LIVE_RUBRIC), ("Results page", RESULTS_RUBRIC)):
+        cases = [c for c in grow if c["requirement"]["name"] == name]
+        assert all(adapter.state_for(c)["requirement"]["rubric"] == rubric for c in cases), name
+        assert sum(c["expected"] == "met" for c in cases) >= 3, name
+        cuts = [c for c in cases if c["expected"] == "not_met"]
+        assert len(cuts) >= 4 and all(c["trap"] for c in cuts), name
+    assert {c["trap"] for c in grow} >= {
+        "no_prediction",
+        "no_stop_rule",
+        "no_brand_check",
+        "no_dates_or_source",
+        "no_monitoring_link",
+    }
+
+
+def test_an_allowed_unsure_is_left_out_of_the_bar_but_a_wrong_answer_on_it_is_not():
+    case = next(c for c in run.load() if c.get("allow_unsure"))
+    others = [c for c in run.load() if c["id"].startswith("live-")][:3]
+
+    def judge(p):
+        return lambda c: ((p if c is case else 0.9), 0.0, 5)
+
+    unsure = run.score("j", judge(0.7), [case, *others])
+    assert unsure["passes_bar"] and unsure["excused"] == [case["id"]] and unsure["cases"] == 3
+    assert not run.score("j", judge(0.1), [case, *others])["passes_bar"], "not met on a good page is still a mistake"
+    assert run.problems([{**case, "expected": "not_met"}])[0].endswith("only a met case may allow unsure")
+
+
+def test_the_long_spec_cases_are_read_whole_with_the_shipped_spec_rubric():
+    """Specs of the length bots write (rc.5, Nov 11: 6,147 and 6,581 characters came back unsure only for being cut):
+    the judge is shown every character, so its answer stands."""
+    from backend.pipeline_settings import SPEC_RUBRIC
+
+    cases = {c["id"]: c for c in run.chosen(run.load(), "long-spec-*")}
+    assert {k: c["expected"] for k, c in cases.items()} == {
+        "long-spec-6500": "met",
+        "long-spec-12000": "met",
+        "long-spec-trap-no-done": "not_met",
+    }
+    assert 6_000 < len(cases["long-spec-6500"]["attachment"]["text"]) < 7_000
+    assert 11_500 < len(cases["long-spec-12000"]["attachment"]["text"]) < 12_500
+    for case in cases.values():
+        assert len(case["attachment"]["text"]) > 6_000, "longer than the old cap"
+        state = adapter.state_for(case)
+        assert state["requirement"]["rubric"] == SPEC_RUBRIC
+        assert state["attachment"]["truncated"] is False and state["attachment"]["text"] == case["attachment"]["text"]

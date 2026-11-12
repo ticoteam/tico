@@ -1,6 +1,6 @@
 // Journey 8 on a real hub (redesign TESTING.md §L3): Tools › Keys lists the tool a computer reported (the
-// Engineering Lead's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
-// its row opens the tool: who has it (the Engineering Lead, free to change things there), then its page. The old
+// Engineering Manager's Acme Billing, read and refund, from the runner's heartbeat) under In use, with how many have it, and
+// its row opens the tool: who has it (the Engineering Manager, free to change things there), then its page. The old
 // Tools address (#/integrations) leads to Tools. Desktop only: nothing here differs on a phone, and e2e-tools.cts runs Tools on a phone.
 import type * as RE from './support/redesign-e2e.cts';
 const assert = require('node:assert/strict');
@@ -31,7 +31,7 @@ run('redesign-e2e-tools', ['org', 'toured', 'connection'], async ({hub, browser,
   await page.locator('#int-detail h1').filter({hasText: /acme.billing/i}).waitFor({timeout: t(5000)});
   const access = page.locator('.lc-access .lc-who-row');
   await access.first().waitFor();
-  assert.match(await access.first().innerText(), /engineering.lead/i, `${tag}: who has it`);
+  assert.match(await access.first().innerText(), /engineering.manager/i, `${tag}: who has it`);
   assert.equal(await access.first().locator('.pill').innerText(), 'Freely', `${tag}: refund is a write`);
   assert.equal(await page.locator('#int-detail .int-meta dd').evaluateAll(dd => dd.filter(d => !d.textContent!.trim()).length), 0,
     `${tag}: no label without a value`);

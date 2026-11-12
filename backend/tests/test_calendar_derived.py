@@ -176,12 +176,12 @@ def test_disabled_schedules_and_bots_that_are_not_active_are_skipped(company):
     with company.transaction() as c:
         add_schedule(c, "off", "0 9 * * *", enabled=0)
         add_schedule(c, "paused-bot", "0 9 * * *", name="Paused bot's routine")
-        add_schedule(c, "coo-routine", "0 9 * * *", name="Coo's routine", owner="bot:coo")
+        add_schedule(c, "assistant-routine", "0 9 * * *", name="Assistant's routine", owner="bot:assistant")
         c.execute("UPDATE bots SET state='paused' WHERE id='ops'")
     with company.read_transaction() as c:
         assert D.scheduled(c, ["ops"], at(11), at(12), now=at(10)) == []
-        found = D.scheduled(c, ["coo"], at(11), at(12), now=at(10))
-    assert [occ["title"] for occ in found] == ["Coo's routine"]
+        found = D.scheduled(c, ["assistant"], at(11), at(12), now=at(10))
+    assert [occ["title"] for occ in found] == ["Assistant's routine"]
 
 
 def test_a_schedule_firing_more_often_than_hourly_is_one_pill_per_day(company):

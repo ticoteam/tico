@@ -20,14 +20,18 @@ def request_task(c, auth, who, title, body):
     from . import rooms
     from .store import H
 
+    botops = H.bot_actor(H.FLEET_MAINTAINER)
+    # A new company files these before BotOps has started (`allow_planned`). Its chat room cannot be opened yet, so the
+    # task opens its own thread, and asking for the room would only record a refusal nobody made.
+    planned = (H.bot(c, H.FLEET_MAINTAINER) or {}).get("state") == "planned"
     task = H.task_create(
         c,
         who.actor,
         title,
         body,
-        H.bot_actor(H.FLEET_MAINTAINER),
+        botops,
         allow_planned=True,
-        conversation_id=rooms.task_conversation_id(c, auth, H.bot_actor(H.FLEET_MAINTAINER), who.actor),
+        conversation_id=None if planned else rooms.task_conversation_id(c, auth, botops, who.actor),
     )
     if who.role in ("owner", "human") and who.via != "assistant":
         H.event(c, who.actor, "botops.task_requested", task["id"], {})
@@ -428,7 +432,7 @@ DO = _routes(
     ("POST", r"settings/turn-budgets"),
     ("PUT", rf"system-routines/{_S}"),
     ("POST", rf"system-routines/{_S}/run"),
-    ("POST", r"task-manager/turn-(on|off)"),
+    ("POST", r"general-manager/turn-(on|off)"),
     # The Company page's drafts, sources, stats and logo: the route checks the person is an owner or an admin. An
     # edition is only drafted here; publishing, approving, overriding, retracting and correcting are not listed, so they
     # are refused for BotOps (editions.require_person, require_own_click). Removing an audience's reader or invite is

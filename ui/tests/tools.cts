@@ -203,6 +203,21 @@ async function start(browser: import('playwright').Browser, hash: string, {width
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
+    // The phone breadcrumb's padded edge is part of the link; desktop keeps its compact height.
+    for (const width of [390, 560, 1440]) {
+      const {page, seen} = await start(browser, '#/tools/github', {width, ready: '.tt-crumb a[href="#/tools"]'});
+      const crumb = page.locator('.tt-crumb a[href="#/tools"]');
+      const rect = await crumb.boundingBox();
+      assert.ok(rect, `${width}: Tools breadcrumb is visible`);
+      if (width <= 760) assert.ok(rect.height >= 40 && rect.width >= 40, `${width}: Tools breadcrumb needs a 40 px tap area, got ${rect.width} × ${rect.height}`);
+      else assert.ok(rect.height < 40, 'desktop: Tools breadcrumb keeps its compact height');
+      assert.equal(await sideways(page), false, `${width}: GitHub has no sideways scroll`);
+      await crumb.click({position: {x: rect.width / 2, y: 2}});
+      await page.waitForFunction(() => location.hash === '#/tools');
+      await page.locator('tr[data-tl-row]').first().waitFor();
+      assert.deepEqual(seen.errors, [], `${width}: breadcrumb navigation errors`);
+      await page.close();
+    }
     for (const width of [1440, 390]) {
       const tag = width < 500 ? 'phone' : 'desktop';
       // The list: every row, its faces and "+N more", the filters and Needs you; Websites stays hidden at zero.

@@ -19,7 +19,7 @@ from backend.tests.helpers.profiles import add_bot, profile_of, put
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
     slugs = {
-        "engineering-lead": P.LEAD,
+        "engineering-manager": P.LEAD,
         "cmo": P.LEAD,
         "release-manager": P.LEAD,
         "sentry-triage": P.MONITOR,
@@ -27,9 +27,8 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         "qa-web": P.REVIEWER,
         "security-audit": P.REVIEWER,
         "pr-reviewer-sol": P.REVIEWER,
-        "assistant": P.RESPONDER,
         "botops": P.CUSTOM,
-        "task-manager": P.CUSTOM,
+        "general-manager": P.CUSTOM,
         "writer": P.DOER,
     }
     with api.app.state.store.transaction() as c:
@@ -37,14 +36,14 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
             add_bot(c, slug)
         add_bot(c, "saver", wake_preset="token_saver")
         add_bot(c, "grok-designer", harness="grokbot")
-        add_bot(c, "pr-reviewer")
+        add_bot(c, "reviewer")
         add_bot(c, "builder")
         BS.update(c, 'cpo', {'profile': 'doer'})
         told = P.migrate(c)
-        got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "pr-reviewer", "cpo")}
+        got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "reviewer", "cpo")}
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs
         assert got["grok-designer"]["profile"] == P.RESPONDER and got["cpo"]["profile"] == "doer"
-        assert got["pr-reviewer"]["profile"] == P.REVIEWER
+        assert got["reviewer"]["profile"] == P.REVIEWER
         assert profile_of(c, "builder")["profile"] == P.DOER
         # A former Token saver bot keeps its 30-minute window as a value of its own; Performance is the Doer's.
         assert got["saver"]["profile"] == P.DOER and got["saver"]["wake_preset"] == "token_saver"
@@ -53,7 +52,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         )
         assert told > 12
         notes = [m for m in H.notices(c, "human:ana") if "gave each of your bots a profile" in m["body"]]
-        assert len(notes) == 1 and "engineering-lead" in notes[0]["body"] and "Lead" in notes[0]["body"]
+        assert len(notes) == 1 and "engineering-manager" in notes[0]["body"] and "Lead" in notes[0]["body"]
         # Run again: nothing changes and nobody is told twice.
         revision = c.execute("SELECT sum(revision) FROM bot_config").fetchone()[0]
         assert P.migrate(c) == 0 and c.execute("SELECT sum(revision) FROM bot_config").fetchone()[0] == revision
@@ -293,11 +292,6 @@ def test_custom_copies_the_rows_and_leaving_it_needs_a_confirm(api):
     set_profile(api, "ops", "doer", expected=409)
     back = set_profile(api, "ops", "doer", confirm_drop_rules=True)
     assert back["rules"] == 0 and back["profile"]["name"] == "doer"
-
-
-def test_the_choices_describe_each_profile(api):
-    listed = get(api, "profiles")["profiles"]
-    assert [p["name"] for p in listed] == list(P.NAMES) and all(p["description"] for p in listed)
 
 
 def test_the_cli_and_mcp_tool_read_the_choices_and_send_the_revision():

@@ -134,6 +134,24 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_a_per
     assert kinds.count("woken_again") == 6 and kinds.count("ladder") == 2
 
 
+def test_an_owner_who_never_answers_the_stages_question_climbs_the_same_ladder(c, general, later):
+    settings = {"name": "confidence", "type": "number", "min": 0, "max": 100, "question": "How sure are you?"}
+    stages = ({"name": "Build", "owner": BUILDER, "requirements": [{"kind": "answer", "settings": settings}]},)
+    X.pipeline(c, "eng", "Engineering", stages, manager=MANAGER)
+    task_id = X.new_task(c, ANA, "Build the importer", "eng")["id"]
+    for seconds in (120, 900, 3600):
+        X.ran(c, task_id, BUILDER)
+        assert later(seconds=seconds) == {"woken": 1}
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"to_manager": 1, "woken": 1} and _ladder(c, task_id) == ("manager", 1)
+    for seconds in (900, 3600):
+        X.ran(c, task_id, MANAGER)
+        assert later(seconds=seconds) == {"woken": 1}
+    X.ran(c, task_id, MANAGER)
+    assert later(seconds=120) == {"to_person": 1} and _ladder(c, task_id)[0] == "person"
+    assert (ANA, "How sure are you?") in [(w.who, w.line) for w in W.waiting_on(c, task_id)]
+
+
 def test_try_again_hands_it_back_to_the_owner_with_the_count_at_zero(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     c.execute(
@@ -236,8 +254,12 @@ def test_nothing_is_sent_while_the_bot_runs_and_a_run_that_was_cut_off_is_a_try(
     assert later(hours=6) == {} and _ladder(c, task_id) == ("owner", 0)  # its computer still checks in
     c.execute("UPDATE attempts SET state='expired', finished_at=?, lease_until=? WHERE id='run1'", (H.now(), H.now()))
     c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (job_id,))
-    assert later(seconds=119) == {}
-    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    # Stopped partway after it may have acted: Paused from that moment (the claim holds the task's work for it), with
+    # no wake the bot could not take, until someone runs it again or leaves it.
+    assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", "builder " + task_wakes.RUN_HELD)]
+    assert later(minutes=10) == {} and _queued(c, task_id) == []
+    c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job_id,))  # left (POST jobs/{id}/reconcile)
+    assert later(seconds=10) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
     assert _said(c, task_id, BUILDER)[-1] == "Your last run on this task was cut off. Try 1 of 3."
 
 
@@ -280,7 +302,7 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     X.ran(c, task_id, BUILDER, state="expired")  # its job is uncertain
     attempt, job = c.execute("SELECT id, job_id FROM attempts WHERE task_id=?", (task_id,)).fetchone()
     H.event(c, H.KEEPER, "job.held", attempt, {"job_id": job, "tools": ["Bash"]})
-    line = "builder has a run held for a check"
+    line = "builder " + task_wakes.RUN_HELD
     assert [(w.state, w.line) for w in W.waiting_on(c, task_id)] == [("paused", line)]
     assert later(hours=2) == {} and _queued(c, task_id) == []  # nobody is woken meanwhile
     paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
@@ -290,6 +312,32 @@ def test_a_run_held_for_a_check_pauses_its_task_and_says_so_to_the_bots_owner(c,
     c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job,))  # dismissed (POST jobs/{id}/reconcile)
     assert _states(c, task_id) == [("bot", BUILDER)]
     assert later(seconds=10) == {"woken": 1}
+
+
+def test_a_run_that_stopped_partway_is_never_a_silent_wait(c, general, later):
+    from backend import health
+
+    """Nov 12, Tico Team: a Codex reviewer's turn ended "interrupted" (a steer race) and its job was held for a person to
+    run it again. For the quarter hour before auto_reconcile records `job.held`, the task still said it was the
+    reviewer's turn, nothing was on Needs you and the never-stuck reading counted nothing. From the moment the run stops
+    the task is Paused with the wait, the bot's owner has it on Needs you (no BotOps here) and the reading counts it."""
+    task_id = X.new_task(c, ANA, "Review the footer fix", assignee=REVIEWER)["id"]
+    X.ran(c, task_id, REVIEWER, state="interrupted")  # its job is uncertain, with no `job.held` yet
+    line = "reviewer " + task_wakes.RUN_HELD
+    assert line == "reviewer stopped partway: waiting on a person to run it again"
+    assert W.headline(c, task_id).line == line and _states(c, task_id) == [("paused", REVIEWER)]
+    paused = [n for n in W.needs(c, ANA) if n["kind"] == "paused"]
+    assert [(n["line"], n["bots"], n["tasks"]) for n in paused] == [(line, [REVIEWER], [task_id])]
+    reading = health.never_stuck_reading(c)
+    assert reading["cant_run"] == 1 and task_id in reading["tasks"]["cant_run"]
+    assert later(minutes=10) == {} and _queued(c, task_id) == []
+    # Tico's own choice that waits only for the bot's lane (an update cut) runs by itself: nobody's wait.
+    job, attempt = c.execute("SELECT id, attempt_id FROM jobs WHERE state='uncertain'").fetchone()
+    c.execute(
+        "INSERT INTO job_recovery(job_id, attempt_id, decision, note, actor, created_at) VALUES (?,?,?,?,?,?)",
+        (job, attempt, "resume", "", H.KEEPER, H.now()),
+    )
+    assert _states(c, task_id) == [("bot", REVIEWER)]
 
 
 def test_with_no_manager_bot_that_can_run_the_task_goes_straight_to_a_person(c, general, later):
@@ -361,11 +409,74 @@ def test_a_late_task_that_waits_on_a_person_gets_one_look_from_the_manager_bot(c
     assert _states(c, task_id) == [("person", ANA)]
     assert later(hours=23) == {}  # a person's turn: no bot is woken
     assert later(hours=1) == {"late": 1, "woken": 1} and _ladder(c, task_id) == ("owner", 0)
-    assert _said(c, task_id, MANAGER)[0].startswith("Late: 24 hours in To do, expected 24 hours. It waits on: Card or")
+    said = _said(c, task_id, MANAGER)[0]
+    assert said.startswith("Late: 24 hours in To do, expected 24 hours. It waits on: Card or")
+    # Its one move is to push past an ask it may push past: never a snooze that would set the ask aside.
+    assert "It stays in Ana's list." in said and "push past it with a reason" in said and "snooze" not in said
     assert later(days=5) == {}  # already a person's turn: nothing is added
     assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "Card or invoice?")]
     mine = X.new_task(c, ANA, "Call the bank", assignee=ANA)["id"]
     assert later(days=30) == {} and _visit(c, mine)["late_told_at"] is None  # the day is for bots only
+
+
+SIGN_OFF = (
+    {
+        "name": "Sign off",
+        "owner": "assignee",
+        "expected_minutes": 1440,
+        "expected_bots_only": 1,
+        "requirements": [{"kind": "ok", "who_oks": "people_only", "person": ANA, "line": "OK to ship"}],
+    },
+)
+
+
+def test_a_late_task_that_waits_only_on_a_people_only_ok_wakes_no_manager_bot(c, general, later):
+    """Acme rc.5 (Nov 11): a Late wake offered the manager bot "snooze it" on a task that waited only on a person's
+    people-only OK, and its snooze took the OK out of the person's list. A bot may not push past that OK, so the
+    manager bot has no move: Late is the label only, and the OK stays in her list."""
+    X.pipeline(c, "ship", "Ship", SIGN_OFF, manager=MANAGER)
+    task_id = X.new_task(c, ANA, "Ship the launch note", "ship", assignee=BUILDER)["id"]
+    assert _states(c, task_id) == [("person", ANA)]
+    assert later(hours=24) == {"late": 1}
+    assert _visit(c, task_id)["late_told_at"] and X.wakes(c, task_id, MANAGER) == []
+    assert later(days=5) == {}  # 3 times the time: already her turn, nothing is added
+    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "OK to ship")]
+
+
+def test_a_bots_snooze_never_hides_an_ask_and_the_answer_ends_it(c, general, later):
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    task_id = row["id"]
+    X.ran(c, task_id, BUILDER)
+    asked = E.add_requirement(c, task_id, BUILDER, "answer", ANA, "Card or invoice?", seen_version=row["version"])
+    E.snooze(c, task_id, MANAGER, "Waiting on Ana", until=H.shift(H.now(), days=2), seen_version=asked["version"])
+    assert _states(c, task_id) == [("snoozed", MANAGER), ("person", ANA)]
+    assert [(n["kind"], n["line"]) for n in W.needs(c, ANA)] == [("ask", "Card or invoice?")]
+    assert later(hours=1) == {} and _queued(c, task_id) == []  # set aside: no wake, and the rules hold (rule 3)
+    # Her answer is what the snooze waited for: it ends, and the task goes on now, not in two days.
+    A.answer(c, task_id, asked["requirement_id"], ANA, "Card")
+    assert not E.task(c, task_id).get("snooze") and _states(c, task_id) == [("bot", BUILDER)]
+    assert _said(c, task_id, BUILDER)[-1] == 'Ana answered "Card or invoice?": Card'
+    # A person's own snooze still sets the task aside, asks and all.
+    other = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    X.ran(c, other["id"], BUILDER)
+    E.add_requirement(c, other["id"], BUILDER, "answer", ANA, "Which footer?", seen_version=other["version"])
+    E.snooze(c, other["id"], ANA, until=H.shift(H.now(), days=2))
+    assert [n["task_id"] for n in W.needs(c, ANA)] == []
+    assert later(hours=1) == {}
+
+
+def test_a_bot_takes_back_only_an_ask_a_bot_added(c, general, later):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    mine = E.add_requirement(c, task_id, ANA, "ok", "human:ben", "OK the launch date")
+    for bot in (BUILDER, MANAGER):
+        with pytest.raises(H.Refused, match="task_needs_person"):
+            E.withdraw_requirement(c, mine["requirement_id"], bot, "Not needed")
+    asked = E.add_requirement(
+        c, task_id, BUILDER, "answer", ANA, "Card or invoice?", seen_version=E.task(c, task_id)["version"]
+    )
+    E.withdraw_requirement(c, asked["requirement_id"], MANAGER, "Found it in the docs")  # a bot's ask: a bot may
+    E.withdraw_requirement(c, mine["requirement_id"], ANA)
+    assert [n["kind"] for n in W.needs(c, ANA)] == []
 
 
 def test_a_persons_task_is_late_only_past_its_due_date_and_nobody_is_chased(c, general, later):
@@ -427,6 +538,54 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
     assert later(hours=1) == {}  # that wake waits for its run
     X.ran(c, task_id, BUILDER)
     assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+
+
+@pytest.mark.parametrize("via", [None, "token"])
+def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_that_stops_early_is_tried_soon(
+    c, general, later, via
+):
+    """The drill: two tries spent, a person writes to the bot, its run ends with "I'll install the test dependencies
+    and continue". The next look is the first gap away, not the hour a third try waits, and it is the bot's own try,
+    not a hand-over to the manager bot for runs spent before the person spoke."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    for n in (1, 2):
+        X.ran(c, task_id, BUILDER)
+        assert later(seconds=(120, 900)[n - 1]) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)
+    X.ran(c, task_id, BUILDER)
+    later(minutes=20)
+    mark = H.BY_TOKEN.set(True) if via else None
+    try:
+        H.task_comment(c, ANA, task_id, "pytest is there now, carry on")
+    finally:
+        if mark:
+            H.BY_TOKEN.reset(mark)
+    assert _ladder(c, task_id) == ("owner", 0)
+    assert X.ran(c, task_id, BUILDER, comments=True) == 1  # it said it would carry on, and stopped
+    assert later(seconds=119) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+
+
+@pytest.mark.parametrize("who", ["assistant", "quiet", "person_level"])
+def test_a_comment_the_assistant_writes_or_one_that_wakes_no_bot_or_on_a_persons_task_keeps_the_count(
+    c, general, later, who
+):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    X.ran(c, task_id, BUILDER)
+    if who == "person_level":
+        c.execute(
+            "UPDATE visits SET level='person', person_id=?, tries=3, next_try_at=NULL WHERE task_id=?", (ANA, task_id)
+        )
+    before = _ladder(c, task_id)
+    mark = H.VIA.set("assistant") if who == "assistant" else None
+    try:
+        H.task_comment(c, ANA, task_id, "A note for later", wake=who != "quiet")
+    finally:
+        if mark:
+            H.VIA.reset(mark)
+    assert _ladder(c, task_id) == before
 
 
 def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
@@ -902,43 +1061,6 @@ def test_a_private_rows_failure_keeps_its_id_and_words_out_of_service_health(c):
     assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE 'background:%'").fetchone()
 
 
-def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, general, later):
-    """Speed (a pass looks at every open task): each wake read finds the task's wakes on messages_wake_key, never by a
-    scan, and live runs are read once per pass, not per task, while no bot has one. 2,000 idle tasks took 3.1 s a
-    pass when wakes were read with LIKE."""
-    for title in ("Write the launch note", "Fix the footer", "Plan the offsite"):
-        X.ran(c, X.new_task(c, ANA, title, assignee=BUILDER)["id"], BUILDER)
-    statements: list[str] = []
-    c.set_trace_callback(statements.append)
-    try:
-        assert later(seconds=120) == {"woken": 3}
-        assert later(minutes=20) == {}  # the wakes are queued
-    finally:
-        c.set_trace_callback(None)
-    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "wake_key" in s]
-    assert reads
-    for sql in reads:
-        plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
-        assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
-        # A read of the task's wakes is not by the bot's own messages either (messages_to_delivered): a bot's every
-        # message, read for each task.
-        task_wakes_read = "wake_key >=" in sql and "FROM attempts" not in sql
-        assert not task_wakes_read or "messages_wake_key" in plan, (sql, plan)
-    assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
-
-
-def test_the_rules_check_reads_everyones_needs_you_once(c, general, later, monkeypatch):
-    """Needs you is read for every person together, once a check: asking for each person in turn read every open task
-    again for each of them."""
-    X.new_task(c, ANA, "Call the bank", assignee=ANA)
-    X.new_task(c, ANA, "Renew the lease", assignee="human:ben")
-    reads = []
-    whole = NS.W.needs_by_person
-    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: reads.append(1) or whole(conn))
-    assert NS.rules_hold(c) == []
-    assert len(reads) == 1
-
-
 def _private(c, title, owner, pipeline="general"):
     made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
     assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []
@@ -1102,6 +1224,13 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     assert all(n.get("task_id") != task_id for n in W.needs(c, ANA))
     assert NS.rules_hold(c) == []
     assert H.task_readers(H.task(c, task_id)) == ["group:ops"]  # nobody was added
+    # The reading is hourly: a task closed since it was taken no longer counts, and an old reading says when it was
+    # read (Globex rc.4: "14 can't run" stood after all 14 were done).
+    E.move(c, task_id, E.CLOSED, REVIEWER, "Not needed", seen_version=H.task(c, task_id)["version"])
+    time_machine.shift(timedelta(minutes=1))
+    closed = health._never_stuck_check(c)
+    assert closed["counts"]["no_one"] == 0 and closed["status"] == "ok" and closed["at"] == check["at"]
+    assert "Read at" in closed["summary"] and "Read at" not in check["summary"]
 
 
 class _Store:

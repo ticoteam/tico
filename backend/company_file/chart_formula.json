@@ -24,7 +24,7 @@
     {
       "key": "cro",
       "id": "cro-owner",
-      "title": "Conversion Rate Optimization Owner",
+      "title": "CRO Owner",
       "template": "cro-owner",
       "department": "marketing",
       "reason": "Owns conversion: turning visitors into customers."
@@ -57,7 +57,7 @@
       "key": "email",
       "id": "email-owner",
       "title": "Email Owner",
-      "template": "email-marketing",
+      "template": "email-owner",
       "department": "marketing",
       "reason": "Owns email to customers and prospects."
     },
@@ -65,7 +65,7 @@
       "key": "content",
       "id": "content-owner",
       "title": "Content Owner",
-      "template": "content",
+      "template": "content-owner",
       "department": "marketing",
       "reason": "Owns articles, posts and pages."
     },
@@ -73,7 +73,7 @@
       "key": "community",
       "id": "community-owner",
       "title": "Community Owner",
-      "template": "community",
+      "template": "community-manager",
       "department": "marketing",
       "reason": "Owns the community and the people in it."
     },
@@ -81,7 +81,7 @@
       "key": "pr",
       "id": "pr-owner",
       "title": "PR Owner",
-      "template": "pr",
+      "template": "pr-manager",
       "department": "marketing",
       "reason": "Owns press and public relations."
     },
@@ -89,7 +89,7 @@
       "key": "app-store",
       "id": "app-store-owner",
       "title": "App Store Owner",
-      "template": "app-store",
+      "template": "app-store-owner",
       "department": "marketing",
       "reason": "Owns the app store listing, its updates and reviews."
     },
@@ -97,7 +97,7 @@
       "key": "affiliates",
       "id": "affiliates-owner",
       "title": "Affiliates Owner",
-      "template": "affiliates",
+      "template": "affiliates-owner",
       "department": "marketing",
       "reason": "Owns affiliate and referral partners."
     },
@@ -105,7 +105,7 @@
       "key": "events",
       "id": "events-owner",
       "title": "Events Owner",
-      "template": "events",
+      "template": "event-marketing-manager",
       "department": "marketing",
       "reason": "Owns events, webinars and trade shows."
     }
@@ -121,7 +121,7 @@
           "template": "product-manager",
           "department": "product",
           "reports_to": null,
-          "reason": "Owns the Product pipeline: picks the next idea, writes the spec for each change and checks it in production.",
+          "reason": "Leads the product team and manages the Product pipeline: keeps each task moving from idea to checked in production, and never does a stage's work.",
           "live": true
         },
         {
@@ -133,7 +133,19 @@
           "template": "segment-product-owner",
           "department": "product",
           "reports_to": "product-manager",
-          "reason": "Owns the {label} segment's product{initiatives}."
+          "reason": "Owns the {label} segment's product{initiatives}.",
+          "live": "first"
+        },
+        {
+          "key": "product-owner",
+          "id": "product-owner",
+          "title": "Product Owner",
+          "template": "segment-product-owner",
+          "department": "product",
+          "reports_to": "product-manager",
+          "reason": "Owns the product: the Product pipeline's ideas, the spec for each change and its check in production.",
+          "unless": "segment",
+          "live": true
         }
       ]
     },
@@ -147,7 +159,7 @@
           "template": "engineering-manager",
           "department": "engineering",
           "reports_to": null,
-          "reason": "Owns the Engineering pipeline: keeps every task moving from On deck to a published release.",
+          "reason": "Leads engineering and manages the Engineering pipeline: keeps each task moving from On deck to a published release, and never does a stage's work.",
           "live": true
         },
         {
@@ -164,7 +176,7 @@
           "key": "reviewer-1",
           "id": "reviewer-1",
           "title": "Reviewer 1",
-          "template": "pr-reviewer",
+          "template": "reviewer",
           "department": "engineering",
           "reports_to": "engineering-manager",
           "reason": "Reviews each code change before it ships, as the first reviewer.",
@@ -174,7 +186,7 @@
           "key": "reviewer-2",
           "id": "reviewer-2",
           "title": "Reviewer 2",
-          "template": "pr-reviewer",
+          "template": "reviewer",
           "department": "engineering",
           "reports_to": "engineering-manager",
           "reason": "Reviews each code change before it ships, as the second reviewer.",
@@ -187,7 +199,8 @@
           "template": "qa-owner",
           "department": "engineering",
           "reports_to": "engineering-manager",
-          "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones."
+          "reason": "Owns the automated tests, unit through end to end: writes and keeps them working, and finds flaky or slow ones.",
+          "live": true
         },
         {
           "key": "security-owner",
@@ -208,9 +221,9 @@
           "reason": "Owns infrastructure: the servers and systems the product runs on."
         },
         {
-          "key": "release-manager",
-          "id": "release-manager",
-          "title": "Release Manager",
+          "key": "release-owner",
+          "id": "release-owner",
+          "title": "Release Owner",
           "template": "release-owner",
           "department": "engineering",
           "reports_to": "engineering-manager",
@@ -223,13 +236,14 @@
       "team": "Growth",
       "seats": [
         {
-          "key": "growth-team-manager",
-          "id": "growth-team-manager",
-          "title": "Growth Team Manager",
-          "template": "growth-team-manager",
+          "key": "growth-manager",
+          "id": "growth-manager",
+          "title": "Growth Manager",
+          "template": "growth-manager",
           "department": "marketing",
           "reports_to": null,
-          "reason": "Leads growth: from first contact to customer, and its owners."
+          "reason": "Leads growth and manages its pipelines: experiments, leads and opportunities, from first contact to customer.",
+          "live": true
         },
         {
           "key": "segment-marketing",
@@ -239,13 +253,13 @@
           "title": "{label} Marketing Owner",
           "template": "segment-marketing-owner",
           "department": "marketing",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns the {label} segment's marketing."
         },
         {
           "key": "channel",
           "per": "channel",
-          "reports_to": "growth-team-manager"
+          "reports_to": "growth-manager"
         },
         {
           "key": "lead-generation",
@@ -253,7 +267,7 @@
           "title": "Lead Generation Owner",
           "template": "lead-generation-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns finding new leads."
         },
         {
@@ -262,7 +276,7 @@
           "title": "Inbound Sales Owner",
           "template": "inbound-sales-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns inbound leads: answering, qualifying and closing them."
         },
         {
@@ -271,7 +285,7 @@
           "title": "Outbound Sales Owner",
           "template": "outbound-sales-owner",
           "department": "sales",
-          "reports_to": "growth-team-manager",
+          "reports_to": "growth-manager",
           "reason": "Owns outbound prospecting: finding and reaching out to buyers."
         }
       ]
@@ -280,13 +294,14 @@
       "team": "Success",
       "seats": [
         {
-          "key": "success-team-manager",
-          "id": "success-team-manager",
-          "title": "Success Team Manager",
-          "template": "success-team-manager",
+          "key": "success-manager",
+          "id": "success-manager",
+          "title": "Success Manager",
+          "template": "success-manager",
           "department": "success",
           "reports_to": null,
-          "reason": "Leads success: support, onboarding and renewals, and its owners."
+          "reason": "Leads success and manages its pipelines: new customers and the success experiments.",
+          "live": true
         },
         {
           "key": "support-owner",
@@ -294,7 +309,7 @@
           "title": "Support Owner",
           "template": "support-owner",
           "department": "success",
-          "reports_to": "success-team-manager",
+          "reports_to": "success-manager",
           "reason": "Owns customer support: answering and resolving customer issues."
         },
         {
@@ -303,7 +318,7 @@
           "title": "Success Owner",
           "template": "success-owner",
           "department": "success",
-          "reports_to": "success-team-manager",
+          "reports_to": "success-manager",
           "reason": "Owns customer success: onboarding, adoption and renewals."
         }
       ]
@@ -312,10 +327,10 @@
       "team": "Corporate",
       "seats": [
         {
-          "key": "corporate-team-manager",
-          "id": "corporate-team-manager",
-          "title": "Corporate Team Manager",
-          "template": "corporate-team-manager",
+          "key": "corporate-manager",
+          "id": "corporate-manager",
+          "title": "Corporate Manager",
+          "template": "corporate-manager",
           "department": "corporate",
           "reports_to": null,
           "reason": "Leads the corporate team: legal, finance and partnerships, and its owners."
@@ -326,16 +341,17 @@
           "title": "Legal Owner",
           "template": "legal-owner",
           "department": "corporate",
-          "reports_to": "corporate-team-manager",
-          "reason": "Owns legal: contracts, terms and compliance."
+          "reports_to": "corporate-manager",
+          "reason": "Owns legal: contracts, terms and compliance.",
+          "live": true
         },
         {
           "key": "finance-owner",
-          "id": "bookkeeper",
+          "id": "finance-owner",
           "title": "Finance Owner",
-          "template": "bookkeeper",
+          "template": "finance-owner",
           "department": "finance",
-          "reports_to": "corporate-team-manager",
+          "reports_to": "corporate-manager",
           "reason": "Owns finance: the books, bills, cash and the monthly close.",
           "live": true
         },
@@ -345,7 +361,7 @@
           "title": "Partnerships Owner",
           "template": "partnerships-owner",
           "department": "corporate",
-          "reports_to": "corporate-team-manager",
+          "reports_to": "corporate-manager",
           "reason": "Owns partnerships with other companies."
         }
       ]
@@ -374,7 +390,7 @@
   ],
   "coverage": [
     {
-      "seat": "growth-team-manager",
+      "seat": "growth-manager",
       "name": "Growth"
     },
     {
@@ -390,11 +406,11 @@
       "name": "Infrastructure"
     },
     {
-      "seat": "release-manager",
+      "seat": "release-owner",
       "name": "Release"
     },
     {
-      "seat": "success-team-manager",
+      "seat": "success-manager",
       "name": "Success"
     },
     {

@@ -20,13 +20,13 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         with store.read() as c:
             return {"cards": onboarding.catalog(c)}
 
-    # The /api/v2/ceo-bot path is the Strategy Bot's old one: clients built before the rename still call it, so it
+    # The /api/v2/ceo-bot path is the Strategy Owner's old one: clients built before the rename still call it, so it
     # stays a hidden alias of the route under it.
     @app.get("/api/v2/ceo-bot", include_in_schema=False)
     @app.get("/api/v2/strategy-bot")
     def strategy_bot_settings(request: Request):
-        """The Strategy Bot's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
-        person's Needs you today is the owner's, an admin's and the Strategy Bot's to read; anyone else sees only their
+        """The Strategy Owner's name, level and regular checks (backend/strategy_bot.py). How many items it put in each
+        person's Needs you today is the owner's, an admin's and the Strategy Owner's to read; anyone else sees only their
         own count."""
         who = request.state.identity
         auth.domain(who)
@@ -38,7 +38,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             value["asked_today"] = {k: n for k, n in value["asked_today"].items() if k == who.actor}
         return value
 
-    @app.post("/api/v2/goal-manager/turn-on")
+    @app.post("/api/v2/strategy-owner/turn-on")
     def turn_on_goal_manager(request: Request, body: M.Empty):
         who = request.state.identity
         if who.role != "owner":
@@ -95,7 +95,7 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
 
     @app.post("/api/v2/onboarding/company/import-failure/dismiss")
     def onboarding_company_import_failure_dismiss(request: Request, body: M.Empty):
-        """The owner leaves a kept setup-file failure they won't fix by importing (Health and the welcome page)."""
+        """The owner leaves a kept setup-file failure they won't fix by importing (Health and setup)."""
         from . import company_import
 
         return mutate(request, body, lambda c: company_import.dismiss(onboarding, c, request.state.identity))
@@ -234,8 +234,8 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
             **({"slug": slug} if slug else {}),
         }
 
-    # A person's own API tokens (backend/personal_tokens.py). Managed only from a browser
-    # sign-in: a token is that person everywhere else, but it cannot mint or revoke tokens.
+    # A person's own API tokens (backend/personal_tokens.py). Made only from a browser sign-in: a token is that
+    # person everywhere else and may list and revoke its person's tokens, but it cannot mint one.
     @app.get("/api/v2/me/tokens")
     def my_tokens(request: Request):
         with store.read() as c:

@@ -1,0 +1,135 @@
+[
+ {
+  "argv": [
+   "pipeline",
+   "create",
+   "id-1",
+   "--name",
+   "name-1",
+   "--stage",
+   "stages-1",
+   "--stage",
+   "stages-1b",
+   "--manager",
+   "manager-1",
+   "--goal",
+   "goal-1",
+   "--prefix",
+   "prefix-1",
+   "--private"
+  ],
+  "tools": [
+   [
+    "tico_pipeline_create",
+    {
+     "goal": "goal-1",
+     "id": "id-1",
+     "manager": "manager-1",
+     "name": "name-1",
+     "operation_id": null,
+     "prefix": "prefix-1",
+     "private": true,
+     "stages": [
+      "stages-1",
+      "stages-1b"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pipelines",
+    null
+   ],
+   [
+    "POST",
+    "pipelines/id-1",
+    {
+     "id": "id-1",
+     "name": "name-1",
+     "goal": "goal-1",
+     "stages": [
+      {
+       "name": "stages-1",
+       "owner": "assignee"
+      },
+      {
+       "name": "stages-1b",
+       "owner": "assignee"
+      }
+     ],
+     "manager_id": "bot:manager-1",
+     "prefix": "prefix-1",
+     "private": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pipeline",
+   "create",
+   "sales",
+   "--name",
+   "Sales",
+   "--stage",
+   "New:ana",
+   "--stage",
+   "Won",
+   "--private",
+   "--manager",
+   "bot:ana"
+  ],
+  "tools": [
+   [
+    "tico_pipeline_create",
+    {
+     "id": "sales",
+     "manager": "bot:ana",
+     "name": "Sales",
+     "operation_id": null,
+     "private": true,
+     "stages": [
+      "New:ana",
+      "Won"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "pipelines",
+    null
+   ],
+   [
+    "POST",
+    "pipelines/sales",
+    {
+     "id": "sales",
+     "name": "Sales",
+     "goal": "",
+     "stages": [
+      {
+       "name": "New",
+       "owner": "bot:ana"
+      },
+      {
+       "name": "Won",
+       "owner": "assignee"
+      }
+     ],
+     "manager_id": "bot:ana",
+     "private": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

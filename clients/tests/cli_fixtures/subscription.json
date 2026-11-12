@@ -1,0 +1,41 @@
+[
+ {
+  "argv": [
+   "subscription",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_subscription_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "model-subscriptions",
+    null
+   ],
+   [
+    "GET",
+    "computer-subscriptions",
+    null
+   ],
+   [
+    "GET",
+    "computers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"subscriptions\": [],\n  \"cannot_take_one\": [],\n  \"detail\": \"Give one to a computer: tico settings set models.computer_subscription\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

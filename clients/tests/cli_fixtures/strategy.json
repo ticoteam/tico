@@ -1,0 +1,537 @@
+[
+ {
+  "argv": [
+   "strategy",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_strategy_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "strategy",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "summary"
+  ],
+  "tools": [
+   [
+    "tico_strategy_summary",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy/summary",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "draft"
+  ],
+  "tools": [
+   [
+    "tico_strategy_draft",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "strategy",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"forbidden\",\n  \"detail\": \"Only the owner writes the strategy; a bot proposes a change with tico_proposal_create, kind strategy_draft\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "strategy",
+   "draft",
+   "--summary",
+   "summary-1",
+   "--vision",
+   "vision-1",
+   "--section",
+   "section-1",
+   "--section",
+   "section-1b",
+   "--revision",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_draft",
+    {
+     "operation_id": null,
+     "revision": 5,
+     "section": [
+      "section-1",
+      "section-1b"
+     ],
+     "summary": "summary-1",
+     "vision": "vision-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "strategy/draft",
+    {
+     "revision": 5,
+     "summary": "summary-1",
+     "vision": "vision-1",
+     "sections": {
+      "extra": {
+       "section-1": "",
+       "section-1b": ""
+      }
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"version\": 3,\n  \"summary\": \"Win small offices first\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "publish",
+   "--note",
+   "note-1",
+   "--revision",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_publish",
+    {
+     "note": "note-1",
+     "operation_id": null,
+     "revision": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/publish",
+    {
+     "note": "note-1",
+     "revision": 5
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "versions"
+  ],
+  "tools": [
+   [
+    "tico_strategy_versions",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy/versions",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "versions",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_versions",
+    {
+     "n": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy/versions/5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "diff",
+   "--from",
+   "5",
+   "--to",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_diff",
+    {
+     "from_n": 5,
+     "operation_id": null,
+     "to_n": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy/diff?from=5&to=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "bet",
+   "add",
+   "--statement",
+   "statement-1"
+  ],
+  "tools": [
+   [
+    "tico_strategy_bet_add",
+    {
+     "operation_id": null,
+     "statement": "statement-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/bets",
+    {
+     "statement": "statement-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "bet",
+   "add",
+   "--statement",
+   "statement-1",
+   "--why",
+   "why-1",
+   "--rules-out",
+   "rules-out-1",
+   "--wrong-if-kpi",
+   "wrong-if-kpi-1",
+   "--wrong-if-direction",
+   "above",
+   "--wrong-if-threshold",
+   "2.5",
+   "--wrong-if-thesis",
+   "wrong-if-thesis-1",
+   "--wrong-if-text",
+   "wrong-if-text-1",
+   "--check-by",
+   "check-by-1",
+   "--cite",
+   "cites-1",
+   "--cite",
+   "cites-1b",
+   "--status",
+   "proposed",
+   "--rank",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_bet_add",
+    {
+     "check_by": "check-by-1",
+     "cites": [
+      "cites-1",
+      "cites-1b"
+     ],
+     "operation_id": null,
+     "rank": 5,
+     "rules_out": "rules-out-1",
+     "statement": "statement-1",
+     "status": "proposed",
+     "why": "why-1",
+     "wrong_if_direction": "above",
+     "wrong_if_kpi": "wrong-if-kpi-1",
+     "wrong_if_text": "wrong-if-text-1",
+     "wrong_if_thesis": "wrong-if-thesis-1",
+     "wrong_if_threshold": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/bets",
+    {
+     "statement": "statement-1",
+     "why": "why-1",
+     "rules_out": "rules-out-1",
+     "cites": [
+      "cites-1",
+      "cites-1b"
+     ],
+     "status": "proposed",
+     "rank": 5,
+     "wrong_if": {
+      "kind": "kpi",
+      "kpi_id": "wrong-if-kpi-1",
+      "direction": "above",
+      "threshold": 2.5,
+      "check_by": "check-by-1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "bet",
+   "update",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_strategy_bet_update",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/bets/id-1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "bet",
+   "update",
+   "id-1",
+   "--statement",
+   "statement-1",
+   "--why",
+   "why-1",
+   "--rules-out",
+   "rules-out-1",
+   "--wrong-if-kpi",
+   "wrong-if-kpi-1",
+   "--wrong-if-direction",
+   "above",
+   "--wrong-if-threshold",
+   "2.5",
+   "--wrong-if-thesis",
+   "wrong-if-thesis-1",
+   "--wrong-if-text",
+   "wrong-if-text-1",
+   "--check-by",
+   "check-by-1",
+   "--cite",
+   "cites-1",
+   "--cite",
+   "cites-1b",
+   "--status",
+   "proposed",
+   "--rank",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_strategy_bet_update",
+    {
+     "check_by": "check-by-1",
+     "cites": [
+      "cites-1",
+      "cites-1b"
+     ],
+     "id": "id-1",
+     "operation_id": null,
+     "rank": 5,
+     "rules_out": "rules-out-1",
+     "statement": "statement-1",
+     "status": "proposed",
+     "why": "why-1",
+     "wrong_if_direction": "above",
+     "wrong_if_kpi": "wrong-if-kpi-1",
+     "wrong_if_text": "wrong-if-text-1",
+     "wrong_if_thesis": "wrong-if-thesis-1",
+     "wrong_if_threshold": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/bets/id-1",
+    {
+     "statement": "statement-1",
+     "why": "why-1",
+     "rules_out": "rules-out-1",
+     "cites": [
+      "cites-1",
+      "cites-1b"
+     ],
+     "status": "proposed",
+     "rank": 5,
+     "wrong_if": {
+      "kind": "kpi",
+      "kpi_id": "wrong-if-kpi-1",
+      "direction": "above",
+      "threshold": 2.5,
+      "check_by": "check-by-1"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "strategy",
+   "bet",
+   "retire",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_strategy_bet_retire",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "strategy/bets/id-1",
+    {
+     "status": "retired"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

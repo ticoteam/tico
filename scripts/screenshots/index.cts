@@ -141,7 +141,7 @@ const PAGES: PageSpec[] = [
       'ui/app/org-fan.ts', 'ui/app/org-factories.ts', 'ui/styles/goals.css', 'ui/styles/redesign.css', 'ui/styles/redesign-strategy.css',
       'ui/styles/org-factories.css']},
   // The "Have a draft ready" line shows on desktop only; the empty thread shows at both widths.
-  {name: 'bot-chat', route: '#/bot/support', ready: 'No messages yet', ui: BOT_CHAT_UI},
+  {name: 'bot-chat', route: '#/bot/support-owner', ready: 'No messages yet', ui: BOT_CHAT_UI},
   {name: 'meetings', route: '#/meetings', ready: 'Larkford town bid call', ui: MEETINGS_UI},
   {name: 'meeting', route: async page => '#/meetings?meeting=' + encodeURIComponent(await page.evaluate(async () => {
     const list = (await (await fetch('/api/meetings')).json()) as Meeting[];
@@ -158,7 +158,7 @@ const PAGES: PageSpec[] = [
       'ui/app/settings-hosted.ts', 'ui/health.ts', 'ui/runner-updates.ts']},
   {name: 'devices', route: '#/settings', tab: 'devices', ready: "Ana's MacBook",
     ui: [...SETTINGS_UI, 'ui/app/settings-devices.ts', 'ui/app/computer-detail.ts', 'ui/app/cloud-machines.ts',
-      'ui/app/subscriptions.ts', 'ui/runner-updates.ts']},
+      'ui/app/subscriptions.ts', 'ui/app/plan-signin.ts', 'ui/runner-updates.ts']},
   {name: 'support', route: '#/updates', ready: 'The rivals sit $20 to $40 above Home Pro, so we still win on price.', ui: ['ui/support.ts', 'ui/styles/support.css', 'ui/app/updates.ts', 'ui/styles/updates.css'],
     steps: async page => {
       await page.evaluate(() => window.supportOpen());
@@ -210,8 +210,9 @@ const PAGES: PageSpec[] = [
   {name: 'growth', route: '#/growth', ready: 'Growth', ui: ['ui/app/growth-*.ts', 'ui/app/brand-page.ts', 'ui/styles/growth.css']},
   {name: 'finance', route: '#/finance', ready: 'P&L', ui: ['ui/app/finance*.js', 'ui/app/finance*.ts', 'ui/styles/finance.css']},
   {name: 'rules', route: '#/rules', ready: 'Rules', ui: ['ui/app/org-rules.ts', 'ui/app/org-rule-holds.ts', 'ui/styles/org-rules.css', 'ui/styles/org-rule-holds.css']},
-  {name: 'directory', route: '#/library/directory', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
+  {name: 'contacts', route: '#/library/contacts', ready: 'Bright Homes Retail', ui: ['ui/app/directory*.ts', 'ui/styles/directory.css']},
   {name: 'automations', route: '#/automations', ready: 'Automations', ui: ['ui/app/automations*.js', 'ui/app/automations*.ts', 'ui/styles/automations.css']},
+  {name: 'listening', route: '#/listening', ready: 'Listening', ui: ['ui/app/listening.ts', 'ui/styles/listening.css']},
   {name: 'learnings', route: '#/learnings', ready: 'set the phone on a flat surface before calibrating',
     ui: ['ui/app/learnings.ts', 'ui/app/learned.ts', 'ui/app/bot-learnings.ts', 'ui/styles/learnings.css', 'ui/styles/bot-learnings.css']},
   {name: 'threads', route: '#/threads', ready: 'Threads',

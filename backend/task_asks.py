@@ -214,9 +214,9 @@ CHECKS_ITSELF = ("email_send", "letter")
 GENERIC: dict[str, Callable[..., str | None]] = {
     # A bot's file, at the version pinned when asked (backend/file_reviews.py).
     "file": _file_may_ok,
-    # A raise of a bot's own project budget (templates/catalog/video-producer).
+    # A raise of a bot's own project budget (templates/catalog/video-owner).
     "budget_raise": _named_and_answerable("a budget raise"),
-    # A reply to a Tico HQ support ticket (templates/catalog/support/software/hq-tickets).
+    # A reply to a Tico HQ support ticket (templates/catalog/support-owner/software/hq-tickets).
     "hq_reply": _named_and_answerable("this reply"),
 }
 MAY_OK.update({kind: rule for kind, rule in GENERIC.items() if kind not in MAY_OK})
@@ -439,7 +439,7 @@ def filed_for(conn: "sqlite3.Connection", person: str, task_id: object) -> bool:
 
 def assistant_actor() -> str:
     """The install's Assistant as an actor (TICO_ASSISTANT_BOT, as backend/config.py reads it)."""
-    return "bot:" + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "coo")
+    return "bot:" + (os.environ.get("TICO_ASSISTANT_BOT", "").strip() or "assistant")
 
 
 def assistant_for(person: object, carried: object) -> bool:

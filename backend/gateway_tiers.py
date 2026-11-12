@@ -411,7 +411,8 @@ def _model_key(text):
     return re.sub(r"[^a-z0-9]", "", str(text or "").lower())
 
 
-# The models a Tico tier may not run here: the held rows in providers.MODEL_CATALOG (Dev 693). A tier whose current
+# The models a Tico tier may not run here (Dev 693). gpt-6.1-terra is offered on Codex with a person's own plan
+# (providers.MODEL_CATALOG) but stays held for paid Gateway use. A tier whose current
 # version runs one is left out whole, and a pinned version that runs one is left out, so the Gateway's index, picker,
 # lineup and resolver never offer the id, whatever HQ publishes.
 HELD_MODELS = frozenset(_model_key(m) for m in ("gpt-6.1-terra",))

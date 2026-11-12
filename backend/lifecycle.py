@@ -35,7 +35,7 @@ SCHEMA = (
 
 
 # Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
-# a chart model's text), when an earlier release's Strategy Bot drafted it and the task that asked it to, and the bot
+# a chart model's text), when an earlier release's Strategy Owner drafted it and the task that asked it to, and the bot
 # that filled the seat.
 COLUMNS = (
     ("description_by", "TEXT NOT NULL DEFAULT ''"),
@@ -380,7 +380,7 @@ def _clean_title(value):
 
 def create_seat(auth, c, who, title, description="", reports_to="", team="", description_by=None):
     """`description_by` says whose words the job description is: the caller's by default when they wrote one, `chart`
-    for a chart model's text. Only a description no person wrote is replaced by the Strategy Bot's draft
+    for a chart model's text. Only a description no person wrote is replaced by the Strategy Owner's draft
     (recruiting.py)."""
     reports_to = _reports_to(c, reports_to or who.actor)
     _may_place(auth, c, who, reports_to)

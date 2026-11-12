@@ -15,7 +15,7 @@ curl -fsSL https://github.com/ticoteam/tico/releases/latest/download/install.sh 
 ```
 
 [Start here](install.md#quick-start-on-your-own-computer) continues through provider sign-in to
-[Your first result](install.md#your-first-result): Content Marketer drafts a post from a fictional brief, you review it and close the task.
+[Your first result](install.md#your-first-result): Content Owner drafts a post from a fictional brief, you review it and close the task.
 Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server, follow [Hosted install](install.md#install-the-server-for-your-team).
 
 - [Build your team](onboarding-guide.md), [Team chart](org-chart.md) and [People](people.md).
@@ -36,12 +36,12 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Threads](threads.md): where people and bots talk: the Home, DMs, sub-threads and calls.
 - [Sessions](sessions.md): each task a bot owns is its own session, apart from its Home thread.
 - [Company page](company-page.md): what outside people see of the company (investors, the board, the public), and who approves it.
-- [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
+- [Desktop app](desktop.md), [Your Assistant](assistant.md), [External agents](connect-an-agent.md) and [Work from a terminal](terminal.md).
 - [Pause, resume and discard a shared meeting](recorder-pause-discard.md) in Tico Recorder on a Mac.
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
-- [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
-- [Bookkeeper](bookkeeper.md): the built-in helper that keeps the books, and the [Finance tools](finance-tools.md) it and every bot use.
-- [Strategy](strategy.md), [Growth](growth.md) (the numbers and their sources), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
+- [General Manager](general-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
+- [Finance Owner](bookkeeper.md): the built-in helper that keeps the books, and the [Finance tools](finance-tools.md) it and every bot use.
+- [Strategy](strategy.md), [Growth](growth.md) (the numbers and their sources), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Owner](strategy-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 
 ## Developer or computer operator
@@ -49,7 +49,8 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Register a computer](install.md#add-computers-to-run-your-bots), its logins and usage on [Computers](computers.md), [Harnesses](harnesses.md) and [Environments](environments.md).
 - [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [Webhooks](webhooks.md) (recipes for [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md)), [System routines](system-routines.md), [Maintenance](maintenance.md), [Heartbeat](heartbeat.md), [Agent context](agent-context.md), [Watchers](watchers.md),
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
-- [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#save-decide-and-resolve),
+- [The `tico` CLI from a terminal](cli.md) (profiles for several companies, `--fields`, `tico events tail`, exit codes).
+- [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#read-and-save),
   [Needs you batches](needs-you-batches.md) and [Service keys](service-keys.md), for another system that files tasks.
   [Company skills in your own Claude Code](skills.md#peoples-claude-code): the skills helper, its device token and its usage reports.
   [Recorder speech and assist](recorder.md) relays the Tico Recorder's transcription, live text and chat through the Gateway.

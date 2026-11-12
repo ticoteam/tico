@@ -4,7 +4,7 @@
 'use strict';
 
 const RD_GOALS = '#/strategy/goals', RD_ORG = '#/strategy/org', RD_BUDGET = '#/strategy/budget';
-const RD_LISTENING = '#/strategy/market/listening', RD_AUTOMATIONS = '#/automations';
+const RD_LISTENING = '#/listening', RD_AUTOMATIONS = '#/automations';
 const rdUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
 // Where Goals lives: a Strategy tab.
 const goalsBase = () => RD_GOALS;
@@ -88,16 +88,16 @@ for (const name of RD_NAV_NAMES) rdNavPaint(name, document.documentElement.class
 // the next visit). A browser that will not store it keeps Library open.
 const RD_LIB_KEY = 'tico.nav.library';
 const RD_LIB = {inside: false, was: false};
-// Directory sits on the Team header now, so its page leaves Library as it is.
-const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
+// Contacts sits on the Team header, so its page (and its old Directory address) leaves Library as it is.
+const rdInLibrary = (r: string): boolean => { const p = (r || '').split('?')[0] ?? ''; return !rdUnder(p, DIR_ROUTE) && !rdUnder(p, DIR_OLD_ROUTE) && [DOCS, MEETINGS, TOOLS_ROUTE, '#/library'].some(base => rdUnder(p, base)); };
 function rdLibRemember(open: boolean): void { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
-// Company folds the same way: open unless folded here, opened while Strategy, Finance, Growth, Automations or Rules is
-// showing (its own page, #/home, shows its row whatever the fold).
+// Company folds the same way: open unless folded here, opened while Strategy, Finance, Growth, Automations, Listening or
+// Rules is showing (its own page, #/home, shows its row whatever the fold).
 const RD_CO_KEY = 'tico.nav.company';
 const RD_CO = {inside: false, was: false};
-const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
+const rdInCompany = (r: string): boolean => ['#/strategy', GR_ROUTE, FIN_ROUTE, RD_AUTOMATIONS, RD_LISTENING, RULES_ROUTE].some(base => rdUnder((r || '').split('?')[0] ?? '', base));
 function rdCoRemember(open: boolean): void { try { localStorage.setItem(RD_CO_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdCoSaved() { try { return localStorage.getItem(RD_CO_KEY) !== 'closed'; } catch { return true; } }
 const rdCoOpen = () => RD_CO.inside || rdCoSaved();
@@ -134,10 +134,11 @@ function redesignNavCurrent(nav: string | undefined): boolean {
   if (!nav) return false;   // sidebar.ts passes a row's data-nav, which a row without one lacks (the old code threw here)
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
+  if (nav === 'listening') return rdUnder(r, RD_LISTENING);
   if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'skills') return rdUnder(r, SKILLS_ROUTE);
-  if (nav === 'directory') return rdUnder(r, DIR_ROUTE);
+  if (nav === 'contacts') return rdUnder(r, DIR_ROUTE);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'growth') return rdUnder(r, GR_ROUTE);
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
@@ -151,13 +152,14 @@ function redesignNavCurrent(nav: string | undefined): boolean {
 function redesignRoute(r: string): boolean {
   // Old addresses of what moved.
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
-  if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
+  // Listening is its own page; its old places (a Settings tab, then a view of Market) lead to it.
+  if (r === '#/settings/listening' || r === '#/strategy/market/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
   if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_SOURCES); return true; }   // Sources is growth's now
   if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace('#/strategy'); return true; }
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0] ?? '')) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
-  if (rdUnder(r, RD_AUTOMATIONS)) {
+  if (rdUnder(r, RD_AUTOMATIONS) || rdUnder(r, RD_LISTENING)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
     if (typeof window.pageAutomations === 'function') window.pageAutomations();
     else $('#main').innerHTML = '<div id="automations-root" class="rd-automations"></div>';
@@ -168,7 +170,7 @@ function redesignRoute(r: string): boolean {
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.ts
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.ts
   if (skillsRoute(r)) return true;   // Library › Skills (ui/app/skills.ts)
-  if (directoryRoute(r)) return true;   // Library › Directory (ui/app/directory.ts)
+  if (directoryRoute(r)) return true;   // Library › Contacts and its old #/library/directory (ui/app/directory.ts)
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.ts)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
@@ -179,7 +181,7 @@ function redesignRoute(r: string): boolean {
 }
 // After every route: leave Automations' and Tools' state when off their pages.
 function redesignAfterRoute() {
-  if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
+  if (!rdUnder(S.route || '', RD_AUTOMATIONS) && !rdUnder(S.route || '', RD_LISTENING)) window.automationsStop?.();
   if (!rdUnder(S.route || '', TOOLS_ROUTE)) toolsStop();
   if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');

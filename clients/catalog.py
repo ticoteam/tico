@@ -33,10 +33,20 @@ from clients.repo_safety import contained_file, outside_installation
 
 ROOT = Path(__file__).resolve().parents[1]
 CARD = "card.yaml"
-# What a built-in bot (a `bootstrap: true` card) takes from the product on every update: its instructions and playbooks.
-# What the bot and its people write (knowledge, memory, state, reports, bot.yaml, playbooks of their own) stays theirs.
+# What a bot made from a template takes from a newer one (`refresh`), and the record of what it was given (STAMP).
+# PRODUCT_OWNED is what a card says is Tico's own (`product_owned` overrides it): its instructions, playbooks and skills.
+# A built-in bot (a `bootstrap: true` card) takes those on every update even over its own edits.
 STAMP = ".tico-template.json"
 PRODUCT_OWNED = ("AGENT.md", "playbooks", "skills")
+# Also the template's: the permissions file it ships (no template ships a Codex settings file) and its knowledge pages.
+TEMPLATE_OWNED = (".claude/settings.json", "knowledge")
+# Written for this company when the bot is made, never by the template: the onboarding answers.
+COMPANY_PAGE = "knowledge/company.md"
+# What the bot and its people write (memory, state, reports, bot.yaml, their own playbooks and knowledge) stays theirs.
+SET_UP = re.compile(r"^Set up \S+ from the \S+ template$")
+# The seat's own part of a seat bot's instructions (backend/recruiting.py brief), carried over a newer template.
+JOB = re.compile(r"^## Job description[ \t]*$", re.M)
+RELEASE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SLUG_MAX = 40  # short enough for `bot-<slug>` on GitHub and readable in a path
 # What a template's text is filled with before the first commit.
@@ -287,23 +297,23 @@ def materialize(
         page = target / "state.md"
         _write(target, page, set_sections(page.read_text() if page.is_file() else "# State\n", state))
     apply_mailbox(target, instructions)
-    if (card(template, directory) or {}).get("bootstrap"):
-        _stamp(
-            target, template, {rel: _digest(text) for rel, text in _product_files(source, template, values, directory)}
-        )
+    _stamp(
+        target,
+        template,
+        {rel: _digest(text) for rel, text in offered(template, values, instructions, directory).items()},
+    )
     commit(target, f"Set up {slug} from the {template} template")
     return target
 
 
-# ----------------------------------------------------------------------------- built-in bots follow the release
+# ----------------------------------------------------------------------------- bots follow their template
 def _digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _product_files(source, template, values, directory=None):
-    """(relative path, filled text) of every product-owned file the template ships."""
-    owned = (card(template, directory) or {}).get("product_owned") or PRODUCT_OWNED
-    for name in owned:
+def _files_under(source, names, values):
+    """(relative path, filled text) of every readable file under `names` in a template folder."""
+    for name in names:
         base = source / name
         for path in [base] if base.is_file() else sorted(base.rglob("*")) if base.is_dir() else []:
             if not path.is_file() or path.stat().st_size > MAX_FILL:
@@ -312,6 +322,36 @@ def _product_files(source, template, values, directory=None):
                 yield str(path.relative_to(source)), fill(path.read_text(), values)
             except (UnicodeError, OSError):
                 continue
+
+
+def _product_files(source, template, values, directory=None):
+    """(relative path, filled text) of every product-owned file the template ships."""
+    owned = (card(template, directory) or {}).get("product_owned") or PRODUCT_OWNED
+    yield from _files_under(source, owned, values)
+
+
+def with_job(text, instructions):
+    """A template's AGENT.md with the seat's job description the bot was given (`## Job description` to the end)."""
+    found = JOB.search(str(instructions or ""))
+    if not found:
+        return text
+    return text.rstrip("\n") + "\n\n" + str(instructions)[found.start() :].rstrip("\n") + "\n"
+
+
+def offered(template, values, instructions=None, directory=None, mailbox=None):
+    """{relative path: text} of every file a bot takes from its template: the product-owned files, the permissions file
+    and the template's knowledge pages, never the company page. AGENT.md keeps the job description of `instructions`
+    (what the bot was made with, or its AGENT.md now), and a `{{mailbox}}` is filled from `mailbox`, else from the
+    `Mailbox:` line of `instructions`."""
+    source = template_dir(template, directory)
+    files = dict(_product_files(source, template, values, directory))
+    for rel, text in _files_under(source, TEMPLATE_OWNED, values):
+        files.setdefault(rel, text)
+    files.pop(COMPANY_PAGE, None)
+    if "AGENT.md" in files:
+        files["AGENT.md"] = with_job(files["AGENT.md"], instructions)
+    box = mailbox if mailbox is not None else mailbox_of(instructions)
+    return {rel: text.replace("{{mailbox}}", box) if box else text for rel, text in files.items()}
 
 
 def _write(target, path, text):
@@ -334,57 +374,167 @@ def _write(target, path, text):
             tmp.unlink(missing_ok=True)
 
 
-def _stamp(target, template, files):
-    _write(
-        target,
-        Path(target) / STAMP,
-        json.dumps({"template": template, "files": files}, indent=1, sort_keys=True) + "\n",
-    )
+def _stamp(target, template, files, kept=None, version=""):
+    record = {"template": template, "files": files}
+    if kept:
+        record["kept"] = kept
+    if version:
+        record["version"] = version
+    _write(target, Path(target) / STAMP, json.dumps(record, indent=1, sort_keys=True) + "\n")
 
 
-def refresh(template, target, names, display_name=None, directory=None):
-    """Bring a built-in bot's product-owned files up to this release's template. Returns the paths it changed.
+def _release_key(text):
+    found = RELEASE.fullmatch(str(text or "").strip())
+    if not found:
+        return None
+    pre = found.group(4)
+    tail = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split(".")) if pre else ()
+    return (*map(int, found.group(1, 2, 3)), 0 if pre else 1, tail)
 
-    A file is rewritten only when the template's text for it is not the one written here last time (the stamp keeps its
-    digest), so an update always wins and a repository whose template did not change keeps whatever the bot improved since.
-    A repository from before the stamp counts as never refreshed: every product-owned file is brought up once. What was
-    there stays in the repository's history. The bot's own files, and the playbooks it wrote itself, are never touched.
+
+def is_release(text):
+    """Whether `text` names a release ("0.6.0-rc.5"), not a source build ("dev") or nothing."""
+    return _release_key(text) is not None
+
+
+def newer(first, second):
+    """Whether release `first` comes after release `second`; False when either is not a release ("dev", "")."""
+    a, b = _release_key(first), _release_key(second)
+    return a is not None and b is not None and a > b
+
+
+def _set_up_with(target, template, directory=None):
+    """{relative path: digest} of the template's files as the bot's first commit ("Set up <slug> from the <template>
+    template") holds them: what a bot from before the stamp was given. {} when its history has no such commit."""
+    roots = git(target, "rev-list", "--max-parents=0", "HEAD")
+    for sha in roots.stdout.split() if roots and roots.returncode == 0 else []:
+        subject = git(target, "log", "-1", "--format=%s", sha)
+        if not subject or not SET_UP.match(subject.stdout.strip()):
+            continue
+        listing = git(target, "ls-tree", "-r", "-z", "--name-only", sha)
+        owned = (card(template, directory) or {}).get("product_owned") or PRODUCT_OWNED
+        given = {}
+        for rel in listing.stdout.split("\0") if listing and listing.returncode == 0 else []:
+            if rel == COMPANY_PAGE or not any(rel == n or rel.startswith(n + "/") for n in (*owned, *TEMPLATE_OWNED)):
+                continue
+            try:
+                shown = git(target, "show", f"{sha}:{rel}")
+            except ValueError:
+                continue  # not text: a file there now counts as the bot's own
+            if shown and shown.returncode == 0:
+                given[rel] = _digest(shown.stdout)
+        return given
+    return {}
+
+
+def _display_name(target):
+    """What the bot is called, as its bot.yaml says (`identify` wrote it when the bot was made), or ""."""
+    try:
+        found = yaml.safe_load(manifest_path(target).read_text()) or {}
+    except (OSError, ValueError, yaml.YAMLError):
+        return ""
+    return str(found.get("display_name") or "") if isinstance(found, dict) else ""
+
+
+def _text(path):
+    """A file's text, None when there is none, or a mark no template writes when it cannot be read as text."""
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text()
+    except (UnicodeError, OSError):
+        return "\0unreadable"
+
+
+def refresh(template, target, names, display_name=None, directory=None, instructions=None, version=""):
+    """Bring a bot made from a template up to this release's template. Returns {"added", "updated", "removed",
+    "kept"}: the paths written, deleted, and kept because the bot or a person changed them.
+
+    The stamp keeps the digest of each template file as the bot was given it (at set-up, or by the last refresh); a bot
+    from before the stamp is given what its first commit holds. A template file that did not change since is left
+    alone. One that changed replaces the bot's file only when that file is still what it was given, a new one is added,
+    and one the template dropped is deleted only when the bot never changed it; a changed file is kept, reported once
+    and not offered again until the template changes it again. A built-in bot (a `bootstrap: true` card) takes its
+    product-owned files whatever it did with them, its own version kept in the history first. Files from a newer
+    release than `version` stay until this computer has that release. Nothing else in the repository is touched.
     """
     target = outside_installation(target)
-    if not (card(template, directory) or {}).get("bootstrap") or not (target / "AGENT.md").is_file():
-        return []
+    result = {"added": [], "updated": [], "removed": [], "kept": []}
+    found = card(template, directory)
+    if not found or not (target / "AGENT.md").is_file():
+        return result
     names = dict(names or {})
     values = {key: str(names.get(key) or "") for key in PLACEHOLDERS[:-1]}
-    values["bot_name"] = fill(str(display_name or (card(template, directory) or {}).get("name") or target.name), values)
+    values["bot_name"] = fill(str(display_name or _display_name(target) or found.get("name") or target.name), values)
     try:
-        recorded = (json.loads((target / STAMP).read_text()) or {}).get("files") or {}
+        record = json.loads((target / STAMP).read_text()) or {}
+    except FileNotFoundError:
+        record = None
     except (OSError, ValueError):
-        recorded = {}
-    products = list(_product_files(template_dir(template, directory), template, values, directory))
+        record = {}
+    if record is None:
+        given, declined, at = _set_up_with(target, template, directory), {}, ""
+    else:
+        given, declined, at = dict(record.get("files") or {}), dict(record.get("kept") or {}), record.get("version")
+    if newer(at, version):
+        return result
+    agent = _text(target / "AGENT.md")
+    offer = offered(template, values, agent, directory, mailbox=mailbox_of(agent) or mailbox_of(instructions))
+    product = {rel for rel, _ in _product_files(template_dir(template, directory), template, values, directory)}
+    built_in = bool(found.get("bootstrap"))
     # Check every path before any commit or write, even if its digest says it needs no refresh.
-    for rel in [*(rel for rel, _ in products), STAMP]:
+    for rel in [*offer, *given, STAMP]:
         contained_file(target, target / rel)
-    files, changed = dict(recorded), []
-    for rel, text in products:
-        digest = _digest(text)
-        if recorded.get(rel) == digest:
+    files, kept, write, gone, saved = {}, {}, {}, [], []
+    for rel in sorted({*offer, *given}):
+        text, base, have = offer.get(rel), given.get(rel), _text(target / rel)
+        mine = have is not None and _digest(have) != base
+        if text is None:  # the template dropped it
+            if have is not None and base is not None:
+                (result["kept"] if mine else gone).append(rel)
             continue
-        dest = target / rel
-        if not dest.is_file() or dest.read_text() != text:
-            if dest.is_file():
-                # What the bot had, saved in the history before the release's text replaces it.
-                commit_paths(target, [rel], f"Keep the bot's version of {rel} before the refresh")
-            _write(target, dest, text)
-            changed.append(rel)
-        files[rel] = digest
-    if files != recorded:
-        _stamp(target, template, files)
-        commit_paths(
-            target,
-            [*changed, STAMP],
-            f"Refresh {len(changed)} product file{'s' if len(changed) != 1 else ''} from the {template} template",
-        )
-    return changed
+        digest = _digest(text)
+        if have == text:
+            files[rel] = digest
+        elif digest in (base, declined.get(rel)):
+            # The template did not change it since: what the bot did with it is its own.
+            if base is not None:
+                files[rel] = base
+            if declined.get(rel) == digest:
+                kept[rel] = digest
+        elif built_in and rel in product:
+            if have is not None:
+                saved.append(rel)
+            write[rel], files[rel] = text, digest
+        elif have is None and base is None or have is not None and not mine:
+            write[rel], files[rel] = text, digest
+        else:
+            result["kept"].append(rel)
+            kept[rel] = digest
+            if base is not None:
+                files[rel] = base
+    if record is not None and not write and not gone and (files, kept) == (given, declined):
+        return result
+    at = version if is_release(version) else at
+    if saved:
+        # What the bot had, saved in the history before the release's text replaces it.
+        commit_paths(target, saved, f"Keep the bot's version of {', '.join(saved)} before the refresh")
+    for rel, text in write.items():
+        result["updated" if (target / rel).exists() else "added"].append(rel)
+        _write(target, target / rel, text)
+    for rel in gone:
+        (target / rel).unlink()
+        result["removed"].append(rel)
+    _stamp(target, template, files, kept, at or "")
+    touched = len(write) + len(gone)
+    commit_paths(
+        target,
+        [*write, *gone, STAMP],
+        f"Refresh {touched} file{'s' if touched != 1 else ''} from the {template} template"
+        if touched
+        else f"Record the {template} template's files",
+    )
+    return result
 
 
 # ----------------------------------------------------------------------------- git

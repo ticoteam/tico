@@ -36,7 +36,7 @@ They are different things, and mixing them makes both useless.
 
 - `memory/learnings.md` is about **how to do the job**: the flag you keep forgetting, the assumption
   that was wrong, what a tool refuses and why. Written for the next run of this bot.
-- `knowledge/` is about **the domain**: what is true out in the business, the market, the product.
+- `knowledge/` is about **the domain**: what is true about the team, the market, the product.
   Written for anyone who needs to know the domain, whether a human, a future session, or another
   bot.
 

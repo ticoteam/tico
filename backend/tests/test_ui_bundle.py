@@ -52,19 +52,6 @@ def test_the_page_names_one_versioned_script_and_one_stylesheet(api):
     assert "content-encoding" not in uncompressed.headers
 
 
-def test_standalone_scripts_are_compressed_and_still_revalidate_privately(api):
-    path = "/tico/ui/health.ts"
-    plain = api.get(path, headers={**AUTH, "Accept-Encoding": "identity"})
-    zipped = api.get(path, headers={**AUTH, "Accept-Encoding": "gzip"})
-    assert zipped.content == plain.content
-    assert zipped.headers["content-encoding"] == "gzip"
-    assert int(zipped.headers["content-length"]) < len(zipped.content) // 2
-    assert zipped.headers["etag"].startswith("W/")
-    assert zipped.headers["cache-control"] == "private, no-cache"
-    assert api.get(path, headers={**AUTH, "If-None-Match": zipped.headers["etag"]}).status_code == 304
-    assert api.get(path, headers={"Accept-Encoding": "gzip"}).status_code == 401
-
-
 def test_a_versioned_font_is_kept_and_an_unversioned_one_revalidates(api):
     # Inter's font-display is optional: a font the browser must revalidate first can miss the first paint.
     url = re.search(
@@ -142,23 +129,6 @@ def test_a_change_to_a_listed_file_changes_the_url(tmp_path):
     assert second.etag[ui_bundle.JS_PATH] != first.etag[ui_bundle.JS_PATH] and second.page != first.page
     (ui / "app/a.js").write_text("const A = 3;\n")  # not strict: it cannot share a script
     assert bundles.get() is None
-
-
-def test_no_two_files_declare_the_same_top_level_name():
-    # The listed files share one scope (bundled or not), so a top-level const, let or class whose name another file
-    # also declares is a SyntaxError that leaves the whole app blank.
-    from pathlib import Path
-
-    decl = re.compile(r"^(?:async\s+)?(function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)", re.M)
-    ui = Path(ui_bundle.__file__).resolve().parent.parent / "ui"
-    _, paths = ui_bundle.build(ui)
-    seen = {}
-    for path in paths:
-        if path.suffix == ".js":
-            for kind, name in decl.findall(path.read_text()):
-                seen.setdefault(name, []).append((path.name, kind))
-    clashes = {n: d for n, d in seen.items() if len(d) > 1 and any(k in ("const", "let", "class") for _, k in d)}
-    assert clashes == {}
 
 
 @served

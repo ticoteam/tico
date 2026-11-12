@@ -33,6 +33,15 @@ PATTERN_SAMPLES = ("1h", "30m", "never", "2d", "1", SMOKE)
 # Set to a file path to write every tool's outcome there instead of checking it: the way the recorded list is
 # regenerated after a deliberate change (review the diff of e2e/mcp/expected-refusals.json before committing it).
 RECORD = os.environ.get("TICO_E2E_RECORD_REFUSALS", "")
+# Every call shares one seeded API, so the order is fixed here, by name alone (never by where a tool is defined or how
+# tools/list sorts): a tool whose last word ends or removes something runs after all the others, so it cannot take
+# away the seeded record a later call reads.
+ENDS_SOMETHING = {"archive", "cancel", "close", "delete", "leave", "remove", "revoke"}
+
+
+def call_order(tools):
+    """`tools` in the order the smoke test calls them."""
+    return sorted(tools, key=lambda t: (t["name"].rsplit("_", 1)[-1] in ENDS_SOMETHING, t["name"]))
 
 
 @pytest.fixture
@@ -167,7 +176,7 @@ def test_every_remote_tool_answers_a_generated_call_as_its_recorded_refusal_or_s
 ):
     seeds = seeded(api)
     problems, observed = [], {}
-    tools = hubtools.listing(kind="owner")
+    tools = call_order(hubtools.listing(kind="owner"))
     assert len(tools) > 400, "the owner's tool list shrank: the smoke test would not cover the surface"
     for tool in tools:
         name = tool["name"]

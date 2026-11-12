@@ -824,6 +824,6 @@ def unlink(conn, goal_id, kpi_id):
 
 
 def fill_slugs(conn):
-    """Give every KPI a slug (the folder name in the Strategy Bot's repository)."""
+    """Give every KPI a slug (the folder name in the Strategy Owner's repository)."""
     for row in conn.execute("SELECT id, name FROM kpis WHERE slug IS NULL OR slug='' ORDER BY created_at").fetchall():
         conn.execute("UPDATE kpis SET slug=? WHERE id=?", (_unique_slug(conn, row["name"]), row["id"]))

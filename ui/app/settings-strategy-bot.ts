@@ -1,4 +1,4 @@
-/* ui/app/settings-strategy-bot.ts — the Strategy Bot's page, Settings tab: "Regular checks" and "How much your Strategy Bot does"
+/* ui/app/settings-strategy-bot.ts — the Strategy Owner's page, Settings tab: "Regular checks" and "How much your Strategy Owner does"
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -15,7 +15,7 @@ interface StrategyLogHost extends HTMLElement {
 // Regular checks on or off (the KPI pass and the automatic goal colours), then three levels (backend/strategy_bot.py LEVELS),
 // each with its one sentence of what it will and won't do. Picking a level shows that sentence again with a Confirm
 // before anything changes. Where the level is only the default (`level_chosen` false), the owner can confirm it too,
-// so a later default never moves them. It is a helper's settings, beside the Task Manager's: nobody chats with it, the
+// so a later default never moves them. It is a helper's settings, beside the General Manager's: nobody chats with it, the
 // Assistant hands it the work. Only the owner sees the card; the server refuses everyone else, admins and every bot
 // included. Its name, pause and budget are the rest of its page's Settings.
 let STRATEGY_BOT_PICK: number | null = null;
@@ -85,7 +85,7 @@ async function renderSettingsStrategyBot(): Promise<void> {
 }
 const strategyLevelName = (v: StrategyBotView, level: number): string => v.levels.find(lv => lv.level === level)?.name || 'Level ' + level;
 
-// The Strategy Bot log on its page (backend/strategy_acts.py): each decision it made alone at level 3 and each thing it proposed
+// The Strategy Owner log on its page (backend/strategy_acts.py): each decision it made alone at level 3 and each thing it proposed
 // because it stays the owner's, newest first, with the reason. Only the owner reads it (the page shows it to them
 // alone) and only the owner sees Undo, which asks once before it puts the tasks back. What Undo couldn't restore stays
 // on the entry in plain words. The entries loaded so far, every page of them, are kept on the host: asking to Undo an

@@ -2,7 +2,8 @@
    bots into it, and watch the chart grow beside the conversation. The server has the departments and cards
    (GET /api/v2/setup/groups) and the suggestions (POST /api/v2/setup/recruit, from Tico HQ or its local
    recommender); this page shows them and keeps what is checked in the wizard's catalog state (`state.catalog.picked`),
-   from which ui/first-run.ts builds `selected`. Nothing exists until "Create my team". The built-ins are always created and
+   from which ui/first-run.ts builds `selected`. It is setup's Change, behind the default chart; nothing exists until
+   "Create team". The built-ins are always created and
    sit in a Built-in group on the chart, folded until opened, with nothing to drag or add. A `kind: helper` card is not on
    the chart: it is one switch under Message bots on the finished chart, off until someone turns it on. */
 'use strict';
@@ -149,9 +150,13 @@ function obEnsure(state: OBState): void {
     org.loaded = true;
     obRestore(state);
   }).catch((error: unknown) => { org.error = errorMessage(error, ''); })
-    .finally(() => { org.loading = null; if (ONB === state && state.steps[state.step] === 'org') onbRender(state); });
+    .finally(() => { org.loading = null; if (ONB === state && state.steps[state.step] === 'team' && state.mode === 'custom') onbRender(state); });
 }
 function obSuggested(state: OBState): string[] {
+  // Change from the team step starts with the groups that were on there, where a group has the same name.
+  const on = new Set((ONB?.record.default_chart || []).filter(team => team.on).map(team => team.team.toLowerCase()));
+  const named = state.org.departments.filter(d => on.has(d.name.toLowerCase())).map(d => d.id);
+  if (named.length) return named;
   // A blank answer is yes (D7), as on the default chart (company_import.default_chart): only "no" drops Product and Engineering.
   const software = state.record.answers.software_product !== 'no';
   return state.org.departments.filter(d => (d.software_only ? software : OB_CORE.includes(d.id))).map(d => d.id);
@@ -357,10 +362,10 @@ function obHelpersHTML(state: OBState): string {
   return `<section class="ob-helpers" id="ob-helpers" aria-labelledby="ob-helpers-h"><h3 id="ob-helpers-h">Message bots</h3>${cards.map(card => {
     const on = cat.picked.has(card.slug);
     return `<div class="ob-helper${on ? ' on' : ''}" data-ob-helper-row="${esc(card.slug)}"><label class="ob-helper-toggle">${obAvatar(card.slug, card, 28)}
-        <span class="ob-helper-name">${esc(catalogName(cat, card))}<small id="ob-helper-desc-${esc(card.slug)}">${esc(card.template === 'inbox'
+        <span class="ob-helper-name">${esc(catalogName(cat, card))}<small id="ob-helper-desc-${esc(card.slug)}">${esc(card.template === 'inbox-manager'
             ? 'Reads one person’s mailbox and prepares an email brief.' : card.summary)}</small></span>
         <input type="checkbox" role="switch" data-ob-helper="${esc(card.slug)}" aria-describedby="ob-helper-desc-${esc(card.slug)}" ${on ? 'checked' : ''}></label>
-      ${on && card.template === 'inbox' ? obMailboxHTML(state, card.slug) : ''}</div>`;
+      ${on && card.template === 'inbox-manager' ? obMailboxHTML(state, card.slug) : ''}</div>`;
   }).join('')}</section>`;
 }
 function obFinishHTML(state: OBState): string {
@@ -371,7 +376,7 @@ function obFinishHTML(state: OBState): string {
       <p class="err" id="team-problem" role="alert" hidden></p>
       <div class="onb-actions"><button class="ghost" type="button" id="ob-back">Back</button>
         <button class="ghost" type="button" id="ob-departments">Groups</button><span class="spacer"></span>
-        <span class="muted" id="onb-status"></span><button class="primary" type="button" id="onb-next">Next</button></div>
+        <span class="muted" id="onb-status"></span><button class="primary" type="button" id="onb-next">Create team</button></div>
     </div>`;
 }
 function obMainHTML(state: OBState): string {
@@ -413,10 +418,10 @@ function obRender(state: OBState): void {
   root.className = `ob ob-phase-${state.org.phase}`;
   $('#ob-main').innerHTML = obMainHTML(state);
   obRenderChart(state, true);          // the finished chart was just drawn with the main pane
-  const back = $('#onb-back');       // the pick's Back is the wizard's own
-  if (back) back.onclick = () => { onbCollect(state, 'org'); state.step = Math.max(0, state.step - 1); onbRender(state); };
+  const back = $('#onb-back');       // the pick's Back goes back to the default chart
+  if (back) back.onclick = () => onbTeamMode(state, 'default');
   const next = $('#onb-next');
-  if (next) next.onclick = () => void onbAdvance(state, 'org');
+  if (next) next.onclick = () => void onbAdvance(state, 'team');
   const focus = state.org.phase === 'dept' && state.org.step === 'ask' ? $('#ob-brief') : null;
   if (focus && window.matchMedia?.('(min-width: 761px)').matches) focus.focus({preventScroll: true});
 }

@@ -1,0 +1,55 @@
+# Review an asset
+
+Triggered by a task with copy, a page, a deck, an email, an ad or a proposed name attached: "is this on brand?", "can we call it X?". Also triggered by a brand check: a sub-task a channel Owner files on a bet before its Go-live page goes to a person (step 5). Budget 20 minutes.
+
+Inputs: the attached item, its audience and where it will appear, the deadline, the brand card (`tico brand show`) and `knowledge/rulings.md`.
+
+Outcome: a verdict and marked changes on the task. The work itself is not edited.
+
+Done when: the verdict is on the task in one line with the path to the full review, every change is marked rule or suggestion, and any open question is asked once.
+
+---
+
+## 1. Read the request
+
+    tico task show <id>
+
+Find the item, its audience, where it will appear and the deadline. If the audience is missing, ask once with `tico task ask <id> --to <person> "<question>" --version N`.
+
+## 2. Review copy
+
+Follow `skills/review-copy-against-the-brand-book/SKILL.md`. Read it once as the audience, then line by line against the brand card (`tico brand show`). Mark each change as **rule** (quote the rule) or **suggestion** (your judgement, clearly labelled). Check product and plan names, prices and claims against `tico doc search`. Do not rewrite whole paragraphs; show the smallest change that fixes each line.
+
+## 3. Review a name
+
+Follow `skills/run-a-name-clash-check/SKILL.md`. Check the name against the naming rules first (descriptive or coined, length, how it reads aloud, how it sits next to existing product names). Then list the close hits from the registers, app stores and the web, each with its link and date. End with the line: "This is a starting point, not clearance; legal counsel decides."
+
+## 4. Hand it back
+
+Write `reports/reviews/<date>-<item>.md`: the verdict first, then the marked changes, then open questions. On the task, put the verdict in one line and the path. If the review exposed a missing rule, propose it for the owner. Then:
+
+    tico task done <id> -m "<verdict>; reports/reviews/<date>-<item>.md" --version N
+
+## 5. A brand check for a bet
+
+A channel Owner (SEO, Content, Email, CRO, Search Ads, Social Ads) files `Brand check: <title>` as a sub-task of its bet
+in Growth Experiments, with the drafts linked. Its Go-live page cannot go to a person until your answer is on it. The
+bet stays theirs: you check, you do not take the pen.
+
+- Review the words (steps 2 and 3) and the look: colours, type, logo use, images, layout, and contrast against the
+  brand card's visual rules. A page change is checked as it will look, not as a text file.
+- A video in the bet is the Video Owner's to make. File it under this sub-task:
+
+      tico task file "Video: <title>" --parent <id> --owner video-owner --body "<what the bet needs, where it runs, the deadline>"
+
+  and give your answer once its brief and cost are on its task.
+- With no brand card published yet (`tico brand show`), there are no rules to check against. Check the facts and
+  claims only, and close with `Brand check: no brand card yet`, followed by any fact that must change. That is not a
+  "not passed": the Owner says so on its Go-live page and a person decides.
+- Otherwise the first line of your closing note is one of:
+  - `Brand check: passed`, or `Brand check: passed with small fixes` followed by each fix (rule or suggestion);
+  - `Brand check: not passed`, followed by the fixes that block it, each quoting its rule.
+
+      tico task done <id> -m "Brand check: passed. reports/reviews/<date>-<item>.md" --version N
+
+  Not passed: the Owner fixes the drafts and files a new brand check. A suggestion never blocks.

@@ -30,6 +30,7 @@
 .task-req[data-state="met"] .task-req-dot { color: var(--accent); }
 .task-req-state { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 .task-req-name { min-width: 0; overflow-wrap: anywhere; }
+.task-req-val { max-width: 200px; overflow: hidden; text-overflow: ellipsis; color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
 .task-req-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 10px; }
 .task-req-ask[hidden] { display: none; }
 .task-req-ask input[name=line] { flex: 1 1 160px; min-width: 0; height: 32px; box-sizing: border-box; padding: 0 10px; border-radius: 6px;
@@ -270,6 +271,9 @@
 .pe-req-body{display:flex;flex-direction:column;gap:var(--s2);padding:0 0 var(--s3) 20px}
 .pe-req-foot{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2) var(--s3)}
 .pe-req-x{margin-left:auto}
+.pe-choices{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s2)}
+.pe-choice{display:inline-flex;align-items:center;gap:2px}
+.pe-choice input{width:120px}
 .pe-add{align-self:flex-start}
 .pe-foot{display:flex;justify-content:space-between;gap:var(--s2)}
 @media (max-width:720px){

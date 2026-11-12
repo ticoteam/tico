@@ -494,7 +494,7 @@ fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
             &store,
             &record.id,
             "item-fixture",
-            "bot:sales",
+            "bot:inbound-sales-owner",
             "Sales Bot",
             true,
         )
@@ -510,7 +510,7 @@ fn an_action_item_becomes_one_private_task_carrying_the_transcript() {
     let body = &tasks[0].1;
     assert_eq!(
         (body["owner"].as_str(), body["private"].as_bool()),
-        (Some("bot:sales"), Some(true))
+        (Some("bot:inbound-sales-owner"), Some(true))
     );
     let text = body["body"].as_str().unwrap();
     assert!(

@@ -1,0 +1,88 @@
+[
+ {
+  "argv": [
+   "editions",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_editions_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "editions",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "editions",
+   "list",
+   "--audience",
+   "audience-1",
+   "--status",
+   "status-1",
+   "--before",
+   "before-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_editions_list",
+    {
+     "audience": "audience-1",
+     "before": "before-1",
+     "limit": 5,
+     "operation_id": null,
+     "status": "status-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "editions?audience=audience-1&status=status-1&before=before-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "editions",
+   "show",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_editions_show",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "editions/id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

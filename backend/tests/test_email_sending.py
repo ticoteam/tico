@@ -326,10 +326,10 @@ def test_new_automation_uses_the_same_approval_queue_and_never_bypasses_never(in
 def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_policy(inbox):
     from backend.auth import Identity
 
-    machine, _, _ = setup_attempt(inbox, "coo")
+    machine, _, _ = setup_attempt(inbox, "assistant")
     with inbox.app.state.store.read() as c:
         attempt_id = c.execute(
-            "SELECT id FROM attempts WHERE runner_id=? AND bot_id='coo' ORDER BY rowid DESC LIMIT 1",
+            "SELECT id FROM attempts WHERE runner_id=? AND bot_id='assistant' ORDER BY rowid DESC LIMIT 1",
             (machine["runner_id"],),
         ).fetchone()[0]
     inbox.app.state.store.settings.test_identities["assistant-test"] = Identity(
@@ -337,7 +337,7 @@ def test_assistant_acting_for_a_person_queues_as_that_person_and_cannot_change_p
         "owner",
         BOX,
         via="assistant",
-        task_actor="bot:coo",
+        task_actor="bot:assistant",
         runner_id=machine["runner_id"],
         attempt_id=attempt_id,
     )

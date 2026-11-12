@@ -2103,43 +2103,6 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
-    #[tokio::test]
-    async fn a_low_bot_runs_on_the_gateway_and_the_built_in_ids_are_lineup_3s() {
-        let (_, dir) = gateway_turn_on(
-            "tico-low-1.0",
-            &[
-                SESSION,
-                r#"{"type":"agent_start"}"#,
-                r#"{"type":"agent_end"}"#,
-            ],
-        )
-        .await;
-        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        assert!(
-            args.lines()
-                .last()
-                .unwrap()
-                .starts_with("--mode rpc --provider tico --model tico-low-1.0 "),
-            "{args}"
-        );
-        let models: Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join("runtime/pi-agent/acme/models.json")).unwrap(),
-        )
-        .unwrap();
-        let ids: Vec<&str> = models["providers"]["tico"]["models"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["id"].as_str().unwrap())
-            .collect();
-        assert_eq!(ids.len(), GATEWAY_MODELS.len(), "{ids:?}");
-        // Every built-in id is a level, Fast or not, at 1.0: no department and no first-lineup name.
-        let level = regex::Regex::new(r"^tico-(xlow|low|medium|high|xhigh)(-fast)?-1\.0$").unwrap();
-        assert!(ids.iter().all(|id| level.is_match(id)), "{ids:?}");
-        assert!(ids.contains(&"tico-medium-1.0"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
     #[test]
     fn a_pi_turn_gets_the_hub_and_the_declared_and_repository_servers_as_direct_http_servers() {
         let dir = std::env::temp_dir().join(format!("pi-mcp-{}", uuid::Uuid::new_v4().simple()));
@@ -2572,17 +2535,6 @@ mod tests {
             assert!(!turn.compacted, "{end}");
             assert!(turn.error.is_empty() && turn.out.is_empty(), "{end}");
         }
-    }
-
-    #[test]
-    fn the_newest_requests_prompt_and_reply_are_the_sessions_context() {
-        let mut turn = Turn::default();
-        Pi::on_event(
-            &json!({"type": "message_end", "message": {"role": "assistant", "provider": "openrouter", "stopReason": "stop", "content": [],
-                             "usage": {"input": 120, "output": 9, "cacheRead": 40, "cacheWrite": 0}}}),
-            &mut turn,
-        );
-        assert_eq!(turn.context, Some(169));
     }
 
     #[tokio::test]

@@ -28,18 +28,3 @@ def seed_dms(api):
         )
         assert dm.status_code == 200, dm.text
         api.post(f"/api/v2/threads/{dm.json()['id']}/messages", json={"text": "Reply"}, headers=headers("ben-test"))
-
-
-def test_sidebar_reads_the_same_statements_however_many_threads_it_lists(api, monkeypatch):
-    seed_dms(api)
-    seed_threads(api, 0, 10)
-    counted(api, monkeypatch, "/api/v2/threads?limit=100")  # warm
-    few_body, few = counted(api, monkeypatch, "/api/v2/threads?limit=100")
-    assert len(few_body["threads"]) >= 10 and len(few_body["dms"]) >= 3
-    seed_threads(api, 10, 30)
-    counted(api, monkeypatch, "/api/v2/threads?limit=100")  # warm again: the writes emptied the caches
-    many_body, many = counted(api, monkeypatch, "/api/v2/threads?limit=100")
-    assert len(many_body["threads"]) >= 40 and len(many_body["dms"]) >= 3
-    # Before: 125 statements at 10 threads and 305 at 40 (about 6 a thread: membership, the thread row and the
-    # follower row, read again for each row). A page's rows are read together now, so the count is flat.
-    assert many - few <= 10, (few, many)

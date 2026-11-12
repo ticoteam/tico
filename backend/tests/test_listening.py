@@ -1,289 +1,610 @@
-"""Listening's observation store and the shared intake (backend/listening.py): save what a sweep
-saw, score it with the judge, route it, and let each receiver accept or reject what it was sent."""
+"""Listening (backend/listening.py): sources save posts, each pass marks copies, scores against the rules, expires
+and sends within the rate limits as one run of the listening's automation."""
 
-import json
+import importlib
+import sqlite3
+from datetime import datetime, timedelta, timezone
 
+import time_machine
+
+from backend import automations
 from backend import listening as L
-from backend.tests.helpers.api import get, post, put
-from backend.tests.helpers.listening import FakeJudge, _bots, _post, _token
+from backend.store import H
+from backend.tests.helpers.api import get, headers, post
+from backend.tests.helpers.automation_api import patch
+from backend.tests.helpers.automation_runs import sql
+from backend.tests.helpers.listening import NOTE, SEARCH, FakeJudge, item, listening, save, source_id
+
+START = datetime(2026, 11, 2, 7, 30, tzinfo=timezone.utc)  # a Monday, half an hour before the send time
+KEEP = {"do": "keep", "tag": "leads", "text": "A team lead who might use the product"}
+KEEP_NEWS = {"do": "keep", "tag": "news", "text": "News about a competitor"}
+DROP = {"do": "drop", "text": "A vendor selling something"}
+WORDS = [f"word{n}" for n in range(200)]
 
 
-def test_only_listening_and_the_owner_save_runs_and_judgments(api):
-    _bots(api)
-    coo = _token(api, "coo")
-    post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok"}, token=coo, expected=403)
-    post(api, "listening/runs", {"source": "X Bookmarks", "query": "q", "status": "ok"}, expected=422)
-    saved = post(api, "listening/runs", {"source": "x", "query": "q", "status": "ok", "items": [_post("9", "hi")]})
-    post(
+def at(hours=0.0, days=0):
+    return START + timedelta(days=days, hours=hours)
+
+
+def started(api, **extra):
+    """A listening made at START, and its one source's id."""
+    with time_machine.travel(START, tick=False):
+        made = listening(api, **extra)
+    return made["id"], source_id(api, made["id"])
+
+
+def saved(api, source, items, when=START, **extra):
+    with time_machine.travel(when, tick=False):
+        return save(api, source, items, **extra)
+
+
+def run(api, when, judge=None):
+    store = api.app.state.store
+    L.run_pass(store, when, judge)
+    store.automations.drain()
+
+
+def statuses(api, aid):
+    rows = sql(api, "SELECT status, count(*) AS n FROM listening_items WHERE automation_id=? GROUP BY status", (aid,))
+    return {r["status"]: r["n"] for r in rows}
+
+
+def runs(api, aid):
+    return get(api, f"automations/{aid}/runs")["runs"][::-1]  # oldest first
+
+
+def story(n):
+    return f"Post number {n} about how a team runs its daily standup meeting"
+
+
+# ---------------------------------------------------------------------------------------------- copies
+def test_exact_copies_are_duplicates_and_count_on_their_originals(api):
+    aid, source = started(api)
+    posts = [item(n, story(n % 150)) for n in range(200)]  # 150 texts, 50 of them said twice
+    assert saved(api, source, posts)["saved"] == 200
+    run(api, at(0.1))
+    assert statuses(api, aid)["duplicate"] == 50
+    copies = sql(
+        api, "SELECT sum(copies) AS n FROM listening_items WHERE automation_id=? AND status<>'duplicate'", (aid,)
+    )
+    assert copies[0]["n"] == 50
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE duplicate_of_id IS NOT NULL")[0]["n"] == 50
+
+
+def test_posts_96_percent_alike_are_copies_and_80_percent_alike_are_not(api):
+    aid, source = started(api)
+    base = " ".join(WORDS[:100])
+    close = " ".join(WORDS[:98] + WORDS[100:102])  # 98 shared of 102 in all
+    far = " ".join(WORDS[:89] + WORDS[110:121])  # 89 shared of 111 in all
+    saved(api, source, [item(1, base), item(2, close), item(3, far)])
+    run(api, at(0.1))
+    rows = {r["native_id"]: r for r in sql(api, "SELECT * FROM listening_items WHERE automation_id=?", (aid,))}
+    assert rows["2"]["status"] == "duplicate" and rows["2"]["duplicate_of_id"] == rows["1"]["id"]
+    assert rows["1"]["copies"] == 1 and rows["1"]["status"] == "kept" and rows["3"]["status"] == "kept"
+
+
+# ---------------------------------------------------------------------------------------------- rules
+def test_keep_and_drop_rules_tag_keep_and_drop(api):
+    aid, source = started(api, rules=[KEEP, KEEP_NEWS, DROP])
+    saved(
         api,
-        "listening/judgments",
-        {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1", "scores": {"lead": 0.9}}]},
-        token=coo,
-        expected=403,
+        source,
+        [
+            item(1, "A lead asks about standups [r0]"),
+            item(2, "Both, news more [r0:0.8] [r1:0.95]"),
+            item(3, "A lead, but a vendor [r0] [r2]"),
+            item(4, "Neither"),
+        ],
     )
-    post(
-        api,
-        "listening/judgments",
-        {"judgments": [{"item_id": saved["items"][0]["id"], "question_set": "x@1", "scores": {"lead": 1.5}}]},
-        expected=422,
-    )
+    run(api, at(0.1), FakeJudge())
+    rows = {r["native_id"]: (r["status"], r["tag"]) for r in sql(api, "SELECT * FROM listening_items")}
+    assert rows == {"1": ("kept", "leads"), "2": ("kept", "news"), "3": ("dropped", ""), "4": ("dropped", "")}
 
 
-def test_a_receiver_sees_and_resolves_only_its_own_inbox(api):
-    _bots(api)
-    listening = _token(api, "listening")
-    api.app.state.judge = FakeJudge()
-    saved = post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [_post("1", "Creator asks how teams handle standups [creator] [content]")],
-        },
-        token=listening,
-    )
-    post(api, "listening/judge", {}, token=listening)
-    sales = _token(api, "influencer")
-    inbox = get(api, "intake", token=sales)["items"]
-    assert [i["destination"] for i in inbox] == ["creators"]
-    assert inbox[0]["post"]["author"] == "@host1" and inbox[0]["routed_because"] == "creator >= 0.75"
-    get(api, "intake?destination=content", token=sales, expected=403)
-    content_id = get(api, "intake?destination=content", token=listening)["items"][0]["id"]
-    post(api, f"intake/{content_id}/resolve", {"status": "accepted", "receiver_ref": "x"}, token=sales, expected=403)
-    sid = inbox[0]["id"]
-    post(api, f"intake/{sid}/resolve", {"status": "accepted"}, token=sales, expected=422)
-    post(api, f"intake/{sid}/resolve", {"status": "rejected"}, token=sales, expected=422)
-    done = post(api, f"intake/{sid}/resolve", {"status": "accepted", "receiver_ref": "instagram:@host1"}, token=sales)
-    assert done["intake"]["status"] == "accepted" and done["intake"]["decided_at"]
-    # Saying it again is harmless; changing the verdict is refused.
-    assert (
-        post(api, f"intake/{sid}/resolve", {"status": "accepted", "receiver_ref": "instagram:@host1"}, token=sales)[
-            "intake"
-        ]["id"]
-        == sid
-    )
-    post(api, f"intake/{sid}/resolve", {"status": "rejected", "reason": "a travel account"}, token=sales, expected=409)
-    assert get(api, "intake", token=sales)["items"] == []
-    assert get(api, "intake?status=accepted", token=sales)["items"][0]["receiver_ref"] == "instagram:@host1"
-    # A receiver traces what it was sent; another bot cannot open the post at all.
-    assert get(api, f"listening/items/{saved['items'][0]['id']}", token=sales)["intake"][0]["destination"] == "creators"
-    get(api, f"listening/items/{saved['items'][0]['id']}", token=_token(api, "finance"), expected=403)
-    stats = get(api, "listening/stats", token=listening)
-    assert stats["destinations"]["creators"]["precision"] == 1.0 and stats["destinations"]["content"]["new"] == 1
-    assert stats["coverage"]["x"]["ok"]["runs"] == 1
+def test_with_no_keep_rules_everything_not_dropped_is_kept(api):
+    aid, source = started(api, rules=[DROP])
+    saved(api, source, [item(1, "A vendor pitch [r0]"), item(2, "Anything else at all")])
+    run(api, at(0.1), FakeJudge())
+    rows = {r["native_id"]: r["status"] for r in sql(api, "SELECT * FROM listening_items")}
+    assert rows == {"1": "dropped", "2": "kept"}
 
 
-def test_hub_sql_shows_posts_only_to_listening_the_owner_and_their_receivers(api):
-    _bots(api)
-    listening = _token(api, "listening")
-    api.app.state.judge = FakeJudge()
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [_post("1", "A creator for team leads [creator]"), _post("2", "Atlia news [market]")],
-        },
-        token=listening,
-    )
-    post(api, "listening/judge", {}, token=listening)
-
-    def rows(sql, token):
-        return post(api, "sql", {"sql": sql}, token=token)["rows"]
-
-    finance, sales = _token(api, "finance"), _token(api, "influencer")
-    assert rows("SELECT count(*) FROM listen_runs", finance)[0][0] == 1
-    assert rows("SELECT count(*) FROM listen_items", finance)[0][0] == 0
-    assert rows("SELECT count(*) FROM intake_items", finance)[0][0] == 0
-    assert rows("SELECT native_id FROM listen_items", sales) == [["1"]]
-    assert rows("SELECT destination FROM intake_items", sales) == [["creators"]]
-    assert rows("SELECT count(*) FROM listen_judgments", sales)[0][0] == 1
-    assert rows("SELECT count(*) FROM listen_items", listening)[0][0] == 2
-    assert rows("SELECT count(*) FROM listen_items", "ana-test")[0][0] == 2
+# ---------------------------------------------------------------------------------------------- save
+def test_saving_the_same_body_twice_adds_no_rows(api):
+    aid, source = started(api)
+    posts = [item(1, story(1)), item(2, story(2))]
+    assert save(api, source, posts, key="k1")["saved"] == 2
+    assert save(api, source, posts, key="k1")["saved"] == 2  # the same key: the first answer again
+    assert save(api, source, posts)["saved"] == 0
+    assert statuses(api, aid) == {"new": 2}
 
 
-def test_invalid_registry_questions_refuse_decisions_without_private_details(api):
-    settings = api.app.state.store.settings
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    (directory / "listening-item.json").write_text('{"private-question-fixture-value": [}')
-    api.app.state.judge = engine = FakeJudge()
-    response = post(api, "listening/judge", {}, expected=422)
-    assert response["error"]["code"] == "judge_questions"
-    assert "private-question-fixture-value" not in json.dumps(response)
-    assert engine.calls == []
+def test_only_a_bot_or_whoever_may_change_the_listening_saves(api):
+    _, source = started(api)
+    r = api.post(f"/api/v2/listening/sources/{source}/items", json={"items": []}, headers=headers("cara-test"))
+    assert r.status_code == 403
+    save(api, "nope", [], expected=404)
+    save(api, source, [], status="asleep", expected=422)
 
 
-# ----------------------------------------------------------------------------- Settings > Listening
-def _settings(api):
-    return api.app.state.store.settings
+# ---------------------------------------------------------------------------------------------- sending
+def test_three_an_hour_ten_a_day_sends_3_3_3_1_then_waits_for_the_next_day(api):
+    limits = [{"count": 3, "per": "hour"}, {"count": 10, "per": "day"}]
+    aid, source = started(api, rules=[KEEP], limits=limits)
+    saved(api, source, [item(n, f"{story(n)} [r0:{0.76 + n * 0.005:.3f}]") for n in range(40)])
+    judge = FakeJudge()
+    run(api, at(0.1), judge)
+    assert statuses(api, aid) == {"kept": 40} and runs(api, aid) == []
+    for hour in range(1, 8):
+        run(api, at(hour - 0.4), judge)  # just after each hour's send time
+    done = runs(api, aid)
+    assert [r["listening"]["count"] for r in done] == [3, 3, 3, 1]
+    assert [r["listening"]["waiting"] for r in done] == [37, 34, 31, 30]
+    assert done[0]["summary"] == "3 sent" and done[0]["status"] == "ok"
+    assert done[0]["listening"]["counts"]["sent"] == 3 and done[0]["listening"]["counts"]["kept"] == 40
+    order = [done[0]["listening"]["text"].index(story(n)) for n in (39, 38, 37)]
+    assert order == sorted(order)  # the best first
+    first = get(api, f"listening/items?automation={aid}&run={done[0]['id']}")["items"]
+    assert sorted(i["native_id"] for i in first) == ["37", "38", "39"]
+    run(api, at(0.6, days=1), judge)
+    assert [r["listening"]["count"] for r in runs(api, aid)] == [3, 3, 3, 1, 3]
 
 
-def _merged(api):
+def test_five_a_day_sends_once_at_its_time_and_once_after_the_server_was_down(api):
+    aid, source = started(api)
+    saved(api, source, [item(n, story(n)) for n in range(12)])
+    run(api, at(0.4))  # before 08:00
+    assert runs(api, aid) == []
+    run(api, at(1.5, days=2))  # two send times went by
+    run(api, at(1.6, days=2))
+    done = runs(api, aid)
+    assert [r["listening"]["count"] for r in done] == [5]
+    assert get(api, f"automations/{aid}")["listening"]["waiting"] == 7
+
+
+def test_nothing_kept_queues_no_run(api):
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(1, "Nothing a rule keeps")])
+    run(api, at(1), FakeJudge())
+    assert statuses(api, aid) == {"dropped": 1} and runs(api, aid) == []
+
+
+# ---------------------------------------------------------------------------------------------- the decision model
+def test_a_failing_model_is_retried_and_the_post_fails_after_three_tries(api):
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(1, "A lead [r0]")])
+    down = FakeJudge(fail=True)
+    run(api, at(0.1), down)
+    run(api, at(0.2), down)
+    assert statuses(api, aid) == {"new": 1}
+    run(api, at(0.3), down)
+    assert statuses(api, aid) == {"failed": 1} and len(down.calls) == 3
+
+
+def test_with_decisions_off_posts_stay_new_show_hollow_and_expire_in_a_week(api, monkeypatch):
+    from backend import judge
+
+    monkeypatch.setattr(judge, "server_engine", lambda *a, **k: None)
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(1, "A lead [r0]")])
+    run(api, at(1))
+    assert statuses(api, aid) == {"new": 1}
+    with time_machine.travel(at(1), tick=False):
+        assert get(api, f"automations/{aid}")["listening"]["dot"] == "hollow"
+    run(api, at(1, days=8))
+    assert statuses(api, aid) == {"expired": 1}
+
+
+def test_a_pass_out_of_time_releases_its_claims_still_sends_and_the_next_pass_scores_them(api, monkeypatch):
+    clock = {"now": 0.0, "step": 6.0}
+    monkeypatch.setattr(L, "CLOCK", lambda: clock["now"])
+    judge = FakeJudge()
+
+    def slow(state, questions, label=None):
+        clock["now"] += clock["step"]
+        return judge(state, questions, label)
+
+    busy, source = started(api, rules=[KEEP])
+    other, other_source = started(api, rules=[KEEP])
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)], when=at(0.2))
+    saved(api, other_source, [item(1, f"{story(1)} [r0]")], when=at(0.1))  # waiting longest, so it goes first
+    run(api, at(0.6), slow)  # after the send time; the fourth call uses up the 20 seconds
+    assert statuses(api, other) == {"sent": 1}
+    assert statuses(api, busy) == {"sent": 3, "new": 7} and len(judge.calls) == 4
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+    assert [r["listening"]["count"] for r in runs(api, busy)] == [3]
+    clock["step"] = 0.0
+    run(api, at(0.7), slow)
+    assert statuses(api, busy) == {"sent": 3, "kept": 7} and len(judge.calls) == 11
+
+
+def test_the_newest_posts_are_scored_first(api, monkeypatch):
+    clock = {"now": 0.0}
+    monkeypatch.setattr(L, "CLOCK", lambda: clock["now"])
+    judge = FakeJudge()
+
+    def slow(state, questions, label=None):
+        clock["now"] += 6.0
+        return judge(state, questions, label)
+
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
+    run(api, at(0.1), slow)
+    assert [text.split()[2] for text in judge.calls] == ["9", "8", "7", "6"]
+
+
+def test_copies_of_a_copy_count_on_the_one_original(api):
+    aid, source = started(api)
+    base = " ".join(WORDS[:60])
+    saved(api, source, [item(n, f"{base} ending{n}") for n in (1, 2, 3)])  # near copies, none word for word
+    run(api, at(0.1))
+    rows = {r["native_id"]: r for r in sql(api, "SELECT * FROM listening_items WHERE automation_id=?", (aid,))}
+    assert [rows[n]["status"] for n in "123"] == ["kept", "duplicate", "duplicate"]
+    assert rows["2"]["duplicate_of_id"] == rows["3"]["duplicate_of_id"] == rows["1"]["id"]
+    assert [rows[n]["copies"] for n in "123"] == [2, 0, 0]
+
+
+def test_long_posts_that_only_open_alike_are_not_copies(api):
+    aid, source = started(api)
+    opening = " ".join(f"open{n}" for n in range(300))  # longer than what the first comparison reads
+    one = opening + " " + " ".join(f"alpha{n}" for n in range(400))
+    other = opening + " " + " ".join(f"bravo{n}" for n in range(400))
+    saved(api, source, [item(1, one), item(2, other), item(3, one + " and one more thing")])
+    run(api, at(0.1))
+    rows = {r["native_id"]: r for r in sql(api, "SELECT * FROM listening_items WHERE automation_id=?", (aid,))}
+    assert [rows[n]["status"] for n in "123"] == ["kept", "kept", "duplicate"]
+    assert rows["3"]["duplicate_of_id"] == rows["1"]["id"]
+
+
+def test_the_same_post_with_another_link_is_a_copy(api):
+    aid, source = started(api)
+    said = "Our team finally dropped the daily standup and nobody misses it"
+    links = ("https://acme.example/a/very/long/path?utm_source=one&ref=abcdef", "www.acme.example/other/long/path/2")
+    saved(api, source, [item(n, f"{said} {link} today") for n, link in enumerate(links)])
+    run(api, at(0.1))
+    assert statuses(api, aid) == {"kept": 1, "duplicate": 1}
+
+
+def test_scoring_stops_when_the_pass_itself_reaches_the_spend_cap(api):
+    judge = FakeJudge()
+
+    def paid(state, questions, label=None):
+        return {**judge(state, questions, label), "usage": {"cost_usd": 0.02}}
+
+    aid, source = started(api, rules=[KEEP], spend_cap={"per_30m": 0.05})
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
+    run(api, at(0.1), paid)
+    assert len(judge.calls) == 3 and statuses(api, aid) == {"kept": 3, "new": 7}
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+
+
+def test_a_listening_turned_off_while_a_call_runs_scores_no_more_and_keeps_no_result(api):
+    judge = FakeJudge()
+    aid, source = started(api, rules=[KEEP])
+
+    def off(state, questions, label=None):
+        patch(api, aid, {"enabled": False})
+        return judge(state, questions, label)
+
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
+    run(api, at(0.1), off)
+    assert len(judge.calls) == 1 and statuses(api, aid) == {"new": 5}
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
+
+
+def test_posts_waiting_on_a_listening_that_is_off_still_expire(api):
+    aid, source = started(api)
+    saved(api, source, [item(1, story(1))])
+    patch(api, aid, {"enabled": False})
+    run(api, at(1, days=8))
+    assert statuses(api, aid) == {"expired": 1}
+
+
+def test_two_passes_at_once_score_no_post_twice(api):
+    aid, source = started(api, rules=[KEEP])
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
+    store = api.app.state.store
+    judge = FakeJudge()
+    answer = FakeJudge()
+
+    def racing(state, questions, label=None):
+        if not judge.calls:  # a second pass starts while the first is asking about its first post
+            judge.calls.append(state["text"])
+            L.run_pass(store, at(0.1), answer)
+        return answer(state, questions, label)
+
+    L.run_pass(store, at(0.1), racing)
+    assert sorted(answer.calls) == sorted(f"{story(n)} [r0]" for n in range(5))
+    assert statuses(api, aid) == {"kept": 5}
+
+
+# ---------------------------------------------------------------------------------------------- sources
+def test_a_blocked_read_shows_on_the_source_the_list_and_tools(api):
+    aid, source = started(api)
+    out = saved(api, source, [], status="blocked", error="Sign in again")
+    assert out["source"]["status"] == "blocked"
+    listed = get(api, f"listening/sources?automation={aid}")["sources"]
+    assert [(s["key"], s["status"], s["last_error"]) for s in listed] == [("s1", "blocked", "Sign in again")]
+    rows = get(api, "automations?trigger=listening")["automations"]
+    assert next(r for r in rows if r["id"] == aid)["listening"]["dot"] == "hollow"
     with api.app.state.store.read() as c:
-        return L.destinations(_settings(api), c, check_questions=False)
+        assert L.worst(c) == "blocked"
+    saved(api, source, [])
+    with time_machine.travel(START, tick=False):
+        assert get(api, f"automations/{aid}")["listening"]["dot"] == "filled"
 
 
-def _save(api, key, token="ana-test", expected=200, **fields):
-    body = {"category": "lead", "threshold": 0.8, "receiver": "bot:sales-ops", **fields}
-    return put(api, f"listening/destinations/{key}", body, token=token, expected=expected)
+def test_due_sources_are_the_search_sources_not_read_in_the_last_day(api):
+    page = {"id": "p1", "kind": "page", "site": "", "target": "https://acme.example/pricing"}
+    aid, source = started(api, sources=[SEARCH, page])
+    with time_machine.travel(START, tick=False):
+        due = get(api, f"listening/sources?due=1&automation={aid}")["sources"]
+        assert [(s["id"], s["kind"], s["target"]) for s in due] == [(source, "search", "standup tools")]
+        save(api, source, [])
+        assert get(api, f"listening/sources?due=1&automation={aid}")["sources"] == []
 
 
-def test_a_destination_saved_in_settings_wins_over_the_file_on_the_same_key_and_routes_a_post(api):
-    _bots(api)
-    api.app.state.judge = FakeJudge()
-    _save(api, "leads", threshold=0.5, receiver="bot:influencer")
-    _save(api, "extra", category="content", receiver="librarian")
-    merged = _merged(api)
-    assert merged["leads"]["receiver"] == "bot:influencer" and merged["leads"]["threshold"] == 0.5
-    assert "unless" not in merged["leads"], "the saved row replaces the file's whole entry"
-    assert merged["extra"]["receiver"] == "bot:librarian" and merged["content"]["receiver"] == "bot:content-social"
-    listing = get(api, "listening/destinations")
-    assert {d["key"]: d["source"] for d in listing["destinations"]}["leads"] == "settings"
-    assert {d["key"]: d["source"] for d in listing["destinations"]}["market"] == "yaml"
-    assert [d for d in listing["destinations"] if d["key"] == "leads"][0]["overrides_yaml"] is True
-    listening = _token(api, "listening")
-    post(
-        api,
-        "listening/runs",
-        {"source": "x", "query": "q", "status": "ok", "items": [_post("1", "A team lead asks for a tool [lead]")]},
-        token=listening,
+def test_a_listening_that_is_off_saves_scores_and_sends_nothing(api):
+    aid, source = started(api)
+    saved(api, source, [item(1, story(1))])
+    patch(api, aid, {"enabled": False})
+    save(api, source, [item(2, story(2))], expected=409)
+    run(api, at(1))
+    assert statuses(api, aid) == {"new": 1} and runs(api, aid) == []
+
+
+def test_a_source_taken_out_of_the_trigger_stops_taking_posts(api):
+    aid, source = started(api)
+    trigger = get(api, f"automations/{aid}")["trigger"]
+    patch(api, aid, {"trigger": {**trigger, "sources": []}})
+    save(api, source, [item(1, story(1))], expected=404)
+
+
+# ---------------------------------------------------------------------------------------------- push
+def test_a_push_address_takes_posts_without_sign_in_and_shows_its_token_once(api):
+    with time_machine.travel(START, tick=False):
+        made = listening(api, sources=[{"id": "in", "kind": "push", "site": "syften"}])
+    aid = made["id"]
+    address = made["push_addresses"]["in"]
+    path = address[address.index(L.PUSH_PATH) :]
+    r = api.post(path, json={"items": [item(1, story(1))]})
+    assert r.status_code == 200 and r.json() == {"seen": 1, "saved": 1}
+    assert api.post(L.PUSH_PATH + "wrong", json={"items": []}).status_code == 404
+    token = path.rsplit("/", 1)[1]
+    assert token not in str(get(api, f"automations/{aid}")) and token not in str(
+        sql(api, "SELECT * FROM listening_sources")
     )
-    post(api, "listening/judge", {}, token=listening)
-    assert [
-        i["destination"] for i in get(api, "intake?destination=leads", token=_token(api, "influencer"))["items"]
-    ] == ["leads"]
+    assert "push_addresses" not in patch(api, aid, {"name": "Standups again"})
+    again = post(api, f"listening/sources/{source_id(api, aid, 'in')}/address", {})["address"]
+    assert again != address and api.post(path, json={"items": []}).status_code == 404
+    assert api.post(again[again.index(L.PUSH_PATH) :], json={"items": []}).status_code == 200
 
 
-def test_saved_destinations_are_owner_only_validated_never_remove_the_files_and_show_to_the_owner_and_admins(api):
-    _bots(api)
-    # Only the owner writes destinations, and only owner and admins read them.
-    for token in ("ben-test", "cara-test", _token(api, "librarian")):
-        _save(api, "mine", token=token, expected=403)
-        post(api, "listening/destinations/market/remove", {}, token=token, expected=403)
-    assert "mine" not in _merged(api)
-    get(api, "listening/destinations", token="ben-test")
-    get(api, "listening/destinations", token="cara-test", expected=403)
-    get(api, "listening/destinations", token=_token(api, "listening"), expected=403)
-    # A destination the file would refuse is refused when it is saved.
-    for bad in (
-        {"category": "vendor_pitch_typo"},
-        {"category": "lead", "threshold": 0},
-        {"threshold": 1.5},
-        {"receiver": "bot:nobody"},
-        {"receiver": "human:ana"},
-        {"readers": ["bot:nobody"]},
-        {"unless": {"category": "nope", "threshold": 0.5}},
-        {"unless": {"category": "vendor_pitch", "threshold": 2}},
-    ):
-        assert _save(api, "bad", expected=422, **bad)["error"]["code"] == "invalid", bad
-    _save(api, "Not A Key", expected=422)
-    assert "bad" not in _merged(api)
-    ok = _save(
-        api,
-        "good",
-        readers=["bot:doc-updater", "bot:doc-updater"],
-        unless={"category": "vendor_pitch", "threshold": 0.7},
-    )
-    assert ok["destination"]["readers"] == ["bot:doc-updater"] and ok["destination"]["unless"]["threshold"] == 0.7
-    # A destination only the file has cannot be removed and a saved one can.
-    assert post(api, "listening/destinations/market/remove", {}, expected=409)["error"]["code"] == "yaml"
-    post(api, "listening/destinations/nothing/remove", {}, expected=404)
-    _save(api, "market", threshold=0.9)
-    assert _merged(api)["market"]["threshold"] == 0.9
-    post(api, "listening/destinations/market/remove", {})
-    assert _merged(api)["market"]["threshold"] == 0.70, "removing the saved one brings the file's back"
-    # Hub SQL shows saved destinations to the owner and admins only.
-    assert post(api, "sql", {"sql": "SELECT key FROM listening_destinations"})["rows"] == [["good"]]
-    assert (
-        post(api, "sql", {"sql": "SELECT count(*) FROM listening_destinations"}, token=_token(api, "finance"))["rows"][
-            0
-        ][0]
-        == 0
-    )
+def test_a_replayed_save_answers_without_the_push_address(api):
+    body = {"id": "in", "kind": "push", "site": "syften"}
+    with time_machine.travel(START, tick=False):
+        made = listening(api, sources=[body], key="make-1")
+        again = listening(api, sources=[body], key="make-1")
+    assert made["push_addresses"]["in"] and again["id"] == made["id"] and "push_addresses" not in again
+    more = {"trigger": {**made["trigger"], "sources": [body, {**body, "id": "two"}]}}
+    first = api.patch(f"/api/v2/automations/{made['id']}", json=more, headers=headers("ana-test", "edit-1")).json()
+    replay = api.patch(f"/api/v2/automations/{made['id']}", json=more, headers=headers("ana-test", "edit-1")).json()
+    assert first["push_addresses"]["two"] and "push_addresses" not in replay
+    route = f"listening/sources/{source_id(api, made['id'], 'in')}/address"
+    new, same = post(api, route, {}, key="addr-1"), post(api, route, {}, key="addr-1")
+    assert L.PUSH_PATH in new["address"] and "address" not in same and same["source"] == "in"
+    assert L.PUSH_PATH not in str(sql(api, "SELECT response FROM idempotency"))
 
 
-def test_the_market_destination_is_offered_once_a_removal_sticks_and_health_reads_saved_destinations(api):
-    from backend import health
-
-    settings = _settings(api)
-    with api.app.state.store.transaction() as c:
-        assert L.seed_market(c, settings) is False, "no Librarian, nothing to offer"
-    _bots(api)
-    (settings.registry_dir / L.LISTENING_FILE).write_text("destinations: {}")
-    with api.app.state.store.transaction() as c:
-        assert L.seed_market(c, settings) is True
-    assert _merged(api)["market"] == {
-        "category": "market",
-        "threshold": 0.7,
-        "receiver": "bot:librarian",
-        "what": "a post about the market: competitors, buyers, prices, regulation",
+# ---------------------------------------------------------------------------------------------- paths
+def path(tag):
+    return {
+        "name": tag,
+        "when": [{"field": "item.tag", "op": "is", "value": tag}],
+        "steps": [
+            {"id": "say_" + tag.lower(), "type": "action", "do": "note", "args": {"text": tag + ": {{item.count}}"}}
+        ],
     }
-    with api.app.state.store.transaction() as c:
-        assert L.seed_market(c, settings) is False
-    post(api, "listening/destinations/market/remove", {})
-    with api.app.state.store.transaction() as c:
-        assert L.seed_market(c, settings) is False
-    assert "market" not in _merged(api)
-    # Health reads destinations saved in settings.
-    with api.app.state.store.transaction() as c:
+
+
+def notes(run_row):
+    return sorted(s["outputs"]["note"] for s in run_row["steps"] if s["type"] == "action")
+
+
+def test_paths_by_tag_run_one_thread_per_tag_and_the_rest_on_otherwise(api):
+    other = [{"id": "say_rest", "type": "action", "do": "note", "args": {"text": "rest: {{item.tag}}"}}]
+    steps = [{"id": "split", "type": "paths", "by": "tag", "paths": [path("leads")], "otherwise": {"steps": other}}]
+    aid, source = started(api, rules=[KEEP, KEEP_NEWS], steps=steps)
+    saved(api, source, [item(1, "One [r0]"), item(2, "Two [r0]"), item(3, "Three [r1]")])
+    run(api, at(1), FakeJudge())
+    done = runs(api, aid)
+    assert len(done) == 1 and done[0]["status"] == "ok"
+    assert notes(done[0]) == ["leads: 2", "rest: news"]
+
+
+def test_run_now_with_nothing_sent_ends_with_no_thread(api):
+    for by in ("tag", "item"):
+        steps = [{"id": "split", "type": "paths", "by": by, "paths": [path("leads")], "otherwise": {"steps": []}}]
+        aid, _ = started(api, rules=[KEEP], steps=steps)
+        post(api, f"automations/{aid}/run", {})
+        api.app.state.store.automations.drain()
+        done = runs(api, aid)
+        assert len(done) == 1 and done[0]["status"] == "empty" and notes(done[0]) == []
+
+
+def test_paths_by_item_run_one_thread_per_item(api):
+    each = {
+        "name": "All",
+        "when": [],
+        "steps": [{"id": "say", "type": "action", "do": "note", "args": {"text": "{{item.title}}"}}],
+    }
+    steps = [{"id": "split", "type": "paths", "by": "item", "paths": [each]}]
+    aid, source = started(api, steps=steps)
+    saved(api, source, [item(1, "One", title="First"), item(2, "Two", title="Second")])
+    run(api, at(1))
+    assert notes(runs(api, aid)[0]) == ["First", "Second"]
+
+
+def test_paths_by_tag_are_refused_outside_a_listening(api):
+    steps = [{"id": "split", "type": "paths", "by": "tag", "paths": [path("leads")]}]
+    body = {"name": "T", "owner": "person:ana", "trigger": {"type": "schedule", "cron": "0 9 * * *", "tz": "UTC"}}
+    post(api, "automations", {**body, "steps": steps}, expected=422)
+
+
+def test_a_run_whose_only_bot_turn_hit_the_spend_cap_fails(api):
+    turn = {"id": "look", "type": "bot_turn", "bot": "ops", "prompt": "{{listening.text}}"}
+    aid, source = started(api, steps=[turn], spend_cap={"per_30m": 0.2})
+    saved(api, source, [item(1, story(1))])
+    with api.app.state.store.transaction() as c:  # a turn still going holds more than the cap
         c.execute(
-            "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what) "
-            "VALUES ('typo','no_such_category',0.7,'bot:librarian','[]','null','')"
+            "INSERT INTO automation_holds(ref,automation_id,run_id,amount,created_at) VALUES('t_old',?,'run_old',0.25,?)",
+            (aid, H.now()),
         )
-    with api.app.state.store.read() as c:
-        check = health._listening(c, settings)
-    assert check["status"] == "warn" and "typo" in check["summary"]
-    _save(api, "typo", category="market", receiver="bot:librarian")
-    with api.app.state.store.read() as c:
-        assert health._listening(c, settings) is None
+    run(api, at(1))
+    done = runs(api, aid)
+    assert [s["status"] for s in done[0]["steps"]] == ["spend_cap"] and done[0]["status"] == "failed"
 
 
-def test_the_market_destination_is_not_offered_when_one_already_routes_market(api):
-    _bots(api)  # the file already sends category market to the Librarian
+# ---------------------------------------------------------------------------------------------- the trigger
+def test_the_trigger_is_checked_on_save(api):
+    def refused(**trigger):
+        base = {
+            "type": "listening",
+            "sources": [SEARCH],
+            "rules": [],
+            "limits": [{"count": 5, "per": "day"}],
+            "at": "08:00",
+            "tz": "UTC",
+        }
+        body = {"name": "T", "owner": "person:ana", "trigger": {**base, **trigger}, "steps": [NOTE]}
+        post(api, "automations", body, expected=422)
+
+    refused(limits=[])
+    refused(limits=[{"count": 5, "per": "day"}, {"count": 9, "per": "day"}])
+    refused(limits=[{"count": 5, "per": "year"}])
+    refused(sources=[{"id": "p", "kind": "page", "site": "", "target": "not a link"}])
+    refused(sources=[SEARCH, SEARCH])
+    refused(rules=[{"do": "keep", "text": "No tag"}])
+    refused(at="8am")
+
+
+def test_a_listening_reads_back_with_its_sources_and_next_send(api):
+    aid, source = started(api)
+    with time_machine.travel(START, tick=False):
+        seen = get(api, f"automations/{aid}")
+    assert seen["trigger"]["sources"] == [SEARCH]
+    heard = seen["listening"]
+    assert heard["next_send_at"].startswith("2026-11-02T08:00") and heard["waiting"] == 0
+    assert [(s["id"], s["key"], s["status"]) for s in heard["sources"]] == [(source, "s1", "never")]
+    assert aid not in {a["id"] for a in get(api, "automations/stats?range=7d")["automations"]}
+
+
+# ---------------------------------------------------------------------------------------------- upkeep
+def test_a_kept_post_unsent_for_a_week_expires_and_maintenance_deletes_old_rows(api):
+    aid, source = started(api, limits=[{"count": 1, "per": "week"}])
+    saved(api, source, [item(1, story(1), posted_at="2026-11-02T07:00:00Z"), item(2, story(2))])
+    run(api, at(1))
+    assert statuses(api, aid) == {"sent": 1, "kept": 1}
+    run(api, at(1, days=7))  # the week's one is not yet allowed again when the other turns a week old
+    assert statuses(api, aid) == {"sent": 1, "expired": 1}
     with api.app.state.store.transaction() as c:
-        assert L.seed_market(c, _settings(api)) is False
-        assert c.execute("SELECT count(*) FROM listening_destinations").fetchone()[0] == 0
+        L.prune(c, H.shift(H.now(), days=L.KEEP_DAYS + 1))
+    assert statuses(api, aid) == {"sent": 1}
+    with api.app.state.store.transaction() as c:
+        L.prune(c, H.shift(H.now(), days=L.KEEP_SENT_DAYS + 1))
+    assert statuses(api, aid) == {}
 
 
-def test_stats_carry_a_daily_chart_and_the_callers_recent_posts(api):
-    """Market › Listening reads posts per day by source and the newest routed posts; a receiver sees only its own."""
-    _bots(api)
-    listening = _token(api, "listening")
-    api.app.state.judge = FakeJudge()
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [
-                _post("1", "Creator asks how teams handle standups [creator] [content]"),
-                _post("2", "Nothing to see"),
-            ],
-        },
-        token=listening,
+def test_a_new_company_has_one_market_listening_and_deleting_it_keeps_it_gone(api):
+    def named():
+        rows = get(api, "automations?trigger=listening")["automations"]
+        return [r for r in rows if r["name"] == automations.LISTENING_NAME]
+
+    automations.tick(api.app.state.store)
+    made = named()
+    assert len(made) == 1 and not made[0].get("builtin")
+    r = api.delete(f"/api/v2/automations/{made[0]['id']}", headers=headers())
+    assert r.status_code == 200, r.text
+    with api.app.state.store.transaction() as c:
+        automations.ensure_builtins(c)
+    assert named() == []
+
+
+# ---------------------------------------------------------------------------------------------- the old model is gone
+def test_the_old_routes_and_tools_are_gone(api):
+    for route in ("listening/runs", "listening/items/x", "intake", "listening/destinations"):
+        get(api, route, expected=404)
+    for route in ("listening/runs", "listening/decide", "listening/judge", "listening/judgments", "intake/x/resolve"):
+        assert api.post("/api/v2/" + route, json={}, headers=headers()).status_code in (404, 405)
+    from clients import hubtools
+
+    names = {t["name"] for t in hubtools.TOOLS if "listening" in t["name"]}
+    assert names == {"tico_listening_sources", "tico_listening_save"}
+
+
+def test_the_migration_drops_the_old_tables_and_the_automations_on_the_old_model():
+    import json
+
+    up = importlib.import_module("backend.migrations.20261111190425_listening_feed").up
+    conn = sqlite3.connect(":memory:")
+    old = ("intake_items", "listen_judgments", "listen_items", "listen_runs", "listening_destinations")
+    for table in old:
+        conn.execute(f"CREATE TABLE {table} (id TEXT)")
+    conn.execute("CREATE TABLE automations (id TEXT, trigger_type TEXT, flow TEXT, enabled INTEGER)")
+    conn.execute("CREATE TABLE automation_versions (automation_id TEXT, n INTEGER, flow TEXT)")
+    for table in ("automation_runs", "automation_daily", "automation_holds"):
+        conn.execute(f"CREATE TABLE {table} (automation_id TEXT)")
+    find = {"id": "f", "type": "find", "source": "listening"}
+    inner = {"id": "p", "type": "paths", "paths": [{"name": "b", "steps": [find]}], "otherwise": {"steps": [find]}}
+    fork = {"id": "k", "type": "paths", "paths": [{"name": "a", "steps": [inner, NOTE]}], "otherwise": {"steps": []}}
+    flows = {
+        "old": ("listening", {"trigger": {"type": "listening", "destination": "leads"}, "steps": [NOTE]}),
+        "finds": ("schedule", {"trigger": {"type": "schedule"}, "steps": [find, NOTE], "enabled": True}),
+        "plain": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE], "enabled": True}),
+        "nested": ("schedule", {"trigger": {"type": "schedule"}, "steps": [NOTE, fork], "enabled": True}),
+    }
+    for aid, (kind, flow) in flows.items():
+        conn.execute("INSERT INTO automations VALUES (?,?,?,1)", (aid, kind, json.dumps(flow)))
+    conn.execute("INSERT INTO automation_runs VALUES ('old')")
+    up(conn)
+    up(conn)  # again changes nothing
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert not tables & set(old) and {"listening_sources", "listening_items"} <= tables
+    rows = {r[0]: (json.loads(r[1]), r[2]) for r in conn.execute("SELECT id, flow, enabled FROM automations")}
+    assert (
+        set(rows) == {"finds", "plain", "nested"}
+        and conn.execute("SELECT count(*) FROM automation_runs").fetchone()[0] == 0
     )
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "reddit",
-            "query": "q",
-            "status": "ok",
-            "items": [_post("3", "A team lead asks for a hosted plan [lead]", author="@lead")],
-        },
-        token=listening,
-    )
-    post(api, "listening/judge", {}, token=listening)
-    stats = get(api, "listening/stats")
-    assert [d["sources"] for d in stats["daily"]] == [{"x": 2, "reddit": 1}]
-    assert sorted(tuple(r["destinations"]) for r in stats["recent"]) == [("content", "creators"), ("leads",)]
-    mine = get(api, "listening/stats", token=_token(api, "influencer"))["recent"]
-    assert [(r["source"], r["destinations"]) for r in mine] == [("x", ["creators"])]
-    assert mine[0]["text"].startswith("Creator asks") and mine[0]["author"] == "@host1"
+    assert rows["finds"][0]["steps"] == [NOTE] and rows["finds"][0]["enabled"] is False and rows["finds"][1] == 0
+    assert rows["plain"] == (flows["plain"][1], 1)
+    assert '"find"' not in json.dumps(rows["nested"][0]) and rows["nested"][1] == 0
+    assert rows["nested"][0]["steps"][1]["paths"][0]["steps"][1] == NOTE
+
+
+def test_a_migrated_automation_runs_without_its_listening_find_when_turned_back_on(api):
+    import json
+
+    up = importlib.import_module("backend.migrations.20261111190425_listening_feed").up
+    say = {"id": "say", "type": "action", "do": "note", "args": {"text": "hello"}}
+    body = {
+        "name": "Daily",
+        "owner": "person:ana",
+        "trigger": {"type": "schedule", "cron": "0 9 * * *"},
+        "steps": [say],
+    }
+    aid = post(api, "automations", body)["id"]
+    find = {"id": "f", "type": "find", "source": "listening"}
+    with api.app.state.store.transaction() as c:  # as the old server saved it: the step in the flow and its version
+        for table, where in (("automations", "id"), ("automation_versions", "automation_id")):
+            for row in c.execute(f"SELECT rowid AS r, flow FROM {table} WHERE {where}=?", (aid,)).fetchall():
+                flow = json.loads(row["flow"])
+                flow["steps"] = [find, *flow["steps"]]
+                c.execute(f"UPDATE {table} SET flow=? WHERE rowid=?", (json.dumps(flow), row["r"]))
+        up(c)
+    assert '"find"' not in str(sql(api, "SELECT flow FROM automation_versions WHERE automation_id=?", (aid,)))
+    assert get(api, f"automations/{aid}")["enabled"] is False
+    patch(api, aid, {"enabled": True})
+    post(api, f"automations/{aid}/run", {})
+    api.app.state.store.automations.drain()
+    done = runs(api, aid)
+    assert len(done) == 1 and done[0]["status"] == "ok" and notes(done[0]) == ["hello"]

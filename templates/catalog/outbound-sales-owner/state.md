@@ -7,8 +7,8 @@ Not started. The first message walks the human through `playbooks/onboarding.md`
 None yet. Record each setup answer here, one line each, dated.
 
 ## Routine
-`outbound-run`: declared off, and switched on when your setup starts.
-`weekly-outbound-readout`: declared off, and switched on at step 6 of setup.
+`outbound-run` and `weekly-outbound-readout`: declared off, and switched on when your setup starts,
+unless a person changed one first.
 
 ## Current focus
 None.

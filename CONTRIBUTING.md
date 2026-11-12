@@ -19,13 +19,13 @@ commit instead (see below). Please follow the [Code of Conduct](CODE_OF_CONDUCT.
 ## Running the tests
 
 ```bash
-pip install -r backend/requirements-dev.txt
-python -m pytest -q                            # the default Python suite, in parallel (about a minute)
-
-npm ci
-npx playwright install chromium
+scripts/dev_setup.sh --browser                 # .venv, node_modules, Chromium and the pre-push hook; quick when done
+.venv/bin/python -m pytest -q                  # the default Python suite, in parallel (about a minute)
 npm run test:ui                                # the core browser scripts (CORE in scripts/ui-tests.cts)
 ```
+
+`scripts/dev_setup.sh` does only what is missing or stale, so run it again after a pull; `--rust` adds the Rust toolchain
+(it does that by itself when your branch touches a Rust crate).
 
 Run both locally before you open a pull request. GitHub Actions lints the pull request again and, once it is ready, runs its selected tests (the PR checks workflow);
 the merge queue runs them again on the merged result before a change lands. The default run leaves out
@@ -66,7 +66,8 @@ Where the local gate differs from CI:
 
 - Uncommitted and untracked files are checked locally; CI checks only the pushed commit. The hook says so when the tree is dirty.
 - The baselines (ruff, tsc, UI strict, Biome, API paths) compare with origin/main as the hook last fetched it. CI compares with the pull request's base at the time of its run, so a base that moved since the fetch can differ.
-- `check.sh` uses the Python and Node on your PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
+- `check.sh` uses `.venv/bin` first when there is one (`scripts/dev_setup.sh` makes it), then the Python and Node on your
+  PATH. CI uses a pinned Python 3.15 venv and Node 22 with `npm ci`.
 - `check.sh` runs cargo fmt on the Rust crates; CI's static job does not (the merge queue's rust lint does).
 - `check.sh` collects every test file (`pytest --collect-only`, nothing run), so a test that imports a removed module fails before the push; CI finds it only in the test job.
 - Tests, clippy, the desktop app, the recorder and the Caddy checks are not in `check.sh`. The merge queue runs the tests a change reaches; run the ones you touched with `scripts/remote.py`.
@@ -107,11 +108,11 @@ only shrinks the same way. Fix a call by pointing it at the route it should reac
 
 ## Profiling API test setup
 
-Each API test creates a fresh app, store, authentication state, registry and database. For targeted
-runs with repeated API setup, `--api-database-snapshots` restores a worker-local schema snapshot with
-SQLite's backup API before normal lifespan initialization. It is opt-in: template construction can
-cost more than it saves for small selections at high worker counts. `--fresh-api-databases` forces
-empty database paths, and direct Store/migration fixtures always initialize from empty paths.
+Each API test creates a fresh app, store, authentication state, registry and database. The database is a copy of a
+worker-local schema snapshot (`--api-database-snapshots`, on by default in `pytest.ini`), restored with SQLite's
+backup API before normal lifespan initialization: on a whole suite that halves the time of a migration per test.
+`--fresh-api-databases` forces empty database paths, and direct Store/migration fixtures always initialize from
+empty paths.
 
 Compare the same tests and dependencies with alternating fresh/snapshot runs:
 
@@ -202,6 +203,6 @@ merged work past the newest release and no candidate is in flight, GitHub Action
 first green candidate to Tico Team's install (the canary). Stable (TIDY) takes it once it is approved: automatically
 when its notes list no High risk item and `RELEASE_NEEDS_PERSON` is off (the default), otherwise by a person with write
 access on that release's `release-approval` issue (the `approved` label, or a `/approve` comment). A hotfix is for major
-production issues only. The Release Manager bot no longer tags or rolls out Tico releases; it only monitors them. The
+production issues only. The Release Owner bot no longer tags or rolls out Tico releases; it only monitors them. The
 details are in [docs/releasing.md](docs/releasing.md#the-release-train), and the approval steps are in
 [docs/releasing.md](docs/releasing.md#approval).

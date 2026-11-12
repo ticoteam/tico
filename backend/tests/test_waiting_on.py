@@ -11,7 +11,7 @@ from backend.tests.helpers import engine as X
 
 ANA = X.ANA
 BUILD = (
-    {"name": "Ideas", "by_hand": True},
+    {"name": "Ideas", "by_hand": True, "requests_move_on": True},
     {"name": "On deck"},
     {"name": "Build", "owner": "bot:builder", "task_limit": 1, "requirements": [{"kind": "owner_done"}]},
     {
@@ -116,10 +116,13 @@ def test_snoozed_is_the_headline_and_the_rest_is_still_listed(c, general):
 
 
 def test_by_hand_room_and_a_named_person_follow_the_task_through_its_stages(c, build):
-    first = X.new_task(c, ANA, "Build the importer", "eng")
-    second = X.new_task(c, ANA, "Build the exporter", "eng")
+    first = X.new_task(c, "bot:builder", "Build the importer", "eng")  # a bot's idea: held by hand
+    second = X.new_task(c, "bot:builder", "Build the exporter", "eng")
     wait = W.headline(c, first["id"])
     assert (wait.state, wait.who, wait.line) == ("by_hand", "eng-ideas", "Leaves Ideas by hand")
+    asked = X.new_task(c, ANA, "Build the report", "eng")  # a person's request is not held: it waits for room
+    wait = W.headline(c, asked["id"])
+    assert (wait.state, wait.who, wait.line) == ("room", "eng-on-deck", "Moving to On deck")
     for row in (first, second):
         E.move(c, row["id"], E.NEXT, ANA)  # picked by hand: Ideas needs nothing
     assert W.all_met(W.waiting_on(c, first["id"]))  # On deck needs nothing: it waits only for a slot
@@ -158,7 +161,7 @@ def test_a_task_waits_on_the_tasks_it_filed_and_on_a_question_a_bot_asked(c, gen
 
 
 def test_an_ended_task_waits_on_nothing_and_an_open_one_never_does(c, build):
-    row = X.new_task(c, ANA, "Build the importer", "eng")
+    row = X.new_task(c, "bot:builder", "Build the importer", "eng")
     stops = []
     for step in (E.NEXT, E.NEXT, "Review", E.DONE):
         assert W.waiting_on(c, row["id"]), "an open task always waits on something"

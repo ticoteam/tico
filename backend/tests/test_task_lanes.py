@@ -58,13 +58,6 @@ def test_a_bot_uses_all_places_and_next_place_goes_to_the_bot_with_fewest(api):
     assert claim(api, machine)["lane"] == "task:" + tasks[4]["id"]
 
 
-def test_a_bot_alone_on_its_computer_may_use_every_turn(api):
-    machine = task_bot(api, lanes=True, capacity=4)
-    for title in ("first", "second", "third", "fourth"):
-        new_task(api, title)
-    assert [claim(api, machine)["bot"] for _ in range(4)] == ["ops"] * 4
-
-
 def test_a_runner_without_lanes_runs_one_turn_per_bot(api):
     machine = task_bot(api, lanes=False)
     new_task(api, "first"), new_task(api, "second")

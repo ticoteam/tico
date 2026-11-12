@@ -38,7 +38,7 @@
                   "enabled": true,
                   "do": "create_task",
                   "args": {
-                    "owner": "bot:engineering-lead",
+                    "owner": "bot:engineering-manager",
                     "title": "Bug from #support"
                   }
                 }

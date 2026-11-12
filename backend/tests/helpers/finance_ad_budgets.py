@@ -86,7 +86,7 @@ def world(store: Store, at: str = AT) -> dict[str, str]:
             (
                 "meta",
                 {
-                    "name": "Rental Social Ad Owner",
+                    "name": "Rental Social Ads Owner",
                     "teammate": "bot:rental-social-ad-owner",
                     "vendor": out["meta_ads_vendor"],
                     "amount": 300_000,

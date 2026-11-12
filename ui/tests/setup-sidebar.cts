@@ -1,8 +1,8 @@
 // Offline regression for the sidebar around the first-run wizard. Fixtures only.
-//  - on the wizard, before setup is done, the sidebar shows Finish setup and the team, not the app's pages or
-//    the "Updated to" version row, and the phone's bottom bar is hidden; anywhere else, and once setup is
-//    done, everything is back;
-//  - after Create, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
+//  - on the setup modal, before setup is done, the app's sidebar stays whole behind it (Finish setup, the pages and
+//    the team), What's new and the usage notice wait, and the phone's bottom bar is hidden; anywhere else, and once
+//    setup is done, everything is back;
+//  - once the team exists, a team of "Head of …" bots, each with its harness mark and its Setup pill, shows each whole name
 //    in one color (words shared with another bot's name are not muted), and each row's tooltip has the whole name.
 // TICO_SCREENSHOT_DIR=<dir> saves both screens at desktop and phone width, dark and light.
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -22,7 +22,7 @@ async function shot(page: Page, name: string) {
 }
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
-  assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
+  assistant_bot: 'assistant', public_url: 'https://initech.test', runner_url: 'https://initech.test', local: false, release: '',
   version: '0.3.62', runner_compat: {version: '0.3.62', min_runner: '0.1.0'}, providers_configured: true,
   changelog: {unread_count: 103}, usage_count_notice: true};
 const people = [{id: 'ana', name: 'Ana Rivera', email: 'ana@initech.test', org_parent: 'g:leadership', team: 'leadership'}];
@@ -37,9 +37,9 @@ const TEAM = [
   bot('head-of-engineering', 'Head of Engineering', 'engineering', 'human:ana'),
   bot('qa-engineer', 'QA Engineer', 'engineering', 'head-of-engineering'),
   bot('head-of-finance', 'Head of Finance', 'finance', 'human:ana'),
-  bot('bookkeeper', 'Bookkeeper', 'finance', 'head-of-finance'),
+  bot('finance-owner', 'Finance Owner', 'finance', 'head-of-finance'),
   bot('head-of-marketing', 'Head of Marketing', 'marketing', 'human:ana'),
-  bot('content', 'Content Marketer', 'marketing', 'head-of-marketing'),
+  bot('content', 'Content Owner', 'marketing', 'head-of-marketing'),
   bot('head-of-product', 'Head of Product', 'product', 'human:ana'),
   bot('insights', 'Customer Insights Analyst', 'product', 'head-of-product'),
 ];
@@ -91,7 +91,7 @@ async function open(browser: import('playwright').Browser, {theme, phone, needed
 
 const shown = (page: Page, selector: string) => page.locator(selector).evaluateAll(els => els.filter(el => el.checkVisibility()).map(el => (el as HTMLElement).dataset.nav || el.id));
 
-// The anonymous usage count's notice: not over the wizard or the after-Create screen, and not counted as seen there.
+// The anonymous usage count's notice: not over the setup modal, and not counted as seen there.
 const noNotice = async ({page, notices}: {page: Page; notices: string[]}) => {
   assert.equal(await page.locator('#usage-notice').isVisible(), false, 'the usage notice waits until setup is left');
   assert.deepEqual(notices, []);
@@ -103,17 +103,16 @@ async function wizard(browser: import('playwright').Browser, theme: string) {
   await page.locator('#onb-website').waitFor();
   assert.equal(await page.evaluate(() => location.hash), '#/welcome');
   await noNotice({page, notices});
-  assert.deepEqual(await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row'), ['welcome'], 'only Finish setup');
+  // The sidebar is the app's own behind the modal, not a stripped one.
+  const nav = await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link, #side .side-scroll > .nav-row');
+  assert.ok(nav.includes('welcome') && nav.includes('tasks'), 'Finish setup and the app\'s pages');
   assert.equal(await page.locator('#changelog-notice').isVisible(), false, 'no What\'s new on a fresh install');
-  await page.locator('#account').click();
-  assert.equal(await page.locator('#changelog-badge').isVisible(), false, 'nor its count in the account menu');
-  await page.locator('#account').click();
   assert.equal(await page.locator('#tree').isVisible(), true, 'the team stays');
   await shot(page, `wizard-desktop-${theme}`);
-  // Anywhere else the app is all there: the nav only steps aside on the wizard itself.
+  // Anywhere else the app is all there, and What's new and the usage notice come back.
   await page.evaluate(() => { location.hash = '#/tasks'; });
-  await page.locator('#side [data-nav="tasks"]').waitFor();
-  assert.equal(await page.locator('#changelog-notice').isVisible(), true);
+  await page.locator('#onb').waitFor({state: 'detached'});
+  await page.locator('#changelog-notice').waitFor({state: 'visible'});
   assert.ok((await shown(page, '#side .side-scroll > .nav-link, #side .side-scroll > .nav-row > .nav-link')).includes('overview'));
   await page.locator('#usage-notice').waitFor({state: 'visible'});
   assert.deepEqual(notices, ['shown'], 'and counts as seen only then');
@@ -166,38 +165,32 @@ const readable = (team: Row[], where: string) => {
 };
 
 async function created(browser: import('playwright').Browser, theme: string) {
-  const {page, errors, notices, close} = await open(browser, {theme, needed: false, team: true, route: '#/welcome'});
+  const {page, errors, close} = await open(browser, {theme, needed: false, team: true, route: '#/tasks'});
   await page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor();
-  await noNotice({page, notices});
   // Setup is done: the app's pages are back.
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
-  // Bookkeeper is a built-in helper, off the Team tree (it opens from Finance).
+  // The Finance Owner is a built-in helper, off the Team tree (it opens from Finance).
   assert.equal(team.length, TEAM.length - 1);
-  assert.ok(!team.some(row => row.name === 'Bookkeeper'));
+  assert.ok(!team.some(row => row.name === 'Finance Owner'));
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);
   assert.ok(heads.every(row => row.setup && row.mark), 'the harness mark and the Setup pill stay');
   assert.equal(await page.locator('#tree .nm-split, #tree .nm-lead').count(), 0, 'no name is split at shared words');
   await shot(page, `created-desktop-${theme}`);
-  await noNotice({page, notices});
   assert.deepEqual(errors, []);
   await close();
 
-  const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
-  await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
-  assert.equal(await phone.page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
+  const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/tasks'});
+  await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
   assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
-  await noNotice(phone);
-  await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree a.node[data-org="b:head-of-product"]').waitFor({state: 'visible'});
   await expand(phone.page);
   readable(await rows(phone.page), 'on a phone');
   await shot(phone.page, `created-phone-${theme}`);
-  await noNotice(phone);
   assert.deepEqual(phone.errors, []);
   await phone.close();
 }
@@ -209,7 +202,7 @@ async function created(browser: import('playwright').Browser, theme: string) {
       await wizard(browser, theme);
       await created(browser, theme);
     }
-    console.log('PASS: on the wizard the sidebar shows setup and the team only, and the usage notice waits; after Create each bot row shows its whole name in one color.');
+    console.log('PASS: behind the setup modal the sidebar stays whole and the usage notice waits; once the team exists each bot row shows its whole name in one color.');
   } finally {
     await browser.close();
   }

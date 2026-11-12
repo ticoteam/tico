@@ -1,5 +1,5 @@
 /* ui/app/task-requirements.ts — "To leave <stage>" in a task's window (docs/pipelines-v3.md S4): what the task needs
-   before it leaves its stage, each with ✓ or ○, the line and whose it is; × takes back an ask you may withdraw, and +
+   before it leaves its stage, each with ✓ or ○, the line and whose it is (a stage's answer, once given, its value); × takes back an ask you may withdraw, and +
    asks someone for an answer or an OK (POST /v2/tasks/{id}/asks). A task with nothing to leave by shows only +.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -11,7 +11,10 @@ const taskStageOf = (t: Pick<TaskV3, 'stage'> | null | undefined): TaskStageV3 |
   t?.stage && typeof t.stage === 'object' && 'name' in t.stage ? t.stage as unknown as TaskStageV3 : null;
 
 function taskReqRowHTML(req: TaskReq): string {
-  const who = req.who ? `${actorFace(req.who, 16)}<span class="task-req-who">${esc(actorLabel(req.who))}</span>` : '';
+  // A stage's answer, once given, shows its value where whose it is would be.
+  const value = req.typed && req.met ? req.answer?.value ?? req.standing : '';
+  const who = value ? `<span class="task-req-val">${esc(value)}</span>`
+    : req.who ? `${actorFace(req.who, 16)}<span class="task-req-who">${esc(actorLabel(req.who))}</span>` : '';
   const drop = req.may.includes('withdraw') && !req.met
     ? `<button type="button" class="x" data-req-withdraw="${esc(req.requirement_id)}" aria-label="Take back: ${esc(req.line)}" title="Take back">×</button>` : '';
   return `<div class="task-req" data-req-id="${esc(req.requirement_id)}" data-state="${req.met ? 'met' : 'missing'}">

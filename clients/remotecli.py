@@ -6,17 +6,17 @@ import io
 import json
 import os
 import re
-import shlex
 import sys
 import time
 import uuid
 from datetime import date, datetime, timedelta, timezone
+from urllib.parse import quote
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from clients import s3links
+from clients import cli_spec, hubcli_pipelines, s3links
 from clients.tico import APIError, Client
 
 
@@ -45,62 +45,8 @@ def _delivery(args):
     return delivery_of(args)
 
 
-def _rules_args(args):
-    """`tico rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
-
-    def scope(names, everyone=False, all_bots=False, outside_editions=False):
-        out = {}
-        if names:
-            out["names"] = list(names)
-        if everyone:
-            out["everyone"] = True
-        if all_bots:
-            out["all_bots"] = True
-        if outside_editions:
-            out["outside_editions"] = True
-        return out or None
-
-    if args.fn in ("rules add", "rules edit", "rules accept"):
-        who = scope(
-            getattr(args, "who_names", None),
-            getattr(args, "everyone", False),
-            getattr(args, "all_bots", False),
-            getattr(args, "outside_editions", False),
-        )
-        if who is not None:
-            args.who = who
-    if args.fn in ("rules add", "rules edit"):
-        with_scope = scope(getattr(args, "with_names", None))
-        if with_scope is not None:
-            setattr(args, "with", with_scope)
-    if args.fn == "rules read" and not getattr(args, "source", None):
-        args.fn = "rules get"  # one rule by id; with --from it is a document read (tico_rules_read)
-    if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
-        raise SystemExit("tico rules add: --version goes with --file and --quote")
-    if args.fn == "rules add" and getattr(args, "quote", None):
-        if not getattr(args, "file_id", None):
-            raise SystemExit("tico rules add: a quote needs --file (the document it is in)")
-        args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
-        if getattr(args, "file_version", None):
-            args.cite["version"] = args.file_version
-    for flag in (
-        "who_names",
-        "with_names",
-        "everyone",
-        "all_bots",
-        "outside_editions",
-        "file_id",
-        "section",
-        "quote",
-        "file_version",
-    ):
-        if hasattr(args, flag):
-            delattr(args, flag)
-    return args
-
-
-def _directory_args(args):
-    """`tico directory` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
+def _contacts_args(args):
+    """`tico contacts` flags as the tools take them: a KEY=VALUE match is an object, --set pairs are the values object, and
     --option pairs are an attribute's options. The pairs are the command line's; the tool takes objects."""
     if getattr(args, "match", None):
         args.match = {args.match[0]: args.match[1]}
@@ -128,14 +74,10 @@ def via_tool(client, args, **more):
     }
     if getattr(args, "visual", None):
         fields["visuals"] = visuals_from_args(args)
-    if args.fn in ("bot keep-tasks-going", "bot turns-at-once", "computer turns-at-once") and hasattr(args, "limit"):
+    if args.fn == "bot turns-at-once" and hasattr(args, "limit"):
         fields["limit"] = args.limit  # explicit null restores the default; omission only reads
     if args.fn == "bot browser-exit" and hasattr(args, "computer"):
         fields["computer"] = args.computer  # explicit null is the bot's own internet; omission only reads
-    if args.fn == "computer browser-exit" and "sharing" in fields:
-        fields["sharing"] = fields["sharing"] == "on"
-    if args.fn == "thread update" and fields.pop("keep_forever", False):
-        fields["retention_days"] = None  # explicit null keeps its messages for good; omission leaves the policy alone
     fields["operation_id"] = fields.get("operation_id") or os.environ.get("HUB_OPERATION_ID")
     fields.update(more)
     return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
@@ -264,42 +206,17 @@ def chosen_grant(value):
     return {"full_name": name, "access": access, **flags}
 
 
-MARKET_SPEND = (
-    "market define",
-    "market segment add",
-    "market segment tree",
-    "market size add",
-    "market size decide",
-    "market size list",
-    "market figure add",
-    "market sources",
-    "market spend",
-    "market research",
-)
-
-
-def market_spend(client, args, tool):
-    """The spend commands run the MCP tool of the same name; `sources --add-file` reads its YAML here."""
-    fn = args.fn
-    if fn == "market sources" and args.add_file:
-        import yaml
-
-        loaded = yaml.safe_load(Path(args.add_file).read_text())
-        args.add = loaded if isinstance(loaded, list) else [loaded]
-    return tool(client, args)
-
-
 def counsel_held(args):
-    """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
+    """The Rules Owner runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
     from clients import hubtools
 
-    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
+    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.RULES_OWNER_BOT:
         return
     fn = getattr(args, "fn", None)
     entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None
     if entry and hubtools.COUNSEL not in hubtools.offered_to(entry):
-        raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
+        raise SystemExit(f"{fn} is not available to the Rules Owner: it has no credentials and sends nothing")
 
 
 # The aliases hubcli.parser() declares. Argparse keeps the spelling typed (`tico tasks list` sets cmd to "tasks"), and the
@@ -308,7 +225,6 @@ COMMAND_ALIASES = {
     "tasks": "task",
     "automations": "automation",
     "bots": "bot",
-    "rule": "rules",
 }
 
 
@@ -505,34 +421,30 @@ def run(args, who=None):
     fn = args.fn
     if args.cmd == "calendar" and args.sub in CALENDAR_SUBS and calendar_on_events(args):
         return calendar_command(client, args)
-    if args.cmd == "inbound":
+    if (spec := cli_spec.of(args)) is not None:  # a command declared as a spec (clients/cli_spec.py)
+        return spec.call(client, args)
+    from clients.commands.org import COMMANDS as ORG_COMMANDS
+
+    if fn in ORG_COMMANDS or fn in hubcli_pipelines.COMMANDS:  # `tico bot list` and the like; `tico task request` ...
         return via_tool(client, args)
-    if args.cmd == "rules":
-        return via_tool(client, _rules_args(args))
-    if args.cmd in ("mail", "email", "letter", "alerts") or fn in ("tool index", "tool check"):
+
+    from clients.commands import connections as hubtools_connections
+
+    if fn in hubtools_connections.COMMANDS:
+        return hubtools_connections.run_command(client, args)
+    if args.cmd == "alerts" or fn in ("tool index", "tool check"):
         return via_tool(client, args)
-    if args.cmd == "maintenance":
-        return via_tool(client, args)
-    if args.cmd == "thread":
-        return via_tool(client, args)
-    if args.cmd == "directory":
-        return via_tool(client, _directory_args(args))
-    if args.cmd == "finance":
-        return via_tool(
-            client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {})
-        )
+    if args.cmd == "contacts":
+        return via_tool(client, _contacts_args(args))
     if args.cmd == "settings":
+        return via_tool(client, args)
+    if fn in ("token list", "token create", "token revoke"):  # clients/cli_plumbing.py
         return via_tool(client, args)
     if args.cmd == "feedback":
         return via_tool(client, args)
     if args.cmd == "call":
         return via_tool(client, args)
-    if args.cmd in ("card", "pin"):
-        return via_tool(client, args)
-    if fn.startswith(("trigger relay ", "relay ", "sleep ")):
-        return via_tool(client, args)
-    # The other webhook leaves of docs/webhooks.md: each runs the tool of its own name, as on the server's own shell.
-    if fn.startswith(("trigger ", "notice ")) or fn == "event-types":
+    if fn == "event-types":
         return via_tool(client, args)
     if fn == "team icon":
         with Path(args.file).open("rb") as source:
@@ -587,26 +499,10 @@ def run(args, who=None):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
-    if args.cmd == "tag":
-        more = {}
-        if getattr(args, "markdown_file", None):
-            more["markdown"] = Path(args.markdown_file).read_text()
-        if getattr(args, "metadata", None) is not None:
-            more["metadata"] = json.loads(args.metadata)
-            if not isinstance(more["metadata"], dict):
-                raise APIError("kind", "Tag metadata must be a JSON object")
-        fields = vars(args).copy()
-        fields.pop("markdown_file", None)
-        from argparse import Namespace
-
-        return via_tool(client, Namespace(**fields), **more)
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
         return bots(client, args)
     if fn in (
         "bot repo-create",
-        "human add",
-        "human list",
-        "human access",
         "group list",
         "group update",
         "group delete",
@@ -638,8 +534,6 @@ def run(args, who=None):
         "calendar status",
         "team show",
         "team budget",
-        "org order",
-        "org reports-to",
         "run list",
         "message list",
         "message mark-read",
@@ -651,10 +545,6 @@ def run(args, who=None):
         "slack channel add",
         "slack channel remove",
         "slack channel import",
-        "seat list",
-        "seat create",
-        "seat update",
-        "seat close",
         "setup show",
         "setup complete",
         "setup invite",
@@ -673,7 +563,6 @@ def run(args, who=None):
         "task requesters",
         "task requester-save",
         "task requester-remove",
-        "task publication-preview",
         "task comment-moderate",
         "roadmap tasks",
     ):
@@ -696,51 +585,30 @@ def run(args, who=None):
         return via_tool(client, args)
     if fn == "audit":
         return via_tool(client, args)
-    if fn and fn.startswith("task-manager "):
+    if fn and fn.startswith("general-manager "):
         from clients import hubtools
 
         op = os.environ.get("HUB_OPERATION_ID")
-        if fn == "task-manager status":
-            return hubtools.task_manager_status(client, {})
-        if fn == "task-manager run":
-            return hubtools.task_manager_run(client, {"operation_id": op})
+        if fn == "general-manager status":
+            return hubtools.general_manager_status(client, {})
+        if fn == "general-manager run":
+            return hubtools.general_manager_run(client, {"operation_id": op})
         change = {
-            "task-manager on": {"on": True},
-            "task-manager off": {"on": False},
-            "task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
-            "task-manager bot": {"bot": getattr(args, "state", None)},
+            "general-manager on": {"on": True},
+            "general-manager off": {"on": False},
+            "general-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},
+            "general-manager bot": {"bot": getattr(args, "state", None)},
         }[fn]
-        return hubtools.task_manager_set(client, {**change, "operation_id": op})
-    if fn in ("support report", "support send"):
-        from clients import hubtools
-
-        key = os.environ.get("HUB_OPERATION_ID")
-        if fn == "support send":
-            return hubtools.support_send(client, {"ok": args.ok, "operation_id": key})
-        text = Path(args.file).read_text(encoding="utf-8") if args.file else args.message
-        report = {"message": text, "include_ids": not args.no_ids, "task": args.task, "operation_id": key}
-        return hubtools.support_report(client, report)
-    if args.cmd in ("api", "computer", "credential", "support", "health") or fn == "message redact":
+        return hubtools.general_manager_set(client, {**change, "operation_id": op})
+    if args.cmd in ("api", "credential") or fn == "message redact":
         return botops_tools(client, args)
     if args.cmd == "classify":
         from clients import hubtools
 
         text = Path(args.file).read_text(errors="replace") if args.file else sys.stdin.read()
         return hubtools.BY_NAME["tico_classify"]["fn"](client, {"text": text})
-    if fn in (
-        "decision readout",
-        "decision outcome",
-        "gateway catalog",
-        "gateway search",
-        "gateway fetch",
-        "gateway image",
-        "gateway video",
-        "gateway video-status",
-    ):
+    if fn in ("decision readout", "decision outcome"):
         return via_tool(client, args)
-    if fn == "gateway digest":
-        items = json.loads(Path(args.items_file).read_text(encoding="utf-8"))
-        return via_tool(client, args, items=items)
     if args.cmd == "decision":
         return judge(client, args)
     if args.cmd == "meeting":
@@ -778,14 +646,6 @@ def run(args, who=None):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         if fn == "file publish":
             return hubtools.files_publish_path(client, fields)
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
-    if args.cmd == "page":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn == "page publish":
-            return hubtools.pages_publish_path(client, fields)
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "doc":
         from clients import hubtools
@@ -837,23 +697,6 @@ def run(args, who=None):
         return client.get("service-keys")["keys"]
     if args.cmd == "ok":
         return unwrap(via_tool(client, args))
-    if args.cmd == "webhook":
-        from clients import hubtools
-
-        fields = {k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "fn") and v is not None}
-        fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
-        if fn in ("webhook create", "webhook update"):
-            try:
-                hubtools.webhook_options(fields)
-            except ValueError as exc:
-                raise APIError("header", str(exc), 422) from None
-        if fn == "webhook send":
-            raw = fields.pop("data", None) or "{}"
-            try:
-                fields["data"] = json.loads(Path(raw[1:]).read_text() if raw.startswith("@") else raw)
-            except (OSError, ValueError):
-                raise APIError("data", "--data must be JSON, or @file holding JSON") from None
-        return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     identity = client.get("me")
     actor = identity["actor"]
     key = os.environ.get("HUB_OPERATION_ID")
@@ -870,30 +713,6 @@ def run(args, who=None):
     def target(value):
         return actor if value in ("me", "self") else value
 
-    def tool(client, args):
-        """The goal, KPI and proposal commands run the MCP tool of the same name, so both say the same thing."""
-        from clients import hubtools
-
-        fields = {
-            k: v for k, v in vars(args).items() if k not in ("cmd", "sub", "subsub", "fn", "json") and v is not None
-        }
-        fields["operation_id"] = key
-        if args.fn == "brand check":
-            file = fields.pop("file")
-            fields["text"] = sys.stdin.read() if file == "-" else Path(file).read_text()
-        if args.fn == "kpi log":
-            if fields.pop("estimate", False) and "quality" not in fields:
-                fields["quality"] = "estimate"
-        if args.fn == "proposal create":
-            file = fields.pop("payload_file", None)
-            text = Path(file).read_text() if file else fields.pop("payload", None)
-            fields.pop("payload", None)
-            try:
-                fields["payload"] = json.loads(text) if text else {}
-            except ValueError:
-                raise APIError("payload", "--payload must be JSON") from None
-        return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
-
     def refs(values):
         out = {}
         for value in values or []:
@@ -903,7 +722,9 @@ def run(args, who=None):
 
     cmd, sub = args.cmd, getattr(args, "sub", None)
     if cmd == "whoami":
-        return identity
+        from clients import cli_plumbing
+
+        return cli_plumbing.identity(client, identity)  # plus the company, its address and the profile in use
     if fn == "message send":
         from clients import hubtools
 
@@ -915,6 +736,7 @@ def run(args, who=None):
                 "fyi": args.fyi,
                 "conversation_id": args.conversation,
                 "refs": args.ref or [],
+                "command": getattr(args, "command", False),
                 "steer": getattr(args, "steer", False),
                 "needs_action": getattr(args, "needs_action", False),
                 "operation_id": key,
@@ -1005,6 +827,7 @@ def run(args, who=None):
             "unsnooze",
             "update",
             "queue",
+            "release",
             "unlink",
         ):
             # The engine's commands (docs/pipelines-v3.md S16): each sends the version the bot passed, never one read now.
@@ -1103,161 +926,17 @@ def run(args, who=None):
             except UnicodeDecodeError:
                 body["content_base64"] = base64.b64encode(data).decode("ascii")
             return post(f"tasks/{args.id}/files", body)
-    if cmd == "goal":
-        if sub in ("create", "update"):
-            args.parent_id = args.parent
-            if args.body_file:
-                args.body = Path(args.body_file).read_text()
-        return tool(client, args)
-    if cmd in ("kpi", "proposal", "strategy", "brand", "growth"):
-        return tool(client, args)
-    if cmd == "lens":
-        from clients import hubtools
-
-        if sub == "list":
-            return hubtools.lens_list(client, {"applies_to": "market" if args.market else None})
-        if sub == "run":
-            answers = json.loads(Path(args.answers_file).read_text(encoding="utf-8-sig")) if args.answers_file else {}
-            if not isinstance(answers, dict):
-                raise APIError("answers", "--answers-file is a JSON object of {step key: answer}")
-            return hubtools.lens_run(
-                client,
-                {
-                    "lens": args.id,
-                    "answers": answers,
-                    "draft": args.draft,
-                    "wait": 0 if args.no_wait else hubtools.LENS_WAIT_MAX,
-                    "operation_id": key,
-                },
-            )
-        if sub == "show":
-            return hubtools.lens_show(client, {"id": args.id})
-        return hubtools.lens_runs(client, {"lens": args.lens, "limit": args.limit})
-    if fn.startswith("market watch "):
-        return via_tool(client, args)
-    if fn == "market briefing latest":
-        return via_tool(client, args)
-    if fn == "market briefing post":
-        body = sys.stdin.read() if args.body_file == "-" else Path(args.body_file).read_text()
-        items = json.loads(Path(args.items_file).read_text()) if args.items_file else []
-        answers = json.loads(Path(args.answers_file).read_text()) if args.answers_file else None
-        return via_tool(client, args, body=body, items=items, answers=answers)
-    if cmd == "market" and fn in MARKET_SPEND:
-        return market_spend(client, args, tool)
-    if cmd == "market":
-        if sub == "show":
-            return client.get("market/entities/" + args.id)
-        if sub == "find":
-            return client.get("market/entities", q=args.text)
-        if sub == "edges":
-            return client.get("market/edges", src=args.src, dst=args.dst, rel=args.rel, as_of=args.as_of)
-        if sub == "delta":
-            return client.get("market/delta", since=args.since)
-        if sub == "ask":
-            return post("market/ask", {"question": args.question})
-        if sub == "report":
-            return post(
-                "market/insights",
-                {
-                    "kind": args.kind,
-                    "about": args.about or "",
-                    "claim": args.claim,
-                    "source_url": args.source or "",
-                    "quote": args.quote or "",
-                    "confidence": args.confidence or "medium",
-                    "urgent": bool(args.urgent),
-                    "source_ref": getattr(args, "source_ref", None) or None,
-                },
-            )
-        if sub == "resolve":
-            return post(
-                f"market/insights/{args.id}/resolve",
-                {"status": args.status, "resolution": args.resolution or "", "applied_events": args.events or []},
-            )
-        if sub == "apply":
-            body = {
-                "evidence": {
-                    "source_url": args.source or "",
-                    "source_kind": args.source_kind or "other",
-                    "quote": args.quote or "",
-                    "our_read": args.our_read or "",
-                }
-            }
-            verified = None
-            if args.last_verified_at:
-                from clients import hubtools
-
-                try:
-                    verified = hubtools.market_day(args.last_verified_at)
-                except ValueError as exc:
-                    raise APIError("date", str(exc), 422) from None
-            if args.entity_type and args.entity_name:
-                body["entity"] = {"type": args.entity_type, "name": args.entity_name, "summary": args.summary or ""}
-                if args.tier:
-                    body["entity"]["tier"] = args.tier
-                if args.new_id:
-                    body["entity"]["id"] = args.new_id
-                if verified:
-                    body["entity"]["last_verified_at"] = verified
-            if args.entity_id:
-                body["entity_id"] = args.entity_id
-                if args.summary is not None:
-                    body["summary"] = args.summary
-                if verified:
-                    body["last_verified_at"] = verified
-            if verified and "entity" not in body and "entity_id" not in body:
-                raise APIError(
-                    "entity",
-                    "--last-verified-at needs --entity-id, or --entity-type and --entity-name for a new entity",
-                )
-            if args.edge_src and args.edge_rel and args.edge_dst:
-                body["edge"] = {"src": args.edge_src, "rel": args.edge_rel, "dst": args.edge_dst}
-            return post(f"market/insights/{args.id}/apply", body)
-        if sub == "import":
-            text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text(encoding="utf-8-sig")
-            return post(
-                "market/import",
-                {
-                    "name": "" if args.file == "-" else Path(args.file).name,
-                    "lines": text,
-                    "note": args.note or "",
-                    "dry_run": bool(args.preview),
-                },
-            )
-        if sub == "refresh":
-            return post("market/delta/refresh", {"today": args.today})
-        if sub == "page":
-            if not args.body_file:
-                return client.get("market/pages/" + args.name)
-            if args.body_file == "-":
-                text = sys.stdin.read()
-            else:
-                with open(args.body_file) as f:
-                    text = f.read()
-            return post("market/pages/" + args.name, {"body": text})
-        unverified = []
-        for item in args.unverified or []:
-            entity_id, _, look = str(item).partition("=")
-            unverified.append({"id": entity_id, "look_for": look})
-        return post("market/curator/sweep", {"today": args.today, "unverified": unverified})
     if cmd == "listening":
         if fn == "listening save":
             text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-            return post("listening/runs", json.loads(text))
-        if fn == "listening decide":
-            return post("listening/decide", {"limit": args.limit, "item_ids": args.item_ids or []})
-        if fn == "listening show":
-            return client.get("listening/items/" + args.id)
-        if fn == "listening runs":
-            return client.get("listening/runs", since=args.since, source=args.source)
-        if fn == "listening item list":
-            return client.get("intake", destination=args.destination, status=args.status, limit=args.limit)
-        if fn == "listening item resolve":
-            return post(
-                f"intake/{args.id}/resolve",
-                {"status": args.status, "receiver_ref": args.receiver_ref or "", "reason": args.reason or ""},
-            )
-        return client.get("listening/stats", since=args.since)
+            try:
+                read = json.loads(text)
+            except ValueError as exc:
+                raise APIError("file", f"--file is not JSON ({exc})") from None
+            if not isinstance(read, dict):
+                raise APIError("file", "--file must hold a JSON object")
+            return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
+        return client.get("listening/sources", due=1, automation=args.automation)
     if fn == "conversation show":
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {
@@ -1266,23 +945,8 @@ def run(args, who=None):
             "has_more": bool(page.get("has_more")),
             "next_before": page.get("next_before"),
         }
-    if fn == "thread link-slack":  # the MCP tool of the same name: the CLI and MCP run one function
-        from clients import hubtools
-
-        return hubtools.BY_NAME["tico_thread_link_slack"]["fn"](
-            client,
-            {
-                "thread": args.thread,
-                "channel": args.channel,
-                "history": args.history,
-                "off": args.off,
-                "operation_id": key,
-            },
-        )
     if cmd == "automation":
         return automation(client, args)
-    if cmd == "release":
-        return via_tool(client, args)
     if fn.startswith("bot status"):
         if fn == "bot status set":
             bot = args.bot or actor.split(":", 1)[-1]
@@ -1316,13 +980,23 @@ def run(args, who=None):
 
 
 def botops_tools(client, args):
-    """`tico api`, `tico credential ...`, `tico computer list`, `tico health check`, `tico message redact`, `tico support file`: the
-    tool of the same name. A secret is read from standard input, never from the command line."""
+    """`tico api`, `tico credential ...`, `tico message redact`: the tool of the same name. A secret is read from standard input, never from the command line."""
     from clients import hubtools
 
     key = os.environ.get("HUB_OPERATION_ID")
     if args.fn == "api":
-        text = sys.stdin.read() if args.body == "-" else args.body
+        source = getattr(args, "file", None)
+        if source and args.body:
+            raise APIError("body", "Give the body one way: inline, or --file PATH")
+        if "-" in (args.body, source):
+            text = sys.stdin.read()
+        elif source:
+            try:
+                text = Path(source).expanduser().read_text()
+            except OSError as exc:
+                raise APIError("body", f"Cannot read {source}: {exc.strerror}") from None
+        else:
+            text = args.body
         try:
             body = json.loads(text) if text else None
         except ValueError:
@@ -1504,7 +1178,7 @@ def local_slug(client, args, workspace):
         known = {b.get("slug") or b.get("name") for b in client.get("bots", include_archived="1")}
     except (APIError, AttributeError, TypeError):
         known = set()
-    reserved = ("assistant", "botops", "librarian", "goal-manager", "coo", "task-manager", "bookkeeper")
+    reserved = ("assistant", "botops", "librarian", "strategy-owner", "general-manager", "finance-owner")
     return catalog.free_slug(
         args.name or card.get("name") or args.template,
         lambda slug: (
@@ -1520,7 +1194,9 @@ def github_repository(client, slug, path):
     holding the build, so the bot's first placement is here, and this computer's runner publishes the history into it. No GitHub connected (or a rehearsal) leaves the bot on its computer, as before. When the GitHub App may not
     create repositories, the build is not finished: the command fails (non-zero) and says a person must act. The
     server has put one Needs-you task in front of the owner and finishes the repository on its own once they do; the
-    bot stays planned with its files here."""
+    bot stays planned with its files here. When the App is installed on chosen repositories only, or the name is
+    already taken on GitHub by a repository this company did not make, no repository is made or adopted: the bot
+    works from this computer and its history is not backed up to GitHub; nobody needs to act."""
     try:
         return client.post("github/repos", {"slug": slug, "empty": True})
     except APIError as exc:
@@ -1529,8 +1205,8 @@ def github_repository(client, slug, path):
         if exc.code in ("forbidden", "not_found"):
             # A bot the server has not registered stays on this computer, as before.
             return {"skipped": exc.detail, "note": f"register the bot, then tico bot repo-create {slug} --empty"}
-        if exc.code == "github_repo_exists":
-            return {"repository": path.name, "existing": True, "note": exc.detail}
+        if exc.code in ("github_selected_repos", "github_repo_taken", "github_repo_exists"):
+            return {"skipped": exc.detail}  # never adopt a repository this company may not have made
         if exc.code == "github_permission_missing":
             raise APIError(
                 exc.code,
@@ -1909,73 +1585,15 @@ def growth_text(fn, result):
     return "\n".join(_plain(result)) or "Nothing yet."
 
 
-def strategy_section_text(result, key):
-    """One section of the published strategy as text, for `tico strategy show --section`."""
-    current = result.get("current") if isinstance(result, dict) else None
-    if not current:
-        return "Nothing published yet."
-    return (current.get("sections") or {}).get(key) or ""
-
-
-def email_text(result, action):
-    if action in ("archive", "unarchive", "mark-read", "mark-unread", "label", "unlabel"):
-        verb = {
-            "archive": "Archived",
-            "unarchive": "Unarchived",
-            "mark-read": "Marked read",
-            "mark-unread": "Marked unread",
-            "label": "Labeled",
-            "unlabel": "Unlabeled",
-        }[action]
-        text = f"{verb} {result['count']} messages in {result['mailbox']}."
-        if not result['count']:
-            return text
-        undo = result['undo']
-        words = ['tico', 'email', undo['action'].replace('_', '-'), result['mailbox']]
-        if 'label' in undo:
-            words.append(undo['label'])
-        command = shlex.join(words + undo['ids'])
-        return text + (
-            " Undo: " + command if len(command) <= 1000 else " Undo: use the inverse action and ids from --json."
-        )
-    if action == "mailboxes":
-        boxes = result.get("mailboxes") or []
-        return "# Email mailboxes\n\n" + ("\n".join("- " + box["address"] for box in boxes) or "No readable mailboxes.")
-    messages = [result] if action == "message" else result.get("messages") or []
-    lines = ["# Email", ""]
-    if not messages:
-        lines.append("No messages.")
-    for message in messages:
-        lines.extend(
-            [
-                "## " + (message.get("subject") or "(no subject)"),
-                f"Mailbox: {message['mailbox']}",
-                f"Message: {message['msg_id']} · Thread: {message['thread_id']}",
-                "From: " + (message.get("from_header") or message.get("from_addr") or ""),
-                "To: " + ", ".join(message.get("to") or []),
-                "Date: " + (message.get("date") or ""),
-                "Labels: " + ", ".join(message.get("labels") or []),
-                "",
-                message.get("body", message.get("snippet") or ""),
-                "",
-            ]
-        )
-        for attachment in message.get("attachments") or []:
-            lines.append(f"Attachment: {attachment['name']} ({attachment['type']}, {attachment['size']} bytes)")
-    if result.get("next_cursor"):
-        lines.extend(["Next cursor: " + result["next_cursor"], ""])
-    return "\n".join(lines)
-
-
 def _entity_line(row):
     """One entity in a list: its id, name and status, and the link keys it has to us (customer_of ...)."""
     keys = " ".join(row.get("links_to_us") or [])
     return f"{row['id']}  {row['name']}  {row['status']}" + (f"  [{keys}]" if keys else "")
 
 
-def directory_text(fn, result):
-    """`--text` for the Directory's reads: a short summary, one line per entity, or a card. Any other command prints JSON."""
-    if fn == "directory self":
+def contacts_text(fn, result):
+    """`--text` for Contacts reads: a short summary, one line per entity, or a card. Any other command prints JSON."""
+    if fn == "contacts self":
         lines = [result["name"] + (f" ({result['primary_domain']})" if result.get("primary_domain") else "")]
         if result.get("operates_in"):
             lines.append("operates in: " + ", ".join(place["name"] for place in result["operates_in"]))
@@ -1983,12 +1601,12 @@ def directory_text(fn, result):
             "obligations: " + ("none yet" if not result.get("obligations") else str(len(result["obligations"])))
         )
         return "\n".join(lines)
-    if fn == "directory find":
+    if fn == "contacts find":
         lines = [_entity_line(row) for row in result.get("rows", [])] or ["(none you can see)"]
         if result.get("next"):
             lines.append(f"more: --after {result['next']}")
         return "\n".join(lines)
-    if fn == "directory get":
+    if fn == "contacts get":
         if result.get("ambiguous"):
             return f"{result['ref']} matches {len(result['matches'])} entities; name one by id:\n" + "\n".join(
                 _entity_line(row) for row in result["matches"]
@@ -2007,30 +1625,20 @@ def directory_text(fn, result):
     return json.dumps(result, indent=2)
 
 
-def main(args, who=None):
-    from clients import hubtools
+def main(args, who=None, fields=None):
+    """Run one parsed command and print its answer. `fields`: the global --fields (clients/profiles.py pick), which
+    prints only those fields as JSON, in place of any text rendering. Returns the exit code (clients/cli_plumbing.py)."""
+    from clients import cli_plumbing, hubtools
+    from clients.commands import connections as hubtools_connections
 
     try:
         result = run(args, who)
-        if (
-            args.cmd == "email"
-            and args.sub
-            in (
-                "mailboxes",
-                "inbox",
-                "search",
-                "thread",
-                "message",
-                "archive",
-                "unarchive",
-                "mark-read",
-                "mark-unread",
-                "label",
-                "unlabel",
-            )
-            and not args.json
-        ):
-            print(email_text(result, args.sub))
+        if fields:
+            from clients import profiles
+
+            print(json.dumps(profiles.pick(result, fields), indent=2, default=str))
+        elif (spec := cli_spec.of(args)) is not None and spec.render and not args.json:
+            print(spec.render(args, result))
         elif args.cmd == "sql" and not args.json:
             print(sql_csv(result) if args.csv else sql_table(result))
         elif args.cmd == "db" and not args.json:
@@ -2042,18 +1650,14 @@ def main(args, who=None):
             print(calendar_text(args, result))
             for line in calendar_notes(result):
                 print(line, file=sys.stderr)
-        elif args.cmd == "directory" and getattr(args, "as_text", False):
-            print(directory_text(args.fn, result))
+        elif args.cmd == "contacts" and getattr(args, "as_text", False):
+            print(contacts_text(args.fn, result))
         elif args.fn == "tool list" and not args.bot and not args.json:
             print(integrations_text(result))
         elif args.fn == "tool show" and not args.json:
             print(integration_text(result))
-        elif args.fn == "strategy show" and getattr(args, "section", None) and not args.json:
-            print(strategy_section_text(result, args.section))
         elif args.fn == "tool query-search" and not args.json:
             print(query_text(result) if args.query_id else queries_text(result))
-        elif args.cmd in ("brand", "growth") and not getattr(args, "json", False) and args.fn != "growth numbers":
-            print(growth_text(args.fn, result))
         elif args.fn == "automation guide" and isinstance(result, dict) and "text" in result:
             print(result["text"])
         elif args.fn == "meeting read" and getattr(args, "notes", False):
@@ -2076,6 +1680,8 @@ def main(args, who=None):
             print(json.dumps(result, indent=2))
         if args.fn == "file approved":
             return 0 if isinstance(result, dict) and result.get("approved") else 1
+        if (code := hubtools_connections.exit_code(args.fn, result)) is not None:
+            return code
         if isinstance(result, dict) and result.get("readback"):  # what a relation write stored, direction and all
             for line in result["readback"]:
                 print("tico: stored: " + str(line), file=sys.stderr)
@@ -2109,10 +1715,10 @@ def main(args, who=None):
                 indent=2,
             )
         )
-        return 1 if exc.retryable else 2
+        return cli_plumbing.exit_code(exc)
     except ValueError as exc:
         if args.cmd != "task":
             raise
         # What the command needs first, in its own words ("Add --version N: ..."), as the MCP tool says it.
         print(json.dumps({"error": "usage", "detail": str(exc), "retryable": False}, indent=2))
-        return 1
+        return cli_plumbing.EXIT_USAGE

@@ -296,7 +296,7 @@ async function until(fn: () => unknown, what: string) {
 
       // The header search marks matches on the map; Enter selects the first. A team's tab and Everyone are parties too.
       await page.locator('.ru-acts .rr-q').fill('sales');
-      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:sales-lead']);
+      assert.deepEqual(await page.locator('.ru-acts .rr-results [data-rr-party]').evaluateAll((b: HTMLElement[]) => b.map(x => x.dataset.rrParty)), ['group:sales', 'bot:growth-manager']);
       assert.equal(await page.locator('.rr-map .hit').count(), 2);
       await shot(page, 'desktop-search');
       await page.locator('.ru-acts .rr-q').press('Enter');

@@ -1,7 +1,7 @@
 # Weekly bookings page
 
 Schedule: Mondays at 08:00 team time (routine `weekly-bookings-page`), after setup. Budget 30 minutes. Nothing is sent,
-paid, moved or changed. The page goes to the Operations Manager (`ops-manager`) or the person the owner names.
+paid, moved or changed. The page goes to the Operations Manager (`operations-manager`) or the person the owner names.
 
 Inputs: the bookings export and any reschedule requests on the task (ask once if the export is missing),
 `knowledge/booking-rules.md`, `knowledge/exceptions.md`, and last week's page.

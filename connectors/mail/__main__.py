@@ -11,7 +11,7 @@
   scripts/mail.sh attachment 18f... a1 --out private/case.pdf --as legal --mailbox ana@acme.example
   scripts/mail.sh label add 18f... 18g... hub/needs-owner --as influencer
   scripts/mail.sh rules run --as ana --mailbox ana@acme.example --dry-run
-  scripts/mail.sh rules backtest --as inbox --since 14d [--rules candidate.yaml]
+  scripts/mail.sh rules backtest --as inbox-manager --since 14d [--rules candidate.yaml]
   scripts/mail.sh draft --as influencer --to a@b.example --subject "..." --body-file f --issue 128
   scripts/mail.sh draft --as legal --reply-to 18f... --body-file f --attach private/letter.pdf
   scripts/mail.sh discard r-88... --as legal          (only a draft this bot made, never sent mail)

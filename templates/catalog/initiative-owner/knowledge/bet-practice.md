@@ -35,7 +35,7 @@ This file is the method for reading it, so each run does not re-derive it.
 - **Watch.** A milestone or a reading is behind. Name the cause, and the date to look again.
 - **Looks wrong.** The wrong-if has tripped, or the evidence points against what the bet rules out or claims. Quote the
   evidence with its date and source. If the wrong-if has tripped, the server has already filed the trip task to the Strategy
-  Bot; otherwise tell the Strategy Bot. The owner decides whether to keep the bet, rewrite it or retire it.
+  Bot; otherwise tell the Strategy Owner. The owner decides whether to keep the bet, rewrite it or retire it.
 
 A call is made from the evidence in the check-in, never from the mood of the week.
 
@@ -48,4 +48,4 @@ A call is made from the evidence in the check-in, never from the mood of the wee
 ## Sources
 
 - 2026-11-07: template definition, written from the bet fields the Strategy page holds (statement, rules out, why, wrong-if,
-  status, goals under each bet) as the Strategy Bot's playbooks describe them. Not yet checked against a team's own Strategy page.
+  status, goals under each bet) as the Strategy Owner's playbooks describe them. Not yet checked against a team's own Strategy page.

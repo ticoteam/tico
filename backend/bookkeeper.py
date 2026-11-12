@@ -1,4 +1,4 @@
-"""The Bookkeeper (docs/bookkeeper.md): a built-in helper bot that keeps the books, through the tico_finance tools only.
+"""The Finance Owner (docs/bookkeeper.md): a built-in helper bot that keeps the books, through the tico_finance tools only.
 
 It appears when Finance is set up: a new install builds it with the other required helpers, and an install from
 before it gets it at the next start (`ensure`, after Finance's own setup). It is a helper outside the org chart.
@@ -12,12 +12,12 @@ Everything; payroll's private lines stay private either way).
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
 finance.invoice.overdue and finance.period.ready, one task each. Everything that arrives in volume or is a standing
 state comes from the system routine `bookkeeper_check` (hourly by default, backend/scheduler.py): plain code reads
-the Bookkeeper's own Finance work queue (`finance.reads.inbox`, every page, cut to its view: rows to categorize, draft
+the Finance Owner's own Finance work queue (`finance.reads.inbox`, every page, cut to its view: rows to categorize, draft
 bills, receipts and emailed bills to match, failed syncs, budgets near their limit), the days since money accounts were
 reconciled, and emailed bills Finance did not take (backend/bills_address.py; one Finance has since filed drops out,
 and a bill whose fetch failed for good is listed in one check only). Kinds its event routines answer are left
 out of the check. An item already listed in the last day with the same facts is not news. With no news it is a quiet
-run: no task and no model call. Otherwise one private task owned by the Bookkeeper, "Books check (<n>)", carries the
+run: no task and no model call. Otherwise one private task owned by the Finance Owner, "Books check (<n>)", carries the
 whole queue; a still-open one absorbs the next check (its body is replaced and the bot woken only when the body
 changed), so checks never pile up. The wake is the routine's: `trigger="schedule"`, `refs.wake="bookkeeper_check"`.
 
@@ -26,7 +26,7 @@ Two more plain-code checks run on their own schedules (backend/scheduler.py FIXE
 (`finance.reads.watch_findings`) and
 opens one private "Watch (<n>)" task, only for a finding not seen before. The rules digest (`rules_digest`, weekly)
 lists the posting rules made in the last seven days (`finance.reads.new_posting_rules`) as "Rules digest (<n>)", and
-opens nothing when there are none. Both are quiet runs without news, and both do nothing while the Bookkeeper is paused."""
+opens nothing when there are none. Both are quiet runs without news, and both do nothing while the Finance Owner is paused."""
 
 import json
 from typing import Any
@@ -34,17 +34,17 @@ from typing import Any
 from . import hubdb as H
 from . import bot_settings as BS
 
-SLUG = "bookkeeper"
-NAME = "Bookkeeper"
+SLUG = "finance-owner"
+NAME = "Finance Owner"
 ACTOR = "bot:" + SLUG
 EVENT = "bookkeeper_check"  # the routine's key and the wake's `refs.wake`
 TITLE = "Books check"
-WATCH_TITLE = "Watch"  # the daily Watch checks (watch): one task for the Bookkeeper when one is new
+WATCH_TITLE = "Watch"  # the daily Watch checks (watch): one task for the Finance Owner when one is new
 WATCH_EVENT = "bookkeeper_watch"
 DIGEST_TITLE = "Rules digest"  # the weekly digest of posting rules made that week (rules_digest)
 DIGEST_EVENT = "bookkeeper_rules_digest"
 RULES_DAYS = 7
-VIEW_TITLE = "Let the Bookkeeper see the books"
+VIEW_TITLE = "Let the Finance Owner see the books"
 REPEAT_HOURS = 24  # an item already listed is not news for this long, unless its facts changed
 KEEP_DAYS = 7  # the ledger forgets an item this long after it was last seen
 PER_KIND = 25  # lines one kind contributes to the body; the rest are counted
@@ -88,7 +88,7 @@ CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
 
 
 def built(c):
-    """Whether bot:bookkeeper is the built-in one: made from the bookkeeper template and not archived."""
+    """Whether bot:finance-owner is the built-in one: made from the finance-owner template and not archived."""
     row = c.execute(
         f"SELECT {BS.CONFIG} AS config, b.state FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot WHERE bc.bot=?",
         (SLUG,),
@@ -119,8 +119,8 @@ def _has_event(c, action):
 
 
 def grant_defaults(c):
-    """The Bookkeeper's Finance rights, once per install: a later revoke is not undone. The rights granted now.
-    A built-in Bookkeeper from before RIGHTS_VERSION 2 is granted the one right it lacks (finance.rules) and nothing
+    """The Finance Owner's Finance rights, once per install: a later revoke is not undone. The rights granted now.
+    A built-in Finance Owner from before RIGHTS_VERSION 2 is granted the one right it lacks (finance.rules) and nothing
     else: a right it was given and later lost stays lost."""
     from .finance import actions as FA
 
@@ -140,14 +140,14 @@ def grant_defaults(c):
 
 
 def ask_for_view(c, owner):
-    """One task, once, asking the owner to let the Bookkeeper see the books (Finance → Access, Everything)."""
+    """One task, once, asking the owner to let the Finance Owner see the books (Finance → Access, Everything)."""
     if not owner or not built(c):
         return None
     if c.execute("SELECT 1 FROM events WHERE action='bookkeeper.view_asked' LIMIT 1").fetchone():
         return None
     body = (
-        "The Bookkeeper keeps the books through Finance's own actions and approvals, and it can only work on what "
-        "it can see. Open Finance → Access and give the Bookkeeper Everything (payroll's private lines stay "
+        "The Finance Owner keeps the books through Finance's own actions and approvals, and it can only work on what "
+        "it can see. Open Finance → Access and give the Finance Owner Everything (payroll's private lines stay "
         "private). Until then it sees only its own spend, and its checks find little to do."
     )
     made = H.task_create(c, H.KEEPER, VIEW_TITLE, body, owner, deduplicate=True, lint=False)
@@ -156,7 +156,7 @@ def ask_for_view(c, owner):
 
 
 def ensure(c, onboarding, auth):
-    """At start and when a computer enrolls: once Finance is set up, build the Bookkeeper if this install has none,
+    """At start and when a computer enrolls: once Finance is set up, build the Finance Owner if this install has none,
     then its default rights, the outside due dates it owns (finance/tax.py seed_dues), and the one view ask. Best
     effort: a start never fails because of it."""
     from .finance import reads as FR
@@ -169,7 +169,35 @@ def ensure(c, onboarding, auth):
 
     FT.seed_dues(c, H.now())
     ask_for_view(c, _owner(c, auth))
+    from . import pipeline_settings
+
+    pipeline_settings.ensure_private(c)  # the Finance pipeline, once the Finance Owner is here
     return made
+
+
+FINANCE = "finance"  # the Finance pipeline's preset (backend/pipeline_presets_more.py)
+
+
+def filing(c, owner):
+    """Where a task for `owner` goes, as (pipeline, stage): the private Finance pipeline when the owner is the
+    Finance Owner and Finance's last work stage is its own, else (None, None) (General). Its own checks, digests and routine turns
+    are filed already taken in and done, so they enter at that last stage (Review) and one "done" finishes them, as in
+    General. A person's task (the view ask, Finance's own Needs-you tasks) never goes there."""
+    if owner != ACTOR:
+        return None, None
+    found = c.execute(
+        "SELECT p.id FROM pipelines p WHERE (p.id=? OR p.preset=?) AND p.retired_at IS NULL AND p.private=1 "
+        "ORDER BY p.id=? DESC LIMIT 1",
+        (FINANCE, FINANCE, FINANCE),
+    ).fetchone()
+    if not found:
+        return None, None
+    last = c.execute(
+        "SELECT id, owner FROM stages WHERE pipeline_id=? AND kind='work' AND retired_at IS NULL "
+        "ORDER BY position DESC LIMIT 1",
+        (found[0],),
+    ).fetchone()
+    return (str(found[0]), str(last[0])) if last and last[1] == ACTOR else (None, None)
 
 
 # ----------------------------------------------------------------------------- the check
@@ -178,7 +206,7 @@ def _stamp(item):
 
 
 def collect(c):
-    """Every item in the Bookkeeper's queue now, in work order: [{kind, key, id, label, stamp}], plus counts."""
+    """Every item in the Finance Owner's queue now, in work order: [{kind, key, id, label, stamp}], plus counts."""
     from .finance import actions as FA
     from .finance import reads as FR
     from . import bills_address
@@ -311,6 +339,7 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
             source=event,
         )
         return open_task["id"], "updated"
+    into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
         H.KEEPER,
@@ -320,6 +349,8 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
         deduplicate=False,
         lint=False,
         private=True,
+        pipeline=into,
+        stage=start,
         wake_refs={"wake": event},
         trigger="schedule",
         trigger_source=event,
@@ -328,9 +359,9 @@ def deliver(c, body, count, *, name=TITLE, event=EVENT):
 
 
 def private_finance_run(c, who) -> bool:
-    """Whether a run may make Finance actions (`tico finance act`) while it works the Bookkeeper's own private work: the
+    """Whether a run may make Finance actions (`tico finance act`) while it works the Finance Owner's own private work: the
     Books check and Watch tasks, which the system opens for it (`deliver`) and no person files. Every task the run
-    carries must be one of them, and the run must be the Bookkeeper's own; anything else keeps the private refusal.
+    carries must be one of them, and the run must be the Finance Owner's own; anything else keeps the private refusal.
     Nothing here widens who reads a task or lets anyone publish it: the task stays private (task_privacy.guard_write)."""
     from . import task_privacy as TP
 
@@ -341,7 +372,7 @@ def private_finance_run(c, who) -> bool:
 
 
 # The Finance actions a private Books check or Watch run may make: the categorize and receipt-match writes its checks
-# need. Every other kind is refused from there, money included (a bill approval, a payment, a card): the Bookkeeper
+# need. Every other kind is refused from there, money included (a bill approval, a payment, a card): the Finance Owner
 # does not spend or approve from work no person filed (Chris, Nov 8).
 PRIVATE_FINANCE_KINDS = frozenset({"categorize", "attach"})
 PRIVATE_FINANCE_REFUSAL = (
@@ -454,12 +485,12 @@ def _set_listed(c, task_id: str, keys: list[str]) -> None:
 
 def watch(c, auth, at: str) -> dict[str, Any]:
     """One pass of the Watch checks. Nothing new is a quiet run: no task, no wake. Something new opens or updates one
-    "Watch" task for the Bookkeeper (private, like the Books check), which opens a task for the owner only when a
+    "Watch" task for the Finance Owner (private, like the Books check), which opens a task for the owner only when a
     person must act on an item."""
     from .finance import reads as FR
 
     if not FR.is_set_up(c) or not active(c):
-        return {"items": 0, "words": "The Bookkeeper is off", "task": None, "state": ""}
+        return {"items": 0, "words": "The Finance Owner is off", "task": None, "state": ""}
     items = [
         {
             "kind": f["kind"],
@@ -501,7 +532,7 @@ def watch(c, auth, at: str) -> dict[str, Any]:
 
 def _reach_owner(c, auth, task_id: str) -> None:
     """A private task is read by its parties and its reader list: the company owner is its reader, so the digest
-    reads for them and the Bookkeeper, never for the rest of the team."""
+    reads for them and the Finance Owner, never for the rest of the team."""
     owner = _owner(c, auth)
     row = H.task(c, task_id)
     if owner and row is not None and H.task_reach_refusal(c, H.KEEPER, row, owner) is None:
@@ -510,11 +541,11 @@ def _reach_owner(c, auth, task_id: str) -> None:
 
 def rules_digest(c, auth, at: str) -> dict[str, Any]:
     """The weekly digest of the posting rules made in the last RULES_DAYS: a precheck in plain code, so no new rule is
-    a quiet run. Otherwise one private task for the Bookkeeper, read by its owner, lists them for the digest."""
+    a quiet run. Otherwise one private task for the Finance Owner, read by its owner, lists them for the digest."""
     from .finance import reads as FR
 
     if not FR.is_set_up(c) or not active(c):
-        return {"items": 0, "words": "The Bookkeeper is off", "task": None, "state": ""}
+        return {"items": 0, "words": "The Finance Owner is off", "task": None, "state": ""}
     rules = FR.new_posting_rules(c, H.shift(at, days=-RULES_DAYS))
     if not rules:
         return {"items": 0, "words": "No new posting rules", "task": None, "state": ""}
@@ -523,6 +554,7 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         state = "on" if rule["active"] else "off"
         lines.append(f"  - {rule['id']}  {rule['name'][:120]}  (by {rule['created_by'] or 'unknown'}, {state})")
     body = "\n".join(lines).encode()[:BODY_BYTES].decode(errors="ignore")
+    into, start = filing(c, ACTOR)
     made = H.task_create(
         c,
         H.KEEPER,
@@ -532,6 +564,8 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         deduplicate=False,
         lint=False,
         private=True,
+        pipeline=into,
+        stage=start,
         wake_refs={"wake": DIGEST_EVENT},
         trigger="schedule",
         trigger_source=DIGEST_EVENT,
@@ -551,7 +585,7 @@ def check(c, auth, at):
     from .finance import reads as FR
 
     if not FR.is_set_up(c) or not active(c):
-        return {"items": 0, "words": "The Bookkeeper is off", "task": None}
+        return {"items": 0, "words": "The Finance Owner is off", "task": None}
     from . import bills_address
 
     grant_defaults(c)

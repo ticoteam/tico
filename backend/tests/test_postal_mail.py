@@ -105,7 +105,7 @@ def mail(api, hq, monkeypatch):
     hq.relays[SYSTEM] = {"id": SYSTEM, "trigger_id": "_tico", "key": "hq", "system": True}
     hq.relays[MAIL] = {"id": MAIL, "trigger_id": "_mail", "key": "hq", "system": True}
     with api.app.state.store.transaction() as c:
-        BS.update(c, 'finance', {'template': 'finance-lead'})
+        BS.update(c, 'finance', {'template': 'finance-owner'})
     return fake
 
 
@@ -403,14 +403,14 @@ def test_delegated_mail_needs_both_the_person_and_the_actual_bot(api, hq, mail):
         assert call(api, "tico_mail_list", {}, token=token)[1]["items"] == []
         assert call(api, "tico_mail_read", {"item_id": row["id"]}, token=token)[0]
         with api.app.state.store.read() as c:
-            assert not task_privacy.blob_readable(c, ("human:ben", "bot:coo"), row["blob_id"])
+            assert not task_privacy.blob_readable(c, ("human:ben", "bot:assistant"), row["blob_id"])
 
     assert scan(api, row, "ben-test") == 200
     denied()  # Ben's grant alone cannot carry the letter into the Assistant's turn.
-    bot_grant = "postal/addresses/as_de/grants/bot/coo"
+    bot_grant = "postal/addresses/as_de/grants/bot/assistant"
     put(api, bot_grant, {"level": "read"}, token, expected=403)
     assert not any(
-        g["grantee_type"] == "bot" and g["grantee_id"] == "coo"
+        g["grantee_type"] == "bot" and g["grantee_id"] == "assistant"
         for g in get(api, "postal/addresses/as_de/grants")["grants"]
     )
     put(api, bot_grant, {})
@@ -437,11 +437,11 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
 
     counsel_on(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET slug='legal' WHERE id=?", (H.COUNSEL,))
-        BS.update(c, H.COUNSEL, {"template": "tico-counsel", "runtime": "fake"})
+        c.execute("UPDATE bots SET slug='legal' WHERE id=?", (H.RULES_OWNER,))
+        BS.update(c, H.RULES_OWNER, {"template": "rules-owner", "runtime": "fake"})
     grant_path = "postal/addresses/all/grants/bot/legal"
-    assert put(api, grant_path, {})["grant"]["grantee_id"] == H.COUNSEL
-    assert put(api, "postal/settings", {"legal_bot_id": "legal"})["settings"]["legal_bot_id"] == H.COUNSEL
+    assert put(api, grant_path, {})["grant"]["grantee_id"] == H.RULES_OWNER
+    assert put(api, "postal/settings", {"legal_bot_id": "legal"})["settings"]["legal_bot_id"] == H.RULES_OWNER
     letter(api, "171", "legal", summary="Summons for Counsel")
     deliver(hq, "171")
     service(api).tick()
@@ -453,14 +453,14 @@ def test_claimed_builtin_counsel_can_read_granted_and_routed_mail_only(api, hq, 
     drain(api)
     got = items(api)
     routed, owner = got["171"], got["172"]
-    assert task(api, routed["task_id"])["owner_id"] == "bot:" + H.COUNSEL
+    assert task(api, routed["task_id"])["owner_id"] == "bot:" + H.RULES_OWNER
     get(api, "postal/items", "counsel-test", expected=403)
     computer = runner(api)
     with api.app.state.store.read() as c:
-        assignment = c.execute("SELECT generation FROM assignments WHERE bot=?", (H.COUNSEL,)).fetchone()
-    assign(api, computer, H.COUNSEL, generation=assignment[0] if assignment else 0)
-    ready(api, computer, [H.COUNSEL], capabilities=["task_lanes_v2", "session_roots_v1"])
-    claimed = post(api, "jobs/claim", {"bot": H.COUNSEL, "start_places": True}, token=computer["token"])
+        assignment = c.execute("SELECT generation FROM assignments WHERE bot=?", (H.RULES_OWNER,)).fetchone()
+    assign(api, computer, H.RULES_OWNER, generation=assignment[0] if assignment else 0)
+    ready(api, computer, [H.RULES_OWNER], capabilities=["task_lanes_v2", "session_roots_v1"])
+    claimed = post(api, "jobs/claim", {"bot": H.RULES_OWNER, "start_places": True}, token=computer["token"])
     assert claimed["attempt"], claimed
     attempt = claimed["attempt"]
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "postal-counsel"}, token=computer["token"])
@@ -527,10 +527,10 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
         "203": ("financial", None, "bot:finance"),
         "204": ("check", None, "human:ana"),
         "205": ("junk", None, None),
-        "206": ("other", None, "bot:coo"),
-        "207": ("bill", ("bill", 0.4), "bot:coo"),  # short of the threshold: the Assistant
+        "206": ("other", None, "bot:assistant"),
+        "207": ("bill", ("bill", 0.4), "bot:assistant"),  # short of the threshold: the Assistant
         "208": ("bill", ("legal", 0.3), "human:ana"),  # legal at any confidence
-        "209": ("junk", ("junk", 0.7), "bot:coo"),
+        "209": ("junk", ("junk", 0.7), "bot:assistant"),
     }  # junk only at its own, higher threshold
     for ident, (kind, decided, _) in cases.items():
         letter(api, ident, kind, decided)

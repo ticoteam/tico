@@ -13,9 +13,9 @@ time. Who reports to whom (`reports_to`) is a separate thing and is never touche
   migrate(c, settings)     once, for a team that had `teams`, org groups or derived departments: every one becomes a
                            group and every bot its group's member (idempotent; `groups_migrated` in the roster)
 
-Built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot) and helpers are not made members by hand: they sit
-in the Built-in group (`BUILT_IN`), which Tico keeps (it cannot be renamed, moved or deleted) and the org chart shows
-collapsed. The chart's Finance Owner is the Bookkeeper, and the company file puts it in its own team's group (`move_bot`).
+Built-in bots (BotOps, the Librarian, the Strategy Owner) and helpers are not made members by hand: they are the General
+Manager's team, the General group (`BUILT_IN`), which Tico keeps (it cannot be renamed, moved or deleted). The Assistant
+reports to its person and is in no group. The company file puts the Finance Owner in its own team's group (`move_bot`).
 """
 
 import json
@@ -33,18 +33,29 @@ SYSTEM_BOTS = (
     "assistant",
     "botops",
     "librarian",
-    "goal-manager",
+    "strategy-owner",
     "health-monitor",
-    "task-manager",
-    "bookkeeper",
-    H.COUNSEL,
-    H.BRAND_OWNER,
+    "general-manager",
+    "finance-owner",
+    H.RULES_OWNER,
+    H.DESIGN_OWNER,
     "updates-owner",
     "automations-owner",
 )
-# The group the built-in bots sit in: Tico's own, collapsed on the org chart. Its id and name are the same for every company.
+# The General Manager's team, the built-in bots: Tico's own. Its id and name are the same for every company.
 BUILT_IN = "built-in"
-BUILT_IN_NAME = "Built-in"
+BUILT_IN_NAME = "General"
+GENERAL_MANAGER = "general-manager"
+# The built-ins that report to the General Manager (onboarding.ensure_general_team).
+GENERAL_TEAM = (
+    "botops",
+    "librarian",
+    "strategy-owner",
+    H.RULES_OWNER,
+    H.DESIGN_OWNER,
+    "automations-owner",
+    "updates-owner",
+)
 
 
 def _roster(c):
@@ -455,7 +466,7 @@ def create(c, auth, settings, who, body, via=None):
 
 def _kept(gid):
     if gid == BUILT_IN:
-        raise Problem("built_in", "The Built-in group is kept by Tico", 422)
+        raise Problem("built_in", "The General team is kept by Tico", 422)
 
 
 def update(c, auth, settings, who, gid, body, via=None):
@@ -556,6 +567,14 @@ def ensure(roster, gid, name):
     return gid
 
 
+def _general(settings, slug, roster):
+    """The group of a built-in bot or helper: General, made when the company has none; none for the Assistant, which
+    reports to its person."""
+    if slug == getattr(settings, "assistant_bot", ""):
+        return ""
+    return ensure(roster, BUILT_IN, BUILT_IN_NAME)
+
+
 def move_bot(c, slug, gid):
     """Put one bot in the group `gid` (made by the caller), as the company file's chart does for its own seats."""
     _set_bot(c, slug, gid)
@@ -564,8 +583,9 @@ def move_bot(c, slug, gid):
 
 def place(c, settings, slugs, group_order=(), seat_groups=None):
     """The team builder made these bots: each one goes in the group of its template (the group its card is in), which
-    is made when the team has none yet. A built-in bot goes in the Built-in group, unless `seat_groups` ({slug: group id},
-    made by the caller) names its group. A bot that already has a group of its own keeps it."""
+    is made when the team has none yet. A built-in bot goes in the General group, unless `seat_groups` ({slug: group id},
+    made by the caller) names its group; the Assistant reports to its person and goes in none. A bot that already has a
+    group of its own keeps it."""
     from . import recruit
 
     configs = _configs(c)
@@ -581,8 +601,7 @@ def place(c, settings, slugs, group_order=(), seat_groups=None):
     todo.sort(key=lambda slug: rank.get(homes.get(str(configs[slug].get("template") or ""), {}).get("id"), len(rank)))
     for slug in todo:
         if outside(settings, slug, configs[slug]):
-            gid = (seat_groups or {}).get(slug) or ensure(roster, BUILT_IN, BUILT_IN_NAME)
-            _set_bot(c, slug, gid)
+            _set_bot(c, slug, (seat_groups or {}).get(slug) or _general(settings, slug, roster))
             continue
         home = homes.get(str(configs[slug].get("template") or ""))
         if home:
@@ -716,12 +735,10 @@ def migrate(c, settings):
             seen.add(at)
             at = str(configs[at].get("reports_to") or "")
     live = {row[0] for row in c.execute("SELECT id FROM bots")}  # a bot_config row with no bot has no declaration
-    built_in = None
     for slug, config in configs.items():
         if slug in live and slug not in archived and config.get("team") is None:  # a bot that names its group keeps it
             if outside(settings, slug, config, helpers):
-                built_in = built_in or ensure(roster, BUILT_IN, BUILT_IN_NAME)
-                _set_bot(c, slug, built_in)
+                _set_bot(c, slug, _general(settings, slug, roster))
             else:
                 _set_bot(c, slug, placed.get(slug, ""))
     doc["org_groups"] = {

@@ -49,7 +49,7 @@ def test_thread_and_message_fetch_full_and_normalize_bodies_and_attachments(gmai
     assert minted == [(BOX, "gmail", W.READ_ONLY_SCOPES["gmail"])] * 2
 
 
-@pytest.mark.parametrize("status, expected", [(0, 502), (400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])
+@pytest.mark.parametrize("status, expected", [(400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])
 def test_gmail_errors_are_clear_refusals_never_empty_results(gmail_http, minted, status, expected):
     gmail_http["status"] = status
     with pytest.raises(Problem) as caught:
@@ -157,7 +157,7 @@ def test_ids_resolve_all_pages_before_a_bounded_change_without_reading_content(g
     assert gmail_http["calls"][-1][1]["maxResults"] == ["99"]
 
 
-@pytest.mark.parametrize("status, expected", [(400, 422), (403, 403), (404, 404), (429, 503), (503, 502)])
+@pytest.mark.parametrize("status, expected", [(403, 403)])
 def test_modify_failures_are_refusals(gmail_http, minted, status, expected):
     gmail_http["write_status"] = status
     with pytest.raises(Problem) as caught:

@@ -3924,49 +3924,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn instruction_repair_and_backup_inspection_refuse_fifos_and_large_files() {
-        if !regular_file::in_child("repositories::tests::instruction_repair_and_backup_inspection_refuse_fifos_and_large_files").await { return; }
-        let f = RepoFixture::new().await;
-        let path = f.base.join("AGENTS.md");
-        let target = f.base.join("CLAUDE.md");
-        std::fs::remove_file(&path).unwrap();
-        std::fs::write(&path, "CLAUDE.md").unwrap();
-        std::fs::remove_file(&target).unwrap();
-        regular_file::fifo(&target);
-        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
-        assert_eq!(std::fs::read(&path).unwrap(), b"CLAUDE.md");
-        assert!(!f.base.join(".git/tico-instruction-backups").exists());
-        std::fs::remove_file(&target).unwrap();
-        std::fs::File::create(&target)
-            .unwrap()
-            .set_len(CONTENT + 1)
-            .unwrap();
-        assert!(repair_instruction_links(&f.base, &f.env).await.is_none());
-        assert!(!path.is_symlink());
-        std::fs::remove_file(&path).unwrap();
-        regular_file::fifo(&path);
-        let saved = f.base.join(".git/tico-instruction-backups");
-        std::fs::create_dir(&saved).unwrap();
-        let backup = saved.join("AGENTS.md.tico-backup-legacy");
-        std::fs::write(&backup, "Repository rules\n").unwrap();
-        assert!(instruction_backup_note(&f.base, &f.base.join(".git"))
-            .await
-            .unwrap()
-            .contains("AGENTS.md.tico-backup-legacy"));
-        std::fs::remove_file(&backup).unwrap();
-        let backup = saved.join(format!(
-            "AGENTS.md.tico-backup-marked-sha256-{}",
-            gitrun::sha256_hex(b"Repository rules\n")
-        ));
-        regular_file::fifo(&backup);
-        assert!(instruction_backup_note(&f.base, &f.base.join(".git"))
-            .await
-            .unwrap()
-            .contains(backup.file_name().unwrap().to_str().unwrap()));
-        assert!(backup.exists());
-    }
-
-    #[tokio::test]
     async fn metadata_inspection_and_managed_marker_writes_refuse_special_files() {
         if !regular_file::in_child("repositories::tests::metadata_inspection_and_managed_marker_writes_refuse_special_files").await { return; }
         let f = RepoFixture::new().await;

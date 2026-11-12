@@ -229,8 +229,8 @@ mod tests {
         run(&other, &["commit", "-q", "--allow-empty", "-m", "two"]);
         run(&other, &["push", "-q", "origin", "HEAD:main"]);
         let env = crate::env::process_environment();
-        catch_up("coo", &Value::from(1), &here, &env).await;
-        assert!(kept("coo").is_none());
+        catch_up("assistant", &Value::from(1), &here, &env).await;
+        assert!(kept("assistant").is_none());
         let head = |p: &Path| {
             String::from_utf8(
                 Command::new("git")
@@ -246,11 +246,11 @@ mod tests {
         run(&here, &["commit", "-q", "--allow-empty", "-m", "local"]);
         run(&other, &["commit", "-q", "--allow-empty", "-m", "three"]);
         run(&other, &["push", "-q", "origin", "HEAD:main"]);
-        catch_up("coo", &Value::from(1), &here, &env).await; // the same placement: not asked again
-        assert!(kept("coo").is_none());
-        catch_up("coo", &Value::from(2), &here, &env).await;
+        catch_up("assistant", &Value::from(1), &here, &env).await; // the same placement: not asked again
+        assert!(kept("assistant").is_none());
+        catch_up("assistant", &Value::from(2), &here, &env).await;
         assert_eq!(
-            kept("coo").as_deref(),
+            kept("assistant").as_deref(),
             Some("it has commits GitHub does not, and GitHub has commits it does not")
         );
         let _ = std::fs::remove_dir_all(&root);

@@ -1,0 +1,33 @@
+name: reviewer                     # the slug: it matches the repository bot-reviewer and the label owner:reviewer
+display_name: "Reviewer"
+labels: [owner:reviewer]
+shared: true
+session: task
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: high
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekday-review-queue
+    title: Weekday review queue
+    cron: "0 9 * * 1-5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekday-review-queue.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools:
+  - service: github
+    identity: "the product repositories the owner lists for this bot"
+    can: [read]
+    note: "reads open pull requests, their diffs and checks; every review comment is a draft on the task for a human to post"
+# Writing to GitHub is the owner's decision, not the template's: the team's GitHub App token can write, so the only
+# thing between this bot and a public comment is its declared access and .claude/settings.json, which allows reviews and
+# comments and denies merging, closing and editing. It stays read only; a posted review needs granted write access.

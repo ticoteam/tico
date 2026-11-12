@@ -1224,126 +1224,6 @@
    ]
   }
  },
- "a required check missing: GitHub refuses the queue": {
-  "stage": "Merge",
-  "status": "open",
-  "level": "owner",
-  "requirements": [
-   {
-    "kind": "pr_merged",
-    "state": "not_met",
-    "whose": "bot:release",
-    "line": "GitHub refused the merge: Required status check \"e2e\" is expected.",
-    "can_push_past": false
-   }
-  ],
-  "github_kinds": [
-   {
-    "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
-    "can_push_past": true
-   },
-   {
-    "kind": "checks_pass",
-    "state": "met",
-    "whose": null,
-    "line": "Checks pass",
-    "can_push_past": true
-   },
-   {
-    "kind": "pr_merged",
-    "state": "not_met",
-    "whose": "bot:release",
-    "line": "GitHub refused the merge: Required status check \"e2e\" is expected.",
-    "can_push_past": false
-   },
-   {
-    "kind": "in_release",
-    "state": "waiting",
-    "whose": "github",
-    "line": "Not merged yet",
-    "can_push_past": false
-   }
-  ],
-  "waiting": [
-   [
-    "bot",
-    "bot:release",
-    "GitHub refused the merge: Required status check \"e2e\" is expected."
-   ]
-  ],
-  "turn": "bot:release",
-  "prs": [
-   {
-    "ref": "acme/app#1",
-    "fact": {
-     "state": "open",
-     "draft": false,
-     "head": "sha1",
-     "checks_state": "success",
-     "checks": [
-      [
-       "check-1",
-       "success",
-       false
-      ]
-     ],
-     "merged_sha": null,
-     "merged_at": false,
-     "queue_state": "none",
-     "queued_at": false,
-     "removed_at": false,
-     "removed_reason": null,
-     "failing_check": null,
-     "failing_check_url": null,
-     "head_seen_at": true,
-     "checks_started_at": false,
-     "read_again": false
-    }
-   }
-  ],
-  "releases": {},
-  "effects": [
-   {
-    "kind": "queue_pr",
-    "state": "failed",
-    "tries": 1,
-    "ref": "acme/app#1",
-    "head": "sha1",
-    "error": "Required status check \"e2e\" is expected."
-   }
-  ],
-  "due": [
-   "acme/app#1"
-  ],
-  "github_calls": [
-   [
-    "ready",
-    "acme/app",
-    1
-   ],
-   [
-    "enqueue",
-    "acme/app",
-    1,
-    "sha1"
-   ]
-  ],
-  "wakes": [
-   [
-    "<task>:<visit1>:owner:0",
-    "bot:builder"
-   ],
-   [
-    "<task>:<visit2>:queue_refused:acme/app#1:sha1",
-    "bot:release"
-   ]
-  ],
-  "older_pr_pass_items": [],
-  "events": []
- },
  "a webhook delivered twice": {
   "stage": "Build",
   "status": "open",
@@ -2342,7 +2222,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],
@@ -4681,7 +4561,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -4711,7 +4591,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -4719,7 +4599,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -4767,132 +4647,6 @@
         false
        ]
       ]
-     }
-    ]
-   }
-  },
-  "effects": [
-   {
-    "kind": "queue_pr",
-    "state": "done",
-    "tries": 1,
-    "ref": "acme/app#1",
-    "head": "sha2",
-    "error": null
-   }
-  ],
-  "due": [],
-  "github_calls": [
-   [
-    "ready",
-    "acme/app",
-    1
-   ],
-   [
-    "enqueue",
-    "acme/app",
-    1,
-    "sha2"
-   ]
-  ],
-  "wakes": [
-   [
-    "<task>:<visit1>:owner:0",
-    "bot:builder"
-   ]
-  ],
-  "older_pr_pass_items": [],
-  "events": [
-   "pr_queued"
-  ]
- },
- "merged, a pre-release holds it and pre-releases count": {
-  "stage": "Done",
-  "status": "done",
-  "level": "owner",
-  "requirements": [],
-  "github_kinds": [
-   {
-    "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
-    "can_push_past": true
-   },
-   {
-    "kind": "checks_pass",
-    "state": "met",
-    "whose": null,
-    "line": "Checks pass",
-    "can_push_past": true
-   },
-   {
-    "kind": "pr_merged",
-    "state": "met",
-    "whose": null,
-    "line": "Merged",
-    "can_push_past": false
-   },
-   {
-    "kind": "in_release",
-    "state": "met",
-    "whose": null,
-    "line": "In v1.0.0-rc.1",
-    "can_push_past": false
-   }
-  ],
-  "waiting": [],
-  "turn": null,
-  "prs": [
-   {
-    "ref": "acme/app#1",
-    "fact": {
-     "state": "merged",
-     "draft": false,
-     "head": "sha2",
-     "checks_state": "success",
-     "checks": [
-      [
-       "check-1",
-       "success",
-       false
-      ]
-     ],
-     "merged_sha": "sha3",
-     "merged_at": true,
-     "queue_state": "none",
-     "queued_at": false,
-     "removed_at": false,
-     "removed_reason": null,
-     "failing_check": null,
-     "failing_check_url": null,
-     "head_seen_at": true,
-     "checks_started_at": false,
-     "read_again": false
-    }
-   }
-  ],
-  "releases": {
-   "acme/app": {
-    "read": true,
-    "publishes": true,
-    "releases": [
-     {
-      "tag": "v1.0.0-rc.1",
-      "commit": "sha3",
-      "prerelease": false,
-      "holds": [
-       [
-        "sha3",
-        true
-       ]
-      ]
-     },
-     {
-      "tag": "v0.9.0",
-      "commit": "sha1",
-      "prerelease": false,
-      "holds": []
      }
     ]
    }
@@ -5059,18 +4813,10 @@
   ]
  },
  "merged, only a pre-release holds it": {
-  "stage": "Release",
-  "status": "open",
+  "stage": "Done",
+  "status": "done",
   "level": "owner",
-  "requirements": [
-   {
-    "kind": "in_release",
-    "state": "waiting",
-    "whose": "github",
-    "line": "Waiting for a release of acme/app",
-    "can_push_past": false
-   }
-  ],
+  "requirements": [],
   "github_kinds": [
    {
     "kind": "pr_open",
@@ -5095,19 +4841,13 @@
    },
    {
     "kind": "in_release",
-    "state": "waiting",
-    "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "state": "met",
+    "whose": null,
+    "line": "In v1.0.0-rc.1",
     "can_push_past": false
    }
   ],
-  "waiting": [
-   [
-    "github",
-    null,
-    "Waiting for a release of acme/app"
-   ]
-  ],
+  "waiting": [],
   "turn": null,
   "prs": [
    {
@@ -5147,7 +4887,12 @@
       "tag": "v1.0.0-rc.1",
       "commit": "sha3",
       "prerelease": false,
-      "holds": []
+      "holds": [
+       [
+        "sha3",
+        true
+       ]
+      ]
      },
      {
       "tag": "v0.9.0",
@@ -5202,7 +4947,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5232,7 +4977,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -5240,7 +4985,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -5778,7 +5523,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],
@@ -6493,7 +6238,7 @@
    ],
    "bot:release": [
     "task_requirement",
-    "The checks on acme/app#1 are still running"
+    "acme/app#1 has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
    ],
    "bot:builder": [
     "task_requirement",
@@ -6855,7 +6600,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -6885,7 +6630,7 @@
     "kind": "in_release",
     "state": "waiting",
     "whose": "github",
-    "line": "Waiting for a release of acme/app",
+    "line": "Waiting for the next release of acme/app",
     "can_push_past": false
    }
   ],
@@ -6893,7 +6638,7 @@
    [
     "github",
     null,
-    "Waiting for a release of acme/app"
+    "Waiting for the next release of acme/app"
    ]
   ],
   "turn": null,
@@ -7267,7 +7012,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    },
    {
@@ -7433,7 +7178,7 @@
     "state": "done",
     "tries": 1,
     "ref": "acme/app#1",
-    "head": null,
+    "head": "sha1",
     "error": null
    }
   ],

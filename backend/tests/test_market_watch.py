@@ -217,7 +217,7 @@ def test_a_page_change_trips_a_cited_bet_only_once_the_insight_is_applied(seeded
             "summary": "Raised the Pro plan to $12.",
         },
     )
-    assert bet_tasks() == [("Bet 1: may be wrong", "bot:goal-manager")]
+    assert bet_tasks() == [("Bet 1: may be wrong", "bot:strategy-owner")]
 
 
 COPYRIGHT = "© 2025 Northwind Analytics, Inc. All rights reserved. Terms and privacy apply to every visitor."

@@ -1,12 +1,12 @@
 # The Assistant
 
-Every human has one private DM with the team's assistant (the `coo` bot; you may have renamed it): a personal
+Every human has one private DM with the team's assistant (the `assistant` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Tico Assistant** opens it from any page except its own page and setup, and still opens while the signed-out banner shows. Where no person has loaded, the row is not shown and ⌘J does nothing; Search's icon becomes a row of its own. On a computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) and the Tico team's **?** at its end; it (or ⌘J / Ctrl+J) opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the middle of the tab bar (**Assistant**) opens it as a sheet, even while the signed-out banner shows. On the Assistant page a tap on that tab does not open the sheet at once; it comes up when you leave that page by a link, not by the tab bar. Where no person has loaded, a tap on that tab opens the sheet only once one does. During setup the tab bar is not shown. The panel names the page it sees, and a message sent from it carries that page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name and the page it sees. The DM is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's Home, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
 page. Attach files or
-pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no BotOps, Strategy Bot, Librarian or Assistant row in
+pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no BotOps, Strategy Owner, Librarian or Assistant row in
 the rail: you ask the Assistant, and it hands its helpers what needs them (below). BotOps' own Home is still at
 `#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
@@ -48,28 +48,28 @@ Everyone, the owner included, has one DM: their Assistant. Three built-in helper
 them directly:
 
 - **BotOps** creates, changes, debugs, tests, deploys and maintains bots.
-- **The [Strategy Bot](strategy-bot.md)** gives strategy advice and proposes goal changes (goal and KPI colours and reasons, the
+- **The [Strategy Owner](strategy-bot.md)** gives strategy advice and proposes goal changes (goal and KPI colours and reasons, the
   vision).
 - **The [Librarian](librarian.md)** does research and sets up Market, Docs and the library.
 
 The Assistant files a helper a task with `--request-id turn`. The same citation check holds for each: a message you
 wrote in your own Assistant DM in the last 30 minutes, and the owner's rule "Assistant acts without asking" on.
 The task opens with your words quoted.
-For the Strategy Bot and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
+For the Strategy Owner and the Librarian the event `assistant.asked_helper` records it (with `helper`, `for` and
 `cited`). Each helper runs its own turn with its own rights, and only BotOps borrows yours (below). So a strategy change
-stays the owner's: the Strategy Bot proposes it on a Confirm card, and only the owner can confirm. The Strategy Bot's goal
+stays the owner's: the Strategy Owner proposes it on a Confirm card, and only the owner can confirm. The Strategy Owner's goal
 suggestions are agreed the way your own goal changes are: a yes in your chat confirms one ([below](#goals-agreed-in-words)).
-A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Bot's DM (`POST /api/v2/chat/goal-manager`) lands in their
+A task for any other bot that cites your words is refused (`422 request_id`). A person's post to the Strategy Owner's DM (`POST /api/v2/chat/strategy-owner`) lands in their
 Assistant DM instead.
 
-The owner used to message the Strategy Bot itself (`room_key: ceo`). That DM stays the owner's as read-only history:
+The owner used to message the Strategy Owner itself (`room_key: ceo`). That DM stays the owner's as read-only history:
 `GET /api/v2/assistant` lists it under `"earlier": {"room_id", "bot", "name"}`, and new messages go to the Assistant.
 On the first start after the update, Confirm cards still waiting there move to the owner's Assistant DM, once
 (event `assistant.strategy_cards_moved`). A card runs only on its owner's own tap, so moving it is safe.
 
 ### Goals, agreed in words
 
-For your own goals, measures and targets, and for the Strategy Bot's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
+For your own goals, measures and targets, and for the Strategy Owner's goal suggestions, the Assistant saves nothing on the first ask. It writes the change back to you
 in your chat as a numbered read-back, with the exact steps. Only your yes saves it:
 
 - A plain yes as your next message, such as **yes**, **ok**, **go ahead** or **save it**, saves every change in it.
@@ -85,8 +85,8 @@ include one, Tico refuses the whole read-back and saves nothing, and the Assista
 that change for your click. A KPI reading, the company Vision, strategy drafts and bets, and recovery suggestions stay
 clicks too, and are refused the same way.
 
-A suggestion the Strategy Bot made that you confirm with a yes leaves **Needs you**, as it does when you confirm its
-card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Bot
+A suggestion the Strategy Owner made that you confirm with a yes leaves **Needs you**, as it does when you confirm its
+card. A message from you that opens with a no, such as "no" or "no, too high", turns down the waiting Strategy Owner
 suggestion at once. It turns down only a card of the same kind, on the same goal, for the same KPI or measure. A wording
 card names neither, so any other waiting wording card on the same goal counts as the same kind. The kinds are a goal's
 wording, a KPI added to a goal, a KPI's definition, a KPI target or a flag. It needs no read-back and no second yes. Your
@@ -116,7 +116,7 @@ meetings, docs, files, bots, humans), and the links open inside the app.
 The DM is a personal thread (`scope: personal`, `room_key: assistant`) owned by you. Only you can read it or post in it.
 Everyone, the owner and administrators included, has the Assistant.
 The team owner and administrators cannot read anyone else's, and no other route reaches the assistant: the ordinary
-chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
+chat routes still refuse it (`403`). Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
 (`409 system_bot`); pausing and renaming stay allowed, and Settings > Bots shows them as **Built-in**. A team
 that set the assistant aside before it was built in keeps it archived on update, and the Assistant page says the Assistant is off
@@ -317,7 +317,7 @@ Assistant, and not a bot doing other work for you, BotOps included. The audit lo
 Each turn in your DM is handed the layer as it is when the turn starts, so a line you delete is not used from the
 next reply on. It holds up to 100 lines of up to 280 characters; saving the same line twice keeps one. The Assistant
 only adds: editing and deleting are your own clicks. Nothing about the company is in it: the owner's Assistant also has the company layer, once the
-Strategy Bot is on ([Strategy Bot](strategy-bot.md#what-it-has-learned)).
+Strategy Owner is on ([Strategy Owner](strategy-bot.md#what-it-has-learned)).
 
 ## On the Updates page
 
@@ -347,7 +347,7 @@ own session, not a personal token.
 | `POST /api/v2/assistant/changes/{id}/restore` | Undoes one of those changes as you: `{"id", "restored", "already", "object"}`. `409 not_undoable` with the reason when the record does not allow it; `404` for another person's change. |
 | `GET /api/v2/needs-you/summary?limit=` | `{"actor", "total", "this_week", "by_kind", "by_bot": [{"bot", "count", ...}], "bots_left"}`: the Needs you list's own count, split. |
 | `GET /api/v2/origins/{ref}` | `{"ref", "kind", "id", "title", "created_at", "made_by", "task", "cause", "siblings", "stop": [{"how", "command", "note"}]}`: why an item is on your list. |
-| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Bot is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
+| `GET /api/v2/assistant/learned` | `{"personal": [entry], "company": null}`; for the owner, once the Strategy Owner is on, `"company": {"vision", "description", "priorities": [{"id", "title", "status"}], "entries": [entry]}`. An entry is `{"id", "layer", "text", "created", "updated", "taught_in_chat"}`. Not yet in the stable contract. |
 | `POST /api/v2/assistant/learned` `{"text", "layer"}` | Saves one line (`layer` is `personal`, the default, or `company`: the owner only, on their own or in their own Assistant DM; `403` for anyone else and any other Assistant). `{"entry"}`; the same line again returns the one already there; `409 too_many` past 100. What the bot's `tico assistant learn` calls. |
 | `PATCH /api/v2/assistant/learned/{id}` `{"text"}`, `DELETE /api/v2/assistant/learned/{id}` | Your own click only (`403` for a bot's turn); someone else's entry is `404`. |
 

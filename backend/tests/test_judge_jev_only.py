@@ -77,14 +77,14 @@ def test_jev_failing_on_the_decisions_route_is_a_503_and_no_answer(api, wire):
     assert detail["error"] == "unavailable" and "answers" not in detail
 
 
-def test_jev_failing_leaves_a_pipeline_requirement_unsure_never_met(api, wire):
+def test_jev_failing_leaves_a_pipeline_requirement_failed_never_met(api, wire):
     store = api.app.state.store
     requirement = {"id": "req-1", "name": "Shows the page live", "rubric": "The link opens", "pipeline_id": None}
     attachment = {"id": "att-1", "source": "link", "digest": "d", "url": "https://x.example", "file_version": 0}
     attachment["text"] = "The link opens the page"
     with store.read() as c:
         result = P.judge_once(c, requirement, attachment, settings=store.settings, engine=P.live_engine(store))
-    assert result["verdict"] == "unsure" and result["p"] == 0.5
+    assert result["verdict"] == "failed" and result["p"] is None and result["reason"]
     assert wire["requests"]
     _jev_only(wire["requests"])
 
@@ -127,9 +127,10 @@ def test_a_draft_still_runs_on_the_companys_own_model_and_sends_only_its_two_tex
     assert updates.own_model(cursor, env={}) is None
 
 
-def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, wire, monkeypatch):
+def test_jev_failing_on_a_page_verdict_is_retried_then_the_managers_never_met(api, wire, monkeypatch):
     """The Heartbeat's Jev step (page_verdicts.run, through the server's own engine) asks only Jev; a Jev that does not
-    answer is a try, never a verdict, and after TRIES the page is a person's to decide."""
+    answer is a try, never a verdict, and after TRIES the page is the pipeline's manager bot's to decide (two sign-offs
+    rule, Nov 11)."""
     import uuid
 
     from backend import page_verdicts as V
@@ -185,5 +186,9 @@ def test_jev_failing_on_a_page_verdict_is_retried_then_a_persons_never_met(api, 
     _jev_only(wire["requests"])
     with store.read() as r:
         (standing,) = R.standings(r, E.task(r, row["id"]))
-        assert standing.line == "Jev couldn't check this"
+        assert standing.on == "bot:manager"
+        assert standing.line == (
+            f"{R.DECIDE} Jev couldn't check this: The decision model did not answer; try again shortly. "
+            "The check: Spec page"
+        )
         assert E.task(r, row["id"])["stage"]["name"] == "Spec"

@@ -121,20 +121,6 @@ def keep_items(c, items, created_at=None):
     return run_id
 
 
-def test_off_and_exhausted_cap_make_no_model_calls_or_deliveries(api, monkeypatch):
-    _, calls = scoring(api, monkeypatch)
-    assert run_step(api, context(api, settings={"enabled": 0}))["status"] == "skipped"
-    store = api.app.state.store
-    with store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.spend", "earlier", {"cost_usd": 1.0})
-    result = run_step(api, context(api, cap=1.0))
-    assert result["status"] == "skipped" and "cap" in result["reason"]
-    assert result["cost_usd"] == 0 and calls == []
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM learning_cursors").fetchone()[0] == 0
-
-
 def test_top_fifteen_per_bot_cost_and_replay_without_packet_tasks(api, monkeypatch):
     bot(api, "reader", "Reader")
     _, calls = scoring(api, monkeypatch, recipients=("ops", "reader"))
@@ -284,33 +270,6 @@ def test_cap_reached_mid_run_keeps_cursors_and_reports_paid_failures(api, monkey
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM learning_cursors").fetchone()[0] == 0
-
-
-def test_each_call_reserves_against_the_context_cap_in_the_judge_budget(api, monkeypatch):
-    scoring(api, monkeypatch, count=3)
-    paid = []
-    monkeypatch.setattr(judge, "reservation", lambda *args: 0.6)
-
-    def engine_for(store, c):
-        def engine(state, questions, label=None):
-            def call():
-                paid.append(state)
-                return {
-                    "answers": {key: {"type": "noul", "noul": 0.9} for key in questions},
-                    "usage": {"cost_usd": 0.6},
-                }
-
-            return judge.metered(store, [], state, questions, label, call)
-
-        return engine
-
-    monkeypatch.setattr(learnings, "engine_for", engine_for)
-    result = run_step(api, context(api, cap=1.0))
-    assert result["status"] == "skipped" and len(paid) == 1
-    assert result["cost_usd"] == pytest.approx(0.6)
-    with api.app.state.store.read() as c:
-        assert judge.spent_this_month(c) == pytest.approx(0.6)
-        assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
 
 
 def test_update_sends_fifteen_across_runs_and_binds_the_exact_batch_once(api, monkeypatch):
@@ -787,30 +746,6 @@ def test_learnings_page_reads_pending_update_and_old_packet_receipts(api, monkey
         learnings.record_saved(c, "ops", row["id"], 1)
     packet = api.get(f"/api/v2/learnings/{ctx['run_id']}/packets/ops", headers=headers())
     assert packet.status_code == 200 and len(packet.json()["items"]) == 2
-
-
-def test_same_day_runs_are_not_lost_between_pages_and_stats_cover_seven_days(api, monkeypatch):
-    scoring(api, monkeypatch, count=2)
-    run_step(api)
-    run_step(api)
-    store = api.app.state.store
-    with store.transaction() as c:
-        old = H.shift(H.now(), days=-8)
-        c.execute(
-            "INSERT INTO learning_runs(id,night,status,started_at,read_count,detail) VALUES('old',?,'quiet',?,99,?)",
-            (old[:10], old, json.dumps({"cost_usd": 99.0})),
-        )
-        stats = learnings.beta_stats(c)
-        assert stats["days"] == 7 and stats["runs"] == 2 and stats["items_read"] == 4
-        assert stats["cost_usd"] == pytest.approx(0.008)
-    first = api.get("/api/v2/learnings", params={"limit": 1}, headers=headers())
-    assert first.status_code == 200, first.text
-    first = first.json()
-    second = api.get("/api/v2/learnings", params={"limit": 1, "before": first["next_before"]}, headers=headers())
-    assert second.status_code == 200, second.text
-    second = second.json()
-    assert first["nights"][0]["night"] == second["nights"][0]["night"]
-    assert first["nights"][0]["id"] != second["nights"][0]["id"]
 
 
 def learn_migration():

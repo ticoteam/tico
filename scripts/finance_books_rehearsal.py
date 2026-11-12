@@ -1415,12 +1415,14 @@ class Rehearsal:
             f"dry run: {dry.get('status')} {dry.get('reason') or ''}",
         )
         grant_status, _ = self.act(
-            "view_grant", {"subject_kind": "teammate", "subject": "bot:bookkeeper", "what": "everything"}
+            "view_grant", {"subject_kind": "teammate", "subject": "bot:finance-owner", "what": "everything"}
         )
         from backend.finance import actions as FA
 
         with self.store.transaction() as c:
-            bot = FA.act(c, "bot:bookkeeper", "bill_mark_paid", pay_over, "rehearsal-bot-pay-over-limit", dry_run=True)
+            bot = FA.act(
+                c, "bot:finance-owner", "bill_mark_paid", pay_over, "rehearsal-bot-pay-over-limit", dry_run=True
+            )
         res.check(
             "a bot's payment of that bill over a hold_payment limit waits for a person",
             grant_status == 200 and bot.status == "needs_approval",

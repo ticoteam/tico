@@ -3,7 +3,9 @@
 Today only the browser sign-in makes a person; a bot administrator who wants to add a bot from
 a script has no credential that is them. A personal token is that credential. It is stored as
 a hash, shown once, expires, and is the person for every purpose but one: a token cannot make
-or revoke tokens, so a leaked token cannot extend its own life (`Identity.via_token`).
+tokens, so a leaked token cannot extend its own life (`Identity.via_token`). A token may list its
+person's own tokens and revoke them (`tico token list`, `tico token revoke`): neither lengthens
+anything. Everyone's list, and revoking someone else's token, take the browser.
 
 Any person may create one, and it sees what they see. The owner's rule "Members make personal tokens" (backend/team_rules.py),
 off, leaves it to the owner and the Admins. The owner and the Admins see everyone's tokens and may revoke any of them,
@@ -19,11 +21,11 @@ PREFIX = "tico_pt_"
 FIELDS = ("id", "label", "created_at", "last_used_at", "expires_at", "revoked_at")
 
 
-def _person(who):
-    """The token routes take a signed-in person and never a token."""
+def _person(who, token_may=False):
+    """The token routes take a person. A token may read and revoke its own person's tokens (`token_may`), never mint."""
     if who.role not in ("owner", "human"):
         raise Problem("forbidden", "Personal tokens belong to people", 403)
-    if who.via_token:
+    if who.via_token and not token_may:
         raise Problem("forbidden", "Manage tokens from a signed-in browser", 403)
 
 
@@ -51,7 +53,7 @@ def has_live(c, who):
 
 def listing(c, who):
     """This person's tokens, newest first; never the secret or its hash."""
-    _person(who)
+    _person(who, token_may=True)
     rows = c.execute(
         "SELECT " + ",".join(FIELDS) + " FROM human_tokens WHERE human=? ORDER BY created_at DESC",
         (H.actor_id(who.actor),),
@@ -95,10 +97,11 @@ def create(c, auth, who, body):
 
 
 def revoke(c, auth, who, token_id):
-    """Stop a token at once. Your own; the owner and the Admins may revoke anyone's."""
-    _person(who)
+    """Stop a token at once. Your own; the owner and the Admins may revoke anyone's, from a signed-in browser."""
+    _person(who, token_may=True)
     row = c.execute("SELECT id,human,label,revoked_at FROM human_tokens WHERE id=?", (token_id,)).fetchone()
-    if not row or (not auth.bot_admin(who) and row["human"] != H.actor_id(who.actor)):
+    anyones = auth.bot_admin(who) and not who.via_token
+    if not row or (not anyones and row["human"] != H.actor_id(who.actor)):
         raise Problem("not_found", "Token not found", 404)
     if row["revoked_at"]:
         raise Problem("revoked", "This token is already revoked", 409)

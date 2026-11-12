@@ -219,7 +219,7 @@ def main():
         {"id": "ben", "name": "Ben Okafor", "email": "ben@acme.example", "title": "Engineer", "reports_to": "ana"},
     ]
     bots = {
-        "coo": {"name": "coo", "display_name": "Chief of Staff", "runtime": "fake", "status": "active"},
+        "assistant": {"name": "assistant", "display_name": "Chief of Staff", "runtime": "fake", "status": "active"},
         "ops": {
             "name": "ops",
             "display_name": "Ops",
@@ -234,7 +234,7 @@ def main():
         for slug, config in bots.items():
             c.execute(
                 "INSERT INTO bot_config(bot,owner_id,reports_to,description) VALUES(?,?,?,?)",
-                (slug, "ana", "ana" if slug == "coo" else "coo", config.get("description", "")),
+                (slug, "ana", "ana" if slug == "assistant" else "assistant", config.get("description", "")),
             )
             bot_settings.write(c, slug, config)
         c.execute(

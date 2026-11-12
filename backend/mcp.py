@@ -229,7 +229,7 @@ def problem(payload, status, key):
 def caller_kind(auth, who):
     """What kind of caller this is, for the tools it is offered (`hubtools.KINDS`): a human as owner, admin or member,
     a bot, BotOps, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
-    Counsel is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
+    The Rules Owner is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
     `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
 
@@ -246,7 +246,7 @@ def caller_kind(auth, who):
             else "botops"
             if who.actor == H.bot_actor(H.FLEET_MAINTAINER)
             else "counsel"
-            if who.actor == "bot:" + H.COUNSEL
+            if who.actor == "bot:" + H.RULES_OWNER
             else "bot"
         )
     return None

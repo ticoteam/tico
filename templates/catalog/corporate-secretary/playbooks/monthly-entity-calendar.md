@@ -22,7 +22,7 @@ days waiting and who each waits on. Check the tasks for signed copies that arriv
 ## 3. Entities
 
 For each entity in `knowledge/entities.md`: annual filings and accounts due inside 90 days (and whether
-`compliance` has them), officer or director changes since last month (`tico team show` for people who left), and any
+`compliance-manager` has them), officer or director changes since last month (`tico team show` for people who left), and any
 fact older than twelve months to re-confirm.
 
 ## 4. Cap table

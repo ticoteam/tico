@@ -1,15 +1,15 @@
 """The company itself, at the top of the Goals page: its Vision and Description, and each goal's "Why" line
-(docs/goals-and-kpis.md, "The company"; spec: Head of Product, Strategy Bot). Shown only where the Strategy Bot switch
+(docs/goals-and-kpis.md, "The company"; spec: Head of Product, Strategy Owner). Shown only where the Strategy Owner switch
 is on (backend/strategy_bot.py).
 
 - Vision (one or two sentences: where the company is going) and Description (a short paragraph: what it does, for whom)
   are one row, `company_profile`. Every change leaves a `history_events` row (subject_type `company`), as a goal's do, so the
   history says who changed which and when. Only a person who is the owner or an admin writes them, on their own click:
-  never a bot, the Strategy Bot included, and never the Assistant acting for someone (backend/goal_routes.py).
-- A goal's Why is one line tying it to the vision (`goals.why`, with who set it and when). The Strategy Bot proposes one
+  never a bot, the Strategy Owner included, and never the Assistant acting for someone (backend/goal_routes.py).
+- A goal's Why is one line tying it to the vision (`goals.why`, with who set it and when). The Strategy Owner proposes one
   (`goal_proposals` kind `goal_why`); a person who may edit the goal accepts it as it is or edited, or writes one
   themselves. Either way it is a row in the goal's history. A goal with no Why is "Not tied to the vision", which is not an
-  error. Writing a Why settles the goal's other pending Why proposals, so the Strategy Bot's next ask is about what is
+  error. Writing a Why settles the goal's other pending Why proposals, so the Strategy Owner's next ask is about what is
   still open.
 
 Unversioned and idempotent (`ensure`), like the task trash: an older release never reads the tables or the columns."""

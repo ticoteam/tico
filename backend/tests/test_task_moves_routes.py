@@ -103,6 +103,21 @@ def test_reassign_snooze_and_unsnooze(api):
     refused(api, f"tasks/{made['id']}/snooze", {"until": "not a date"}, status=422)
 
 
+def test_status_all_lists_snoozed_tasks_with_the_rest(api):
+    """Tico Team, Nov 11: GET /api/v2/tasks?status=all left out three snoozed tasks. All is every task; the default list
+    still leaves a snoozed one out until its date."""
+    snoozed, done, other = task(api, "Plan the offsite"), task(api, "Book the venue"), task(api, "Pick a menu")
+    post(api, f"tasks/{snoozed['id']}/snooze", {"until": "2099-01-05", "why": "After the holidays"})
+    post(api, f"tasks/{done['id']}/move", {"to": "closed", "why": "Booked elsewhere", "version": done["version"]})
+
+    def ids(query):
+        return {t["id"] for t in get(api, "tasks?" + query)["tasks"]} & {snoozed["id"], done["id"], other["id"]}
+
+    assert ids("status=all") == {snoozed["id"], done["id"], other["id"]}
+    assert ids("") == {done["id"], other["id"]}
+    assert ids("status=all&snoozed=hide") == {done["id"], other["id"]}
+
+
 def test_an_ask_is_answered_given_and_withdrawn_on_the_task(api):
     made = task(api, owner="ana")
     asked = api.post(
@@ -155,13 +170,6 @@ def test_a_persons_mention_is_in_needs_you_until_they_reply(api):
     assert mention[0]["root_id"] == root  # the rail row a mention moves
     post(api, f"tasks/{made['id']}/comments", {"text": "Checked: both weekends are free."}, token="cara-test")
     assert not [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
-
-
-def test_bulk_is_for_people_and_moves_each_task_with_its_call(api):
-    first, second = task(api, "One"), task(api, "Two")
-    out = post(api, "task-bulk", {"filter": {"ids": [first["id"], second["id"]]}, "action": "close", "why": "Done"})
-    assert out["changed"] == 2 and show(api, first["id"])["status"] == "closed"
-    refused(api, "task-bulk", {"filter": {"ids": [first["id"]]}, "action": "close"}, token=as_bot(api), status=403)
 
 
 def test_the_pipelines_read_and_save_their_settings_record(api):

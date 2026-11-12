@@ -1,5 +1,5 @@
 // Goal suggestion cards say what yes does (ui/goals-kpis.ts goalPropHtml, propDoHtml, propNowProposedHtml; spec "Clear
-// Strategy Bot suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
+// Strategy Owner suggestion cards"): Add a KPI names the measure, says what it counts, its target or "No target yet" and
 // a
 // missing data source, and folds away the goal editor's target fields; each yes button says what it does, the no button
 // reads "No, leave it", a Flag has one "Got it", and new wording or a new definition reads Now and Proposed.
@@ -18,12 +18,12 @@ const {unrouted} = require('./support/routes.cts') as RouteSupport.Api;
 const screenshotDir = process.env.TICO_SCREENSHOT_DIR;
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
+const bots = [bot('assistant', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
+  bot('strategy-owner', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'p:ana')];
 const GOAL = 'Double organic signups';
 const LONG = 'Signed-up accounts that finish setup, counted once per account, in the week the last setup step is done, '.repeat(8);   // long enough to wrap past four lines on Goals' full width (no rail beside it)
 const prop = (id: string, kind: string, payload: unknown, card: Record<string, unknown> & {kpi_name?: string}, over?: Record<string, unknown>) => ({id, kind, goal_id: 'g-cmo', kpi_id: null, payload, reason: 'No measure on this goal yet',
-  proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), status: 'pending', card: {goal_title: GOAL, ...card}, ...over});
+  proposed_by: 'bot:strategy-owner', proposed_at: new Date().toISOString(), status: 'pending', card: {goal_title: GOAL, ...card}, ...over});
 const measure = (name: string, over?: Record<string, unknown>) => ({name, definition: '', source_note: '', unit: '', direction: 'up', existing: false, ...over});
 
 (async () => {
@@ -65,7 +65,7 @@ const measure = (name: string, over?: Record<string, unknown>) => ({name, defini
       if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana Silva', org_parent: ''}]});
       if (p === '/api/status') return json({active: [], employees: []});
       if (p === '/api/v2/status') return json({bots: []});
-      if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+      if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
       if (p === '/api/v2/goals/tree') return json({goals, owners: {}, other_kpis: [], proposals: [...posted.some(x => x.id === 'p-panel') ? [] : [panelProp], recovery]});
       if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
       const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
@@ -132,8 +132,8 @@ const measure = (name: string, over?: Record<string, unknown>) => ({name, defini
     await word.locator('[data-np-all]').click();
     assert.equal(await longCell.evaluate(el => el.scrollHeight > el.clientHeight + 1), false, 'Show all opens it');
     assert.match(await card('p-tgt').innerText(), /New target for Activation on Double organic signups\s+Now\s+→ 65% by Dec 31\s+Proposed\s+→ 60% by Dec 31, 2027/);
-    // A Flag says in one line what the Strategy Bot noticed.
-    assert.match(await card('p-flag').innerText(), /Strategy Bot noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
+    // A Flag says in one line what the Strategy Owner noticed.
+    assert.match(await card('p-flag').innerText(), /Strategy Owner noticed: Double organic signups looks like a duplicate of another goal: Same words as Grow signups/);
     if (screenshotDir) await page.locator('#goal-needs').screenshot({animations: 'disabled', path: path.join(screenshotDir, 'goals-suggestion-cards.png')});
 
     // Fields filled in: "Add measure" adds it with that target.

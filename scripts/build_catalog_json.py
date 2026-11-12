@@ -74,7 +74,7 @@ def _strings(value):
 def roles(documents):
     """The setup page's role list, and the built-in helpers a chart seat can hold. `roles`: every card `tico template list`
     serves except the helpers, which sit outside the setup page's list. `helpers`: the required helper cards (the
-    built-ins every install has, such as the Bookkeeper, which the chart's Finance Owner seat is). Built-in (`required`)
+    built-ins every install has, such as the Finance Owner, which the chart's Finance Owner seat is). Built-in (`required`)
     cards are the `core` department and the assistant reads as "Assistant", as the page shows them. `tools` are the
     prerequisites besides hub; `recommend_when` leaves out `always`."""
     out = []

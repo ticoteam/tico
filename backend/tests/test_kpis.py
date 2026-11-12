@@ -1,5 +1,5 @@
-"""KPIs and the Strategy Bot (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
-arithmetic, a person's override, what the Strategy Bot may not do without a confirm, the migration of
+"""KPIs and the Strategy Owner (backend/kpis.py, backend/goals.py, docs/goals-and-kpis.md): the colour
+arithmetic, a person's override, what the Strategy Owner may not do without a confirm, the migration of
 the old KPI rows and the automatic bot KPIs."""
 
 import sqlite3
@@ -242,35 +242,35 @@ def add_strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Goal Manager','','active',?)",
+            "VALUES('strategy-owner','strategy-owner','Strategy Owner','','active',?)",
             (H.now(),),
         )
-        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
-        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('strategy-owner',NULL,'ana')")
+        BS.write(c, 'strategy-owner', {"runtime": "fake", "host": "keeper"})
 
 
 def owners_chat(api):
     """An Assistant turn in the owner's chat, which is their Assistant like everyone's (backend/assistant.py chat_bot):
-    it acts as the owner, with the Assistant's rights. The Strategy Bot is a helper it hands work to, never this chat."""
+    it acts as the owner, with the Assistant's rights. The Strategy Owner is a helper it hands work to, never this chat."""
     add_strategy_bot(api)
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
     post(api, "assistant/messages", {"text": "Archive the activation KPI, then bring it back"})
-    return claim(api, machine, "coo")["token"]
+    return claim(api, machine, "assistant")["token"]
 
 
 def goals_session(api):
-    """A Strategy Bot turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
+    """A Strategy Owner turn in its goals session, woken by another bot: it acts as itself, never as the owner."""
     add_strategy_bot(api)
     machine = runner(api)
-    for bot in ("ops", "goal-manager"):
+    for bot in ("ops", "strategy-owner"):
         assign(api, machine, bot)
-    ready(api, machine, ["ops", "goal-manager"])
+    ready(api, machine, ["ops", "strategy-owner"])
     post(api, "chat/ops", {"text": "Check the goals."})
     ops = claim(api, machine, "ops")["token"]
-    post(api, "messages", {"to": "goal-manager", "text": "Run the pass.", "needs_action": True}, token=ops)
-    return claim(api, machine, "goal-manager")["token"]
+    post(api, "messages", {"to": "strategy-owner", "text": "Run the pass.", "needs_action": True}, token=ops)
+    return claim(api, machine, "strategy-owner")["token"]
 
 
 def test_only_kpi_owner_or_manager_above_can_archive_and_goal_manager_is_refused(api):

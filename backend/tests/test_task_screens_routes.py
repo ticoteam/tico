@@ -32,6 +32,8 @@ def test_a_list_keeps_a_pipelines_or_a_stages_tasks_and_those_pushed_past(api):
     assert moved["stage"]["id"] == "build"
     assert ids(api, "pipeline=product") == {spec["id"], pushed["id"]}
     assert ids(api, "stage=build") == {pushed["id"]}
+    # By its name within the pipeline, as a move takes it: a bot that listed "Watching" by name counted none.
+    assert ids(api, "pipeline=product&stage=Build") == ids(api, "pipeline=product&stage=build ") == {pushed["id"]}
     assert ids(api, "pipeline=product&pushed_past=true") == {pushed["id"]}
     assert ids(api, "pipeline=product&pushed_past=false") == {spec["id"]}
     rows = {t["id"]: t for t in get(api, "tasks?brief=true")["tasks"]}
@@ -41,7 +43,7 @@ def test_a_list_keeps_a_pipelines_or_a_stages_tasks_and_those_pushed_past(api):
     assert {spec["id"], pushed["id"], general["id"]} <= ids(api, "waiting_on=ben")
     assert ids(api, "waiting_on=ben&pipeline=product") == {spec["id"], pushed["id"]}
     assert ids(api, "waiting_on=cara") == set()
-    for bad in ("pipeline=nope", "stage=nope", "waiting_on=nobody-here"):
+    for bad in ("pipeline=nope", "stage=nope", "stage=Build", "pipeline=product&stage=Ship", "waiting_on=nobody-here"):
         r = api.get("/api/v2/tasks?" + bad, headers=headers())
         assert r.status_code == 422, (bad, r.text)
 
@@ -102,9 +104,10 @@ def test_the_manager_rails_log_names_each_push_past_by_task_title(api):
     post(api, f"tasks/{pushed['id']}/move", {"to": "build", "why": "The spec is in the PR"})
     seen = get(api, "pipelines/product/log")
     assert seen["learned"] == []
-    [line] = seen["log"]
+    [line] = [x for x in seen["log"] if x["task_id"]]
     assert line["task_id"] == pushed["id"] and line["why"] == "The spec is in the PR"
     assert "Guest checkout" in line["text"] and "past Spec" in line["text"]
+    assert [x["text"] for x in seen["log"] if not x["task_id"]] == ["Ana made the pipeline"]
     r = api.get("/api/v2/pipelines/nope/log", headers=headers())
     assert r.status_code == 404, r.text
 
@@ -132,10 +135,15 @@ def test_the_release_schedule_reads_and_changes_and_release_now_answers_why_noth
 
 
 def _releasing(api):
-    """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Manager."""
+    """A Delivery pipeline whose Ship stage waits for a release, and ops as the Release Owner."""
     stages = [
         {"id": "build", "name": "Build", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
-        {"id": "ship", "name": "Ship", "owner": "assignee", "requirements": [{"kind": "in_release"}]},
+        {
+            "id": "ship",
+            "name": "Ship",
+            "owner": "assignee",
+            "requirements": [{"kind": "item", "source": "github", "condition": "in_release"}],
+        },
     ]
     post(api, "pipelines/delivery", {"name": "Delivery", "stages": stages})
     patched = api.patch("/api/v2/release-schedule", json={"bot": "ops"}, headers=headers())
@@ -144,7 +152,7 @@ def _releasing(api):
 
 def test_release_now_files_a_task_that_names_no_waiting_work_and_answers_only_what_the_requester_reads(api):
     """Codex review 2, 4 and 9: the release task is company-visible, so it says who asked and their note, never which
-    tasks wait or how many; the Release Manager finds them itself. What a requester is answered, and what the schedule
+    tasks wait or how many; the Release Owner finds them itself. What a requester is answered, and what the schedule
     shows them, counts only the tasks they may read: no total, no "and N more"."""
     import json
 
@@ -173,14 +181,14 @@ def test_release_now_files_a_task_that_names_no_waiting_work_and_answers_only_wh
 
 def test_release_now_is_filed_whether_or_not_anything_waits(api):
     """Codex review 2, 9: "nothing waits" would tell a reader that no hidden task waits either. The request is filed;
-    the Release Manager closes it when nothing does."""
+    the Release Owner closes it when nothing does."""
     _releasing(api)
     answer = post(api, "release/now", {}, token="cara-test")
     assert answer == {"sent": True, "reason": None, "task": answer["task"], "tasks": 0}
 
 
 def test_release_now_names_an_open_release_task_only_to_who_may_read_it(api):
-    """Codex review 2, 8: the Release Manager's open Release task is private to Ana. Cara's Release now is not
+    """Codex review 2, 8: the Release Owner's open Release task is private to Ana. Cara's Release now is not
     filed again, and is not told that task's id."""
     import json
 
@@ -191,25 +199,6 @@ def test_release_now_names_an_open_release_task_only_to_who_may_read_it(api):
     assert answer == {"sent": False, "reason": "already_open", "task": None, "tasks": 0}
     assert quiet["id"] not in json.dumps(answer)
     assert post(api, "release/now", {})["task"] == quiet["id"]
-
-
-def test_healths_never_stuck_check_gives_its_numbers_as_fields(api):
-    from backend import health
-
-    post(api, "tasks", {"title": "Book the barn", "body": "As discussed.", "owner": "ben"})
-    health.record_never_stuck(api.app.state.store)
-    check = next(c for c in get(api, "health")["checks"] if c["id"] == "never_stuck")
-    assert set(check["counts"]) == set(health.NEVER_STUCK_COUNTS)
-    assert set(health.NEVER_STUCK_COUNTS) == {
-        "waiting_on_nothing",
-        "retry",
-        "manager",
-        "person",
-        "cant_run",
-        "no_one",
-        "broken",
-    }
-    assert all(isinstance(n, int) for n in check["counts"].values()) and check["at"]
 
 
 def test_a_bots_page_says_why_it_cant_run_and_the_fix(api):

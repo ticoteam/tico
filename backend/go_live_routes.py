@@ -3,7 +3,7 @@
 import logging
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from . import agents, go_live as pending_go_lives, models as M
+from . import agents, go_live as pending_go_lives, models as M, routines, setup_live
 from .auth import Identity
 from .execution import bot_repository
 from .settings_admin import repository_present
@@ -29,7 +29,7 @@ def register(
 
     def finish_go_live(c, who, bot, setup):
         """What going live does once the bot's computer has its repository: active, its setup started with the
-        person, and its first routine on. Shared by the request itself and by the readiness report that completes a
+        person, and the routines its template came with on. Shared by the request itself and by the readiness report that completes a
         go-live that was waiting for the repository."""
         row = H.bot(c, bot)
         if row["state"] == "quarantined":
@@ -47,10 +47,22 @@ def register(
         if setup and config and is_parked(config["onboarding_state"]) and who.role in ("owner", "human"):
             send(c, who, M.MessageCreate(to="bot:" + bot, text="Let's set you up."))
             started = True
-        # Going live turns its first routine on too: nobody approves it separately.
-        armed = onboarding.arm_first_routine(c, who, bot)
+        # Going live turns its template's routines on too: nobody approves them separately. The answer and the
+        # go-live event name the ones this turned on, and `routines` says which are on now, so a report of them
+        # comes from this fact rather than from the template.
+        armed = [routine["name"] for routine in onboarding.arm_routines(c, who, bot)]
+        # BotOps' wait on this bot's setup task ends here, and BotOps is woken to say done.
+        setup_live.go_live_ends_botops_wait(c, bot, who.actor)
+        # A seat bot nobody chats with runs the same setup on its own, with no person (backend/setup_live.py).
+        own = setup_live.start_setup(c, onboarding, bot)
         c.execute("DELETE FROM registry_metadata WHERE key=?", (GO_LIVE_PENDING + bot,))
-        return {"activated": activated, "setup_started": started, "routine_armed": armed}
+        return {
+            "activated": activated,
+            "setup_started": started,
+            "routine_armed": armed,
+            "routines": routines.of_bot(c, bot),
+            **({"own_setup_task_id": own} if own else {}),
+        }
 
     def wait_for_repository(c, who, bot, placed, body, github_asked=True):
         """Keep the placement and remember the go-live: the computer is told about the bot on its next heartbeat,
@@ -78,8 +90,14 @@ def register(
             ),
         )
         H.event(c, who.actor, "bot.go_live_waiting", bot, {"computer": computer, "github_asked": github_asked})
+        # A cloud machine still on its way (place_now `waiting`) gets the bot when it enrolls, then the repository.
+        first = (
+            f"{computer} to start and get the repository"
+            if placed.get("waiting")
+            else f"{computer} to get the repository"
+        )
         message = (
-            f"Waiting for {computer} to get the repository. Tico finishes going live by itself "
+            f"Waiting for {first}. Tico finishes going live by itself "
             f"when {computer} has it; nothing needs to run again"
         )
         if not github_asked:
@@ -215,7 +233,10 @@ def register(
                     declared = onboarding._declared(c, bot)
                     if settings_admin.computer_builds_repository(c, bot):
                         building = True
-                    elif github == "present":
+                    elif github == "present" or (declared.get("template") and declared.get("setup_task_id")):
+                        # GitHub has it, or BotOps has its build in hand (its setup task, often the very run asking):
+                        # the computer gets it and its report finishes this go-live. Attaching the template again
+                        # here would park a starter in Onboarding behind a person.
                         return wait_for_repository(c, who, bot, placed, body)
                     elif declared.get("template"):
                         if not H.bot(c, "botops"):
@@ -225,15 +246,16 @@ def register(
                         build = onboarding.attach_template(
                             c, who, bot, declared["template"], declared.get("instructions") or "", queue_build=True
                         )
-                        return {
-                            "bot": bot,
-                            "state": row["state"],
-                            **placed,
-                            **build,
-                            "building": True,
-                            "setup_started": False,
-                            "note": "BotOps is building its repository; watch setup_task_id",
-                        }
+                        if settings_admin.computer_builds_repository(c, bot):
+                            building = True  # a starter: its computer builds it from the template, so it goes live now
+                        else:
+                            # BotOps builds it on its setup task; the computer's report of it finishes this go-live.
+                            return {
+                                **wait_for_repository(c, who, bot, placed, body),
+                                **build,
+                                "building": True,
+                                "note": "BotOps is building its repository; it goes live by itself when it is built",
+                            }
                     elif missing is not None:
                         raise Problem(
                             "repository_missing",
@@ -251,20 +273,21 @@ def register(
                             409,
                         )
             done = finish_go_live(c, who, bot, body.setup)
+            note = "The computer is building its repository; queued work starts when it is ready" if building else ""
+            if placed.get("waiting"):
+                # Its cloud machine is on its way: the bot is live, and its work starts once that computer is up.
+                note = f"{placed['computer']} is starting; its work starts once it is up" + (
+                    " and has built its repository" if building else ""
+                )
             return {
                 "bot": bot,
                 "state": H.bot(c, bot)["state"],
                 "computer": placed["computer"],
                 "placed": placed["placed"],
                 **done,
-                **(
-                    {
-                        "building": True,
-                        "note": "The computer is building its repository; queued work starts when it is ready",
-                    }
-                    if building
-                    else {}
-                ),
+                **({"building": True} if building else {}),
+                **({"waiting_for_computer": True} if placed.get("waiting") else {}),
+                **({"note": note} if note else {}),
             }
 
         result = mutate(request, body, work)

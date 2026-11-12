@@ -11,22 +11,30 @@ from backend.tests.helpers.thread_tasks import make_task
 def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_stranger_gets_404(api):
     thread = new_thread(api, title="Pricing", members=("human:ben",), body="Ship the pricing page Friday")
     message_id = thread["message"]["id"]
-    task = post(api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test")
+    task = post(
+        api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "assistant"}, token="ben-test"
+    )
     assert task["private"] is True
     assert "Ship the pricing page Friday" in task["body"] and f"#/thread/{thread['id']}?m={message_id}" in task["body"]
-    post(api, f"threads/messages/{message_id}/task", {"title": "Peek", "owner": "coo"}, token="cara-test", expected=404)
-    post(api, "threads/messages/nope/task", {"title": "Missing", "owner": "coo"}, token="ben-test", expected=404)
+    post(
+        api,
+        f"threads/messages/{message_id}/task",
+        {"title": "Peek", "owner": "assistant"},
+        token="cara-test",
+        expected=404,
+    )
+    post(api, "threads/messages/nope/task", {"title": "Missing", "owner": "assistant"}, token="ben-test", expected=404)
 
 
 def test_a_repeated_task_is_refused_with_the_task_it_repeats(api):
     thread = new_thread(api, title="Pricing", members=("human:ben",), body="Ship the pricing page Friday")
     message_id = thread["message"]["id"]
     first = post(
-        api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test"
+        api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "assistant"}, token="ben-test"
     )
     again = api.post(
         f"/api/v2/threads/messages/{message_id}/task",
-        json={"title": "Ship pricing", "owner": "coo"},
+        json={"title": "Ship pricing", "owner": "assistant"},
         headers=headers("ben-test"),
     )
     assert again.status_code == 422, again.text
@@ -48,11 +56,6 @@ def test_a_task_a_person_makes_for_a_bot_is_not_unread_for_them(api):
 
 def test_a_task_a_person_makes_for_themselves_is_not_unread_for_them(api):
     task = make_task(api, {"owner": "human:ana", "title": "My own task", "body": "Details."})
-    assert thread_me(api, task["conversation_id"])["unread"] == 0
-
-
-def test_a_task_a_person_makes_for_another_person_is_not_unread_for_its_maker(api):
-    task = make_task(api, {"owner": "human:ben", "title": "Ben's review", "body": "Details."})
     assert thread_me(api, task["conversation_id"])["unread"] == 0
 
 

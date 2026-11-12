@@ -19,7 +19,7 @@ const {t}: {t: (ms: number) => number} = (() => { try { return require('./suppor
 type Route = import('playwright').Route;
 
 declare const S: {route: string; v2: {needs: {id: string; kind: string; line?: string}[]; needsVersion: string; needsNext: string; needsCount: number; needsBots: unknown; status: Record<string, unknown>}};
-declare const LIVE: {es: {url: string} | null; after: string | null; taskKey: unknown};
+declare const LIVE: {es: {url: string; topics: string[]} | null; after: string | null; taskKey: unknown};
 declare const V2C: {rendered: boolean; liveOff: boolean; reading: boolean; readAgain: boolean};
 declare const LIVE_SOON: Map<string, unknown>;
 declare const TASKS_ST: {loading: boolean; cursor: string};
@@ -67,7 +67,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
       return route.fulfill({contentType: ui[1]!.endsWith('.css') ? 'text/css' : 'application/javascript', body: fs.readFileSync(uiFile(ui[1]!), 'utf8')});
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true, registered: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []},
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []},
       {name: 'ops', display_name: 'Ops', host: 'keeper', status: 'active', state: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans') return json({people: [{id: 'ana', name: 'Ana'}]});
     if (p === '/api/issues') return json([]);
@@ -126,7 +126,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
   const opened = reads.snapshot;
 
   // The chat: one stream for the page, following this conversation; a change to it reads the snapshot once.
-  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:coo', body: 'The notes are in the doc.', created_at: now}], execution: null};
+  snapshot = {messages: [...snapshot.messages, {id: 'm2', sender_id: 'bot:assistant', body: 'The notes are in the doc.', created_at: now}], execution: null};
   const first = await send(following, block(10, 'ready', {}), block(11, 'messages', {id: 'm2', conversation_id: 'c-ops', message: snapshot.messages[1]}));
   assert.deepEqual(first.searchParams.get('topics')!.split(',').sort(), ['bots', 'messages', 'needs', 'runs', 'threads'], 'no task changes on a page with no task');
   assert.equal(first.searchParams.get('party'), null);
@@ -217,8 +217,12 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
     await page.setViewportSize({width, height: 820});
     await page.goto(`https://tico-ui.test/?tooltip=${width}#/bot/ops`);
     await page.locator('.bot-ident [data-tip-bot="ops"]').waitFor();
-    // The page's stream for this bot: once the thread has subscribed, it holds the stream it keeps.
-    await page.waitForFunction(() => LIVE.es?.url.includes('thread='));
+    // The page's stream for this bot. A fresh page reconnects twice as it settles: when the thread subscribes
+    // (`thread=`) and when the Threads list's first read lands and adds the `threads` topic (threads.ts threadsLoad ->
+    // live.ts liveTopicAdd), each 30 ms later (liveRestart). Answering the stream before the second has replaced it
+    // answers one the page has closed, and the stream that follows is never answered. Once both are in, it holds the
+    // stream it keeps.
+    await page.waitForFunction(() => LIVE.es?.url.includes('thread=') && LIVE.es.topics.includes('threads'));
     // The thread's first render can scroll; a scroll intentionally dismisses a tooltip.
     // Open it after that render and the thread subscription have settled.
     await page.waitForFunction(() => BOT?.slug === 'ops' && [...THV_VIEWS]

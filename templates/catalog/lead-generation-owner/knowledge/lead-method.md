@@ -47,7 +47,7 @@ interest; no match to profile.
 ## Hand-off rules
 
 - Inbound: demo requests, contact forms, trial sign-ups, referrals, marketplace listings and event follow-ups go to
-  `inbound-sales-owner`, picked up the same business day. The Growth Team Manager (`growth-team-manager`) routes every inbound lead there. These rules decide
+  `inbound-sales-owner`, picked up the same business day. The Growth Manager (`growth-manager`) routes every inbound lead there. These rules decide
   whether a lead counts as qualified, the score and reasons it carries, and its pick-up time. They never take an inbound lead
   off that queue.
 - Outbound: replies to outbound sequences go to `outbound-sales-owner`, picked up within two business days.
@@ -59,6 +59,6 @@ interest; no match to profile.
 
 ## Sources
 
-- 2026-11-06: rules written for setup from the routing rule in the Growth Team Manager (`growth-team-manager`) template (every inbound lead goes to the
+- 2026-11-06: rules written for setup from the routing rule in the Growth Manager (`growth-manager`) template (every inbound lead goes to the
   inbound owner) and the remit of the tracking owner's template (tags and hand-off delay). Those templates were read for their
   owned files and routing lines only. The team's own practice is to be confirmed at setup.

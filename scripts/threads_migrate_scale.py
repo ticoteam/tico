@@ -41,7 +41,7 @@ ROOMS = (
     "assistant",
     "ceo",
     "docs",
-    "coo",
+    "assistant",
     "cfo",
     "cmo",
     "cto",

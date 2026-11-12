@@ -151,8 +151,8 @@ def effective_kind(kind, slides, day=None):
 
 
 def settings(c, bot):
-    # Counsel speaks only on the private task it was asked to read; it cannot publish an update.
-    if bot == H.COUNSEL:
+    # The Rules Owner speaks only on the private task it was asked to read; it cannot publish an update.
+    if bot == H.RULES_OWNER:
         return {"daily": False, "weekly": False}
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
@@ -162,8 +162,10 @@ def set_settings(c, bot, daily=None, weekly=None):
     now = settings(c, bot)
     daily = now["daily"] if daily is None else bool(daily)
     weekly = now["weekly"] if weekly is None else bool(weekly)
-    if bot == H.COUNSEL and (daily or weekly):
-        raise Problem("updates_unavailable", "Counsel speaks only on its own task and cannot publish updates", 422)
+    if bot == H.RULES_OWNER and (daily or weekly):
+        raise Problem(
+            "updates_unavailable", "The Rules Owner speaks only on its own task and cannot publish updates", 422
+        )
     c.execute(
         "INSERT INTO update_settings(bot,daily,weekly) VALUES(?,?,?) ON CONFLICT(bot) DO UPDATE SET "
         "daily=excluded.daily, weekly=excluded.weekly",
@@ -351,7 +353,7 @@ def build_queue(c, day, kind, assistant=None):
         "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
         "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
         "WHERE b.state='active' AND b.id<>? AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1",
-        (H.COUNSEL,),
+        (H.RULES_OWNER,),
     ).fetchall()
     depth = depths(c, [r["id"] for r in rows])
     order = sorted(rows, key=lambda r: (-depth[r["id"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
@@ -1318,7 +1320,7 @@ def redo(c, kind, day, bots=None, managers=False):
     rows = c.execute(
         "SELECT b.id FROM bots b LEFT JOIN update_settings us ON us.bot=b.id WHERE b.state='active' "
         "AND b.id<>? AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug",
-        (H.COUNSEL,),
+        (H.RULES_OWNER,),
     ).fetchall()
     ids = {b: (H.resolve_bot(c, b) or {}).get("id", b) for b in bots or ()}
     chosen = [r["id"] for r in rows if not bots or r["id"] in ids.values()]
@@ -2009,11 +2011,11 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
 
 
 def off_tree():
-    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Bot, the
-    Librarian), the Task Manager and the Bookkeeper. Nobody talks to them and they are not on the org chart."""
-    from . import assistant, bookkeeper, task_manager
+    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Owner, the
+    Librarian), the General Manager and the Finance Owner. Nobody talks to them and they are not on the org chart."""
+    from . import assistant, bookkeeper, general_manager
 
-    return frozenset((*assistant.HELPERS, task_manager.SLUG, bookkeeper.SLUG))
+    return frozenset((*assistant.HELPERS, general_manager.SLUG, bookkeeper.SLUG))
 
 
 def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):

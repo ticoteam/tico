@@ -20,7 +20,7 @@
     },
     "roster": [
       {
-        "bot": "engineering-lead",
+        "bot": "engineering-manager",
         "role": "Engineering Lead: plans and reviews engineering work"
       },
       {
@@ -36,7 +36,7 @@
         "role": "Support agent: customer tickets and setup help"
       },
       {
-        "bot": "sales-ops",
+        "bot": "sales-operations-manager",
         "role": "Sales ops: pipeline and outreach"
       }
     ]

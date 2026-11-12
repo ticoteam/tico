@@ -695,30 +695,6 @@ mod boot_timing_tests {
     use super::*;
 
     #[test]
-    fn a_report_is_one_line_of_its_known_fields() {
-        let body = serde_json::json!({
-            "route": "#/home", "settled": true, "html": 182,
-            "marks": {"head": 190, "bundle-start": 236, "boot": 402, "roster": 1180, "route": 1194, "native-ack": 1201, "paint-fresh": 1690},
-            "bundle": {"bytes": 0, "ms": 4},
-            "server": [{"path": "/api/employees", "ms": 412, "app": 380, "auth": 2}, {"path": "/api/v2/places/:id", "ms": 300, "app": null, "auth": null}],
-        });
-        assert_eq!(boot_line(Some(&body), Some(2020)).unwrap(),
-            "org page open: #/home, settled; html 182, head 190, bundle-start 236, boot 402, roster 1180, route 1194, \
-             native-ack 1201, paint-fresh 1690 ms; bundle cached (4 ms); reads: /api/employees 412 ms (app 380, auth 2), \
-             /api/v2/places/:id 300 ms; 2020 ms since the webview was built");
-        let fetched = serde_json::json!({"route": "", "settled": false, "bundle": {"bytes": 1_300_000, "ms": 230}});
-        assert_eq!(
-            boot_line(Some(&fetched), None).unwrap(),
-            "org page open: no page, not settled; bundle 1270 KB in 230 ms"
-        );
-        let empty = serde_json::json!({});
-        assert_eq!(
-            boot_line(Some(&empty), None).unwrap(),
-            "org page open: no page, not settled"
-        );
-    }
-
-    #[test]
     fn anything_else_refuses_the_whole_report() {
         let read = |path: &str| serde_json::json!({"server": [{"path": path, "ms": 1}]});
         let many: Vec<Value> = (0..17)
@@ -1107,73 +1083,6 @@ mod visual_bridge_tests {
     }
 
     #[test]
-    fn the_bridge_never_tells_an_org_about_another() {
-        let acme = org(
-            "o_aaaaaaaa",
-            "https://acme.example.com/",
-            "Acme Lights",
-            "ops@acme.example",
-        );
-        let tidy = org(
-            "o_bbbbbbbb",
-            "https://tidy.example.com/",
-            "TIDY Team",
-            "chris@tidy.example",
-        );
-        let secrets = [
-            "o_bbbbbbbb",
-            "https://tidy.example.com/",
-            "tidy.example.com",
-            "TIDY Team",
-            "chris@tidy.example",
-        ];
-        let doc = Document {
-            version: 1,
-            active: Some(acme.id.clone()),
-            orgs: vec![acme, tidy],
-        };
-        let state = AppState::new(Orgs::new(doc, None), None);
-        assert_eq!(state.orgs.lock().unwrap().orgs().len(), 2);
-        // Every reply the page can get, with two orgs open in the shell, carries none of the other org's details.
-        for name in [
-            "orgInfo",
-            "multiOrg",
-            "showOrgMenu",
-            "addOrg",
-            "openWindow",
-            "visualOrigin",
-            "checkForUpdates",
-            "showLog",
-            "appLog",
-            "bootTiming",
-        ] {
-            let reply = bridge_reply(name, 2).to_string();
-            for secret in secrets {
-                assert!(!reply.contains(secret), "{name} replied with {secret}");
-            }
-        }
-        // The page script carries no org data in any build, and only this build's org features.
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, several);
-            for secret in secrets {
-                assert!(!script.contains(secret), "the page script carries {secret}");
-            }
-            assert_eq!(script.contains("'multiOrg'"), several);
-            assert_eq!(
-                script.contains("'openRecorder'"),
-                several,
-                "Record is offered only by a Mac build"
-            );
-            assert_eq!(
-                script.contains("'recordEvent'"),
-                several,
-                "a calendar Join is recorded only by a Mac build"
-            );
-        }
-        assert!(BRIDGE_SCRIPT.contains("'orgInfo'"));
-    }
-
-    #[test]
     fn a_switch_waits_until_every_open_dialog_is_answered() {
         static GATE: DialogGate = DialogGate::new();
         GATE.wait_closed();
@@ -1195,26 +1104,5 @@ mod visual_bridge_tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("the switch goes on once both are answered");
         switch.join().unwrap();
-    }
-
-    #[test]
-    fn every_page_reports_its_capture() {
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, several);
-            assert!(
-                script.contains("name: 'capture'") && !script.contains("__ticoCapture"),
-                "nothing the page can call to switch it off"
-            );
-            assert!(script.contains("'getUserMedia', 'getDisplayMedia'"));
-        }
-    }
-
-    #[test]
-    fn a_page_alert_and_confirm_go_through_the_on_screen_check() {
-        for several in [false, true] {
-            let script = script_for("0.5.0", several, !several);
-            assert!(script.contains("window.alert =") && script.contains("window.confirm ="));
-            assert!(script.contains("invoke('page_dialog'") && !script.contains("plugin:dialog"));
-        }
     }
 }

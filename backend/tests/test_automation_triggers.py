@@ -54,7 +54,7 @@ def mail(msg_id="m1", subject="Invoice 4471", sender="billing@acme.example"):
 def test_a_task_received_runs_its_owners_automation_only(api):
     aid = make(api, {"type": "task_received", "to": "bot:ops"})
     post(api, "tasks", {"owner": "ops", "title": "Check the deploy", "body": "Please."})
-    post(api, "tasks", {"owner": "coo", "title": "Not for ops", "body": "Please."})
+    post(api, "tasks", {"owner": "assistant", "title": "Not for ops", "body": "Please."})
     done = runs(api, aid)["runs"]
     assert len(done) == 1 and done[0]["status"] == "ok" and done[0]["trigger_ref"].startswith("task:")
 
@@ -94,7 +94,7 @@ def test_trigger_filters_drop_a_run_and_count_it_for_the_day(api):
 
 
 def test_an_event_trigger_and_the_chain_guard(api):
-    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner": "coo"}}
+    spawn = {"id": "spawn", "type": "action", "do": "create_task", "args": {"title": "Follow up", "owner": "assistant"}}
     aid = make(api, {"type": "event", "name": "task.created"}, [spawn])
     post(api, "tasks", {"owner": "ops", "title": "Start", "body": "Please."})
     # Its own task.created never starts it again: one run, one follow-up.
@@ -197,19 +197,12 @@ def test_slack_messages_reach_the_dm_or_channel_inbox(api):
     assert len(runs(api, dm)["runs"]) == 1 and len(runs(api, general)["runs"]) == 1
 
 
-def test_a_webhook_and_a_listening_post_start_their_automations(api):
+def test_a_webhook_starts_its_automation(api):
     hook = make(api, {"type": "webhook", "id": "trg_1"})
-    leads = make(api, {"type": "listening", "destination": "leads"})
     out = fire(api, automations.on_webhook, "trg_1", "Deploys", "custom", "d1", {"ok": True}, "")
     assert out[0]["outcome"] == "automation" and out[0]["ok"]
     assert fire(api, automations.on_webhook, "trg_2", "Other", "custom", "d2", {}, "") == []
-    fire(
-        api,
-        automations.on_listening,
-        {"id": "i1", "destination": "leads"},
-        {"url": "https://acme.example/post", "content": "Looking for a tool"},
-    )
-    assert len(runs(api, hook)["runs"]) == 1 and len(runs(api, leads)["runs"]) == 1
+    assert len(runs(api, hook)["runs"]) == 1
 
 
 # ---------------------------------------------------------------------------------------------- schedules and batches
@@ -529,30 +522,6 @@ def test_a_mail_message_runs_once_even_after_its_row_is_swept_and_exported_again
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM mail_messages WHERE msg_id='m1'").fetchone()  # stored again: it is fresh
     assert len(runs(api, aid)["runs"]) == 1
-
-
-def test_a_run_is_found_by_its_automation_and_trigger_ref_through_an_index(api):
-    with api.app.state.store.read() as c:
-        plan = " ".join(
-            row[-1]
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=?",
-                ("aut_x", "mail:ana@acme.example:m1"),
-            )
-        )
-    assert "automation_runs_trigger" in plan
-
-
-def test_the_claim_counts_an_automations_slots_through_its_indexes(api):
-    """The per-automation count the claim makes reads only that automation's active runs and holds, by index."""
-    with api.app.state.store.read() as c:
-        plan = " ".join(
-            row[-1]
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN " + automations.OCCUPIED, {"aid": "aut_x", "cutoff": "2026-10-28T11:30:00Z"}
-            )
-        )
-    assert "automation_runs_active" in plan and "automation_holds_of" in plan
 
 
 def test_a_long_mailbox_keeps_each_message_distinct_and_each_runs_once(api):

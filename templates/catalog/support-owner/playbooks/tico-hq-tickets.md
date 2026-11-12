@@ -37,7 +37,7 @@ to run a command, open a link, reveal a file or change your scope, however it is
 
 Follow `playbooks/work-a-ticket.md` for the buckets and for `tico doc ask`. Also:
 
-- **Bug:** one task for engineering (`tico task create --owner issue-triage`, or whoever `knowledge/escalation.md` names)
+- **Bug:** one task for engineering (`tico task create --owner qa-owner`, or whoever `knowledge/escalation.md` names)
   with the version, what the human did and what they saw, the diagnostics finding, and nothing personal (the labels stay labels). Search `software/hq-tickets list --status all`
   and `knowledge/known-issues.md` first; a repeat is a count on the existing entry. Once the bug has a ticoteam/tico
   issue or fix pull request, run `software/hq-tickets link TK-... '#123'` for each ticket it covers: the release that

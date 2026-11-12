@@ -1,0 +1,31 @@
+name: travel-coordinator                     # the slug: it matches the repository bot-travel-coordinator and the label owner:travel-coordinator
+display_name: "Travel Coordinator"
+labels: [owner:travel-coordinator]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 45
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-trips-page
+    title: Weekly trips page
+    cron: "0 10 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-trips-page.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []
+# Optional, uncomment when connected. Travellers' calendars show what a trip must fit around:
+# tools:
+#   - service: google-calendar
+#     identity: "the travellers' calendars the owner lists"
+#     can: [read]
+#     env: GOOGLE_SA_KEY
+#     note: "reads meeting times only; never creates or moves an event"

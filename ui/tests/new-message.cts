@@ -112,7 +112,7 @@ async function add(page: Page, words: string, name: string) {
     // Omar and a bot, no thread yet: a name is asked for, then a private thread, pinned for its people, takes the message.
     await openPane(page);
     await add(page, 'om', 'Omar');
-    await add(page, 'engineering', 'engineering-lead');
+    await add(page, 'engineering', 'engineering-manager');
     await page.locator('#nm-list li[aria-selected="true"].nm-new').waitFor({timeout: WAIT});
     assert.deepEqual(await rows(page), ['New thread']);
     await page.locator('.nm-composer .p-text').fill('Kickoff at ten');
@@ -129,7 +129,7 @@ async function add(page: Page, words: string, name: string) {
     assert.equal(view.title, 'eng-sync');
     assert.equal(view.audience, 'members');
     assert.equal(view.me.pinned, true);
-    assert.deepEqual((view.members.members as {actor: string}[]).map(m => m.actor).sort(), ['bot:engineering-lead', 'human:dana', 'human:omar']);
+    assert.deepEqual((view.members.members as {actor: string}[]).map(m => m.actor).sort(), ['bot:engineering-manager', 'human:dana', 'human:omar']);
 
     // A #thread picked from the To box opens it.
     await openPane(page);

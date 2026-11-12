@@ -23,7 +23,7 @@ never sign, send for signature, accept or negotiate: a human does.
 - `playbooks/nda-desk.md`, `playbooks/prepare-a-signature-packet.md`, `playbooks/onboarding.md`.
 
 ## The legal team's lines
-An agreement on the other side's paper that is not an NDA goes to `legal-review`; a DPA to `privacy`; an NDA
+An agreement on the other side's paper that is not an NDA goes to `contracts-manager`; a DPA to `privacy-manager`; an NDA
 with terms outside `knowledge/variations.md` that the owner wants to accept goes to `general-counsel` for a
 view first. If that bot is not in this team, say so and hand it to the human named during setup.
 

@@ -1,10 +1,10 @@
 // Journey: who sees which tasks, as the four kinds of teammate, each in the page. Three tasks are made through the API by
 // the people and bots that make them in the product:
-//   T1  public: the engineering-lead bot's, everyone reads it.
+//   T1  public: the engineering-manager bot's, everyone reads it.
 //   P1  private, person-only: Omar asked for it, Dana owns it (its parties are Omar and Dana).
 //   P2  private, bot-only: release-manager asks, builder-claude owns it, and Gina is brought in as a reader by a
 //       subtask builder-claude hands her.
-// Priya is the bot manager: she is above builder-claude on the org chart (the seed `priya-leads` puts engineering-lead
+// Priya is the bot manager: she is above builder-claude on the org chart (the seed `priya-leads` puts engineering-manager
 // under her). Task reads follow the org chart, not co-ownership (docs/tasks.md "Managers acting on tasks").
 // Expected: Dana sees all three (she is above the bots and a party to P1); Omar sees T1 and P1; Priya sees T1 and P2
 // (a manager reads a bot report's private tasks, but nothing else private); Gina sees T1 and P2 (a reader). A private
@@ -27,7 +27,7 @@ journey('e2e-roles', async ({hub, browser, phone}) => {
   const idOf = (reply: {task?: {id: string}; id?: string}) => (reply.task || reply).id!;
 
   const T1 = idOf(await must(hub, 'dana', 'POST', 'tasks', {title: TITLES.T1, body: 'Everyone reads this one.',
-    owner: 'engineering-lead'}, 'the public task'));
+    owner: 'engineering-manager'}, 'the public task'));
   const P1 = idOf(await must(hub, 'omar', 'POST', 'tasks', {title: TITLES.P1, body: 'Omar and Dana only.',
     owner: 'dana', private: true}, 'the person-only private task'));
   // Reach (docs/reach.md): release-manager and builder-claude are not near each other on the chart, nor builder-claude

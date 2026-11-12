@@ -1,7 +1,7 @@
 # The groups a team builds its team chart from, in the order setup offers them.
 #
 # Each template card names its group (`group:` in templates/catalog/<id>/card.yaml), and exactly one card
-# per group is its head: the template named in `head:` below, which is `lead: true`. A Team Manager is also
+# per group is its head: the template named in `head:` below, which is `lead: true`. A team's Manager is also
 # `lead: true` and does not take the head's seat. The head's card lists the rest of
 # the group in `team_templates:`; a card's `suggest:` says whether it is pre-checked (default), offered (common)
 # or offered only when the briefing asks for it (niche). `icon` is a Material Symbols name in the font the UI ships
@@ -16,7 +16,7 @@ departments:
     question: "What kind of sales do you do today?"
     placeholder: "Outbound to studio owners, a two-call demo, annual contracts; two sellers and a spreadsheet pipeline"
     icon: handshake
-    head: sales-lead
+    head: growth-manager
 
   - id: marketing
     name: Marketing
@@ -25,7 +25,7 @@ departments:
     question: "How do customers find you today?"
     placeholder: "Mostly word of mouth and search; a monthly newsletter, some paid social, two trade shows a year"
     icon: campaign
-    head: marketing-lead
+    head: growth-manager
 
   - id: support
     name: Customer Support
@@ -34,7 +34,7 @@ departments:
     question: "How do customers reach you for help today, and what do they ask most?"
     placeholder: "A shared support inbox and chat on the site; mostly billing questions, setup help and a few bug reports"
     icon: support_agent
-    head: support-lead
+    head: success-manager
 
   - id: finance
     name: Finance
@@ -43,7 +43,7 @@ departments:
     question: "How do you keep the books and handle bills and invoices today?"
     placeholder: "Online accounting software and an outside accountant; we invoice monthly and chase late payers by hand"
     icon: account_balance
-    head: finance-lead
+    head: finance-owner
 
   - id: operations
     name: Operations
@@ -52,7 +52,7 @@ departments:
     question: "What keeps the team running day to day that someone has to remember?"
     placeholder: "Vendor renewals, buying laptops, the office lease, weekly project check-ins and our field crew schedule"
     icon: settings_suggest
-    head: ops-manager
+    head: operations-manager
 
   - id: legal
     name: Legal
@@ -70,7 +70,7 @@ departments:
     question: "How do you hire and look after your people today?"
     placeholder: "Hiring three engineers this quarter; job posts on our site, a shared handbook, reviews twice a year"
     icon: groups
-    head: people-lead
+    head: head-of-people
 
   - id: product
     name: Product
@@ -89,7 +89,7 @@ departments:
     question: "How does your team build and ship software today?"
     placeholder: "Six engineers on GitHub, pull requests reviewed by one other person, weekly releases, alerts in Slack"
     icon: code
-    head: engineering-lead
+    head: engineering-manager
     software_only: true
 
   - id: success
@@ -99,7 +99,7 @@ departments:
     question: "How do customers get set up and kept after they buy, and who owns renewals and account health today?"
     placeholder: "An onboarding call for each new account, a renewal reminder list in a spreadsheet, support by email; the founder handles the big accounts"
     icon: sentiment_satisfied
-    head: success-team-manager
+    head: success-manager
 
   - id: corporate
     name: Corporate
@@ -108,7 +108,7 @@ departments:
     question: "Which legal, finance and partnership obligations do you carry, and who handles each today?"
     placeholder: "An outside lawyer for contracts, a bookkeeper who files taxes, two reseller agreements and a yearly partner registration"
     icon: contract
-    head: corporate-team-manager
+    head: corporate-manager
 
 # Not a group the picker offers. The built-in Assistant already covers a human's own brief and messages, so these
 # templates are never suggested by default; a team can still add them from a template.

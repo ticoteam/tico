@@ -4,7 +4,7 @@ the writes that are never refused. Acme is the fictional company here.
 The chart: cpo reports to Ben; product-design reports to cpo; finance reports to cpo too (product-design's peer); ops
 reports to product-design; doc-updater has no manager and is on the Product team with cpo and product-design. A bot
 with no manager counts as reporting to the owner, Ana: doc-updater and Scout, which is on no team, are peers that way.
-Cara is a person nobody here reports to. coo is the Assistant, a built-in helper."""
+Cara is a person nobody here reports to. assistant is the Assistant, a built-in helper."""
 
 import json
 from datetime import datetime, timedelta, timezone
@@ -233,8 +233,8 @@ def test_a_stage_hand_off_a_helper_and_a_person_are_never_refused(api):
     assert r.status_code == 200, r.text
     with api.app.state.store.read() as c:
         assert (H.task(c, copy["id"])["stage_id"], H.task(c, copy["id"])["owner_id"]) == ("copy-edit", "bot:scout")
-    # The Assistant (coo) and BotOps are off the chart: anyone reaches them.
-    task(api, "pd-test", "bot:coo", title="For the Assistant")
+    # The Assistant (assistant) and BotOps are off the chart: anyone reaches them.
+    task(api, "pd-test", "bot:assistant", title="For the Assistant")
     assert reach.decide(ctx(api), "bot:product-design", "bot:botops").why == "helper"
     # A person is never limited, even writing to a bot nowhere near them.
     task(api, "ben-test", "bot:scout", title="Ben to Scout")
@@ -451,7 +451,7 @@ def test_a_message_in_a_tasks_thread_uses_the_task_and_a_send_anyway_replay_is_n
 def test_the_built_in_helpers_are_reached_and_the_health_monitor_is_not_exempt(api):
     chart(api)
     found = ctx(api)
-    for slug in ("botops", "tico-counsel", "bookkeeper", "task-manager"):
+    for slug in ("botops", "rules-owner", "finance-owner", "general-manager"):
         assert reach.decide(found, "bot:product-design", "bot:" + slug).why == "helper", slug
     assert not reach.decide(found, "bot:health-monitor", "human:cara").allowed
 
@@ -599,3 +599,75 @@ def test_a_direct_report_reaches_the_owner_and_other_people_stay_closed(api):
     task(api, "pd-test", "human:ana", title="From a direct report")
     message(api, "pd-test", "human:ana", "Hello owner.")
     task(api, "pd-test", "human:cara", title="To Cara", expected=409)
+
+
+def test_a_task_for_the_person_goes_through_the_manager_who_passes_it_on_and_the_filer_is_woken_when_it_ends(api):
+    """Initech, Nov 11: the SEO Owner files "Apply: ..." for the person who puts changes live. Two levels down it does
+    not reach them: the refusal names its Manager, the Manager reassigns the task to the person, and the person's done
+    ends the wait the filing bot snoozed its own task on. Here product-design is the filer, cpo its Manager, Ben the
+    person above."""
+    chart(api)
+    as_bot(api, "cpo", "cpo-test")
+    bet = task(api, "ben-test", "bot:product-design", title="Add a sitemap")
+    # Upkeep with no task the person is on (playbooks/watch.md): nothing is shared, so the person is out of reach.
+    refused = task(api, "pd-test", "human:ben", title="Apply: add the sitemap", expected=409)
+    assert refused["error"]["via"] == "bot:cpo" and "who can pass it on" in refused["error"]["detail"], refused
+    filed = task(api, "pd-test", "bot:cpo", title="Apply: add the sitemap", parent=bet["id"])
+
+    def post_task(tid, verb, token, **body):
+        with api.app.state.store.read() as c:
+            version = H.task(c, tid)["version"]
+        r = api.post(f"/api/v2/tasks/{tid}/{verb}", json={**body, "version": version}, headers=headers(token))
+        assert r.status_code == 200, r.text
+
+    post_task(bet["id"], "snooze", "pd-test", until="2099-01-01T08:00:00Z", why="Waiting for the sitemap to be applied")
+    post_task(filed["id"], "owner", "cpo-test", owner="human:ben", why="Only a person can change the site")
+    with api.app.state.store.read() as c:
+        assert H.task(c, filed["id"])["owner_id"] == "human:ben"
+        since = c.execute("SELECT max(rowid) FROM messages").fetchone()[0]
+    post_task(filed["id"], "done", "ben-test")
+    with api.app.state.store.read() as c:
+        from backend import task_engine as E
+
+        assert not E.task(c, bet["id"])["snooze"], "the filing bot's wait ended with the task it filed"
+        woke = c.execute(
+            "SELECT m.body FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "WHERE j.bot_id='product-design' AND j.state='queued' AND m.rowid>?",
+            (since,),
+        ).fetchall()
+    assert any("Apply: add the sitemap: Done" in r["body"] for r in woke), [r["body"] for r in woke]
+
+
+def test_a_bot_reaches_the_bot_that_worked_the_task_in_an_earlier_stage(api):
+    """Finance and Ops share no manager and no team. Finance drafts, the pipeline hands the task to Ops, and Ops asks
+    Finance about the draft on that task: the bot that worked it before is one the task is shared with. Off the task,
+    Finance stays out of Ops's reach."""
+    from backend.tests.helpers import engine as X
+
+    chart(api)
+    as_bot(api, "finance", "fin-test")
+    as_bot(api, "ops", "ops-test")
+    assert not reach.decide(ctx(api), "bot:ops", "bot:finance").allowed
+    with api.app.state.store.transaction() as c:
+        X.pipeline(
+            c,
+            "copy",
+            "Copy",
+            (
+                {"name": "Draft", "owner": "bot:finance", "requirements": [{"kind": "owner_done"}]},
+                {"name": "Edit", "owner": "bot:ops", "requirements": [{"kind": "owner_done"}]},
+            ),
+        )
+    copy = task(api, "ben-test", "bot:finance", title="Copy task", pipeline="copy")
+    r = api.post(f"/api/v2/tasks/{copy['id']}/done", json={"version": copy["version"]}, headers=headers("fin-test"))
+    assert r.status_code == 200, r.text
+    with api.app.state.store.read() as c:
+        now = H.task(c, copy["id"])
+    assert now["owner_id"] == "bot:ops"
+    r = api.post(
+        f"/api/v2/tasks/{copy['id']}/asks",
+        json={"to": "bot:finance", "line": "Which figure is the launch price?", "version": now["version"]},
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    task(api, "ops-test", "bot:finance", title="Something new for Finance", expected=409)

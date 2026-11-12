@@ -17,10 +17,10 @@ by hand. Link each occurrence (task ids, reports). One-off work is routed, not h
     tico team show
 
 Choose one template from `team_templates` on this bot's card whose first routine covers the work:
-specs and launch checklists → `product-manager`; usage and experiment questions → `product-analyst`;
-feature-request ledger, betas, release calendar → `product-ops`; interface copy → `ux-writer`; prices
-and packaging → `pricing`; feedback themes → `feedback-analyst`; interviews and studies →
-`product-researcher`. If `tico team show` shows it already exists, route to it instead.
+specs and launch checklists → `segment-product-owner`; usage and experiment questions → `product-analyst`;
+feature-request ledger, betas, release calendar → `product-operations-manager`; interface copy → `ux-writer`; prices
+and packaging → `pricing-analyst`; feedback themes → `customer-insights-analyst`; interviews and studies →
+`ux-researcher`. If `tico team show` shows it already exists, route to it instead.
 
 ## 3. Propose
 

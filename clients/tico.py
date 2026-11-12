@@ -65,6 +65,41 @@ class APIError(Exception):
         self.extra = extra or {}
 
 
+def http_failure(exc, key):
+    """The APIError for an HTTP error answer: the server's code, detail and extra fields, retryable on 429 and 5xx."""
+    try:
+        payload = json.load(exc)
+    except ValueError:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    error = payload.get("error", {})
+    if isinstance(error, str):
+        # A flat refusal: `error` is the code, `detail` (a task refusal) or `message` (CONTRACT §1 task
+        # caps) the words, the rest is extra (a task refusal's `missing`, `next` and `version`).
+        error = {
+            "code": error,
+            "detail": payload.get("detail") or payload.get("message") or "",
+            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
+        }
+    if not isinstance(error, dict):
+        error = {}
+    # Cloudflare answers 502 then 530 (Error 1033, tunnel down) with a problem-detail
+    # body and no `error` key while a deploy activates; keep its title so the log says why.
+    detail = error.get("detail") or (
+        f"HTTP {exc.code}" + (": " + str(payload["title"])[:200] if payload.get("title") else "")
+    )
+    retryable = exc.code == 429 or 500 <= exc.code < 600
+    return APIError(
+        error.get("code", "http_error"),
+        detail,
+        exc.code,
+        retryable,
+        key,
+        {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")},
+    )
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         # A Cloudflare login redirect is an auth failure, not a destination for credentials.
@@ -116,17 +151,8 @@ class Client:
             if raw is not None
             else (json.dumps(body).encode() if body is not None else None)
         )
-        # Persistent harnesses retain a reference, never an expired per-turn token.
-        token = self.token
-        if token.startswith("tico-file:"):
-            try:
-                token = Path(token[len("tico-file:") :]).read_text().strip()
-            except OSError:
-                token = ""
-            if not token:
-                raise APIError("stale_lease", "No active Hub turn; wait for a new request", status=409)
         headers = {
-            "Authorization": "Bearer " + token,
+            "Authorization": "Bearer " + self.bearer(),
             "Accept": "application/json",
             "User-Agent": "Tico-Client/" + CLIENT_VERSION,
         }
@@ -204,37 +230,7 @@ class Client:
                                     "file_integrity", "Tico file response failed its size or integrity check"
                                 )
                             return data
-                    try:
-                        payload = json.load(exc)
-                    except ValueError:
-                        payload = {}
-                    if not isinstance(payload, dict):
-                        payload = {}
-                    error = payload.get("error", {})
-                    if isinstance(error, str):
-                        # A flat refusal: `error` is the code, `detail` (a task refusal) or `message` (CONTRACT §1 task
-                        # caps) the words, the rest is extra (a task refusal's `missing`, `next` and `version`).
-                        error = {
-                            "code": error,
-                            "detail": payload.get("detail") or payload.get("message") or "",
-                            **{k: v for k, v in payload.items() if k not in ("error", "message", "detail")},
-                        }
-                    if not isinstance(error, dict):
-                        error = {}
-                    # Cloudflare answers 502 then 530 (Error 1033, tunnel down) with a problem-detail
-                    # body and no `error` key while a deploy activates; keep its title so the log says why.
-                    detail = error.get("detail") or (
-                        f"HTTP {exc.code}" + (": " + str(payload["title"])[:200] if payload.get("title") else "")
-                    )
-                    retryable = exc.code == 429 or 500 <= exc.code < 600
-                    failure = APIError(
-                        error.get("code", "http_error"),
-                        detail,
-                        exc.code,
-                        retryable,
-                        key,
-                        {k: v for k, v in error.items() if k not in ("code", "detail", "retryable")},
-                    )
+                    failure = http_failure(exc, key)
             except (urllib.error.URLError, TimeoutError, ConnectionError):
                 failure = APIError(
                     "unavailable",
@@ -251,6 +247,40 @@ class Client:
             if not failure.retryable or attempt == self.retries:
                 raise failure
             time.sleep(min(2**attempt, 5) + random.random() * 0.2)
+
+    def bearer(self):
+        """The token to send. Persistent harnesses retain a reference (`tico-file:PATH`), never an expired per-turn
+        token."""
+        token = self.token
+        if token.startswith("tico-file:"):
+            try:
+                token = Path(token[len("tico-file:") :]).read_text().strip()
+            except OSError:
+                token = ""
+            if not token:
+                raise APIError("stale_lease", "No active Hub turn; wait for a new request", status=409)
+        return token
+
+    def stream(self, path, query=None, last_event_id=None, timeout=60):
+        """Open a server-sent event stream (GET /api/v2/events) and return the open response; read it by lines. An
+        HTTP refusal raises APIError as `request` does; a network failure raises APIError `unavailable` (retryable)."""
+        filtered = {k: v for k, v in (query or {}).items() if v not in (None, "")}
+        url = self.url + "/api/v2/" + path.lstrip("/") + ("?" + urllib.parse.urlencode(filtered) if filtered else "")
+        headers = {
+            "Authorization": "Bearer " + self.bearer(),
+            "Accept": "text/event-stream",
+            "Cache-Control": "no-store",
+            "User-Agent": "Tico-Client/" + CLIENT_VERSION,
+        }
+        if last_event_id is not None:
+            headers["Last-Event-ID"] = str(last_event_id)
+        try:
+            return self.opener.open(urllib.request.Request(url, headers=headers, method="GET"), timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            with exc:
+                raise http_failure(exc, None) from None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            raise APIError("unavailable", "Tico's event stream could not be reached", retryable=True) from None
 
     def get(self, path, /, **query):  # positional: a query may carry its own "path" (file-approvals does)
         filtered = {k: v for k, v in query.items() if v is not None}

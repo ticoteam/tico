@@ -200,11 +200,10 @@ def test_a_shared_room_home_keeps_its_legacy_readers(api):
 
 def test_assistant_rooms_and_other_rows_stay(api):
     with store(api).transaction() as c:
-        coo = room(c, "human:ana", "coo")
         assistant = H.open_conversation(
             c,
             "human:ana",
-            ["human:ana", "bot:coo"],
+            ["human:ana", "bot:assistant"],
             kind="chat",
             subject="Assistant",
             scope=rooms.PERSONAL,
@@ -218,12 +217,12 @@ def test_assistant_rooms_and_other_rows_stay(api):
     summary = merge(api)
     assert summary["rooms"] == 0, summary
     with store(api).read() as c:
-        for cid in (coo, assistant, dm):
+        for cid in (assistant, dm):
             row = threads.thread_row(c, cid)
             assert not row["closed_at"], cid
             assert bot_home_merge.home_for(c, cid) is None
         assert seqs(c, closed)
-        assert threads.home(c, "bot:coo", create=False) is None
+        assert threads.home(c, "bot:assistant", create=False) is None
 
 
 def test_a_second_run_changes_nothing(api, ops_rooms):
@@ -320,8 +319,8 @@ def test_a_persons_chat_with_a_moved_bot_is_its_home_on_every_route(api, ops_roo
     with store(api).transaction() as c:
         assert rooms.personal_room(c, "human:ana", "ops")["id"] == home
         assert rooms.work_room(c, auth, "ops", "human:ana")["id"] == home
-        assert threads.home(c, "bot:coo", create=False) is None
-        assert rooms.personal_room(c, "human:ana", "coo")["id"] != home
+        assert threads.home(c, "bot:assistant", create=False) is None
+        assert rooms.personal_room(c, "human:ana", "assistant")["id"] != home
     sent = api.post("/api/v2/chat/ops", json={"text": "Hello from Ana"}, headers=headers("ana-test"))
     assert sent.status_code == 200, sent.text
     assert sent.json()["conversation"]["id"] == home
@@ -528,14 +527,6 @@ def test_a_write_to_an_open_room_asks_for_no_home_lookup(api, ops_rooms):
     assert not [s for s in recorded.statements if "home_merges" in s], recorded.statements
 
 
-def test_a_chat_with_a_bot_the_move_never_reached_costs_one_lookup(api):
-    """Finding 4: a bot the move never reached costs one lookup to learn that, on every chat asked about it."""
-    with store(api).transaction() as c:
-        recorded = Recorded(c)
-        assert bot_home_merge.home_for_chat(recorded, "human:ben", "finance") is None
-    assert len(recorded.statements) == 1, recorded.statements
-
-
 def test_an_explicit_reply_to_a_moved_room_with_an_archived_home_is_checked_in_the_new_home(api, ops_rooms):
     """A reply that names a moved room whose Home is archived makes the bot's Home before the checks (as the implicit
     path does), so a private run's reply is refused in that Home and a person's reply lands in the new one."""
@@ -726,13 +717,6 @@ def fay_room(api, ops_rooms):
     with store(api).read() as c:
         assert threads.actor_viewer(c, "human:fay") is None
     return {"room": cid, "message": first}
-
-
-def test_an_owner_with_no_viewer_gets_the_home_from_home_for_chat(api, ops_rooms, fay_room):
-    merge(api)
-    with store(api).transaction() as c:
-        assert bot_home_merge.home_for_chat(c, "human:fay", "ops", create=False) == ops_rooms["home"]
-        assert not bot_home_merge.chat_home_missing(c, "human:fay", "ops")
 
 
 def test_a_new_chat_with_an_owner_with_no_viewer_is_the_home(api, ops_rooms, fay_room):

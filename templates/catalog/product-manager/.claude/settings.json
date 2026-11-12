@@ -21,7 +21,10 @@
       "Bash(gh pr edit *)",
       "Bash(gh pr merge *)",
       "Bash(gh repo delete *)",
-      "Bash(git push --force*)"
+      "Bash(git push --force*)",
+      "Bash(gh pr close *)",
+      "Bash(gh api *)",
+      "Bash(git push -f*)"
     ]
   }
 }

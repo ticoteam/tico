@@ -103,6 +103,58 @@ fn tool_of(item: &Value) -> (String, String) {
     }
 }
 
+/// A failed tool item's command (its paths or its input when it has none) and what it printed or the error it ended with, for the
+/// run's capture (crate::run_diagnostics::failed_tool): `commandExecution`'s `command` and `aggregatedOutput`, an MCP
+/// or dynamic call's arguments and its error, result or content items, a function call's output.
+fn failed_detail(item: &Value) -> (String, String) {
+    let command = match (&item["command"], tool_of(item).1) {
+        (Value::String(c), _) => c.clone(),
+        (_, summary) if !summary.is_empty() => summary, // a file change's paths, never its diff
+        _ => ["arguments", "input"]
+            .iter()
+            .map(|k| &item[*k])
+            .find(|v| !v.is_null())
+            .map(|v| match v {
+                Value::String(s) => s.clone(),
+                other => other.to_string(),
+            })
+            .unwrap_or_default(),
+    };
+    let output = [
+        "aggregatedOutput",
+        "error",
+        "output",
+        "result",
+        "contentItems",
+    ]
+    .iter()
+    .map(|k| printed(&item[*k]))
+    .find(|t| !t.trim().is_empty())
+    .unwrap_or_default();
+    (command, output)
+}
+
+/// The text a tool result carries: a string, `message`/`text` fields, or the texts of a content list.
+fn printed(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items
+            .iter()
+            .map(printed)
+            .filter(|t| !t.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Value::Object(map) => ["message", "text", "content"]
+            .iter()
+            .filter_map(|k| map.get(*k))
+            .map(printed)
+            .find(|t| !t.is_empty())
+            .unwrap_or_else(|| v.to_string()),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
 /// The app server's extra skill roots for a turn: its staged company skills folder's `<name>/SKILL.md` folder
 /// (crate::company_skills::skills_root), a folder of the runner's own state. Never a folder under CODEX_HOME, which
 /// may be the operator's own.
@@ -830,6 +882,13 @@ impl CodexHost {
             fields["reads_only"] = json!(shell_reads_only(command));
         }
         self.emit(event("tool", t, u, fields));
+        let exit_code = item["exitCode"].as_i64();
+        if done && (status == "failed" || exit_code.is_some_and(|c| c != 0)) {
+            let (command, output) = failed_detail(item);
+            self.emit(crate::run_diagnostics::failed_tool(
+                &id, &name, &command, &output, exit_code,
+            ));
+        }
     }
 
     /// A `Skill` call, shaped as Claude's (hosts/claude.rs), for each skill the turn's input selects by name: a `skill`
@@ -1055,10 +1114,14 @@ impl CodexHost {
         Ok(turn)
     }
 
+    /// Write `text` into the running turn. Codex's replies for a turn that already ended (or one that is now
+    /// another turn, or a compaction) wrote nothing, so they are refusals: the runner gives the input a turn of its own.
     pub async fn steer(&self, thread_id: &str, turn_id: &str, text: &str) -> Result<(), HostError> {
-        self.request("turn/steer", json!({"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": text}]}), REQUEST_TIMEOUT)
-            .await
-            .map(|_| ())
+        match self.request("turn/steer", json!({"threadId": thread_id, "expectedTurnId": turn_id, "input": [{"type": "text", "text": text}]}), REQUEST_TIMEOUT).await {
+            Ok(_) => Ok(()),
+            Err(HostError::Failed(m)) if steer_turn_over(&m) => Err(HostError::SteerRefused(m)),
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn start_goal(
@@ -1294,6 +1357,17 @@ fn with_kind(err: &Value, msg: String) -> String {
     }
 }
 
+/// Codex's `turn/steer` errors that mean the expected turn is no longer one input can be written into.
+fn steer_turn_over(message: &str) -> bool {
+    [
+        "no active turn to steer",
+        "expected active turn id",
+        "cannot steer a compact turn",
+    ]
+    .iter()
+    .any(|m| message.contains(m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1312,7 +1386,10 @@ mod tests {
             }
             let mut got = vec![];
             while let Ok(ev) = rx.try_recv() {
-                got.push(ev);
+                // A failed call's detail goes to the run's capture, not the event stream (a test below).
+                if ev.get("failed_tool").is_none() {
+                    got.push(ev);
+                }
             }
             // These shared Python snapshots hold no outside actions; Rust adds recovery labels and whether each
             // line only reads (`cat`, `wc` and `ls` do, c3's `curl` does not).
@@ -1324,6 +1401,72 @@ mod tests {
             }
             assert_eq!(got, expected, "{}", path.display());
         }
+    }
+
+    #[tokio::test]
+    async fn a_failed_call_keeps_its_command_and_output_tail_scrubbed_and_a_good_one_keeps_nothing()
+    {
+        let path = crate::hosts::fixtures::dir("codex").join("failed-tools/stream.jsonl");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let host = CodexHost::on_home(Env::new(), tx, None);
+        for line in std::fs::read_to_string(&path).unwrap().lines() {
+            host.on_message(serde_json::from_str(line).unwrap()).await;
+        }
+        let mut failed = vec![];
+        let mut tools = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if ev["kind"] == "diagnostic" && ev["failed_tool"].is_object() {
+                failed.push(ev["failed_tool"].clone());
+            } else if ev["kind"] == "tool" {
+                tools.push(ev);
+            }
+        }
+        assert!(
+            tools
+                .iter()
+                .all(|t| t.get("output_tail").is_none() && t.get("command").is_none()),
+            "tool events stay as they were: {tools:?}"
+        );
+        assert_eq!(
+            failed
+                .iter()
+                .map(|f| f["item_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["call_ui", "call_node"],
+            "only failed calls"
+        );
+        let shell = &failed[0];
+        assert_eq!(
+            (shell["tool"].as_str(), shell["exit_code"].as_i64()),
+            (Some("shell"), Some(1))
+        );
+        assert!(shell["command"]
+            .as_str()
+            .unwrap()
+            .contains("npx playwright test ui/tests/login.spec.ts"));
+        let tail = shell["output_tail"].as_str().unwrap();
+        assert!(
+            tail.contains("Executable doesn't exist")
+                && tail.ends_with("1 failed, 50 passed (31.2s)")
+        );
+        assert!(
+            tail.lines().count() <= 40 && tail.len() <= 4096 && !tail.contains("renders row 1\n")
+        );
+        let all = serde_json::to_string(&failed).unwrap();
+        assert!(
+            !all.contains("tico_live_7f3a9c2e1b4d8f6a0e5c3b7d9a1f2e4c"),
+            "{all}"
+        );
+        let node = &failed[1];
+        assert_eq!(node["tool"], "node");
+        assert!(node["command"]
+            .as_str()
+            .unwrap()
+            .contains("chromium.launch()"));
+        assert_eq!(
+            node["output_tail"],
+            "Error: Chromium is not installed (ENOENT)"
+        );
     }
 
     #[test]
@@ -1511,9 +1654,62 @@ for line in sys.stdin:
         say({"id": msg["id"], "result": {"thread": {"id": "th-%d" % threads}}})
     elif method == "thread/resume":
         say({"id": msg["id"], "result": {"thread": {"id": p["threadId"]}}})
+    elif method == "turn/steer" and os.environ.get("FAKE_STEER_ERROR"):
+        say({"id": msg["id"], "error": {"code": -32600, "message": os.environ["FAKE_STEER_ERROR"]}})
     else:
         say({"id": msg["id"], "result": {}})
 "#;
+
+    /// A message steered just as the Codex turn ended is refused, so the runner carries it into a new turn instead of
+    /// stopping the attempt partway (Nov 12: `turn/steer: no active turn to steer` left a review waiting on a person).
+    #[tokio::test]
+    async fn a_steer_into_a_turn_that_just_ended_is_refused_not_failed() {
+        let dir =
+            std::env::temp_dir().join(format!("codex-steer-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::util::write_script(&dir.join("codex"), FAKE_APP_SERVER);
+        let path = format!(
+            "{}:{}",
+            dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let steer = |reply: &str| {
+            let env: Env = [
+                ("PATH".to_string(), path.clone()),
+                (
+                    "FAKE_CALLS".to_string(),
+                    dir.join("calls.jsonl").display().to_string(),
+                ),
+                ("FAKE_STEER_ERROR".to_string(), reply.to_string()),
+            ]
+            .into_iter()
+            .filter(|(_, v)| !v.is_empty())
+            .collect();
+            async move {
+                let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+                host.start().await.unwrap();
+                let got = host.steer("th-1", "turn-1", "Judge: unsure").await;
+                host.stop().await;
+                got
+            }
+        };
+        for reply in [
+            "no active turn to steer",
+            "expected active turn id `turn-1` but found `turn-2`",
+            "cannot steer a compact turn",
+        ] {
+            assert!(
+                matches!(steer(reply).await, Err(HostError::SteerRefused(m)) if m == format!("turn/steer: {reply}")),
+                "{reply}"
+            );
+        }
+        assert!(matches!(
+            steer("input must not be empty").await,
+            Err(HostError::Failed(_))
+        ));
+        assert!(steer("").await.is_ok());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[tokio::test]
     async fn the_app_server_gets_the_turns_skill_root_once_and_a_refusal_still_runs_the_turn() {

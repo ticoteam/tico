@@ -401,14 +401,21 @@ def from_yaml(text):
         for p in people
     ]
     chosen = {}
-    for b in _rows(doc, "employees"):
+    employees, folded = D.fold_managers(_rows(doc, "employees"), "department")
+    for at, b in enumerate(employees):
+        if isinstance(b.get("template"), str) and b["template"] in D.RETIRED:
+            continue  # its built-in comes with every install, as draft.check lets it go
+        template = D.current(b.get("template"))  # an older release's slug reads as the template that has it now
         role = (
-            next((r for r in D.ROLES if r["slug"] == b.get("template")), None)
-            or next((r for r in D.HELPERS if r["slug"] == b.get("template")), None)
-            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == b.get("template")), None)
+            next((r for r in D.ROLES if r["slug"] == template), None)
+            or next((r for r in D.HELPERS if r["slug"] == template), None)
+            or next((dict(r, lead=False, core=False) for r in D.SEATS if r["slug"] == template), None)
         )
         if not role:
-            raise D.DraftError("employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40])
+            raise D.DraftError(
+                "employees has a template Tico doesn't have: %s" % str(b.get("template"))[:40],
+                plain=D.unknown_template(D.role_name(b, at), b.get("template")),
+            )
         bot = {
             "id": _str(b.get("id")),
             "template": role["slug"],
@@ -458,7 +465,7 @@ def from_yaml(text):
         goal = {
             "id": _str(g.get("id")),
             "title": _str(g.get("title")),
-            "owner": _str(g.get("owner")),
+            "owner": folded.get(_str(g.get("owner")), _str(g.get("owner"))),
             "measure": _str(g.get("measure")),
             "unit": _str(g.get("unit")),
             "direction": g.get("direction") or "up",

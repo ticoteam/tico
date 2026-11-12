@@ -112,7 +112,7 @@ type GkTargetField = 'baseline' | 'target' | 'min' | 'max';
 
 const KPI_LABEL: Record<string, string> = {green: 'On track', yellow: 'At risk', red: 'Off track', gray: 'No fresh data', none: 'No target'};
 const KPI_QUALITY: Record<string, string> = {estimate: 'estimate', partial: 'partial'};
-const GOAL_MANAGER_ACTOR = 'bot:goal-manager';
+const GOAL_MANAGER_ACTOR = 'bot:strategy-owner';
 
 function goalActorName(actor: string | undefined) {
   if (!actor) return '';
@@ -255,14 +255,14 @@ function kpiTargetKinds(form: GkTargetForm) {
 // The yes / no row every suggestion card ends with, shared with the strategy cards: yes first, saying what it does, then
 // "No, leave it" (`no: null` for a card with one button). `line` is a plain sentence above the buttons. `decide` is what
 // the yes button sends: a one-button card that changes nothing ("Got it" on a strategy change the draft holds) rejects.
-// `reason`: once no has rejected it, the card offers a line on why (propLeftHtml), which the Strategy Bot reads.
+// `reason`: once no has rejected it, the card offers a line on why (propLeftHtml), which the Strategy Owner reads.
 function propDoHtml(p: GkProposal, {yes, no = 'No, leave it', line = '', decide = 'confirm', reason = false}: {yes: string | null; no?: string | null; line?: string; decide?: string; reason?: boolean}) {
   if (!p.may_decide) return '';
   return `<div class="kpi-prop-do">${line ? `<p class="muted kpi-prop-line">${esc(line)}</p>` : ''}${yes ? `<button class="primary" type="button" data-decide="${decide}" data-prop-yes>${esc(yes)}</button>` : ''}${no ? `<button class="ghost" type="button" data-decide="reject"${reason ? ' data-prop-reason' : ''}>${esc(no)}</button>` : ''}</div>`;
 }
 // What a card asking a reason becomes after no (already rejected, in one click): one line, a one-line box and Send.
 // Sent, the reason is the suggestion's decision note (POST /v2/proposals/{id}/note, once, by whoever said no), read by
-// the Strategy Bot before it suggests again; left, nothing more happens. The server's cap (backend/goals.py REASON_MAX).
+// the Strategy Owner before it suggests again; left, nothing more happens. The server's cap (backend/goals.py REASON_MAX).
 const PROP_REASON_MAX = 280;
 function propLeftHtml() {
   return `<form class="kpi-prop-left" data-prop-left novalidate><span class="kpi-prop-left-k">Left as it is. Tell it why? (optional)</span>
@@ -299,7 +299,7 @@ function propNowProposedHtml(rows: GkNowProposed[] | undefined) {
   return `<div class="prop-np${long ? ' prop-np-clamp' : ''}">${rows.map(r => `${rows.length > 1 && r.label ? `<div class="prop-np-label">${esc(r.label)}</div>` : ''}${cell('Now', r.now)}${cell('Proposed', r.proposed)}`).join('')}
     ${long ? '<button class="linkish" type="button" data-np-all>Show all</button>' : ''}</div>`;
 }
-// What the Strategy Bot noticed, by the flag's issue (backend/goals.py FLAGS).
+// What the Strategy Owner noticed, by the flag's issue (backend/goals.py FLAGS).
 const PROP_FLAG: Record<string, string> = {vague: 'is worded too vaguely to tell when it is done', duplicate: 'looks like a duplicate of another goal', unmeasured: 'has nothing measuring it'};
 // A goal suggestion card (the payload's words, and `card`: what the server read to say it plainly, backend/goals.py
 // card): one line on what yes changes, what it would change, why, then the buttons named for what they do.
@@ -783,9 +783,9 @@ async function kpiAddBind(form: GkAddForm, goal: GkGoal | null, done: (ok: boole
 function goalTreeShape(): {byParent: Record<string, GkTreeNode[]>} {
   const people = (S.people || []).filter(p => !p.hidden);
   const bots = (S.emps || []).filter(e => !['archived', 'retired'].includes(e.status!));
-  // The sidebar's own rule: built-ins and explicit helpers stay outside the chart. The Strategy Bot is placed and then lifted
+  // The sidebar's own rule: built-ins and explicit helpers stay outside the chart. The Strategy Owner is placed and then lifted
   // out (orgTreeWithHelpers), so the Heads and groups the server hangs under it show under the owner, as on the sidebar.
-  const placed = bots.filter(e => !isHelperBot(e) || e.id === 'goal-manager');
+  const placed = bots.filter(e => !isHelperBot(e) || e.id === 'strategy-owner');
   const keys = new Set([...(S.orgGroups || []).map(g => 'g:' + g.id), ...people.map(p => 'p:' + p.id), ...placed.map(e => 'b:' + e.id)]);
   const byParent: OrgByParent = {}, groupOf = orgGroupOf(people, placed);
   const put = (parent: string, node: OrgNode) => (byParent[keys.has(parent) ? parent : ''] ||= []).push(node);
@@ -857,7 +857,7 @@ function goalBetLineHtml(state: GkState, g: GkGoal) {
 }
 
 // ---------------------------------------------------------------- a goal's Why
-// One line tying a goal to the vision (backend/company.py). The Strategy Bot proposes it; a person who may edit the
+// One line tying a goal to the vision (backend/company.py). The Strategy Owner proposes it; a person who may edit the
 // goal
 // accepts it, edits it or writes their own. A goal with none is "Not tied to the vision": a note, not an error.
 const GOAL_NOT_TIED = 'Not tied to the vision';
@@ -886,7 +886,7 @@ function bindGoalWhy(state: GkState, root: HTMLElement, reload: () => Promise<vo
   const decide = async (b: HTMLButtonElement, body: {decision: string}) => {
     const id = b.closest<GkEl<'whyProp'>>('[data-why-prop]')!.dataset.whyProp;
     b.disabled = true;
-    // Refused (the Strategy Bot replaced the line meanwhile): draw the panel again, so they read the line now waiting.
+    // Refused (the Strategy Owner replaced the line meanwhile): draw the panel again, so they read the line now waiting.
     try { await post(`/v2/proposals/${encodeURIComponent(id)}/decide`, body); await reload(); }
     catch (e) { toast(errorMessage(e, 'Could not decide'), true); b.disabled = false; await reload(); }
   };
@@ -1287,9 +1287,9 @@ function goalPanelRender(state: GkState<GkPanel | null>) {
 }
 
 // ---------------------------------------------------------------- Needs you
-// Each item is a Strategy Bot task for the caller (backend/goal_asks.py), the same one Tasks and Decide show: linked.
+// Each item is a Strategy Owner task for the caller (backend/goal_asks.py), the same one Tasks and Decide show: linked.
 const needTaskLink = (it: GkNeed) => it.task ? `<a class="need-task muted" href="#/task/${esc(it.task.id)}" data-need-task>Task</a>` : '';
-// The Strategy Bot's recovery for a red or stalled goal (level 2): the evidence, each option in plain words with its
+// The Strategy Owner's recovery for a red or stalled goal (level 2): the evidence, each option in plain words with its
 // pick
 // marked, one Approve per option and one Reject for them all. A part that can't happen now says why.
 function recoveryHtml(it: GkNeed) {
@@ -1302,7 +1302,7 @@ function recoveryHtml(it: GkNeed) {
     <ol class="rec-opts">${options}</ol></div>
     <div class="kpi-prop-do"><button class="ghost" type="button" data-decide="reject">Reject</button></div>${needTaskLink(it)}</li>`;
 }
-// Needs you on the Goals tab: one quiet line ("Strategy Bot suggested a new bet · Review"); Review opens the cards in a
+// Needs you on the Goals tab: one quiet line ("Strategy Owner suggested a new bet · Review"); Review opens the cards in a
 // sheet, where each is answered as it would be in the Ask panel or the Needs you queue.
 function goalNeedSay(it: GkNeed) {
   const p: Partial<GkProposal> = it.proposal || {}, who = goalActorName(p.proposed_by || GOAL_MANAGER_ACTOR) || strategyBotName();
@@ -1374,7 +1374,7 @@ function goalNeedsHtml(items: GkNeed[]) {
   const rows = items.map(it => {
     if (it.kind === 'recovery') return recoveryHtml(it);
     if (it.kind === 'proposal') return proposalHtml({...it.proposal!, may_decide: true}, it.kpi_name || it.goal_title || '').replace(/<\/li>$/, `${needTaskLink(it)}</li>`);
-    // Where the Strategy Bot is on: the vision, written on Strategy, and the Why lines waiting on this
+    // Where the Strategy Owner is on: the vision, written on Strategy, and the Why lines waiting on this
     // person, one row for all of them, each goal opening its panel where the Why is accepted or edited.
     if (it.kind === 'vision') return `<li class="need-row" data-need-vision tabindex="0" role="button">${gdot('gray')}<span class="need-text"><b>Say what this company is for</b><span class="muted">: write the summary on Strategy</span></span>${needTaskLink(it)}</li>`;
     if (it.kind === 'why') {

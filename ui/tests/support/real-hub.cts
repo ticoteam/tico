@@ -25,7 +25,7 @@ export interface HubOptions {
   env?: Record<string, string>;
 }
 
-// A started hub. `tokens` maps each teammate id ("ana", "dana", "engineering-lead", ...) to its Bearer token; `runner`
+// A started hub. `tokens` maps each teammate id ("ana", "dana", "engineering-manager", ...) to its Bearer token; `runner`
 // is the world's runner token (to claim a bot's run as its computer would); `skipped` names seeds that waited for a
 // route the app does not have yet; `stop()` kills the hub process this call started, by its pid.
 export interface Hub {

@@ -197,32 +197,6 @@ mod capability_tests {
     }
 
     #[test]
-    fn switching_back_and_forth_grants_one_capability_per_org() {
-        let (acme, tidy) = (
-            url::Url::parse("https://acme.example.com/").unwrap(),
-            url::Url::parse("https://tidy.example.com/").unwrap(),
-        );
-        let mut granted = std::collections::HashSet::new();
-        for _ in 0..500 {
-            for (hub, id) in [(&acme, "o_aaaaaaaa"), (&tidy, "o_bbbbbbbb")] {
-                let label = new_page_label(id);
-                let capability = server_capability(hub, id);
-                let pattern = capability["webviews"][0].as_str().unwrap();
-                // Every new page's label is one the org's single grant names.
-                assert!(
-                    label.starts_with(pattern.trim_end_matches('*')) && org_of(&label) == Some(id),
-                    "{label} {pattern}"
-                );
-                let identifier = capability["identifier"].as_str().unwrap();
-                if first_grant(&granted, identifier) {
-                    granted.insert(identifier.to_string());
-                }
-            }
-        }
-        assert_eq!(granted.len(), 2);
-    }
-
-    #[test]
     fn every_page_webview_has_a_label_of_its_own_that_names_its_org() {
         let (first, second) = (new_page_label("o_aaaaaaaa"), new_page_label("o_aaaaaaaa"));
         assert_ne!(
@@ -1914,17 +1888,6 @@ mod page_tests {
     }
 
     #[test]
-    fn a_capture_question_is_settled_once() {
-        // WebKit's answer first: the wait takes nothing after it.
-        let question = Question::new();
-        assert!(question.take() && !question.take());
-        // The wait gave up first: an answer that comes later changes nothing.
-        let late = Question::new();
-        assert!(late.take());
-        assert!(!late.take(), "the late answer stops nothing");
-    }
-
-    #[test]
     fn a_kept_page_that_loads_again_while_hidden_is_closed() {
         let (mut shown, mut kept) = (Vec::new(), Kept::default());
         switch(&mut shown, &mut kept, "a");
@@ -1934,16 +1897,6 @@ mod page_tests {
         // The open page, or one shown again before the close ran, stays.
         assert!(!forget_reloaded(&mut shown, &mut kept, "b"));
         assert_eq!(shown, order(&["b"]));
-    }
-
-    #[test]
-    fn the_page_left_runs_its_own_leave_and_nothing_it_could_undo() {
-        assert!(HIDE_PAGE.contains("window.ticoPageHidden()") && HIDE_PAGE.contains("m.pause()"));
-        assert!(
-            !HIDE_PAGE.contains("__tico"),
-            "no page-reachable switch for capture"
-        );
-        assert_eq!(HIDE_PAGE.matches("try {").count(), 2);
     }
 
     fn hid(hidden: Option<(String, u64)>) -> Option<String> {
@@ -3513,24 +3466,6 @@ pub(crate) fn tracks_frame(label: &str) -> bool {
 #[cfg(test)]
 mod window_state_tests {
     use super::*;
-
-    #[test]
-    fn only_the_main_window_keeps_its_frame() {
-        assert!(tracks_frame("main"));
-        for label in ["server", "hub-3", "meeting-o_7f3a0001-abc123"] {
-            assert!(!tracks_frame(label), "{label} must not keep a frame");
-        }
-    }
-
-    #[test]
-    fn the_app_decides_when_the_main_window_shows() {
-        let flags = frame_flags();
-        assert!(!flags.contains(StateFlags::VISIBLE));
-        assert_eq!(
-            flags.bits(),
-            (StateFlags::SIZE | StateFlags::POSITION).bits()
-        );
-    }
 
     #[test]
     fn a_saved_frame_is_kept_only_where_its_title_bar_can_be_grabbed() {

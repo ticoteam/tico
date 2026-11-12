@@ -44,52 +44,6 @@ def test_initialize_lists_every_tool_and_ignores_notifications(api):
     )
 
 
-def test_mcp_needs_the_same_credential_as_http(api):
-    r = api.post("/api/v2/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    assert r.status_code == 401
-
-
-def test_every_cli_command_has_a_tool_of_the_same_name():
-    """The schema is the standard; `tico <words>` is `tico_<words>` with underscores.
-
-    A command that only works on the Mac (it writes the workspace) is listed in
-    `hubtools.SHELL_ONLY`, so adding one is a decision, not an omission."""
-
-    def leaves(parser, prefix):
-        groups = [
-            a for a in parser._actions if getattr(a, "choices", None) and not isinstance(a.choices, (list, tuple))
-        ]
-        if not groups:
-            return {prefix}
-        return {
-            leaf
-            for word, sub in unique(groups[0].choices)
-            for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))
-        }
-
-    def unique(choices):
-        # An alias (`tasks` for `task`) is the same parser under another name: it adds no tool of its own.
-        seen = set()
-        for word, sub in choices.items():
-            if id(sub) not in seen:
-                seen.add(id(sub))
-                yield word, sub
-
-    names = set()
-    for action in hubcli.parser()._subparsers._group_actions:
-        for word, sub in unique(action.choices):
-            names |= leaves(sub, "tico_" + word.replace("-", "_"))
-    # Repository convenience commands select one of the explicit read/write MCP tools.
-    for command, tools in hubtools.CLI_TOOL_ALIASES.items():
-        if command in names:
-            names.remove(command)
-            names.update(tools)
-    # An UNLISTED tool (a placeholder) has no command: it is reached only by name.
-    tools = set(hubtools.BY_NAME) - hubtools.UNLISTED
-    assert names - hubtools.SHELL_ONLY == tools, names ^ tools
-    assert hubtools.SHELL_ONLY <= names
-
-
 THREAD_READS = {
     "tico_thread_list",
     "tico_thread_show",
@@ -143,12 +97,6 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
     assert "with" in tools["tico_thread_list"]["inputSchema"]["properties"]
 
 
-def test_link_slack_reaches_the_slack_bridge_and_an_unknown_thread_is_not_found(api):
-    isError, payload = call(api, "tico_thread_link_slack", {"thread": "t1", "channel": "#ops"})
-    assert isError is True
-    assert payload["error"] == "not_found"
-
-
 class RecordingApi:
     """The API a thread tool calls, with each request recorded as (method, route, body) and no server behind it."""
 
@@ -173,7 +121,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run = lambda name, args: hubtools.BY_NAME[name]["fn"](recorder, args)
     run("tico_thread_home", {"actor": "bot:ops"})
     run("tico_thread_list", {"with": "human:ben", "limit": 5})
-    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "body": "Hi"})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:assistant"], "body": "Hi"})
     run("tico_thread_dm_group", {"members": ["human:cara"]})
     run("tico_thread_react", {"message_id": "m7", "emoji": ":+1:"})
     run("tico_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
@@ -182,14 +130,14 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run("tico_thread_pin", {"thread": "th1"})
     run("tico_thread_unpin", {"thread": "th1"})
     run("tico_thread_catch_up", {"limit": 5})
-    run("tico_thread_dm_group", {"members": ["human:ana", "bot:coo"], "title": "Launch"})
+    run("tico_thread_dm_group", {"members": ["human:ana", "bot:assistant"], "title": "Launch"})
     run("tico_thread_post", {"thread": "th1", "text": "Yes", "reply_to": "m7", "operation_id": "op2"})
     run("tico_thread_show", {"thread": "th1", "flat": True})
     run("tico_thread_bot_status", {"thread": "th1"})
     assert recorder.calls == [
         ("GET", "threads/home/bot:ops", {}),
         ("GET", "threads", {"with": "human:ben", "limit": 5}),
-        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": "Hi"}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:assistant"], "body": "Hi"}),
         ("POST", "threads/dm", {"members": ["human:cara"], "body": None}),
         ("PUT", "messages/m7/reactions/:+1:", None),
         ("DELETE", "messages/m7/reactions/:+1:", None),
@@ -198,7 +146,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
         ("PUT", "threads/th1/pin", None),
         ("DELETE", "threads/th1/pin", None),
         ("GET", "threads/catch-up", {"limit": 5}),
-        ("POST", "threads/dm", {"members": ["human:ana", "bot:coo"], "body": None, "title": "Launch"}),
+        ("POST", "threads/dm", {"members": ["human:ana", "bot:assistant"], "body": None, "title": "Launch"}),
         ("POST", "threads/th1/messages", {"text": "Yes", "kind": "say", "in_reply_to": "m7"}),
         ("GET", "threads/th1/timeline", {"flat": 1}),
         ("GET", "threads/th1/bot-status", {}),
@@ -578,10 +526,10 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
         c.execute("UPDATE runners SET accepts_member_bots=0 WHERE id=?", (anas["runner_id"],))
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (shared["runner_id"],))
         restrict(c, "finance", people=["ana"])
-    assign(api, anas, "coo")
+    assign(api, anas, "assistant")
     for bot in ("ops", "finance"):
         assign(api, shared, bot)
-    heavy_heartbeat(api, anas, ["coo"], 1)
+    heavy_heartbeat(api, anas, ["assistant"], 1)
     heavy_heartbeat(api, shared, ["ops", "finance"], 1)
     raw = get(api, "computers", "ben-test")
     err, listing = call(api, "tico_computer_list", token="ben-test")

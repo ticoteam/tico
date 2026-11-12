@@ -7,9 +7,9 @@ The chart in the app is the **Team** sidebar: each group is a section that opens
 and bots, with the groups inside it below them. A group's name opens its team page ([Company](overview.md)). A human or bot with no group sits at the top. The top of the chart is not drawn as
 one more level: the owner, when nobody is above them and they are in no group (else the only human nobody is above), is a
 row of its own, and the groups, then the humans and bots, that report to them sit beside it rather than under it. Any other
-human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (the Assistant, BotOps, the
-Librarian, the Strategy Bot) sit in a Built-in group under the chart, folded until someone opens it, and stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
-the Librarian is reached from Docs and Market, the Strategy Bot from its panel beside the Strategy tabs. Settings > Bots lists all four.
+human nobody is above follows as an ordinary row with their reports under them. With no such top person it nests as before. The built-in bots (BotOps, the
+Librarian, the Strategy Owner and the others) are the General Manager's team: the General group comes last on the chart, folded until someone opens it, with the General Manager as its first row and its reports under it. The Assistant reports to its person and sits beside the top person's other reports. The built-ins stay out of the Goals tree. **Tico Assistant** opens the Assistant from any page except its own and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs it;
+the Librarian is reached from Docs and Market, the Strategy Owner from its panel beside the Strategy tabs. Settings > Bots lists all four.
 
 Your unread messages in a one-to-one DM with a teammate show as a count on that teammate's row, for people as well as bots.
 
@@ -22,8 +22,8 @@ and a **Recruiting** mark where its reporting line puts it: under its bot or hum
 chart lays out roles under roles, `reports_to: seat:<id>`). Hover it for its job description. It is not dragged and nothing
 is dropped on it; under a bot you may not see it hangs from the next row up, and it is left out of the recently-opened list.
 The sidebar reads seats from `seats` on `GET /api/humans`, the same rows as `seats` on `GET /api/v2/org`.
-The built-in **Strategy Bot** ([Your Strategy Bot](strategy-bot.md)) is on every install. The server hangs the Heads, each in its department's group, and the bots that report to no one under it; since it is not on the chart, the app shows them under the owner.
-Explicitly marked helper bots stay apart; the built-in bots are in the Built-in group. Only the chart moves: nobody's `reports_to` and
+The built-in **Strategy Owner** ([Your Strategy Owner](strategy-bot.md)) is on every install. In a company started on the Manager chart it reports to the General Manager and the chart is the reporting lines as they are. Where it reports to a person, the server hangs the Heads, each in its department's group, and the bots that report to no one under it, and the app shows them under the owner.
+Explicitly marked helper bots stay apart; the built-in bots are in the General group. Only the chart moves: nobody's `reports_to` and
 nobody's access changes, and `tico team show` still gives each bot the `reports_to` it has.
 Assigning a mailbox to a bot does not make it a helper: it stays on Team and Goals under its manager, or at the top
 when nobody is above it. Its mailboxes and Slack channels are listed under its Team row. Sources whose bot is off the
@@ -112,12 +112,12 @@ Owners and admins change groups; everyone else reads them.
 - **In the API**: `GET /api/v2/groups` lists them with their humans and the bots you may see; `POST /api/v2/groups` adds one
   (`{"name", "parent", "add": {"people": [], "bots": []}}`); `PATCH /api/v2/groups/{id}` renames it, moves it (`"parent": ""` is the top) and
   adds or removes teammates (`"add"`, `"remove"`); `DELETE /api/v2/groups/{id}` removes it, and the groups and teammates in it move up to
-  its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one. The Built-in group is kept by Tico: it cannot be renamed, moved or deleted (422), and no bot can be added to it by hand.
+  its parent. A group cannot go under itself or a group inside it, and a built-in bot cannot join one. The General group is kept by Tico: it cannot be renamed, moved or deleted (422), and no bot can be added to it by hand.
 - **With the tools**: `tico group list`, `tico group update [<group>] [--name] [--parent] [--lead] [--add-human] [--add-bot] [--remove-human]
   [--remove-bot]` and `tico group delete <group>` (`tico_group_list`, `tico_group_update`, `tico_group_delete`); with no group given, `update`
   creates one from `--name`. `tico org reports-to <bot:slug|human:id> <manager>` (`tico_org_reports_to`) changes who a teammate reports to.
   BotOps does the same as the person who asked it, with their own rights: a member is refused, an owner or an admin is not.
-- **With the Strategy Bot**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
+- **With the Strategy Owner**: it suggests org changes in plain words in its chat and changes nothing on its own. When the person tells it
   to make one, it runs the tools above citing their message (`--on-behalf-of turn`), with exactly that person's rights.
 
 Naming a group in an access list (`group:legal`, [permissions.md](permissions.md)) or in a human's `primary_for` names everyone in that
@@ -141,7 +141,7 @@ team chart, messaging icons beside humans open their matching bot's messages. A 
 Team row, unless explicitly marked as a helper. Shared mailboxes such as `shared@acme.example` can stay on the roster for mail routing with
 `hidden: true`, so they do not appear in the tree.
 
-Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox`
+Every Acme address is `<firstname>@acme.example`. Personal message bots come from the `inbox-manager`
 template and read only the assigned mailbox by default. The template seeds one weekday 07:30 Routine in America/Los_Angeles, initially disabled.
 Extra passes are optional owner choices; reading a report's mail is a grant that report gives (Tools). Each mailbox has its
 own rules in `registry/mail-rules.yaml`. Photos prefer a Google Workspace Directory thumbnail
@@ -152,7 +152,7 @@ profile image stored on the roster.
 
 | Group | Bots |
 |---|---|
-| marketing | The CMO bot and the SEO, analytics, listening and content bots. |
+| marketing | The Head of Marketing (`growth-manager`), and under it the six channel Owners of the growth packs (SEO, Content, Email, CRO, Search Ads, Social Ads; docs/pipelines-v3.md "Growth and Success") and the Video Owner, which reports to the built-in Design Owner. |
 | product | The Product Manager bot and everything under it. |
 | sales | Sales operations and the sales-process bots. |
 | engineering | The CTO bot, which monitors CI, deploys, alerts, security and cost. |

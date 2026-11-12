@@ -95,6 +95,16 @@ def computer_login(readiness, runtime):
     return {**state, **profile}
 
 
+def api_key_login(state):
+    """Whether a runtime's login is an API key rather than a plan: the account the runner read says so, or it reports a
+    key. An account the runner has not read yet is not known to be a key."""
+    return (
+        (state.get("account") or {}).get("kind") == "api_key"
+        or bool(state.get("key"))
+        or "api key" in str(state.get("detail") or "").lower()
+    )
+
+
 def login_warning(readiness, runtime, harness=""):
     """An API login has separate billing; a missing plan reading says nothing about its API credit."""
     caps = harness_caps(harness, runtime)
@@ -103,11 +113,7 @@ def login_warning(readiness, runtime, harness=""):
     state = computer_login(readiness, runtime)
     if state.get("authenticated") != "ready":
         return ""
-    if (
-        (state.get("account") or {}).get("kind") == "api_key"
-        or state.get("key")
-        or "api key" in str(state.get("detail") or "").lower()
-    ):
+    if api_key_login(state):
         return (
             "This computer uses an API key, not a subscription allowance. API credit is not checked here. "
             "Check the provider's API billing, or switch this computer to the intended subscription "

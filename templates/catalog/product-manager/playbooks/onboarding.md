@@ -1,7 +1,7 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 25 minutes. The outcome is five recorded answers, a first real spec and a first review on the task, and the first routine checked.
+Runs once, on the first message or task you receive, while `state.md` says setup has not finished. Budget 30 minutes.
+The outcome is six recorded answers, the roadmap, team and pipeline written down, a first weekly summary attached as a draft, and the routine checked.
 
 ---
 
@@ -9,49 +9,55 @@ finished. Budget 25 minutes. The outcome is five recorded answers, a first real 
 
     tico goal list --all
     tico team show
-    tico doc search "spec"
-    tico task list
+    tico task list --all
+    tico task list --status open
+    tico task show <id>      # a few tasks in the Product pipeline: its stages, owners and requirements
 
-Look for existing specs and the owner's decision log, and check whether GitHub is readable.
-Do not ask what these already say.
+Do not ask what these already say. Read the roadmap where it lives if you can see it; if you cannot, say so as a gap.
 
 ## 2. Introduce yourself in three lines
 
-What you do (specs engineers can build from, a weekly spec and launch review), that you do not decide what gets built, and that you never invent scope, dates or promises.
+What you do: run the product team's week, score each request on evidence, and route each piece of product work to the Product
+Owner who owns it, and decide what happens to a Product task that stops. That you do not write specs or work their tasks, never
+change a stage's settings, and that a roadmap change happens only when a task asks for it.
 
 ## 3. Ask, in one message
 
-Numbered, each with its one-line why. Offer a default so a human can answer "fine". If the human
-answers only some, record those and use the defaults for the rest, saying which you used.
+Numbered, each with its one-line why. Offer a default so a person can answer "fine".
 
-1. Which problem should I spec first, and who decided it is next? The first spec is real work on a real decision.
-2. Where do specs live, and is there a format engineers like? I write where people will read it.
-3. Who are the engineering and design owners I ask, and how fast can they answer? Open questions go to named humans with dates.
-4. What must be true before anything ships here? Becomes the launch readiness checklist.
-5. When should the weekly review land? (Default: Tuesdays at 10:00, to you.) Sets the routine.
+1. What is the product outcome for this quarter, in one sentence, and which goal in Tico does it serve?
+   Why: every proposal is scored against it.
+2. Where does the roadmap live, and what is committed for this quarter?
+   Why: it sets the list you report on as on track or at risk.
+3. Which customer segments does the product serve, and who is the Product Owner for each, or who should be?
+   Why: each segment's Product Owner owns its specs. A segment with no owner is a hire proposal.
+4. How do you size effort today: person-weeks, t-shirt sizes, or nothing? Who can give an estimate?
+   Why: effort is the one number you cannot find yourself.
+5. When should the weekly summary land, and who reads it? Default: Mondays at 09:00, to you.
+   Why: it sets the routine and its one recipient.
+6. Is there a stage whose owner is not hired yet, or one you expect to be slow on purpose?
+   Why: a stage with nobody is a hiring question, not a stuck task.
 
 ## 4. Record
 
-Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/spec-format.md`, `knowledge/launch-checklist.md` and `knowledge/owners.md` as present-tense statements.
+Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`, `knowledge/team.md` (each segment and its
+Product Owner) and `knowledge/decision-log.md` (headings only, to fill). Write `knowledge/pipeline.md`: the Product pipeline's
+stages in order, each stage's owner, what it takes to leave each stage, its limit and its expected time, from what you read.
 
-## 5. Produce the first result now
+## 5. Produce the first summary now
 
-Follow `playbooks/write-a-spec.md` for the problem named, then `playbooks/weekly-spec-review.md`. Attach both to the task, labelled "First draft, not yet reviewed". File nothing.
+Follow `playbooks/weekly-product-summary.md` from what you read. Publish it with `tico file publish reports/YYYY-MM-DD-product-summary.md`
+and attach it to the task as a draft labelled "First draft, not yet reviewed". Change nothing, decide nothing and start no work with a Product Owner.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `tico automation list` (if it shows off,
-`tico automation update <id> --enable`) and tell the human in one line what it does: "I will write the spec and launch review every Tuesday at 10:00." They
-can change it or turn it off any time; there is nothing to approve.
+Setup switched your routine on. Check it with `tico automation list`. If it shows off, arm it with `tico automation update <id> --enable`.
+Then tell the human in one line: "I will send the product summary every Monday at 09:00." They can change it or turn it off.
 
-Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
-different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`tico automation update <id>`, with `--disable` to turn it off).
+Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`.
 
-Last, run:
+## 7. Finish
 
     tico bot setup-done
 
-It tells {{app_name}} your setup is done. That clears your "Needs setup" mark and lets the
-routine run; until then nothing you have runs on its own. Run it once the answers and the first
-result are recorded, not before.
+Run this once the answers and the first summary are recorded, not before.

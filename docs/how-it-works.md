@@ -14,7 +14,7 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 - **Built-in**: four bots every team gets. The [Assistant](assistant.md) is each human's own helper and their one DM,
   the owner's too; the other three are helpers it hands work to. BotOps sets up and
   fixes bots, computers, Tools and Credentials; the [Librarian](librarian.md) answers from the team's docs and the Tico
-  manual; the [Strategy Bot](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [Task Manager](task-manager.md)
+  manual; the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) keeps KPIs and goal status current. The [General Manager](general-manager.md)
   is a built-in helper outside the chart: it manages the General pipeline, and once an hour it looks for tasks that say
   Paused, held bots and duplicates, and wakes only when it finds something. [Check health](health-monitor.md) is a
   plain-code step that runs hourly and opens one BotOps task
@@ -31,8 +31,8 @@ model subscriptions and sends the results back. The in-app Help page (**?** in t
 | Assistant (built-in) | Your own helper: finds things, makes tasks, drafts the rest for your click | Sidebar, or ⌘K | “What needs me today?” |
 | BotOps (built-in) | Sets up and fixes bots, computers, Tools and Credentials | Sidebar | “Add a bot that answers #support” |
 | Librarian (built-in) | Answers from your docs and the Tico manual, with sources | Ask the Librarian on Docs and on Strategy's Market tab | “What is our refund limit?” |
-| Strategy Bot (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
-| Task Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico task-manager status` |
+| Strategy Owner (built-in) | Keeps KPIs and goal colours current | Top of Goals; ask your Assistant | “Why is this goal yellow?” |
+| General Manager (built-in) | Manages General; tidies tasks hourly on weekdays: Paused tasks, held bots, duplicates | Its “Task check” tasks; its bot page → Settings | `tico general-manager status` |
 | Your bots | Do the team's work from their Instructions | Team in the sidebar: its Home or a task | “Draft replies to the open tickets” |
 | Message bots (Beta) | Work a human's email or a Slack channel | Message bots in the sidebar | “Sort today's email” |
 
@@ -72,7 +72,7 @@ Words are defined in the [Glossary](glossary.md).
   (a playbook file) or inline `instructions`, `labels`. Each occurrence becomes a task.
 - **Goal** — what a human or a bot is for: a title, an owner (`company`, a human or a bot), the goal it
   supports (`parent_id`, optional) and a colour with a one-line note. The colour is set automatically
-  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Strategy Bot**; a human
+  from the goal's KPIs (or its owner's check-ins and tasks) by the built-in **Strategy Owner**; a human
   may override it, and it stays theirs until they hand it back. `done` or `dropped` when it ends. A task
   may name the goal it serves. Bots read theirs with `tico goal list`; nothing is pushed into a run.
 - **KPI** — a measure that stands on its own: a name, definition, unit, direction, cadence and one owner.
@@ -136,11 +136,11 @@ and, for the owner and admins, **SQL**. Tasks has You and a view of each pipelin
 and Closed behind
 the archive button; Routines and wake rules are **Automations**.
 Credentials are in **Tools → Credentials**. See [Navigation](navigation.md). A bot's page has **Chat**,
-**Tasks**, **Docs** and **More**. The assistant (Tico, `coo`), BotOps, the Librarian, the Strategy Owner, the Task Manager, the Finance Owner and the Brand Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
+**Tasks**, **Docs** and **More**. The assistant (Tico, `assistant`), BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner and the Design Owner are built in and cannot be archived or deleted (`409 system_bot`); the assistant
 and the Librarian work in the background and are not listed for humans. Each human has one private **Assistant** DM, opened by **Tico Assistant** (or a page's **Ask**) from any page except its own and setup, even while the signed-out banner shows
 (`#/assistant`, also the first tab on their own page, is the same chat in full): it looks things up at once, does low-risk things as that human, and
 proposes anything with a side effect for their own click ([The Assistant](assistant.md)). The owner's DM is the
-Assistant too: it hands strategy and goal work to the Strategy Bot, research to the Librarian and bot work to BotOps. There is no shared
+Assistant too: it hands strategy and goal work to the Strategy Owner, research to the Librarian and bot work to BotOps. There is no shared
 Tico chat page and no Tico Live; humans can also act across Tico through their own external agent over Tico's
 MCP ([Connect an external agent](connect-an-agent.md)).
 The database itself is readable with plain SQL (`tico sql`, the SQL page, `POST /api/v2/sql`):
@@ -649,10 +649,10 @@ again deletes them after a confirm. Set a profile in **Settings → Bots → Edi
 `tico_bot_profile`, or `POST /api/v2/bots/{bot}/profile` with `expected_revision` (`GET /api/v2/profiles` lists the choices
 with a line each); the bot's owner, operator, a person it reports up to, or BotOps may. The profile also shows on every bot read.
 
-Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `listening` and
-`sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `pr-reviewer` that
+Starting the server gives each bot without a profile one by its name once: `*-monitor`, `*-watch`, `social-media-manager` and
+`sentry-triage` are Monitors; `*reviewer*`, `qa-*`, `security*` and `reviewer-*` Reviewers (a bot named `reviewer` that
 owns Dev tickets stays a Doer); the leads, the C-level Heads and `*-manager` Leads; the Assistant and bots synced from
-another platform Responders; BotOps, the Task Manager and the Librarian Custom; everything else a Doer.
+another platform Responders; BotOps, the General Manager and the Librarian Custom; everything else a Doer.
 Each owner gets one notice naming their bots and profiles. The old wake preset is part of the profile: Token saver became a
 Doer with a 30-minute window and Performance a Doer; `wake_preset` and `POST /api/v2/bots/{bot}/wake-preset` still read and
 set that window. **Keep N tasks going** stays the Doer's cap. Health reports a Reviewer that owns tasks other than reviews,
@@ -674,10 +674,14 @@ tico sql "SELECT slug FROM bots"
 curl -H "Authorization: Bearer $HUB_TOKEN" https://hub.acme.example/api/v2/bots
 ```
 
+To keep several companies apart in one shell, save each as a profile instead:
+`tico auth add acme --url https://hub.acme.example --token-file ~/tico/acme_token`, then `tico --profile acme ...`
+([The `tico` CLI from a terminal](cli.md)).
+
 No `HUB_BOT`: the token is you, not a bot. It is you for every purpose, with the rights you
 have in the browser (a member sees what a member sees, an admin adds bots for their own
-account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make or revoke
-tokens or make another standing credential (a bot's agent credential, a pairing); that takes a signed-in browser, and a
+account, the owner does what the owner does), and it leaves the same audit trail. What a token cannot do is make
+tokens (it may list and revoke its own person's) or make another standing credential (a bot's agent credential, a pairing); that takes a signed-in browser, and a
 service key it makes ends with it, so a leaked token cannot extend its own life. Revoke one on the same page, and it stops
 at once; the owner and the Admins see and revoke anyone's. Every token
 made or revoked is an `events` row (`token.create`, `token.revoke`).
@@ -721,7 +725,7 @@ options, and their missing repositories do not count as readiness or Health fail
 ## Task pipelines
 
 Every task is in one pipeline, at one stage, with one owner whose turn it is. A new company has one pipeline,
-General, with one stage, To do, managed by the Task Manager. A task's status is `open`, `done` or `closed`; only
+General, with one stage, To do, managed by the General Manager. A task's status is `open`, `done` or `closed`; only
 the task engine moves it. See [Pipelines and stages](tasks.md#pipelines-and-stages) and
 [Pipelines](pipelines-v3.md).
 

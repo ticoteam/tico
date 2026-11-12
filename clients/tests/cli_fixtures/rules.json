@@ -1,0 +1,1732 @@
+[
+ {
+  "argv": [
+   "rules",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_rules_list",
+    {
+     "mine": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "list",
+   "--kind",
+   "internal",
+   "--status",
+   "active",
+   "--who",
+   "Ops",
+   "--with",
+   "Ada",
+   "--source",
+   "Acme"
+  ],
+  "tools": [
+   [
+    "tico_rules_list",
+    {
+     "kind": "internal",
+     "mine": false,
+     "operation_id": null,
+     "source": "Acme",
+     "status": "active",
+     "who": "Ops",
+     "with": "Ada"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules?kind=internal&status=active&who=Ops&with=Ada&source=Acme",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "list",
+   "--bot",
+   "writer",
+   "--mine",
+   "--cursor",
+   "c1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_rules_list",
+    {
+     "bot": "writer",
+     "cursor": "c1",
+     "limit": 5,
+     "mine": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "rules?bot=writer&mine=true&cursor=c1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "read",
+   "r1"
+  ],
+  "tools": [
+   [
+    "tico_rules_get",
+    {
+     "id": "r1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/r1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "read",
+   "missing"
+  ],
+  "tools": [
+   [
+    "tico_rules_get",
+    {
+     "id": "missing",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/missing",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"error\": \"not_found\",\n  \"detail\": \"No rule missing\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 5
+ },
+ {
+  "argv": [
+   "rules",
+   "read",
+   "f1",
+   "--from",
+   "Acme",
+   "--kind",
+   "vendor",
+   "--note",
+   "the MSA"
+  ],
+  "tools": [
+   [
+    "tico_rules_read",
+    {
+     "id": "f1",
+     "kind": "vendor",
+     "note": "the MSA",
+     "operation_id": null,
+     "source": "Acme"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/read",
+    {
+     "file_id": "f1",
+     "source_id": "Acme",
+     "kind": "vendor",
+     "note": "the MSA"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "read",
+   "https://acme.example/terms",
+   "--from",
+   "Acme"
+  ],
+  "tools": [
+   [
+    "tico_rules_read",
+    {
+     "id": "https://acme.example/terms",
+     "operation_id": null,
+     "source": "Acme"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/read",
+    {
+     "url": "https://acme.example/terms",
+     "source_id": "Acme"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "ask",
+   "Can I share the deck with Acme?"
+  ],
+  "tools": [
+   [
+    "tico_rules_ask",
+    {
+     "operation_id": null,
+     "question": "Can I share the deck with Acme?"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/ask",
+    {
+     "question": "Can I share the deck with Acme?"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "ask",
+   "Can I share the deck with Acme?",
+   "--on-behalf-of",
+   "turn"
+  ],
+  "tools": [
+   [
+    "tico_rules_ask",
+    {
+     "on_behalf_of": "turn",
+     "operation_id": null,
+     "question": "Can I share the deck with Acme?"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rules/ask",
+    {
+     "question": "Can I share the deck with Acme?"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "suggested"
+  ],
+  "tools": [
+   [
+    "tico_rules_suggested",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules?status=suggested",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "suggested",
+   "--cursor",
+   "c1",
+   "--limit",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_rules_suggested",
+    {
+     "cursor": "c1",
+     "limit": 2,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules?status=suggested&cursor=c1&limit=2",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"rules\": [\n    {\n      \"id\": \"r1\",\n      \"text\": \"Reply within a day\",\n      \"version\": 2\n    }\n  ],\n  \"next_cursor\": null\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--text",
+   "Reply within a day"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "kind": "internal",
+     "operation_id": null,
+     "text": "Reply within a day"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Reply within a day"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--text",
+   "Reply within a day",
+   "--description",
+   "why",
+   "--who",
+   "Ops",
+   "--who",
+   "writer",
+   "--everyone",
+   "--all-bots",
+   "--outside-editions",
+   "--with",
+   "Ada",
+   "--where",
+   "thread:t1",
+   "--where",
+   "kind:dm",
+   "--if-broken",
+   "warn",
+   "--reviewer",
+   "Ada"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "description": "why",
+     "if_broken": "warn",
+     "kind": "internal",
+     "operation_id": null,
+     "reviewer": "Ada",
+     "text": "Reply within a day",
+     "where": [
+      "thread:t1",
+      "kind:dm"
+     ],
+     "who": {
+      "all_bots": true,
+      "everyone": true,
+      "names": [
+       "Ops",
+       "writer"
+      ],
+      "outside_editions": true
+     },
+     "with": {
+      "names": [
+       "Ada"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Reply within a day",
+     "description": "why",
+     "who": {
+      "names": [
+       "Ops",
+       "writer"
+      ],
+      "everyone": true,
+      "all_bots": true,
+      "outside_editions": true
+     },
+     "with": {
+      "names": [
+       "Ada"
+      ]
+     },
+     "where": [
+      "thread:t1",
+      "kind:dm"
+     ],
+     "if_broken": "warn",
+     "reviewer": "Ada"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "external",
+   "--text",
+   "Pay in 30 days",
+   "--from",
+   "Acme",
+   "--file",
+   "f1",
+   "--section",
+   "4.2",
+   "--quote",
+   "within thirty days",
+   "--version",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "cite": {
+      "file_id": "f1",
+      "quote": "within thirty days",
+      "section": "4.2",
+      "version": 3
+     },
+     "kind": "external",
+     "operation_id": null,
+     "source_id": "Acme",
+     "text": "Pay in 30 days"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "external",
+     "text": "Pay in 30 days",
+     "source_id": "Acme",
+     "cite": {
+      "file_id": "f1",
+      "section": "4.2",
+      "quote": "within thirty days",
+      "version": 3
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "external",
+   "--text",
+   "Pay",
+   "--from",
+   "Acme",
+   "--file",
+   "f1",
+   "--quote",
+   "thirty"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "cite": {
+      "file_id": "f1",
+      "quote": "thirty",
+      "section": ""
+     },
+     "kind": "external",
+     "operation_id": null,
+     "source_id": "Acme",
+     "text": "Pay"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "external",
+     "text": "Pay",
+     "source_id": "Acme",
+     "cite": {
+      "file_id": "f1",
+      "section": "",
+      "quote": "thirty"
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "external",
+   "--text",
+   "Pay",
+   "--quote",
+   "thirty"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules add: a quote needs --file (the document it is in)",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "external",
+   "--text",
+   "Pay",
+   "--file",
+   "f1",
+   "--version",
+   "3"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules add: --version goes with --file and --quote",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "rules",
+   "edit",
+   "r1",
+   "--version",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_rules_edit",
+    {
+     "id": "r1",
+     "operation_id": null,
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1",
+    {
+     "version": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "edit",
+   "r1",
+   "--version",
+   "2",
+   "--text",
+   "Reply in a day",
+   "--description",
+   "d",
+   "--who",
+   "Ops",
+   "--everyone",
+   "--all-bots",
+   "--outside-editions",
+   "--with",
+   "Ada",
+   "--where",
+   "team:Ops",
+   "--from",
+   "Acme",
+   "--if-broken",
+   "block",
+   "--reviewer",
+   "Ada"
+  ],
+  "tools": [
+   [
+    "tico_rules_edit",
+    {
+     "description": "d",
+     "id": "r1",
+     "if_broken": "block",
+     "operation_id": null,
+     "reviewer": "Ada",
+     "source_id": "Acme",
+     "text": "Reply in a day",
+     "version": 2,
+     "where": [
+      "team:Ops"
+     ],
+     "who": {
+      "all_bots": true,
+      "everyone": true,
+      "names": [
+       "Ops"
+      ],
+      "outside_editions": true
+     },
+     "with": {
+      "names": [
+       "Ada"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1",
+    {
+     "version": 2,
+     "text": "Reply in a day",
+     "description": "d",
+     "who": {
+      "names": [
+       "Ops"
+      ],
+      "everyone": true,
+      "all_bots": true,
+      "outside_editions": true
+     },
+     "with": {
+      "names": [
+       "Ada"
+      ]
+     },
+     "where": [
+      "team:Ops"
+     ],
+     "source_id": "Acme",
+     "if_broken": "block",
+     "reviewer": "Ada"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "accept",
+   "r1"
+  ],
+  "tools": [
+   [
+    "tico_rules_accept",
+    {
+     "id": "r1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/accept",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "accept",
+   "r1",
+   "--version",
+   "2",
+   "--who",
+   "Ops",
+   "--who",
+   "writer",
+   "--everyone"
+  ],
+  "tools": [
+   [
+    "tico_rules_accept",
+    {
+     "id": "r1",
+     "operation_id": null,
+     "version": 2,
+     "who": {
+      "everyone": true,
+      "names": [
+       "Ops",
+       "writer"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/accept",
+    {
+     "version": 2,
+     "who": {
+      "names": [
+       "Ops",
+       "writer"
+      ],
+      "everyone": true
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "accept",
+   "r1",
+   "--all-bots",
+   "--outside-editions"
+  ],
+  "tools": [
+   [
+    "tico_rules_accept",
+    {
+     "id": "r1",
+     "operation_id": null,
+     "who": {
+      "all_bots": true,
+      "outside_editions": true
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/accept",
+    {
+     "who": {
+      "all_bots": true,
+      "outside_editions": true
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "skip",
+   "r1"
+  ],
+  "tools": [
+   [
+    "tico_rules_skip",
+    {
+     "id": "r1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/skip",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "skip",
+   "r1",
+   "--version",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_rules_skip",
+    {
+     "id": "r1",
+     "operation_id": null,
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/skip",
+    {
+     "version": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "retire",
+   "r1",
+   "--version",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_rules_retire",
+    {
+     "id": "r1",
+     "operation_id": null,
+     "version": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/retire",
+    {
+     "version": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due"
+  ],
+  "tools": [
+   [
+    "tico_rules_due",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/due",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "--next",
+   "30d",
+   "--status",
+   "overdue",
+   "--cursor",
+   "c1",
+   "--limit",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_rules_due",
+    {
+     "cursor": "c1",
+     "limit": 3,
+     "next": "30d",
+     "operation_id": null,
+     "status": "overdue"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/due?next=30d&status=overdue&cursor=c1&limit=3",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "list",
+   "--next",
+   "30d",
+   "--status",
+   "due_soon"
+  ],
+  "tools": [
+   [
+    "tico_rules_due",
+    {
+     "next": "30d",
+     "operation_id": null,
+     "status": "due_soon"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/due?next=30d&status=due_soon",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "--next",
+   "10d",
+   "list",
+   "--status",
+   "upcoming"
+  ],
+  "tools": [
+   [
+    "tico_rules_due",
+    {
+     "next": "10d",
+     "operation_id": null,
+     "status": "upcoming"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "rules/due?next=10d&status=upcoming",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "add",
+   "r1",
+   "--first",
+   "2026-12-01",
+   "--repeats",
+   "monthly",
+   "--owner",
+   "Ada"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_set",
+    {
+     "first_due": "2026-12-01",
+     "id": "r1",
+     "operation_id": null,
+     "owner": "Ada",
+     "repeats": "monthly"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/due",
+    {
+     "first_due": "2026-12-01",
+     "repeats": "monthly",
+     "owner": "Ada"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "add",
+   "r1",
+   "--first",
+   "2026-12-01",
+   "--repeats",
+   "yearly",
+   "--owner",
+   "writer",
+   "--timezone",
+   "Europe/Lisbon",
+   "--task-days",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_set",
+    {
+     "first_due": "2026-12-01",
+     "id": "r1",
+     "operation_id": null,
+     "owner": "writer",
+     "repeats": "yearly",
+     "task_days": 3,
+     "timezone": "Europe/Lisbon"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/r1/due",
+    {
+     "first_due": "2026-12-01",
+     "repeats": "yearly",
+     "owner": "writer",
+     "timezone": "Europe/Lisbon",
+     "task_days": 3
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "id": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--first",
+   "2027-01-01",
+   "--repeats",
+   "once",
+   "--owner",
+   "Ada",
+   "--timezone",
+   "UTC"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "first_due": "2027-01-01",
+     "id": "d1",
+     "operation_id": null,
+     "owner": "Ada",
+     "repeats": "once",
+     "timezone": "UTC"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "first_due": "2027-01-01",
+     "repeats": "once",
+     "owner": "Ada",
+     "timezone": "UTC"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--task-days",
+   "2"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "id": "d1",
+     "operation_id": null,
+     "task_days": 2
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "task_days": 2
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--no-routine"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_edit",
+    {
+     "id": "d1",
+     "no_routine": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1",
+    {
+     "task_days": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "edit",
+   "d1",
+   "--task-days",
+   "2",
+   "--no-routine"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico rules due edit: error: argument --no-routine: not allowed with argument --task-days",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "id": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "due",
+   "satisfied",
+   "d1",
+   "--on",
+   "2026-12-01"
+  ],
+  "tools": [
+   [
+    "tico_rules_due_satisfied",
+    {
+     "due_on": "2026-12-01",
+     "id": "d1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rule-due/d1/satisfied",
+    {
+     "due_on": "2026-12-01"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "check",
+   "Sending the deck now",
+   "--to",
+   "Ada"
+  ],
+  "tools": [
+   [
+    "tico_rules_check",
+    {
+     "as": "message",
+     "operation_id": null,
+     "text": "Sending the deck now",
+     "to": "Ada"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rules/check",
+    {
+     "text": "Sending the deck now",
+     "to": "Ada",
+     "as": "message"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "check",
+   "Done",
+   "--to",
+   "Ada",
+   "--as",
+   "comment"
+  ],
+  "tools": [
+   [
+    "tico_rules_check",
+    {
+     "as": "comment",
+     "operation_id": null,
+     "text": "Done",
+     "to": "Ada"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rules/check",
+    {
+     "text": "Done",
+     "to": "Ada",
+     "as": "comment"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "appeal",
+   "h1"
+  ],
+  "tools": [
+   [
+    "tico_rules_appeal",
+    {
+     "id": "h1",
+     "operation_id": null,
+     "why": ""
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rule-holds/h1/appeal",
+    {
+     "why": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "appeal",
+   "h1",
+   "the rule is about invoices"
+  ],
+  "tools": [
+   [
+    "tico_rules_appeal",
+    {
+     "id": "h1",
+     "operation_id": null,
+     "why": "the rule is about invoices"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "rule-holds/h1/appeal",
+    {
+     "why": "the rule is about invoices"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "retire",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_rules_retire",
+    {
+     "id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules/1/retire",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "rules",
+   "add",
+   "--kind",
+   "internal",
+   "--text",
+   "Email pauses when the complaint rate passes 1.",
+   "--who",
+   "email-owner",
+   "--if-broken",
+   "block"
+  ],
+  "tools": [
+   [
+    "tico_rules_add",
+    {
+     "if_broken": "block",
+     "kind": "internal",
+     "operation_id": null,
+     "text": "Email pauses when the complaint rate passes 1.",
+     "who": {
+      "names": [
+       "email-owner"
+      ]
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "rules",
+    {
+     "kind": "internal",
+     "text": "Email pauses when the complaint rate passes 1.",
+     "who": {
+      "names": [
+       "email-owner"
+      ]
+     },
+     "if_broken": "block"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

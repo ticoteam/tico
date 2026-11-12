@@ -7,7 +7,7 @@ Not started. The first message walks the human through `playbooks/onboarding.md`
 None yet. Record each setup answer here, one line each, dated.
 
 ## Routine
-`weekly-search-ads-review`: declared off, and switched on when your setup starts.
+`watch` and `find-ideas`: declared off. Starting setup switches on both, unless a person changed one first.
 
 ## Current focus
 None.

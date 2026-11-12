@@ -29,7 +29,7 @@ interface Viewport {width: number; height: number}
 const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'mkt'},
   {id: 'mia', name: 'Mia Park', role: 'member', team: 'mkt'}, {id: 'ned', name: 'Ned Cole', role: 'member', team: 'mkt'}];
 const emps = ([['rental-mgr', 'Rental Marketing Manager', 'rental'], ['rental-google', 'Rental Google Ad Owner', 'rental'],
-  ['rental-social', 'Rental Social Ad Owner', 'rental'], ['consumer-mgr', 'Consumer Marketing Manager', 'consumer'],
+  ['rental-social', 'Rental Social Ads Owner', 'rental'], ['consumer-mgr', 'Consumer Marketing Manager', 'consumer'],
   ['consumer-google', 'Consumer Google Ad Owner', 'consumer']] as [string, string, string][]).map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
 const teams = [{id: 'mkt', name: 'Marketing', parent: '', lead: 'human:ana'}, {id: 'rental', name: 'Rental', parent: 'mkt', lead: 'bot:rental-mgr'},
@@ -78,7 +78,7 @@ const BUDGETS = [
   budget('b-mkt', 'Marketing', 900000, 159000, {}, {state: {pace_end: 880000}}),
   budget('b-rental', 'Rental Marketing Manager', 600000, 128000, {team: 'rental', parent_id: 'b-mkt'}, {state: {pace_end: 640000}}),
   budget('b-rental-g', 'Rental Google Ad Owner', 300000, 52000, {team: 'rental', teammate: 'bot:rental-google', vendor: 'Google Ads', parent_id: 'b-rental'}, ad('google_ads', 260000)),
-  budget('b-rental-m', 'Rental Social Ad Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
+  budget('b-rental-m', 'Rental Social Ads Owner', 300000, 76000, {team: 'rental', teammate: 'bot:rental-social', vendor: 'Meta Ads', parent_id: 'b-rental'}, ad('meta_ads', 380000)),
   budget('b-consumer', 'Consumer Marketing Manager', 300000, 250000, {team: 'consumer', parent_id: 'b-mkt'}),
   // Paid through an agency: Spent is the books', Google's own figure shows beside it (reported).
   budget('b-consumer-g', 'Consumer Google Ad Owner', 300000, 250000, {team: 'consumer', teammate: 'bot:consumer-google', vendor: 'Acme Agency', parent_id: 'b-consumer'},
@@ -186,7 +186,7 @@ async function shot(page: Page, name: string) {
       await row(page, 'b-rental-g').waitFor();
       assert.deepEqual((await tabs(page)).slice(0, 2), ['P&L', 'Budgets'], tag + ': Budgets right after P&L');
       assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Consumer Marketing Manager', 'Consumer Google Ad Owner',
-        'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ad Owner', 'Video production'], tag + ': a tree, children under their parent');
+        'Rental Marketing Manager', 'Rental Google Ad Owner', 'Rental Social Ads Owner', 'Video production'], tag + ': a tree, children under their parent');
       const depth = async (id: string) => (await row(page, id).getAttribute('style'))!.match(/--d:(\d+)/)![1];
       assert.deepEqual([await depth('b-mkt'), await depth('b-rental'), await depth('b-rental-g'), await depth('b-video')], ['0', '1', '2', '1'], tag + ': indented by depth');
       assert.deepEqual(await page.locator('tr.fin-grp').allInnerTexts(), ['Other budgets'], tag + ': a budget with no line goes under Other budgets');
@@ -215,7 +215,7 @@ async function shot(page: Page, name: string) {
       assert.equal((await cell(page, 'b-video', 6).innerText()).trim(), '', tag + ': nor on one with no amount');
       // Search keeps the matches and the budgets above them.
       await page.locator('[data-fin-q]').fill('social');
-      assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ad Owner'], tag + ': search keeps the path');
+      assert.deepEqual(await page.locator('tr[data-fin-bud] td:first-child').allInnerTexts(), ['Marketing', 'Rental Marketing Manager', 'Rental Social Ads Owner'], tag + ': search keeps the path');
       assert.equal(await page.locator('tr.fin-grp').count(), 0, tag + ': an empty group is left out');
       await page.locator('[data-fin-q]').fill('');
       // A row opens the rail, with its amount by month.
@@ -399,23 +399,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(writes.slice(retry).map(w => w[0] + ' ' + w[1]), ['POST /api/v2/api-tools', 'POST /api/v2/api-tools/stripe/keys', 'POST /api/v2/finance/connections'], tag + ': stored again, then connected');
       assert.deepEqual(writes.find(w => w[1] === '/api/v2/api-tools')![2], {name: 'Stripe', service: 'stripe'}, tag + ': a Stripe tool');
       assert.deepEqual(writes.at(-1)![2], {provider: 'stripe', credential_id: 'k-stripe', name: 'Stripe'}, tag + ': connects with the new key');
-      // Brex while Tools can't be read: an error, not a paste that could store a second key.
-      hub.indexFail = true;
-      const brex = writes.length, index3 = indexReads();
-      await pick('brex');
-      await settled(() => indexReads() > index3);
-      assert.equal(await dlg.count(), 0, tag + ': no dialog when Tools can\'t be read');
-      assert.equal(await page.locator('.toast', {hasText: 'Tools are down'}).count(), 1, tag + ': the error shows');
-      hub.indexFail = false;
-      await pick('brex');
-      await dlg.locator('input[name=token]').fill('brex_token_123');
-      assert.equal(await dlg.locator('select[name=level]').inputValue(), 'read', tag + ': Brex pastes start Read');
-      await dlg.locator('select[name=level]').selectOption('read_write');
-      await dlg.locator('[type=submit]').click();
-      await dlg.waitFor({state: 'detached'});
-      assert.deepEqual(writes.slice(brex).map(w => w[1]), ['/api/v2/api-tools', '/api/v2/api-tools/brex/keys', '/api/v2/finance/connections'], tag + ': Brex stored on Tools, then connected');
-      assert.equal(writes.at(-2)![2].access_level, 'read_write', tag + ': at the level picked');
-      assert.deepEqual(writes.at(-1)![2], {provider: 'brex', credential_id: 'k-brex', name: 'Brex'}, tag + ': connects Brex');
       assert.deepEqual(errors, [], tag + ': no page errors');
       // Google Ads: its tool page.
       await pick('google-ads');

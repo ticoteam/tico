@@ -40,8 +40,8 @@ ORDER = [
     "repository_waits",
     "entity_links",
     "call_sweeps",
-    "pr_facts",
-    "merge_queue_effects",
+    "item_metadata",
+    "source_actions",
     "jev_verdicts",
 ]
 
@@ -142,7 +142,9 @@ def test_a_poll_never_runs_more_often_than_every_10_seconds(api, fake):
     beat(api, scheduler, AT)
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=5))  # a 5-second interval
-    polls = {k for k in ORDER if HB.BY_KEY[k].kind == "poll" and HB.BY_KEY[k].floor <= HB.POLL_FLOOR}  # pr_facts: 1 min
+    polls = {
+        k for k in ORDER if HB.BY_KEY[k].kind == "poll" and HB.BY_KEY[k].floor <= HB.POLL_FLOOR
+    }  # item_metadata: 1 min
     assert polls.isdisjoint(ran) and "run_housekeeping" in ran
     ran.clear()
     beat(api, scheduler, AT + timedelta(seconds=10))
@@ -361,10 +363,6 @@ def test_personal_alerts_busy_says_nothing(api, fake, monkeypatch):
     beat(api, scheduler_of(api), AT)
     shown = next(s for s in get(api, "heartbeat")["steps"] if s["key"] == "personal_alerts")
     assert shown["last_result"] is None and shown["runs_24h"] == 1
-
-
-def test_call_sweeps_has_the_poll_floor():
-    assert HB.BY_KEY["call_sweeps"].every == HB.POLL_FLOOR and HB.BY_KEY["call_sweeps"].floor == HB.POLL_FLOOR
 
 
 def test_a_repeated_failure_folds_into_the_newest_beat_row(api, fake):

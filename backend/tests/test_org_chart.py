@@ -57,10 +57,15 @@ def test_people_and_bots_move_under_people_and_bots_and_only_managers_move_them(
     post(api, "people/ben", {"reports_to": "ben"}, expected=422)
     post(api, "people/ben", {"reports_to": "nobody"}, expected=404)
     # A bot moves back under a bot; a circle is refused as before.
-    post(api, "bots/cpo/definition", {"reports_to": "coo", "expected_revision": revision(api, "cpo")})
+    post(api, "bots/cpo/definition", {"reports_to": "assistant", "expected_revision": revision(api, "cpo")})
     _, bots = tree(api)
-    assert bots["cpo"] == "b:coo"
-    post(api, "bots/coo/definition", {"reports_to": "cpo", "expected_revision": revision(api, "coo")}, expected=422)
+    assert bots["cpo"] == "b:assistant"
+    post(
+        api,
+        "bots/assistant/definition",
+        {"reports_to": "cpo", "expected_revision": revision(api, "assistant")},
+        expected=422,
+    )
 
 
 def test_botops_applies_a_persons_bot_change_as_that_person(api):
@@ -118,5 +123,9 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE messages SET created_at=? WHERE id=?", (H.shift(H.now(), days=-8), mid))
     post(
-        api, "bots/ops/definition", body("ops", reports_to="coo", on_behalf_of=mid), token=botops["token"], expected=403
+        api,
+        "bots/ops/definition",
+        body("ops", reports_to="assistant", on_behalf_of=mid),
+        token=botops["token"],
+        expected=403,
     )

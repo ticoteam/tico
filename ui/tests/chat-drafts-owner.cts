@@ -39,7 +39,7 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') { if (hold) await hold; return json(me); }
     if (p === '/api/v2/me') return json({id: me.id});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/humans' || p === '/api/people') return json({people: [{id: me.id, name: me.name}], teams: {}});
     if (p === '/api/v2/assistant') return json(assistantView('c1'));
     if (p.endsWith('/snapshot')) return json({messages: [], execution: null});
@@ -57,7 +57,7 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     await ready();
     await page.locator(box).fill('Ana draft');
     await page.evaluate(() => {
-      CHAT_PENDING.set('coo', {text: 'Ana draft', signature: 'POST /v2/chat/coo\n{}', key: 'fixture-key', at: Date.now()});
+      CHAT_PENDING.set('assistant', {text: 'Ana draft', signature: 'POST /v2/chat/assistant\n{}', key: 'fixture-key', at: Date.now()});
       chatPendingSave();
     });
     const mine = await saved();
@@ -66,7 +66,7 @@ async function scenario(browser: import('playwright').Browser, name: string, nex
     assert.equal(JSON.parse(mine.pending!).identity, owner, 'a pending send names its account and company');
     if (options.legacy) await page.evaluate(() => {
       localStorage.setItem('hub.chat.drafts', JSON.stringify({coo: 'Ana legacy draft'}));
-      sessionStorage.setItem('hub.chat.pending', JSON.stringify([['coo', {text: 'Ana legacy pending', signature: 'old', key: 'old-key', at: Date.now()}]]));
+      sessionStorage.setItem('hub.chat.pending', JSON.stringify([['assistant', {text: 'Ana legacy pending', signature: 'old', key: 'old-key', at: Date.now()}]]));
     });
 
     let release: (() => void) | undefined;

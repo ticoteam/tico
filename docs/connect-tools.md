@@ -274,8 +274,8 @@ who can use it, and whether it needs you. Incoming webhooks and triggers live in
 
 The owner and admins see every row. Anyone else sees their own (their mailbox, webhooks they made) and the company's rows
 they may read: an API tool they were given a level on, Slack and GitHub once connected, Tico addresses and numbers in
-their audience, meeting importers if they read meetings, physical mail, and Listening when they receive or read a
-destination. Bots named are only those you may see.
+their audience, meeting importers if they read meetings, physical mail, and Listening when they can see a listening.
+The Listening row shows its worst source's state. Bots named are only those you may see.
 
 `GET /api/v2/tool-index?limit=&cursor=` answers `{rows: [{id, kind, name, detail, way, status: {tone, text}, who,
 who_total, needs_you, href}], counts, next}`, at most 500 rows and 192 KB a page; follow `next` with `cursor`. CLI:

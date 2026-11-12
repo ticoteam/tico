@@ -12,8 +12,8 @@ It is not demo mode (backend/demo.py): these are real bots on the person's own s
 asks for leaves the company. Each ends with one Yes/No question to the owner, asked on the task (`tico task ask`), which
 the owner sees in Needs you; an OK is for a send, spending or publishing, and a starter task does none of them.
 
-Two doors: the first-run welcome's "Start with a sample company" (POST /api/v2/setup/sample, the owner), and
-TICO_SAMPLE_COMPANY=on, which loads it on the first start whose owner is on the roster. Both leave a company that is
+Two ways in: TICO_SAMPLE_COMPANY=on, which loads it on the first start whose owner is on the roster, and
+POST /api/v2/setup/sample (the owner; setup itself does not offer it). Both leave a company that is
 already set up alone, and both keep a team name already set (the recommended install sets TICO_TEAM_NAME); the
 sample's own name, Sample Co, is used only when there is none, and its tasks and goals say whichever it is.
 """
@@ -76,7 +76,7 @@ def load_on_start(onboarding, c):
 
 def load(onboarding, c, who):
     """Make this company the sample company: names, answers, bots, goals and starter tasks, in the caller's
-    transaction. Refused once the company is set up. Returns what the welcome page reads (Onboarding.view)."""
+    transaction. Refused once the company is set up. Returns what setup reads (Onboarding.view)."""
     settings = onboarding.settings
     record = O.load(c)
     if not fresh(c, record):
@@ -174,7 +174,7 @@ def state(name, bot, today):
 
 
 def team_name(settings, record):
-    """The team name already set, which the sample keeps: one saved in the welcome, else TICO_TEAM_NAME (config's
+    """The team name already set, which the sample keeps: one saved in setup, else TICO_TEAM_NAME (config's
     "Company" is the name of none)."""
     saved = str(record["names"].get("company_name") or "").strip()
     configured = (settings.company_name or "").strip()

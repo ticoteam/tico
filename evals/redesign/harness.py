@@ -32,10 +32,15 @@ BUILT = {W1, W2, W3, W4, W5, W6}
 # Priya reports to Dana, so "everyone above you sees yours, peers don't" is checked with real people (PLAN decision 36).
 DANA, OMAR, PRIYA = "dana-test", "omar-test", "priya-test"
 LEAD, CLAUDE, OPENAI, RELEASE = "lead-test", "claude-test", "openai-test", "release-test"
-DANA_REF, OMAR_REF, PRIYA_REF, LEAD_REF = "person:dana", "person:omar", "person:priya", "bot:engineering-lead"
+DANA_REF, OMAR_REF, PRIYA_REF, LEAD_REF = "person:dana", "person:omar", "person:priya", "bot:engineering-manager"
 CLAUDE_REF, OPENAI_REF, RELEASE_REF = "bot:builder-claude", "bot:builder-openai", "bot:release-manager"
 DANA_ID, OMAR_ID, PRIYA_ID = "dana", "omar", "priya"
-LEAD_ID, CLAUDE_ID, OPENAI_ID, RELEASE_ID = "engineering-lead", "builder-claude", "builder-openai", "release-manager"
+LEAD_ID, CLAUDE_ID, OPENAI_ID, RELEASE_ID = (
+    "engineering-manager",
+    "builder-claude",
+    "builder-openai",
+    "release-manager",
+)
 
 
 class Unmet(Exception):
@@ -146,7 +151,7 @@ def task_id_of(reply):
 class Org(World):
     """The World (world.py: clock, server, runner) with the scenario org on it, in Acme names: Dana (owner) at the top;
     Omar and Priya, people, under her; Engineering Lead under her too (so Omar is a peer of the lead); two builders
-    under the lead; and the Release Manager under Dana. Emails are @acme.example."""
+    under the lead; and the Release Owner under Dana. Emails are @acme.example."""
 
     def __init__(self, extra_bots=None):
         """`extra_bots` adds bots to the org (BotOps, Health, the Librarian...), as {slug: (role, harness)} in the

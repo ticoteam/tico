@@ -233,8 +233,7 @@ adapters and documented for [Claude](https://platform.claude.com/docs/en/build-w
 [Sol 6.1](https://developers.openai.com/api/docs/models/gpt-6.1-sol) and
 [Luna 6](https://developers.openai.com/api/docs/models/gpt-6-luna).
 Astra, Sol 6 and Opus 5 remain readable for existing configurations but cannot be newly selected.
-Terra 6.1 (`gpt-6.1-terra`) is not offered for new choices. A bot whose **Model** or **Task model**
-is already Terra 6.1 keeps running on it.
+Terra 6.1 (`gpt-6.1-terra`) is offered on Codex with your own ChatGPT plan. The Tico AI Gateway does not offer it.
 No existing bot is migrated automatically.
 
 Cursor Agent and Grok Build already have runner adapters and appear when their providers are enabled.
@@ -275,8 +274,7 @@ bot's task model first, then to the bot's own model. A review or check subtask k
 A bot whose **Task model** is not offered yet keeps that model, and its tasks still run on it, when you change
 **Task context length** or save the same model again. Settings does not offer **Task effort** choices for such a
 model, so that field stays disabled there. A save that sends only an effort or a context length keeps the model too.
-Terra 6.1 (`gpt-6.1-terra`) is one such model. Choosing it for a bot that does not have it saved is refused, and
-so is choosing another model that is not offered yet.
+Choosing such a model for a bot that does not have it saved is refused.
 
 #### A warning about a cheaper task model
 
@@ -374,6 +372,29 @@ The readiness heartbeat carries, per harness: `installed`, `version`, `pinned` (
 `update_available` (and `latest`), `managed` (installed by the runner, not by a human), `wanted` (a bot here runs on it,
 or the owner turned it on), `state`. A runner
 talking to a server from before this change drops the field instead of going offline.
+
+## Contract check with the real CLIs
+
+Tests drive fake `claude` and `codex` scripts, but a computer runs the real ones, at the newest version unless pinned.
+`scripts/cli_contract.sh` runs the real CLIs in an empty home, up to authentication and never through it, and reads
+what they print with the runner's own code (`runner-rs/src/cli_contract.rs`):
+
+- `--version` is readable, and every command and flag the runner passes still exists;
+- signed out, `claude auth status --json` and `codex login status` answer in the words the status check reads;
+- `claude setup-token`, in the terminal the runner opens, shows a link and a prompt for the code; a made-up code is
+  masked and gives the "OAuth error … Press Enter to retry" screen;
+- `codex login --device-auth` shows a link and a one-time code (never entered);
+- a turn with no login ends as a refused sign-in for both, not as a general failure.
+
+```bash
+scripts/cli_contract.sh            # the claude and codex on PATH
+scripts/cli_contract.sh --latest   # the newest of each from npm, as a cloud computer gets them
+```
+
+It needs network access to Anthropic and OpenAI, takes about two minutes after the build, and never opens a browser.
+Release validation runs it with `--latest` on every full validation (job `cli-contract`, Linux), which the release
+train starts once a day; the job is not part of the release verdict. Read it before a release: a red `cli-contract`
+names what the CLI changed.
 
 ## Writing a harness
 

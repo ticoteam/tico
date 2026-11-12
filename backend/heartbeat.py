@@ -177,6 +177,10 @@ def repository_waits(ctx: Context) -> tuple[str, bool]:
     from .repositories import daily
 
     daily(github_app)
+    # Each bot's own repository, made without anyone asking where the App may create them (backend/bot_repo_maker.py).
+    from . import bot_repo_maker
+
+    bot_repo_maker.run(github_app)
     # A task waiting for room for a worktree whose freeing event was lost (backend/worktree_waits.py).
     from . import worktree_waits
 
@@ -228,26 +232,26 @@ def _engine_github(ctx: Context) -> Any:
     return AppGitHub(ctx.github_app)
 
 
-def pr_facts(ctx: Context) -> tuple[str, bool]:
-    # The 5-minute re-read of the PRs and releases open tasks wait on (backend/task_facts.py `refresh`): a webhook
-    # GitHub never sent, or one Tico missed, still reaches the task.
+def item_metadata(ctx: Context) -> tuple[str, bool]:
+    # The 5-minute re-read of the items open tasks wait on, GitHub's PRs and releases (backend/item_sources/github.py
+    # `refresh`): a webhook GitHub never sent, or one Tico missed, still reaches the task.
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
-    from . import task_facts
+    from .item_sources import github as GS
 
-    changed = task_facts.refresh(ctx.store, github)
-    return (f"{changed} facts changed", False) if changed else ("Nothing due", True)
+    changed = GS.refresh(ctx.store, github)
+    return (f"{changed} items changed", False) if changed else ("Nothing due", True)
 
 
-def merge_queue_effects(ctx: Context) -> tuple[str, bool]:
-    # The Merge stage's owed queue and dequeue calls (backend/merge_queue.py `run`).
+def source_actions(ctx: Context) -> tuple[str, bool]:
+    # The owed source actions, the Merge stage's queue and dequeue calls (backend/source_actions.py `run`).
     github = _engine_github(ctx)
     if github is None:
         return "No GitHub app", True
-    from . import merge_queue
+    from . import source_actions as SA
 
-    done = merge_queue.run(ctx.store, github)
+    done = SA.run(ctx.store, {"github": github})
     return (f"{done} merge queue calls", False) if done else ("Nothing due", True)
 
 
@@ -332,7 +336,7 @@ STEPS = [
     ),
     Step(
         "entity_links",
-        "Directory links",
+        "Contacts links",
         "recovery",
         None,
         entity_links,
@@ -341,16 +345,16 @@ STEPS = [
     ),
     # It asks LiveKit, so it is timed as the polls are: never more often than every 10 s.
     Step("call_sweeps", "Calls and live meetings", "recovery", POLL_FLOOR, call_sweeps, loop=True),
-    Step("pr_facts", "PR and release facts", "poll", MINUTE, pr_facts, failure="pr_facts", capture="scheduler"),
     Step(
-        "merge_queue_effects",
-        "Merge queue",
-        "due",
-        None,
-        merge_queue_effects,
-        failure="merge_queue_effects",
+        "item_metadata",
+        "PR and release metadata",
+        "poll",
+        MINUTE,
+        item_metadata,
+        failure="item_metadata",
         capture="scheduler",
     ),
+    Step("source_actions", "Merge queue", "due", None, source_actions, failure="source_actions", capture="scheduler"),
     Step("jev_verdicts", "Jev's page verdicts", "due", None, jev_verdicts, failure="jev_verdicts", capture="scheduler"),
 ]
 BY_KEY = {step.key: step for step in STEPS}

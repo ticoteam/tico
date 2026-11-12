@@ -1,5 +1,5 @@
-"""What the Strategy Bot does alone at level 3 and what it never does (backend/strategy_acts.py; spec: Head of Product,
-Strategy Bot, tests 9, 12 and 15). A decision changes bot tasks under one action id, logged with its reason; the owner
+"""What the Strategy Owner does alone at level 3 and what it never does (backend/strategy_acts.py; spec: Head of Product,
+Strategy Owner, tests 9, 12 and 15). A decision changes bot tasks under one action id, logged with its reason; the owner
 undoes it without overwriting a later edit; anything on the owner's list, at any level, is refused on the server and
 becomes a proposal in their Needs you, and so does a change a bot offline can't take."""
 
@@ -19,7 +19,7 @@ from backend import mailbox_access
 from backend import strategy_acts as SA
 from backend import strategy_bot
 
-OWNER, STRATEGY_BOT = "human:ana", "bot:goal-manager"
+OWNER, STRATEGY_BOT = "human:ana", "bot:strategy-owner"
 
 
 def bot(api, slug):
@@ -37,9 +37,9 @@ def bot(api, slug):
 
 
 def with_strategy_bot(api, level=1):
-    """The Strategy Bot at `level`, as its own agent credential."""
+    """The Strategy Owner at `level`, as its own agent credential."""
     goal_manager(api, level)
-    return bot(api, "goal-manager")
+    return bot(api, "strategy-owner")
 
 
 def bot_task(api, slug, title):
@@ -52,14 +52,14 @@ def bot_task(api, slug, title):
 @pytest.fixture
 def c(company):
     with company.transaction() as conn:
-        for slug in ("ops", "finance", "goal-manager"):
+        for slug in ("ops", "finance", "strategy-owner"):
             X.bot(conn, slug)
         strategy_bot.set_level(conn, OWNER, 3)
         yield conn
 
 
 def _decide(c, changes, reason="Activation is red; setup work goes first"):
-    """A decision as the route makes it, for a Strategy Bot that reads every task and may give work to every bot."""
+    """A decision as the route makes it, for a Strategy Owner that reads every task and may give work to every bot."""
     action = SA.decide(
         c, STRATEGY_BOT, reason, changes, visible="1", give=lambda owner, task_id=None: None, sees=lambda actor: True
     )
@@ -71,7 +71,7 @@ def _filed(c, slug, title, by=None):
 
 
 def test_a_decision_works_bot_tasks_through_the_task_calls_and_undo_puts_them_back(c):
-    """Each change is one task call made as the Strategy Bot at the version it read: a reorder and a reassign raise
+    """Each change is one task call made as the Strategy Owner at the version it read: a reorder and a reassign raise
     the version once, a close ends the task in Closed. Undo reopens what it closed, closes what it made, and keeps a
     person's later reassign."""
     first = _filed(c, "ops", "Write the onboarding email")
@@ -257,7 +257,7 @@ def test_at_level_3_one_decision_changes_bot_tasks_under_one_action_id_and_the_o
     level(api, 2)
     decide(api, strategy_token, changes, expected=422)  # level 2 suggests; it decides nothing alone
     level(api, 3)
-    decide(api, bot(api, "ops"), changes, expected=403)  # only the Strategy Bot decides alone
+    decide(api, bot(api, "ops"), changes, expected=403)  # only the Strategy Owner decides alone
     made = decide(api, strategy_token, changes)
     assert made["state"] == "done" and not made["left"] and len(made["done"]) == 4
     assert task(api, first)["owner_id"] == "bot:finance" and task(api, stale)["status"] == "closed"
@@ -324,7 +324,7 @@ def test_a_change_a_bot_offline_or_a_person_would_take_becomes_one_proposal_neve
 
 
 def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_instead(api):
-    """Spec test 9, one case per kind, at level 3 where the Strategy Bot does most: a cost, a publish, an outside send's
+    """Spec test 9, one case per kind, at level 3 where the Strategy Owner does most: a cost, a publish, an outside send's
     invitation, a bot added or removed, a goal or target change, the vision, a bot's instructions and a person's
     task. Each is refused (409 `proposed`), changes nothing, is logged and offered to the owner, and is not counted as
     one of the bot's mistakes."""
@@ -384,7 +384,7 @@ def test_everything_on_the_owners_list_is_refused_on_the_server_and_proposed_ins
     assert [x["kind"] for x in log][::-1] == [k for k, _, _ in tries] and all(x["state"] == "proposed" for x in log)
     # Each is in the owner's Needs you: there is no daily limit.
     assert proposals(api) and all(x["proposal_task"] for x in log)
-    # Each item is private to the owner (and the Strategy Bot that asks): it names tasks by their titles, so a person
+    # Each item is private to the owner (and the Strategy Owner that asks): it names tasks by their titles, so a person
     # who reads the owner's work but is not the owner can't open it, find it in a list, or read it in the log.
     asked = proposals(api)
     assert asked and all(x["private"] for x in asked)
@@ -402,7 +402,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
     refused. A task someone changed since stays whole as they left it and is named; the rest goes back; a form holding
     the task from before the decision or the Undo gets a version conflict."""
     strategy_token = with_strategy_bot(api)
-    for slug in ("ops", "finance", "coo"):
+    for slug in ("ops", "finance", "assistant"):
         bot(api, slug)
     level(api, 3)
     ticket = bot_task(api, "ops", "Fix the guest message times")
@@ -413,9 +413,9 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         for t in ("Write the onboarding email", "Clean up old reports", "Draft the pricing page", "Plan the launch")
     )
     bot_task(api, "ops", "Answer the support inbox")
-    bot_task(api, "coo", "Review the budget")
+    bot_task(api, "assistant", "Review the budget")
     with api.app.state.store.transaction() as c:
-        H.task_reassign(c, OWNER, refused, "bot:coo", "Coo plans launches")
+        H.task_reassign(c, OWNER, refused, "bot:assistant", "Coo plans launches")
     start = {t: task(api, t) for t in (moved, back, twice, refused, ticket)}
     made = decide(
         api,
@@ -439,7 +439,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
         H.task_update(c, OWNER, back, rank=-60, mover=True)  # ...and away and back
         H.task_update(c, OWNER, back, rank=decided, mover=True)
         H.task_reassign(c, OWNER, new, OWNER, "I will take this one")  # a person takes on what it made
-        BS.write(c, 'coo', {'harness': 'dots'})
+        BS.write(c, 'assistant', {'harness': 'dots'})
     held = task(api, ticket)["version"]
     post(api, f"strategy-bot/log/{made['id']}/undo", {}, token="ben-test", expected=403)  # an admin doesn't undo
     undone = post(api, f"strategy-bot/log/{made['id']}/undo", {})
@@ -471,7 +471,7 @@ def test_undo_never_overwrites_a_later_edit_and_puts_back_everything_else(api):
 
 
 def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposal(api):
-    """A decision naming a private task the Strategy Bot can't read is refused before anything about that task is
+    """A decision naming a private task the Strategy Owner can't read is refused before anything about that task is
     written; a private task it can read is changed, but its title and body stay out of the company-wide log and the
     owner's proposal, which people who can't read the task also read."""
     strategy_token = with_strategy_bot(api)
@@ -510,7 +510,7 @@ def test_a_private_task_never_reaches_the_strategy_bot_log_or_the_owners_proposa
             dump = " ".join(str(tuple(r)) for r in c.execute(f"SELECT * FROM {table} WHERE created_at>?", (since,)))
             assert "Fire the vendor" not in dump and "Acquire Initech" not in dump, table
 
-    # A private task the Strategy Bot can read is still not changed alone: its close note would reach the company-wide
+    # A private task the Strategy Owner can read is still not changed alone: its close note would reach the company-wide
     # log, and Undo, made as the owner, could not write it back. Each change becomes the owner's proposal instead.
     before = task(api, mine)
     made = decide(
@@ -573,8 +573,8 @@ def test_a_decision_never_makes_a_task_private_and_undo_puts_back_one_made_priva
     assert held["state"] == "proposed" and "keeps its tasks private" in held["left"][0]["why"]
     assert task(api, work)["owner_id"] == "bot:ops" and not task(api, work)["private"]
 
-    bot(api, "coo")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    bot(api, "assistant")
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "assistant"}])
     assert made["state"] == "done" and "before" not in made["done"][0]  # the owner's log keeps the fields
     assert get(api, "strategy-bot/log")["items"][0]["done"][0]["before"]["private"] == 0
     with api.app.state.store.transaction() as c:  # made private since, by someone else
@@ -605,7 +605,7 @@ def test_a_decision_never_creates_a_task_for_a_bot_that_keeps_its_tasks_private(
 
 
 def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_setting(api):
-    """With bot approvals for public changes off, any approval id once let the Strategy Bot publish: the id is
+    """With bot approvals for public changes off, any approval id once let the Strategy Owner publish: the id is
     checked."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
@@ -629,7 +629,7 @@ def test_the_strategy_bot_publishes_only_with_a_real_approval_whatever_the_team_
 
 def test_only_the_owner_reads_the_log_and_it_names_a_task_as_it_is_now(api):
     """An entry shows bot task activity (owners, status, queue places) a person or bot may not be allowed to read, so
-    only the owner reads the log: a member, an admin, a bot and the Strategy Bot itself are refused, and the Strategy
+    only the owner reads the log: a member, an admin, a bot and the Strategy Owner itself are refused, and the Strategy
     Bot's own decision comes back without the task fields Undo keeps. The owner reads each line named as the task is
     now: a task turned private after the decision, which the owner is not a party to, shows no title, to them or in the
     Undo."""
@@ -648,7 +648,7 @@ def test_only_the_owner_reads_the_log_and_it_names_a_task_as_it_is_now(api):
         strategy_token,
         [{"do": "reorder", "task_id": merge}, {"do": "close", "task_id": report, "note": "Moved to next month"}],
     )
-    assert made["state"] == "done" and "Merge with Globex" in str(made)  # the Strategy Bot reads its own work
+    assert made["state"] == "done" and "Merge with Globex" in str(made)  # the Strategy Owner reads its own work
     assert not any("before" in x or "after" in x for x in made["done"])
     for token in ("ben-test", "cara-test", strategy_token, bot(api, "ops")):
         r = api.get("/api/v2/strategy-bot/log", headers=headers(token))
@@ -687,11 +687,11 @@ def test_the_log_pages_through_entries_made_in_the_same_instant(api):
 def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
     """Readers survive a new owner, so Undo gives the task back to its owner and the readers stay."""
     strategy_token = with_strategy_bot(api)
-    for slug in ("ops", "coo"):
+    for slug in ("ops", "assistant"):
         bot(api, slug)
     level(api, 3)
     work = bot_task(api, "ops", "Reconcile the vendor invoices")
-    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "coo"}])
+    made = decide(api, strategy_token, [{"do": "reassign", "task_id": work, "owner": "assistant"}])
     with api.app.state.store.transaction() as c:
         c.execute(
             """UPDATE tasks SET private=1, visibility='private', readers=json_array('human:ben') WHERE id=?""", (work,)
@@ -702,7 +702,7 @@ def test_undo_puts_the_owner_back_and_keeps_readers_given_the_task_since(api):
 
 
 def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by_its_bots_access(api):
-    """A company task a person asked a bot for is hidden from the Strategy Bot when it may not read that bot
+    """A company task a person asked a bot for is hidden from the Strategy Owner when it may not read that bot
     (auth.task_sql). Reordering, reassigning or closing it is refused as a task that isn't there, before anything is
     written; giving a task to that bot, new or moved, is the owner's proposal and changes nothing."""
     strategy_token = with_strategy_bot(api)
@@ -752,7 +752,7 @@ def test_a_decision_never_touches_a_company_task_hidden_from_the_strategy_bot_by
 def test_a_bot_the_strategy_bot_cant_see_is_answered_as_a_bot_that_isnt_there(api):
     """docs/permissions.md: a bot the caller can't see does not exist for them. Giving it a task, new or moved, is
     answered word for word as for a slug no bot has, and neither the receipt nor the owner's Needs you item, which
-    the Strategy Bot reads, carries its display name."""
+    the Strategy Owner reads, carries its display name."""
     strategy_token = with_strategy_bot(api)
     bot(api, "ops")
     bot(api, "finance")

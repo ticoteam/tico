@@ -168,25 +168,17 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
     assert roster_of(api) == once and teams_now(api) == before
 
 
-# ----------------------------------------------------------------------------- the Built-in group
+# ----------------------------------------------------------------------------- the General group
 def test_the_built_in_group_is_kept_by_tico_and_setup_puts_built_in_bots_in_it(api):
     with api.app.state.store.transaction() as c:
         add_bots(c, botops=({"template": "botops"}, None))
         Groups.place(c, api.app.state.store.settings, ["botops"])
-    assert group(api, "built-in")["name"] == "Built-in"
+    assert group(api, "built-in")["name"] == "General"
     assert teams_now(api)["botops"] == "built-in"
     send(api, "PATCH", "groups/built-in", {"name": "Helpers"}, expected=422)
     send(api, "DELETE", "groups/built-in", expected=422)
     send(api, "POST", "groups", {"name": "Marketing", "add": {"bots": ["botops"]}}, expected=422)  # by hand: never
     assert teams_now(api)["botops"] == "built-in"
-
-
-def test_move_bot_puts_a_bot_in_a_group_the_caller_made(api):
-    send(api, "POST", "groups", {"name": "Corporate"})
-    with api.app.state.store.transaction() as c:
-        add_bots(c, cpo=({}, "human:ana"))
-        Groups.move_bot(c, "cpo", "corporate")
-    assert teams_now(api)["cpo"] == "corporate"
 
 
 def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(api):
@@ -197,4 +189,4 @@ def test_migration_puts_the_built_in_bots_in_the_built_in_group_and_no_one_else(
         add_bots(c, botops=({"template": "botops"}, None), cmo=({}, None))
         assert Groups.migrate(c, api.app.state.store.settings) is True
     assert teams_now(api) == {"botops": "built-in", "cmo": None}
-    assert group(api, "built-in")["name"] == "Built-in"
+    assert group(api, "built-in")["name"] == "General"

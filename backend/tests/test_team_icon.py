@@ -10,7 +10,7 @@ def test_icon_owner_rights_public_png_cache_and_replacement(api):
     assert api.get("/api/v2/team/icon").status_code == 404
     for token in ("ben-test", "cara-test"):
         assert api.post("/api/v2/team/icon", content=image(), headers=headers(token)).status_code == 403
-    _, _, attempt = setup_attempt(api, "coo")
+    _, _, attempt = setup_attempt(api, "assistant")
     assert api.post("/api/v2/team/icon", content=image(), headers=headers(attempt["token"])).status_code == 403
     assert api.post("/api/v2/team/icon", content=image(), headers=headers()).json()["url"] == "/api/v2/team/icon"
     first = api.get("/api/v2/team/icon")

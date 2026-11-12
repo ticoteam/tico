@@ -159,6 +159,11 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     const section = page.locator('[data-task-pages]'), field = section.getByRole('textbox', {name: 'Describe the page'});
     await field.fill('The alert flow: three scenarios as tabs.');
+    await go(page, '#/tasks');
+    await section.waitFor({state: 'hidden', timeout: t(10000)});
+    await go(page, '#/task/' + id);
+    await field.waitFor();
+    assert.equal(await field.inputValue(), 'The alert flow: three scenarios as tabs.', 'closing and reopening the task restores the unsent prompt');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     const card = section.locator('.tp-making');
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
@@ -189,7 +194,7 @@ async function makePage({hub, browser, phone}: PassContext) {
       new URL(LIVE.es.url).searchParams.get('conversation')?.split(',').includes(cid),
       status!.conversation_id, {timeout: t(10000)});
     status!.state = 'made';
-    const published = await must<{page: {file_id: string}}>(hub, 'engineering-lead', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
+    const published = await must<{page: {file_id: string}}>(hub, 'engineering-manager', 'POST', 'pages', {name: 'alert-flow.html', title: 'Alert flow', task: id,
       text: '<h1>Alert flow</h1><p>Three scenarios.</p>'});
     await section.locator('.pg-card[data-page="' + published.page.file_id + '"]').waitFor({timeout: t(15000)}).catch(async e => {
       const state = await page.evaluate(() => ({route: location.hash, stream: LIVE.es?.url,

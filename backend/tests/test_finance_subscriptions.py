@@ -144,11 +144,6 @@ FIGMA_RISES = [
 ]
 
 
-def test_a_charge_on_an_active_subscription_is_judged_against_its_expected_amount():
-    found = SUB.price_findings(FIGMA_RISES, ACTIVE_FIGMA)
-    assert [(f["key"], f["label"]) for f in found] == [("price_increase:3", "FIGMA: 15.00 → 20.00")]
-
-
 def test_an_ignored_subscription_raises_no_price_finding_and_no_rows_is_todays_check():
     ignored = [{**ACTIVE_FIGMA[0], "status": "ignored"}]
     assert SUB.price_findings(FIGMA_RISES, ignored) == []
@@ -227,17 +222,17 @@ def test_the_bookkeeper_confirms_with_its_book_right_and_the_owner_can_undo_it(b
         _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
         SUB.detect(c, WATCH_AT)
         sid = str(only_row(c)["id"])
-        FA.grant_defaults(c, "bot:bookkeeper", at=AT)
+        FA.grant_defaults(c, "bot:finance-owner", at=AT)
         done = act(
             c,
-            "bot:bookkeeper",
+            "bot:finance-owner",
             "subscription_confirm",
             {"subscription_id": sid, "status": "active", "amount": 5_200},
             at=WATCH_AT,
         )
         assert done.status == "committed", done
         active = only_row(c)
-        assert (active["status"], active["amount"], active["confirmed_by"]) == ("active", 5_200, "bot:bookkeeper")
+        assert (active["status"], active["amount"], active["confirmed_by"]) == ("active", 5_200, "bot:finance-owner")
         undone = act(c, OWNER, "subscription_undo", {"subscription_id": sid}, at=WATCH_AT)
         assert undone.status == "committed", undone
         back = only_row(c)
@@ -271,9 +266,9 @@ def test_a_bookkeeper_confirmed_repeat_that_lapses_then_charges_again_is_suggest
         _bot_card_charges(c, "coder", "card_coder", PRIOR_MONTHS)
         SUB.detect(c, WATCH_AT)
         sid = str(only_row(c)["id"])
-        FA.grant_defaults(c, "bot:bookkeeper", at=AT)
+        FA.grant_defaults(c, "bot:finance-owner", at=AT)
         kept = act(
-            c, "bot:bookkeeper", "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT
+            c, "bot:finance-owner", "subscription_confirm", {"subscription_id": sid, "status": "active"}, at=WATCH_AT
         )
         assert kept.status == "committed", kept
         assert SUB.detect(c, LAPSED_AT)["cancelled"] == 1

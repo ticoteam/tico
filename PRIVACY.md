@@ -43,7 +43,7 @@ GET https://updates.tico.team/v1/latest?install_id=6f1c2a9e-3b7d-4c58-9a10-2d4e8
 | `version` | The Tico release you run, for example `0.2.15`. |
 | `active_people` | `true` if at least one human used Tico in the last 7 days, otherwise `false`. |
 | `active_bots` | `true` if at least one bot run finished in the last 7 days, otherwise `false`. |
-| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and Strategy Bot do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
+| `first_result` | `true` once a run of one of your own bots has ever finished on this install (the built-in Assistant, BotOps, Librarian and Strategy Owner do not count), otherwise `false`. It lets the project measure how long a new install takes to reach its first working bot. |
 
 That is all. No team name, domain, email address, humans, bot names, counts, content, hostnames or file names. Your
 IP address is unavoidably seen by any server you connect to (GitHub sees it today), and HQ handles it as described below.
@@ -496,7 +496,7 @@ it. Collection never reads a task, message, doc, meeting or ticket body. You can
 keys and tokens (`sk-`, `ghp_`, `gho_`, `xox[abpr]-`, `AKIA`, bearer tokens, JWTs, long base64 or hex runs), IPv4 and IPv6
 addresses, URL query strings, your team's domain and every hostname that is not one of the product's own (`tico.team`, GitHub,
 the model providers), and the names and emails of your bots and humans, which become labels (`bot-3`, `person-1`) that are the same
-all through one bundle and mean nothing outside it. A name or slug is relabeled as a word from four characters; a shorter one (`coo`)
+all through one bundle and mean nothing outside it. A name or slug is relabeled as a word from four characters; a shorter one (`assistant`)
 is relabeled only as an exact `bot:<slug>` or `human:<id>` reference, and an email is always relabeled or redacted. It is built when you press **Review and edit** (or Send) and what you previewed is what
 is sent: Send names the preview by its SHA-256 and your Tico sends those exact bytes. Untick the box and none of it is sent. A local preview already built remains in memory for at most 15 minutes. Edited previews expire too; refreshing is an explicit action and never happens silently on send. HQ keeps follow-up attachments with their messages until the ticket is deleted.
 
@@ -513,6 +513,7 @@ Every field:
 | `update` | The last update's result: state, versions, the updater's message, whether the database was restored | `{"state": "rolled_back", "from": "0.2.17", "to": "0.2.18", "message": "Not updated: ..."}` |
 | `health` | Each Health check by name and status; no summary text | `{"name": "Computers", "status": "warn"}` |
 | `runners` | Per computer, numbered `runner-1`: online, last heartbeat time (`last_seen_at`), platform, kind, release, update state and error, each installed runtime (name, version, ready or not, its sign-in state and detail), how many bots are ready, their problem lines, and the computer's last 50 warning or error log lines | `{"label": "runner-1", "online": true, "runtimes": [{"name": "codex", "ready": true, "detail": "Signed in with ChatGPT"}], "problems": ["bot-2: repository missing at /Users/person-1/work"]}` |
+| `failures` | The last week's failed setup steps and other failure events, newest first, at most 30: when, the event, who as a label, a category from a fixed list in the code, the step (a route pattern, never an address with its values), HTTP status, exit code and elapsed time when there is one, a short reference, the bot or computer as a label, and for a computer's failure up to 20 of its own error lines. No request body, query string, header, refusal sentence, exception message or provider answer. | `{"event": "setup.failed", "category": "github_state", "step": "GET /api/v2/github/app/callback", "status": 400, "ref": "sf-1a2b3c4d", "who": "person-1"}` |
 | `database` | The migration level of the database | `{"migration": 12, "cloud_migration": 44}` |
 | `features` | Which of these are on, as true or false only: `demo`, `updater`, `update_check`, `usage_count`, `backups`, `github_app`, `slack`, `sign_in_proxy`, `blob_storage`, `scheduler`, `observability`, `assistant`, `librarian` | `{"slack": false, "backups": true}` |
 | `counts` | How many bots, humans and routines | `{"bots": 12, "people": 5, "routines": 30}` |

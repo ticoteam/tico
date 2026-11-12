@@ -1,8 +1,7 @@
-// Invites and a failed import (bot-lifecycle-spec.md acceptance tests 2 and 3). Settings -> Humans: "Send invite" on a
+// Invites (bot-lifecycle-spec.md acceptance test 2). Settings -> Humans: "Send invite" on a
 // roster row and Invite on each person the setup's company file names post once, and a refusal from Tico's sign-in mail
 // stays on screen in words; a sent one reads "Invited". "Create password" shows only when the issuer makes accounts,
-// shows the password once in a dialog and clears it on close. The welcome says a chosen chart that failed to import was not
-// replaced by a sample team. Fixtures only, no network.
+// shows the password once in a dialog and clears it on close. Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,11 +9,11 @@ const {html, uiFile} = require('./support/page.cts') as import('./support/page.c
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub', assistant_name: 'Ace',
-  assistant_bot: 'coo', public_url: 'https://initech.test', runner_url: 'https://initech.test', github_owner: '', local: false,
+  assistant_bot: 'assistant', public_url: 'https://initech.test', runner_url: 'https://initech.test', github_owner: '', local: false,
   release: '', onboarding_needed: false, providers_configured: true};
 type SetupPerson = {id: string; name: string; title: string; seats: string[]; invited_at: string | null; person?: string};
 type SetupRecord = {names: {company_name: string}; completed: string | null; needed: boolean; bots: unknown[];
-  company_import_failed: {at: string; reason: string} | null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
+  company_import_failed: null; company_import: {seats?: number; deferred?: unknown[]; people: SetupPerson[]} | null};
 // Browser-side function the test calls inside page.evaluate.
 declare function agoTick(): void;
 
@@ -25,7 +24,8 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
   try {
     const context = await browser.newContext({viewport: {width: 1200, height: 900}, serviceWorkers: 'block'});
     const calls: unknown[][] = [];
-    let config = CONFIG, refuse = true, invites: Record<string, string> = {}, accountPassword = false, made = 0;
+    const config = CONFIG;
+    let refuse = true, invites: Record<string, string> = {}, accountPassword = false, made = 0;
     const people = [
       {id: 'ana', name: 'Ana Rivera', email: 'ana@acme.example'},
       {id: 'ben', name: 'Ben Cole', email: 'ben@acme.example'}];
@@ -82,11 +82,6 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
         if (refuse) { record = {...record, company_import: {...record.company_import, people: setupPeople}}; return json(REFUSED, 422); }
         setupPeople = setupPeople.map(x => x.id === m![1] ? {...x, invited_at: '2026-10-24T09:00:00Z'} : x);
         record = {...record, company_import: {...record.company_import, people: setupPeople}};
-        return json({...record, home: 'human:ana'});
-      }
-      if (p === '/api/v2/setup/company/import-failure/dismiss' && method === 'POST') {
-        calls.push(['dismiss-import-failure']);
-        record = {...record, company_import_failed: null};
         return json({...record, home: 'human:ana'});
       }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
@@ -179,21 +174,6 @@ const REFUSED = {error: {code: 'invite_failed', detail: "Tico's sign-in mail cou
     await dialog.waitFor({state: 'hidden'});
     await dialog.locator('[data-made-password]').waitFor({state: 'detached'});      // not left in the page
 
-    // A company file that could not be imported at install: the welcome says so and that no sample team replaced it.
-    config = {...CONFIG, onboarding_needed: true};
-    record = {...record, completed: null, needed: true, company_import: null,
-      company_import_failed: {at: '2026-10-24T08:00:00Z', reason: 'The company file is not valid YAML (line 3).'}};
-    const welcome = await context.newPage();
-    welcome.on('pageerror', e => errors.push(e.message));
-    await welcome.goto('https://tico-ui.test/');
-    const failed = welcome.locator('#onb-import-failed');
-    await failed.waitFor();
-    assert.equal(await failed.getAttribute('role'), 'alert');
-    assert.match(await failed.innerText(), /Your chosen org chart wasn't imported.*not valid YAML \(line 3\).*No sample team was set up in its place/s);
-    // Dismiss is the way out when the owner won't import it again: the alert goes.
-    await failed.locator('#onb-import-failed-dismiss').click();
-    await failed.waitFor({state: 'detached'});
-    assert.deepEqual(calls.pop(), ['dismiss-import-failure']);
     assert.deepEqual(errors, []);
     console.log('setup-invites: ok');
   } finally { await browser.close(); }

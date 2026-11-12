@@ -110,7 +110,7 @@
     {
       "script": "org-rules-counsel",
       "seconds": 9.13,
-      "reason": "Counsel on the Rules page: no bot list entry or composer; terms in Files open a private task"
+      "reason": "The Rules Owner on the Rules page: no bot list entry or composer; terms in Files open a private task"
     },
     {
       "script": "org-rules",

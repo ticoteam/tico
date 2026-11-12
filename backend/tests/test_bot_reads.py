@@ -41,12 +41,12 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
     )
     with api.app.state.store.transaction() as c:
         for slug, boss, template in (
-            ("cpo", "human:ana", "support-lead"),
+            ("cpo", "human:ana", "success-manager"),
             ("ops", "cpo", "support"),
             ("finance", "cpo", None),
             ("doc-updater", "cpo", None),
             ("product-design", "doc-updater", None),
-            ("coo", "human:ana", None),
+            ("assistant", "human:ana", None),
         ):
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (boss, slug))
             BS.update(c, slug, {'template': template})
@@ -62,13 +62,15 @@ def test_a_bot_sees_the_other_bots_with_reports_to_and_department_except_those_i
     code, org = hub(live, attempt["token"], "team", "show")
     assert code == 0
     bots = {b["id"]: b for b in org["bots"]}
-    assert set(bots) == {"coo", "ops", "cpo", "product-design", "finance"}, "everything but the bot it may not see"
+    assert set(bots) == {"assistant", "ops", "cpo", "product-design", "finance"}, (
+        "everything but the bot it may not see"
+    )
     assert [bots[b]["reports_to"] for b in ("cpo", "ops", "finance")] == ["human:ana", "cpo", "cpo"]
     assert bots["cpo"]["department"] == bots["ops"]["department"] == "Customer Support", (
         "its group's name, as the bot itself or through its manager"
     )
     assert bots["finance"]["department"] == "Customer Support", "in no group of its own: its manager's group"
-    assert bots["coo"]["department"] == "Built-in", "a built-in bot is in the Built-in group"
+    assert bots["assistant"]["department"] == "", "the Assistant reports to its person and is in no group"
     assert (bots["ops"]["template"], bots["finance"]["template"]) == ("support", "")
     assert bots["product-design"]["reports_to"] == "cpo" and bots["product-design"]["org_parent"] == "b:cpo", (
         "under the hidden bot's manager, not dropped"

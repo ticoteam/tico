@@ -67,13 +67,13 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
 
   // ---- the hub's answers
   const box = (await must<{mailbox: {id: string}}>(hub, 'dana', 'POST', 'mailboxes', {address: MAILBOX, shared: true}, 'a shared mailbox')).mailbox;
-  await must(hub, 'dana', 'POST', `mailboxes/${box.id}/accesses`, {grantee_type: 'bot', grantee_id: 'engineering-lead',
+  await must(hub, 'dana', 'POST', `mailboxes/${box.id}/accesses`, {grantee_type: 'bot', grantee_id: 'engineering-manager',
     level: 'read'}, 'the Lead reads it');
   const index = await must<ToolIndex>(hub, 'dana', 'GET', 'tool-index');
   const crm = index.rows.find(r => r.id === 'api:close-crm')!, ledger = index.rows.find(r => r.id === 'api:ledger-export')!;
   assert.ok(crm && ledger, `${where}: both API tools listed: ${index.rows.map(r => r.id)}`);
   assert.deepEqual([crm.way, crm.status.text, crm.needs_you, crm.href], ['Proxy', 'Working', false, '#/tools/api/close-crm']);
-  assert.deepEqual(crm.who.map(w => [w.kind, w.id]).sort(), [['bot', 'engineering-lead'], ['person', 'omar']]);
+  assert.deepEqual(crm.who.map(w => [w.kind, w.id]).sort(), [['bot', 'engineering-manager'], ['person', 'omar']]);
   assert.deepEqual([ledger.way, ledger.status.text, ledger.needs_you], ['On computers', 'Key on computers', true]);
   const mailRow = index.rows.find(r => r.id === 'mailbox:' + MAILBOX);
   assert.ok(mailRow && mailRow.href === '#/tools/mailbox/' + MAILBOX && mailRow.mailbox_id === box.id, `${where}: the mailbox row`);
@@ -82,7 +82,7 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   const tool = await must<ApiTool>(hub, 'dana', 'GET', 'api-tools/close-crm');
   assert.deepEqual(tool.keys.map(k => k.access_level).sort(), ['read', 'read_write'], `${where}: a key a level`);
   assert.deepEqual(Object.fromEntries(tool.access.map(a => [a.subject, a.level])),
-    {'bot:engineering-lead': 'read', 'human:omar': 'read_write'}, `${where}: levels`);
+    {'bot:engineering-manager': 'read', 'human:omar': 'read_write'}, `${where}: levels`);
   assert.ok(tool.checks.length >= 2 && tool.checks.every(c => c.ok && c.status_code === 200), `${where}: Check now worked`);
   const calls = Object.fromEntries(tool.recent.map(c => [c.method, c]));
   assert.deepEqual([calls.GET?.result, calls.GET?.status_code, calls.GET?.path], ['sent', 200, '/api/v1/lead/?query=&_limit='],
@@ -133,7 +133,7 @@ journey('e2e-tools', async ({hub, browser, phone}) => {
   await page.waitForFunction(() => location.hash === '#/tools/api/close-crm');
   await page.locator('#tool-access tr[data-ta-subject-row]').first().waitFor({timeout: t(10000)});
   const checked = (sel: string) => page.locator(`${sel}[aria-checked="true"]`).count();
-  assert.equal(await checked('[data-ta-subject="bot:engineering-lead"][data-ta-level="read"]'), 1, `${where}: the Lead at Read`);
+  assert.equal(await checked('[data-ta-subject="bot:engineering-manager"][data-ta-level="read"]'), 1, `${where}: the Lead at Read`);
   assert.equal(await checked('[data-ta-subject="human:omar"][data-ta-level="read_write"]'), 1, `${where}: Omar at Read and write`);
   assert.deepEqual(await page.locator('#tool-keys [data-key-level]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset.keyLevel!).sort()),
     ['read', 'read_write'], `${where}: two keys`);

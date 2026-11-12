@@ -16,7 +16,7 @@ use std::{
 type Result<T> = std::result::Result<T, String>;
 const TITLE: &str = "Update bundled trust lists";
 const MARKER: &str = "[tico-trust-list-currency:v1]";
-const OWNER: &str = "bot:engineering-lead";
+const OWNER: &str = "bot:engineering-manager";
 
 fn run(program: &str, args: &[&str], key: Option<&str>) -> Result<Vec<u8>> {
     let mut cmd = Command::new(program);
@@ -541,9 +541,9 @@ fn apply_at(report: &Report, hub: &mut impl Hub, path: &Path) -> Result<Value> {
         return Ok(json!({"action": "none", "reason": "all current"}));
     }
     let _writer = writer_lock(hub, path)?;
-    let bot = hub.call(&["api", "GET", "bots/engineering-lead"], None)?;
+    let bot = hub.call(&["api", "GET", "bots/engineering-manager"], None)?;
     if bot["state"] != "active" {
-        return Err("engineering-lead is not active; no write attempted".into());
+        return Err("engineering-manager is not active; no write attempted".into());
     }
     // The CLI list convenience command discards pagination. Read complete cloud pages,
     // including snoozed tasks and every factory step; never use a local database.

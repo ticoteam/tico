@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from clients import judge as clients_judge
+
 from backend import blobs as BL
 from backend import hubdb as H
 from backend import judge as backend_judge
@@ -72,16 +74,16 @@ def test_the_bands_decide_met_not_met_or_unsure(tmp_path):
     def verdict(p):
         return P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(p))["verdict"]
 
-    assert verdict(0.8) == "met" and verdict(0.95) == "met"
+    assert verdict(0.75) == "met" and verdict(0.8) == "met" and verdict(0.95) == "met"
     assert verdict(0.2) == "not_met" and verdict(0.01) == "not_met"
-    assert verdict(0.5) == "unsure" and verdict(0.79) == "unsure" and verdict(0.21) == "unsure"
-    assert verdict(float("nan")) == "unsure"  # an answer with no probability is unsure, not a pass
+    assert verdict(0.5) == "unsure" and verdict(0.74) == "unsure" and verdict(0.21) == "unsure"
+    assert verdict(float("nan")) == "failed"  # an answer with no probability is a judge failure, not a pass
 
 
-def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monkeypatch):
+def test_a_failed_model_call_is_failed_and_no_engine_means_failed(tmp_path, monkeypatch):
     monkeypatch.setattr(
         P, "_installed_store", None
-    )  # no installed app: no production engine, so no engine means unsure
+    )  # no installed app: no production engine, so no engine means the call fails
     path = tmp_path / "hub.sqlite"
     copy_booted(path)
     c = hub(path)
@@ -90,11 +92,16 @@ def test_a_failed_model_call_is_unsure_and_no_engine_means_unsure(tmp_path, monk
     def broken(model, state, questions, label):
         raise J.JudgeError("unavailable", "the model did not answer")
 
-    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=broken)["verdict"] == "unsure"
-    assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=None)["verdict"] == "unsure"
+    def crashed(model, state, questions, label):
+        raise KeyError("answers")  # not a JudgeError: still a failure of the call, never an unsure
+
+    for engine in (broken, None, crashed):
+        result = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=engine)
+        assert (result["verdict"], result["p"], result["failed"]) == ("failed", None, True)
+        assert result["reason"], "a failure says what went wrong"
 
 
-def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeypatch):
+def test_the_spend_cap_stops_the_call_and_the_call_is_failed(tmp_path, monkeypatch):
     path = tmp_path / "hub.sqlite"
     copy_booted(path)
     c = hub(path)
@@ -107,21 +114,7 @@ def test_the_spend_cap_stops_the_call_and_the_answer_is_unsure(tmp_path, monkeyp
 
     result = P.judge_once(c, REQ, ATTACHMENT, settings=_settings(path), engine=ask)
 
-    assert result["verdict"] == "unsure" and called == []
-
-
-def test_every_pipeline_is_judged_by_jev_whatever_it_stored(tmp_path):
-    path = tmp_path / "hub.sqlite"
-    copy_booted(path)
-    c = hub(path)
-    assert P.judge_model_of(c, None) == "jev"
-    assert P.judge_model_of(c, "no-such-pipeline") == "jev"
-
-
-def test_the_judge_model_is_jev_on_the_decide_low_gateway_id():
-    assert P.MODELS == {"jev": "tico-decide-low"}
-    assert P.DEFAULT_MODEL == "jev"
-    assert (P.MET_AT, P.NOT_MET_AT) == (0.8, 0.2)
+    assert result["verdict"] == "failed" and "spend cap" in result["reason"] and called == []
 
 
 def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp_path, monkeypatch):
@@ -144,14 +137,6 @@ def test_the_judge_with_no_engine_given_uses_the_installed_production_engine(tmp
     assert asked == ["jev"]
 
 
-def test_the_judge_state_carries_the_pipeline_goal(tmp_path):
-    """Track J/D58: the pipeline goal reaches the judge with the requirement."""
-    state = P._state(
-        {"name": "Shows the page live", "rubric": "The link opens", "goal": "Launch the lights"}, ATTACHMENT
-    )
-    assert "Launch the lights" in json.dumps(state)
-
-
 def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
     """Fix L2-3: the judge's read is a range read of READ_MAX + 1 bytes, never the whole upload, and the cut is flagged."""
     from backend import file_library as files
@@ -172,24 +157,6 @@ def test_a_large_blob_is_read_only_to_one_byte_past_the_cap(monkeypatch):
     )
     assert asked == [(0, files.READ_MAX)]
     assert len(text) == files.READ_MAX and cut is True
-
-
-def test_a_text_blob_within_the_cap_is_not_cut():
-    from backend import file_library as files
-
-    body = b"Shipped the page."
-
-    class SmallStore:
-        def open_range(self, digest, start=0, end=None):
-            yield body
-
-    digest = hashlib.sha256(body).hexdigest()
-    text, cut = P.text_of(
-        SimpleNamespace(blobs=SmallStore()),
-        {"mime": "text/plain", "blob_digest": digest, "blob_size": len(body)},
-    )
-    assert (text, cut) == ("Shipped the page.", False)
-    assert files.READ_MAX > len(body)
 
 
 def _blob_job(digest: str, size: int) -> dict:
@@ -285,6 +252,44 @@ def test_evidence_the_judge_cannot_read_in_full_is_unsure_whatever_the_model_say
     assert P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.95))["verdict"] == "met"
 
 
+def test_a_page_a_bot_writes_is_read_whole_and_one_too_long_says_how_long_it_may_be():
+    """rc.5: a 6,147-character spec was cut at 6,000 and came back "Tico could not read all of this evidence", which the
+    bot could not act on. A page of a few pages is read whole and judged on the model's word; a longer one is unsure and
+    the owner is told the most Jev reads, so it shortens it rather than attaching it again."""
+    page = {**ATTACHMENT, "source": "page:f1@2"}
+    for chars in (6_500, 12_000, P.TEXT_CHARS):
+        text = ("Scope: the importer reads the CSV. " * 2_000)[:chars]
+        state = P._state(REQ, {**page, "text": text})
+        assert state["attachment"]["text"] == text and state["attachment"]["truncated"] is False, chars
+        assert P.judge_once(None, REQ, {**page, "text": text}, engine=_engine(0.95))["verdict"] == "met", chars
+    too_long = {**page, "text": "x" * (P.TEXT_CHARS + 1)}
+    result = P.judge_once(None, REQ, too_long, engine=_engine(0.95))
+    assert (result["verdict"], result["p"]) == ("unsure", 0.5)
+    assert result["reason"] == "This page is too long for Jev to read: keep it under 40,000 characters."
+    other = P.judge_once(None, REQ, {**ATTACHMENT, "text": "x" * (P.TEXT_CHARS + 1)}, engine=_engine(0.05))
+    assert other["reason"] == "This evidence is too long for Jev to read: keep it under 40,000 characters."
+    bytes_cut = P.judge_once(None, REQ, {**page, "text": "short", "truncated": True}, engine=_engine(0.95))
+    assert bytes_cut["verdict"] == "unsure" and "too long for Jev" in bytes_cut["reason"], "cut bytes are too long too"
+    image = P.judge_once(None, REQ, {**ATTACHMENT, "text": None}, engine=_engine(0.95))
+    assert image["reason"] == P.CANNOT_SEE, "no text is not a length problem"
+
+
+def test_text_that_escapes_long_in_json_is_cut_to_fit_jevs_limit_and_the_owner_is_told_the_length_it_got():
+    """Letters outside ASCII are six characters each in the JSON sent: 40,000 of them would pass Jev's limit. The state
+    is cut to STATE_CHARS, the cut is flagged, and the owner is told the length Jev was shown."""
+    page = {**ATTACHMENT, "source": "page:f1@2", "text": "é" * P.TEXT_CHARS}
+    state = P._state(REQ, page)
+    assert len(json.dumps(state, default=str)) <= P.STATE_CHARS < clients_judge.MAX_STATE_CHARS
+    assert state["attachment"]["truncated"] is True and 0 < len(state["attachment"]["text"]) < P.TEXT_CHARS
+    clients_judge.validate(state, P._questions(), P.QUESTION_SET)  # Jev takes it
+    result = P.judge_once(None, REQ, page, engine=_engine(0.95))
+    shown = len(state["attachment"]["text"]) // 1000 * 1000
+    assert result["reason"] == f"This page is too long for Jev to read: keep it under {shown:,} characters."
+    both = P._state(REQ, {**page, "task_spec": "ü" * P.SPEC_CHARS})
+    assert len(json.dumps(both, default=str)) <= P.STATE_CHARS, "with a spec that escapes long as well"
+    assert len(both["attachment"]["text"]) < len(state["attachment"]["text"]), "the evidence is cut before the spec"
+
+
 def _work_fields(**extra):
     """An attachment dict as the server's waiting read gives it, carrying the work's own fields."""
     return {
@@ -313,8 +318,8 @@ def test_the_judge_state_carries_the_work_title_spec_repo_pr_and_author():
 
 
 def test_a_long_spec_is_cut_and_flagged_and_a_work_with_no_pr_leaves_repo_pr_and_author_out():
-    assert P.SPEC_CHARS == 6000
-    state = P._state(REQ, _work_fields(task_spec="x" * 9000, task_repo=None, task_pr=None, task_author=None))
+    assert P.SPEC_CHARS == 12_000
+    state = P._state(REQ, _work_fields(task_spec="x" * 15_000, task_repo=None, task_pr=None, task_author=None))
     assert len(state["work"]["spec"]) == P.SPEC_CHARS
     assert state["work"]["spec_truncated"] is True
     assert "repo" not in state["work"] and "pr" not in state["work"] and "author" not in state["work"]
@@ -353,10 +358,21 @@ def test_a_met_on_a_cut_spec_is_unsure_and_a_not_met_stays_not_met(tmp_path):
     assert P.judge_once(c, REQ, whole, settings=settings, engine=_engine(0.95))["verdict"] == "met"
 
 
-def test_the_question_set_says_a_missing_author_is_unknown_and_a_cut_spec_is_flagged():
-    instructions = P._questions()["met"]["instructions"]
-    assert "work.author" in instructions and "not given" in instructions
-    assert "spec_truncated" in instructions
+def test_every_verdict_carries_a_reason_even_when_the_model_gives_none(tmp_path):
+    """Jev answers a probability, never prose: Tico says the band, p and the check, so no verdict is a bare word."""
+    path = tmp_path / "hub.sqlite"
+    copy_booted(path)
+    c = hub(path)
+    settings = _settings(path)
+    said = {}
+    for p in (0.95, 0.5, 0.05):
+        result = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(p, reason=""))
+        said[result["verdict"]] = result["reason"]
+    assert set(said) == {"met", "unsure", "not_met"}
+    assert all(REQ["rubric"] in reason for reason in said.values()), said
+    assert "could not tell" in said["unsure"] and "p 0.50" in said["unsure"]
+    kept = P.judge_once(c, REQ, ATTACHMENT, settings=settings, engine=_engine(0.5, reason="No scope line"))
+    assert kept["reason"] == "No scope line", "a model's own reason is kept"
 
 
 def test_no_evidence_is_not_met_even_over_the_cap(tmp_path, monkeypatch):

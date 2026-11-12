@@ -86,6 +86,18 @@ def test_the_person_a_task_waits_on_is_named_though_they_are_not_on_the_task(api
     assert full['actors']['human:ben'] == 'Ben'
 
 
+def test_a_pipelines_manager_is_named_though_it_holds_no_stage(api):
+    """Acme rc.3 bug 8: `GET /api/v2/pipelines` named only the bots that own a stage, so a manager that holds none (the
+    General Manager on General, a team's Manager) was left out of `actors`."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name='Operations' WHERE slug='ops'")
+        c.execute("UPDATE pipelines SET manager_id='bot:ops' WHERE id='general'")
+        assert not c.execute("SELECT 1 FROM stages WHERE pipeline_id='general' AND owner='bot:ops'").fetchone()
+    listed = api.get('/api/v2/pipelines', headers=headers()).json()
+    general = next(p for p in listed['pipelines'] if p['id'] == 'general')
+    assert general['manager_id'] == 'bot:ops' and listed['actors']['bot:ops'] == 'Operations'
+
+
 def test_a_task_the_server_filed_reads_new_task_without_from(api):
     from backend import names
 

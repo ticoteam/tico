@@ -26,6 +26,8 @@ software: a web frontend your team builds, a script, another service. This page 
   `422 ask_default_go_ahead` (do the default and note it on the task; not when the owner turned off
   `bots_go_ahead`), and one an open question to the same person already covers (same task, same words, or nearly)
   returns `422 ask_duplicate` naming it. Nothing is written; a person's own asks are never refused.
+- **Success:** `200` with the answer, a create included: `POST /api/v2/tasks` answers `200 {"task": ...}`, not
+  `201`. The spec gives each route's code.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
 ## What the spec covers
@@ -55,7 +57,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
 | Assistant | The signed-in person's own private Assistant chat ([guide](assistant.md)): ask, and confirm what it proposes. |
-| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Strategy Bot works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
+| Goals | What every person and bot is for ([guide](goals-and-kpis.md)): goals with a colour the Strategy Owner works out from their KPIs, unless a person set one; check-ins in the owner's words; proposals the owner confirms. |
 | KPIs | Measures that stand on their own: a goal links to them and carries the target. Readings are facts with a period, evidence and a quality, never edited; a correction supersedes the old one. |
 | Usage | Estimated model spend per bot ([guide](usage.md)): tokens counted by each run's computer, priced at list price. |
 | Health | Whether the installation is working. |
@@ -92,7 +94,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Calendar | Calendars of people, bots, shared calendars and teams: Google read live, Tico events, runs, due dates and time away merged into one list of occurrences ([guide](dev/calendar-contract.md)). |
 <!-- api-tags:end -->
 
-Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
+Internal developer tutorials: [Listening](listening.md#read-and-save) and [Needs you batches](needs-you-batches.md).
 
 `GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
 own, every Paused cause they can fix, and every @ of them by a person until they reply. Each item has `kind` (`task`,

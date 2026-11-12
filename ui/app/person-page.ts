@@ -358,8 +358,8 @@ async function personAccessLoad(p: RosterPerson) {
 let PERSON_LIST: ({id: string; rows: TaskBriefV3[]; cursor: string; paging: Promise<unknown> | null} & TaskPaging<TaskBriefV3>) | null = null;
 // Its reads against its live events (task-api.ts TaskFeed): a read that lands late undoes no newer event.
 let PERSON_FEED = taskFeedNew();
-// What the list holds: every task the person owns, open or finished, except a snoozed one (the server's default).
-const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id && !t.snoozed;
+// What the list holds: every task the person owns, open, snoozed or finished (status=all).
+const personOwns = (id: string) => (t: TaskBriefV3) => t.owner_id === 'human:' + id;
 async function personTasksLoad(p: RosterPerson) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;

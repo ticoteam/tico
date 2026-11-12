@@ -7,28 +7,33 @@ Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, wh
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import bot_settings as BS
+from backend import answers as A
 from backend import company_import
 from backend import never_stuck as N
+from backend import page_verdicts as V
+from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
+from backend import task_calls as TC
 from backend import task_engine as E
 from backend import task_requirements as R
+from backend import task_wakes as TW
+from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.product_engineering_presets import EPM, PPM, ROLE_BOTS, _answers, _role_bot, _seat, _team
+
+
+def _made(c):
+    """What ensure_presets made, leaving out the Growth and Success pipelines (test_default_pipelines_more.py)."""
+    return [p for p in PS.ensure_presets(c) if p not in more.PRESETS]
+
 
 ANA, BEN = X.ANA, "human:ben"
-ROLE_BOTS = {
-    "pm": "product-manager",
-    "em": "engineering-manager",
-    "builder": "builder",
-    "rev-b": "pr-reviewer",
-    "rev-a": "pr-reviewer",
-    "rm": "release-owner",
-}
 
 
 @pytest.fixture
@@ -37,47 +42,12 @@ def c(company):
         yield conn
 
 
-def _answers(c, software="", completed=True):
-    """The setup record (backend/onboarding.py): the software answer, and whether setup finished."""
-    record = {"answers": {"software_product": software}, "completed": H.now() if completed else None}
-    c.execute(
-        "INSERT INTO registry_metadata VALUES('onboarding',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (json.dumps(record),),
-    )
-
-
-def _role_bot(c, slug, template):
-    actor = X.bot(c, slug)
-    BS.update(c, slug, {"template": template})
-    return actor
-
-
-def _seat(c, title, template, filled_by="", at=None):
-    at = at or H.now()
-    c.execute(
-        "INSERT INTO seats (id, title, template, filled_by, created_at, created_by, updated_at, updated_by, closed_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
-        (H.new_id(), title, template, filled_by, at, ANA, at, ANA, at if filled_by else None),
-    )
-
-
-def _team(c):
-    """The six role bots, each seated as setup seats them. The reviewer seats are titled so `rev-a` is Reviewer 1."""
-    for slug, template in ROLE_BOTS.items():
-        _role_bot(c, slug, template)
-    _seat(c, "Product Manager", "product-manager", "pm")
-    _seat(c, "Engineering Manager", "engineering-manager", "em")
-    _seat(c, "Builder", "builder", "builder")
-    _seat(c, "Reviewer 2", "pr-reviewer", "rev-b")
-    _seat(c, "Reviewer 1", "pr-reviewer", "rev-a")
-
-
 def _owners(record):
     return {s["id"]: s["owner"] for s in record["stages"]}
 
 
 def _kinds(record):
-    return {s["id"]: [r["kind"] for r in s["requirements"]] for s in record["stages"]}
+    return {s["id"]: [r["condition"] or r["kind"] for r in s["requirements"]] for s in record["stages"]}
 
 
 # ----------------------------------------------------------------------------- seats
@@ -85,8 +55,9 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     assert S.resolve(c) == dict.fromkeys(S.ROLES)
     _team(c)
     assert S.resolve(c) == {
-        S.PRODUCT_MANAGER: "bot:pm",
-        S.ENGINEERING_MANAGER: "bot:em",
+        S.PRODUCT_MANAGER: "bot:" + PPM,
+        S.PRODUCT_OWNER: "bot:pm",
+        S.ENGINEERING_MANAGER: "bot:" + EPM,
         S.BUILDER: "bot:builder",
         S.REVIEWER_1: "bot:rev-a",  # its seat's title sorts first
         S.REVIEWER_2: "bot:rev-b",
@@ -94,37 +65,42 @@ def test_roles_are_found_by_seat_template_then_by_bot_template_never_by_name(c):
     }
     # An archived bot fills no role; another bot from the template does, even with no seat.
     c.execute("UPDATE bots SET state='archived' WHERE id='pm'")
-    _role_bot(c, "zz-product", "product-manager")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "zz-product", "segment-product-owner")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
     # A bot named like a role but from another template is not that role.
-    _role_bot(c, "product-manager-ish", "coo")
-    assert S.resolve(c)[S.PRODUCT_MANAGER] == "bot:zz-product"
+    _role_bot(c, "product-owner-ish", "assistant")
+    assert S.resolve(c)[S.PRODUCT_OWNER] == "bot:zz-product"
+    # Each team's Manager has its own template: another team's Manager is not this one's.
+    _role_bot(c, "growth-manager", "growth-manager")
+    c.execute("UPDATE bots SET state='archived' WHERE id=?", (PPM,))
+    assert S.resolve(c)[S.PRODUCT_MANAGER] is None
+    assert S.resolve(c)[S.ENGINEERING_MANAGER] == "bot:" + EPM
 
 
 def test_the_ok_person_is_the_first_person_above_the_manager_else_the_owner(c):
     _team(c)
-    assert S.ok_person(c, "bot:pm") == ANA  # nobody above it: the company's owner
+    assert S.ok_person(c, "bot:" + PPM) == ANA  # nobody above it: the company's owner
     assert S.ok_person(c, None) == ANA
-    c.execute("UPDATE bot_config SET reports_to=? WHERE bot='pm'", (BEN,))
-    assert S.ok_person(c, "bot:pm") == BEN
+    c.execute("UPDATE bot_config SET reports_to=? WHERE bot=?", (BEN, PPM))
+    assert S.ok_person(c, "bot:" + PPM) == BEN
     X.left(c, BEN)
-    assert S.ok_person(c, "bot:pm") == ANA
+    assert S.ok_person(c, "bot:" + PPM) == ANA
 
 
 # ----------------------------------------------------------------------------- the presets
 def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles(c):
     _team(c)
     _answers(c, software="")  # a blank answer is yes (D7)
-    assert PS.ensure_presets(c) == ["engineering", "product"]
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == ["engineering", "product"]
+    assert _made(c) == []
     product, engineering = PS.read(c, "product"), PS.read(c, "engineering")
     assert (product["name"], product["prefix"], product["manager_id"], product["factory_id"]) == (
         "Product",
         "P",
-        "bot:pm",
+        "bot:" + PPM,
         "product",
     )
-    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:em")
+    assert (engineering["name"], engineering["prefix"], engineering["manager_id"]) == ("Engineering", "E", "bot:" + EPM)
     assert c.execute("SELECT name FROM factories WHERE id='product'").fetchone()[0] == "Product"
     assert _owners(product) == {
         "product-ideas": "bot:pm",
@@ -172,47 +148,56 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
         for s in ("engineering-build", "engineering-review-1", "engineering-fixes-2", "engineering-merge")
     ] == [1440, 120, 240, 120]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
-    assert stages["engineering-merge"]["on_enter"] == {"queue_prs": True}
+    assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
-    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_with_exceptions")
-    assert spec["settings"]["rubric"] == "Covers goal, scope, what done looks like"
+    assert (spec["line"], spec["person_id"], spec["who_oks"]) == ("Spec page", ANA, "people_only")
+    assert "acceptance criteria someone can check" in spec["settings"]["rubric"]
     validate = stages["product-validate"]["requirements"][0]
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
-    assert fixes_2["person_id"] == ANA
+    assert (fixes_2["person_id"], fixes_2["who_oks"]) == (ANA, "people_only")
+    assert "checks pass at the newest commit" in fixes_2["settings"]["rubric"]
+    assert "what Reviewer 1 and Reviewer 2 found" in fixes_2["settings"]["rubric"]
+    # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
+    people_only = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only")
+    assert people_only == ["engineering-fixes-2", "product-spec"]
+    named = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["person_id"])
+    assert named == people_only
     assert all(
         r["settings"]["at_head"]
         for s in ("engineering-review-1", "engineering-review-2")
         for r in stages[s]["requirements"]
     )
-    never = [r for s in stages.values() for r in s["requirements"] if r["kind"] in ("pr_merged", "in_release")]
+    never = [r for s in stages.values() for r in s["requirements"] if r["condition"] in ("pr_merged", "in_release")]
     assert len(never) == 2 and not any(r["can_push_past"] for r in never)
 
 
 def test_presets_wait_for_setup_and_a_company_that_builds_no_software_gets_neither(c):
     _team(c)
     _answers(c, software="", completed=False)
-    assert PS.ensure_presets(c) == []  # setup not finished: only General, as every start makes it
+    assert _made(c) == []  # setup not finished: only General, as every start makes it
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
-    assert [r[0] for r in c.execute("SELECT id FROM pipelines")] == ["general"]
+    assert _made(c) == []
+    assert [r[0] for r in c.execute("SELECT id FROM pipelines") if r[0] not in more.PRESETS] == ["general"]
     assert not c.execute("SELECT 1 FROM factories WHERE id='product'").fetchone()
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
 
 
 def test_an_rc1_company_with_general_only_gets_the_pair_and_nothing_else_changes(c):
-    X.bot(c, "task-manager")
+    X.bot(c, "general-manager")
     _answers(c, software="", completed=False)
     PS.ensure_presets(c)
     _team(c)
     before = PS.read(c, "general")
     events = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]
+    assert _made(c) == ["engineering", "product"]
     assert PS.read(c, "general") == before
     after = c.execute("SELECT COUNT(*) FROM events WHERE action='pipeline.save'").fetchone()[0]
-    assert after == events + 2
+    assert after == events + 2 + len(more.PRESETS) - len(
+        more.PRIVATE
+    )  # Growth and Success; no Legal Owner or Bookkeeper
 
 
 def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
@@ -220,11 +205,11 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
     _answers(c, software="yes")
     PS.ensure_presets(c)
     _answers(c, software="no")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert PS.read(c, "product")["retired_at"] and PS.read(c, "engineering")["retired_at"]
     assert company_import.new_company(c)
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == []
+    assert _made(c) == []
     assert not PS.read(c, "product")["retired_at"] and not PS.read(c, "engineering")["retired_at"]
     # A pair someone changed stays when the answer is no: Product as changed, and Engineering, which it files into.
     product = PS.read(c, "product")
@@ -237,7 +222,7 @@ def test_answering_no_retires_the_untouched_pair_and_yes_brings_it_back(c):
 
 def test_an_untouched_preset_gets_its_roles_once_their_bots_appear_and_a_changed_one_does_not(c):
     _answers(c, software="yes")
-    assert PS.ensure_presets(c) == ["engineering", "product"]  # setup finished before any role was hired
+    assert _made(c) == ["engineering", "product"]  # setup finished before any role was hired
     assert set(_owners(PS.read(c, "engineering")).values()) == {None}
     _role_bot(c, "builder", "builder")
     _seat(c, "Builder", "builder", "builder")
@@ -286,12 +271,12 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
             },
             {
                 "name": "Ship",
-                "on_enter": {"queue_prs": True},
+                "on_enter": {"act": "github.queue"},
                 "requirements": [
-                    {"kind": "pr_open"},
-                    {"kind": "checks_pass"},
-                    {"kind": "pr_merged"},
-                    {"kind": "in_release", "settings": {"release_repo": "acme/app", "prereleases": True}},
+                    PS.github("pr_open"),
+                    PS.github("checks_pass"),
+                    PS.github("pr_merged"),
+                    PS.github("in_release", release_repo="acme/app", prereleases=True),
                 ],
             },
         ],
@@ -308,7 +293,7 @@ def test_the_new_kinds_and_both_on_enter_actions_save_and_settings_keys_are_chec
         "The release repo on Ship is owner/name, or empty for the server's.",
     ]
     saved = PS.save(c, ANA, record)
-    assert saved["stages"][1]["on_enter"] == {"queue_prs": True}
+    assert saved["stages"][1]["on_enter"] == {"act": "github.queue"}
 
 
 # ----------------------------------------------------------------------------- the handoff
@@ -316,7 +301,7 @@ def _spec_page(c, task, version=3):
     """The Spec page that counted on the task's visit to Spec, as task_pages.attach leaves it (track B)."""
     rid = c.execute("SELECT id FROM requirements WHERE stage_id='product-spec' AND kind='page'").fetchone()[0]
     c.execute(
-        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, heads, attached_by_id, "
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
         "created_at) VALUES (?,?,?,?,?,?,?,?)",
         (H.new_id(), task["visit"]["id"], rid, "f-spec", version, "{}", "bot:pm", H.now()),
     )
@@ -366,7 +351,7 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
     assert len(_filed(c, row["id"])) == 2
 
 
-def test_a_handoff_the_product_manager_cannot_file_is_filed_by_the_engine(c):
+def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     row = _product_task(c)
     c.execute("UPDATE bots SET state='paused' WHERE id='pm'")
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
@@ -443,7 +428,7 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
-    ideas = [X.new_task(c, ANA, f"Idea {n}", "product") for n in range(4)]
+    ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
     first = N.room_key("product-spec", None)
@@ -466,18 +451,349 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     assert N.rules_hold(c) == []
 
 
-def test_the_software_factory_guide_and_routing_playbook_name_the_seats_templates():
-    """The guide and Engineering's route-a-request playbook send work to the seats the presets place (TEMPLATES),
-    not to the 0.5 chart's Head of Product, Head of Engineering or a release-notes Release Manager."""
-    from pathlib import Path
+def _ideas_moves(c):
+    return {
+        row[0]: row[1]
+        for row in c.execute("SELECT title, stage_id FROM tasks WHERE pipeline_id='product' AND status='open'")
+    }
 
-    root = Path(__file__).resolve().parents[2]
-    guide = (root / "docs/software-factory.md").read_text()
-    playbook = (root / "templates/catalog/engineering-lead/playbooks/route-a-request.md").read_text()
-    for text in (guide, playbook):
-        assert "Head of Product" not in text and "Head of Engineering" not in text
-        assert "`product-lead`" not in text and "`engineering-lead`" not in text
-    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.RELEASE_MANAGER):
-        assert f"`{S.TEMPLATES[role]}`" in guide
-    assert f"`{S.TEMPLATES[S.RELEASE_MANAGER]}` (Release Manager)" in playbook
-    assert f"`{S.TEMPLATES[S.PRODUCT_MANAGER]}` (Product Manager)" in playbook
+
+def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_waits_by_hand(c):
+    """G5: a person who files into Product already picked it. Two filed at once both go into Spec (its limit); the third
+    waits for room, named as room, and goes in first when a slot frees. A bot's idea, and a request moved back into
+    Ideas, are held by hand."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
+    brief = X.new_task(c, "bot:pm", "Brief", "product")
+    X.settled(c)
+    assert N.check(c)["moved"] == 2
+    assert _ideas_moves(c) == {
+        "Request 0": "product-spec",
+        "Request 1": "product-spec",
+        "Request 2": "product-ideas",
+        "Brief": "product-ideas",
+    }
+    (wait,) = W.of(c, E.task(c, asked[2]["id"]))
+    assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
+    (held,) = W.of(c, E.task(c, brief["id"]))
+    assert held.state == W.BY_HAND
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    moved = E.task(c, asked[0]["id"])
+    assert moved["owner_id"] == "bot:pm" and X.wakes(c, moved["id"], "bot:pm")  # its owner is told at once
+    E.move(c, asked[0]["id"], "product-ideas", ANA, "Not this month")
+    N.check(c)
+    assert _ideas_moves(c) == {
+        "Request 0": "product-ideas",  # moved back: held by hand like any idea
+        "Request 1": "product-spec",
+        "Request 2": "product-spec",  # the slot went to the waiting request, not to a room wake
+        "Brief": "product-ideas",
+    }
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert N.rules_hold(c) == []
+
+
+# ----------------------------------------------------------------------------- the two person sign-offs (G1)
+def _jev_passed(c, task_id, file_id, version):
+    found = V.owe(c, file_id, version, "")
+    c.execute("UPDATE page_verdicts SET verdict='met', reasons='' WHERE id=?", (found["id"],))
+    return E.task(c, task_id)
+
+
+def _sign_off(c, stage_id):
+    """A task waiting on the person's OK of its page in `stage_id`, after Jev passed it. Returns it and the page
+    requirement's id."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    pipeline = stage_id.split("-")[0]
+    row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
+    row = E.move(c, row["id"], stage_id, ANA, "Straight to the sign-off for this test")
+    rid = c.execute("SELECT id FROM requirements WHERE stage_id=? AND kind='page'", (stage_id,)).fetchone()[0]
+    c.execute(
+        "INSERT INTO requirement_pages (id, visit_id, requirement_id, file_id, version, item_versions, attached_by_id, "
+        "created_at) VALUES (?,?,?,?,?,?,?,?)",
+        (H.new_id(), row["visit"]["id"], rid, "f-page", 1, "{}", row["owner_id"], H.now()),
+    )
+    return _jev_passed(c, row["id"], "f-page", 1), rid
+
+
+@pytest.mark.parametrize("stage_id", ["product-spec", "engineering-fixes-2"])
+def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_person(c, time_machine, stage_id):
+    time_machine.move_to(datetime(2026, 11, 10, 9, tzinfo=timezone.utc), tick=False)
+    row, rid = _sign_off(c, stage_id)
+    # Fixes 2's checks need GitHub: met here by taking them off, so the person's OK is all the task waits on.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id=? AND kind='item'", (H.now(), stage_id))
+    row = E.task(c, row["id"])
+    page = next(s for s in R.standings(c, row) if s.requirement["id"] == rid)
+    assert (page.state, page.on) == (R.WAITING, ANA)
+    owner, manager = row["owner_id"], row["pipeline"]["manager_id"]
+    for bot in (owner, manager):
+        with pytest.raises(H.Refused, match="task_requirement"):
+            A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
+        with pytest.raises(H.Refused, match="task_needs_person"):
+            E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
+    # Late: no bot is woken, since none can give or push past a people-only OK, and the manager still cannot push
+    # past. The task stays the person's, whom it reads.
+    minutes = row["stage"]["expected_minutes"]
+    X.settled(c)
+    time_machine.shift(timedelta(minutes=minutes + 1))
+    assert N.check(c)["late"] == 1
+    late = E.task(c, row["id"])
+    assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == []
+    with pytest.raises(H.Refused, match="task_needs_person"):
+        E.move(c, row["id"], E.NEXT, manager, "Late: pushing past", seen_version=late["version"])
+    time_machine.shift(timedelta(minutes=3 * minutes))
+    N.check(c)
+    head = next(w for w in W.of(c, E.task(c, row["id"])) if w.requirement_id == rid)
+    assert (head.state, head.who) == (W.PERSON, ANA)
+    assert H.task_private_readable(c, ANA, E.task(c, row["id"]))
+    assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()
+    assert N.rules_hold(c) == []
+    # The person's OK is what moves it on.
+    A.answer(c, row["id"], rid, ANA, "ok")
+    after = E.task(c, row["id"])
+    assert (
+        after["stage_id"]
+        == {"product-spec": "product-in-development", "engineering-fixes-2": "engineering-merge"}[stage_id]
+    )
+
+
+def test_a_people_only_page_that_names_nobody_waits_on_a_person_not_on_jev_alone(c):
+    row, rid = _sign_off(c, "product-spec")
+    c.execute("UPDATE requirements SET person_id=NULL WHERE id=?", (rid,))
+    row = E.task(c, row["id"])
+    (page,) = R.standings(c, row)
+    assert (page.state, page.on) == (R.WAITING, None)
+    (wait,) = W.of(c, row)
+    assert (wait.state, wait.who) == (W.PERSON, ANA)
+    with pytest.raises(H.Refused, match="task_requirement"):
+        A.answer(c, row["id"], rid, "bot:pm", "ok", seen_version=row["version"])
+    A.answer(c, row["id"], rid, ANA, "ok")
+    assert E.task(c, row["id"])["stage_id"] == "product-in-development"
+
+
+SPEC_NOTES = "Repo acme/calc, package acme_calc. -0.0 is fine."
+
+
+def test_the_engineering_task_carries_what_the_person_said_with_their_spec_ok(c):
+    """Acme rc.3 bug 11: the Builder asked again which repository to use, which the person had said with their OK."""
+    row, rid = _sign_off(c, "product-spec")
+    A.answer(c, row["id"], rid, ANA, "ok", SPEC_NOTES)
+    ((filed, kind),) = _filed(c, row["id"])
+    assert kind == "handoff"
+    name = H.actor_name(c, ANA)
+    assert E.task(c, filed)["body"] == (
+        f"Let a shopper keep a cart.\n\nSpec: page:f-page@1\n\n{name}'s notes on the spec, given with their OK:\n"
+        + SPEC_NOTES
+    )
+    # The Product task's own wakes in In development say it too, marked as the person's.
+    line = f"{name}'s notes with their OK of {R.name_of(R.get(c, rid))} in Spec: {SPEC_NOTES}"
+    assert line in TW.body(c, E.task(c, row["id"]), to="bot:pm").splitlines()
+
+
+def test_an_ok_with_no_notes_adds_nothing_to_the_engineering_task(c):
+    row, rid = _sign_off(c, "product-spec")
+    A.answer(c, row["id"], rid, ANA, "ok")
+    ((filed, _),) = _filed(c, row["id"])
+    assert E.task(c, filed)["body"] == "Let a shopper keep a cart.\n\nSpec: page:f-page@1"
+    assert "notes" not in TW.body(c, E.task(c, row["id"]), to="bot:pm")
+
+
+def test_what_the_person_says_with_the_pre_release_ok_reaches_whoever_acts_after_it(c):
+    """The other direction: the OK of what was built moves the task on to Merge and Release, and every wake there
+    carries the person's notes; moved back, it no longer does."""
+    row, rid = _sign_off(c, "engineering-fixes-2")
+    X.github_installed(c)  # Merge and Release need GitHub: with no App the Release Owner would wait on Connect GitHub
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-fixes-2' AND kind='item'", (H.now(),))
+    said = "Say in the release notes that negate(-0.0) is 0.0"
+    A.answer(c, row["id"], rid, ANA, "ok", said)
+    merge = E.task(c, row["id"])
+    assert merge["stage_id"] == "engineering-merge"
+    line = f"{H.actor_name(c, ANA)}'s notes with their OK of {R.name_of(R.get(c, rid))} in Fixes 2: {said}"
+    assert line in TW.body(c, merge, to=merge["owner_id"]).splitlines()
+    told = c.execute(
+        "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? AND body LIKE ?",
+        (merge["id"] + ":%", f"%{said}%"),
+    ).fetchall()
+    assert [who for who, _ in told] == ["bot:rm"]  # the Release Owner, woken as Merge starts
+    # On to Release (Merge's PR check taken off: no PR here), it still reads them: no sign-off came in between.
+    c.execute("UPDATE requirements SET withdrawn_at=? WHERE stage_id='engineering-merge'", (H.now(),))
+    release = E.advance(c, row["id"])
+    assert release["stage_id"] == "engineering-release"
+    assert line in TW.body(c, release, to=release["owner_id"]).splitlines()
+    back = E.move(c, row["id"], "engineering-fixes-2", ANA, "The release notes are wrong")
+    again = E.move(c, back["id"], E.NEXT, ANA, "Fixed, no new OK needed", seen_version=back["version"])
+    assert again["stage_id"] == "engineering-merge"
+    assert line not in TW.body(c, again, to=again["owner_id"])
+
+
+def _at(stages, sid):
+    return next(i for i, s in enumerate(stages) if s["id"] == sid)
+
+
+def _sign_off_req(stages, sid):
+    return next(r for r in stages[_at(stages, sid)]["requirements"] if r["who_oks"] == "people_only")
+
+
+def _move_req(stages, sid, to):
+    req = _sign_off_req(stages, sid)
+    stages[_at(stages, sid)]["requirements"].remove(req)
+    stages[_at(stages, to)]["requirements"].append(req)
+
+
+def _swap(stages, a, b):
+    i, j = _at(stages, a), _at(stages, b)
+    stages[i], stages[j] = stages[j], stages[i]
+
+
+def _fresh(stages):
+    """The same stages written anew: no ids, so every stage and requirement is replaced."""
+    for stage in stages:
+        stage["id"] = None
+        for req in stage["requirements"]:
+            req["id"] = None
+
+
+def _early_queue(stages, before):
+    """A new stage that queues the PRs to merge, just before `before`."""
+    stages.insert(
+        _at(stages, before),
+        {
+            "name": "Ship early",
+            "purpose": "",
+            "on_enter": {"act": "github.queue"},
+            "requirements": [{"kind": "owner_done"}],
+        },
+    )
+
+
+# Every way a save could loosen a sign-off, on each preset: the sign-off's stage, a stage before it, one after it.
+LOOSENING = {
+    "who_oks": lambda st, sid, before, after: _sign_off_req(st, sid).update(who_oks="people_with_exceptions"),
+    "given to a bot": lambda st, sid, before, after: _sign_off_req(st, sid).update(person_id="bot:pm"),
+    "removed": lambda st, sid, before, after: st[_at(st, sid)].update(
+        requirements=[r for r in st[_at(st, sid)]["requirements"] if r["who_oks"] != "people_only"]
+    ),
+    "made another kind": lambda st, sid, before, after: _sign_off_req(st, sid).update(kind="owner_done", settings={}),
+    "moved to a later stage": lambda st, sid, before, after: _move_req(st, sid, after),
+    "its stage deleted": lambda st, sid, before, after: st.pop(_at(st, sid)),
+    "a later stage put before it": lambda st, sid, before, after: _swap(st, sid, after),
+    "stages replaced wholesale": lambda st, sid, before, after: _fresh(st),
+    "an action added before it": lambda st, sid, before, after: st[_at(st, before)].update(
+        on_enter={"act": "github.queue"}
+    ),
+    "a new stage with an action before it": lambda st, sid, before, after: _early_queue(st, sid),
+}
+SIGN_OFFS = [
+    ("product", "product-spec", "product-ideas", "product-in-development", PPM),
+    ("engineering", "engineering-fixes-2", "engineering-review-2", "engineering-merge", EPM),
+]
+
+
+@pytest.mark.parametrize(("pipeline", "sid", "before", "after", "seat"), SIGN_OFFS)
+def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_the_rest(
+    c, pipeline, sid, before, after, seat
+):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    bots = ("bot:" + seat, X.bot(c, "assistant"), X.bot(c, "botops"))
+    c.execute("UPDATE pipelines SET owner_id=? WHERE id=?", ("bot:assistant", pipeline))  # one bot as its owner too
+
+    def edit(change, by):
+        record = PS.read(c, pipeline)
+        change(record["stages"], sid, before, after)
+        return PS.save(c, by, record, seen_version=record["settings_version"])
+
+    name = PS.read(c, pipeline)["stages"][_at(PS.read(c, pipeline)["stages"], sid)]["name"]
+    for what, change in LOOSENING.items():
+        for bot in bots:
+            if not PS.may_change(c, bot, E.pipeline(c, pipeline)):
+                continue  # BotOps: it may not change the pipeline at all
+            with pytest.raises(
+                H.Refused, match=f"This change loosens the person's OK on {name}. A person must make it."
+            ):
+                edit(change, bot)
+    assert not PS.may_change(c, "bot:botops", E.pipeline(c, pipeline))
+    for bot in bots[:2]:
+        with pytest.raises(H.Refused, match="loosens the person's OK"):
+            PS.retire(c, bot, pipeline, PS.read(c, pipeline)["settings_version"])
+    # What does not loosen it a bot may change: the rubric, its push-past switch, a later stage.
+    manager = bots[0]
+    edit(lambda st, *_: _sign_off_req(st, sid)["settings"].update(rubric="Enough for a person to OK it."), manager)
+    edit(lambda st, *_: _sign_off_req(st, sid).update(can_push_past=False), manager)
+    edit(lambda st, *_: st[_at(st, after)].update(expected_minutes=90), manager)
+    # A person may make any of them.
+    assert edit(LOOSENING["a later stage put before it"], ANA)
+    assert edit(LOOSENING["who_oks"], ANA)
+
+
+def test_no_bot_starts_a_task_past_a_sign_off_or_moves_it_into_another_pipeline(c):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    task = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline="product", lint=False)
+    E.reassign(c, task["id"], "bot:builder", ANA)
+    for bot in ("bot:builder", "bot:" + PPM):
+        with pytest.raises(H.Refused, match="task_no_such_stage"):
+            TC.task_move(c, bot, task["id"], "engineering-merge", "Ship it", E.task(c, task["id"])["version"])
+    for pipeline, start in (("product", "product-in-development"), ("engineering", "engineering-merge")):
+        with pytest.raises(H.Refused, match="needs a person's OK first"):
+            H.task_create(c, "bot:builder", "Skip it", "", "bot:builder", pipeline=pipeline, stage=start, lint=False)
+    assert H.task_create(c, ANA, "Hotfix", "", ANA, pipeline="engineering", stage="engineering-merge", lint=False)
+
+
+def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_them(c):
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    c.execute(
+        "UPDATE requirements SET who_oks='people_with_exceptions' "
+        "WHERE stage_id IN ('product-spec', 'engineering-fixes-2') AND kind='page'"
+    )
+    PS.ensure_presets(c)
+    found = c.execute(
+        "SELECT stage_id, who_oks FROM requirements WHERE stage_id IN ('product-spec', 'engineering-fixes-2') "
+        "AND kind='page' ORDER BY stage_id"
+    )
+    assert [tuple(r) for r in found] == [("engineering-fixes-2", "people_only"), ("product-spec", "people_only")]
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "before", "past"),
+    [
+        (
+            "engineering",
+            ("on-deck", "build", "review-1", "fixes-1", "review-2"),
+            ("merge", "release", "done"),
+        ),
+        ("product", ("ideas",), ("in-development", "validate", "done")),
+    ],
+)
+def test_no_bot_jumps_a_task_over_a_sign_off_from_any_earlier_stage(c, pipeline, before, past):
+    """A forward move counts every stage it jumps as not met, so a bot's jump over Fixes 2 or Spec meets the
+    people-only OK and is refused: no merge is queued, and no Engineering task is filed without the spec OK."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    manager = "bot:" + (EPM if pipeline == "engineering" else PPM)
+    bots = ("bot:builder", "bot:rm", "bot:pm", manager, X.bot(c, "assistant"), X.bot(c, "botops"))
+    for stage in before:
+        row = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", ANA, pipeline=pipeline, lint=False)
+        if E.task(c, row["id"])["stage_id"] != f"{pipeline}-{stage}":
+            E.move(c, row["id"], f"{pipeline}-{stage}", ANA, "Here for this test")
+        for bot in bots:
+            # Each bot as the task's owner, so only the sign-off stands in its way.
+            E.reassign(c, row["id"], bot, ANA)
+            effects = c.execute("SELECT COUNT(*) FROM effects").fetchone()[0]
+            tasks = c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            for to in past:
+                seen = E.task(c, row["id"])["version"]
+                with pytest.raises(H.Refused, match="task_needs_person"):
+                    TC.task_move(c, bot, row["id"], f"{pipeline}-{to}", "Ship it", seen)
+            assert E.task(c, row["id"])["stage_id"] == f"{pipeline}-{stage}"
+            assert c.execute("SELECT COUNT(*) FROM effects").fetchone()[0] == effects
+            assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == tasks
+    assert not c.execute("SELECT 1 FROM answers WHERE answer='pushed_past'").fetchone()

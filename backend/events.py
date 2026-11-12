@@ -910,8 +910,17 @@ RUNNER_TRIGGERS = [
         "changes_runner_bot_config_update",
         "UPDATE",
         "bot_config",
-        _changed("owner_id", "team", "onboarding_state"),
+        _changed("owner_id", "team"),
         _bot_runner("assignments", "NEW.bot"),
+    ),
+    # Onboarding marked complete (or begun): the work it held is claimable now, so the computer claims at once rather
+    # than on its next poll.
+    (
+        "changes_runner_bot_onboarding_update",
+        "UPDATE",
+        "bot_config",
+        _changed("onboarding_state"),
+        _bot_runner("assignments", "NEW.bot") + _bot_runner("work", "NEW.bot"),
     ),
     # Its declared settings (backend/bot_settings.py): any setting, not the row's write time.
     ("changes_runner_bot_settings_insert", "INSERT", "bot_settings", None, _bot_runner("assignments", "NEW.bot_id")),

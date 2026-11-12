@@ -9,6 +9,7 @@ from . import (
     profiles,
     report_managers,
     rooms,
+    routines,
     start_places,
     task_models,
     task_privacy as privacy,
@@ -219,7 +220,10 @@ def register(app, auth, settings, settings_admin, store):
             W.STATE_CAUSES["paused"]: "resume",
             W.STATE_CAUSES["quarantined"]: "release_quarantine",
             W.STATE_CAUSES["planned"]: "finish_setup",
+            W.ONBOARDING: "finish_setup",
             W.NO_COMPUTER: "assign_computer",
+            W.CLOUD_STARTING: "open_computers",
+            W.CLOUD_FAILED: "open_computers",
             W.RUNS_FAILING: "release_hold",
             W.LOGIN: "reconnect",
             W.COMPANY_PAUSED: "resume_company",
@@ -231,7 +235,8 @@ def register(app, auth, settings, settings_admin, store):
     @app.get("/api/v2/bots/{bot}")
     def bot_detail(request: Request, bot: str):
         """One bot: the profile a caller who can see it gets (name, role, who runs it, who it reports
-        to, who it works for), and for one who can read it also its status, machine, queue and goals."""
+        to, who it works for), and for one who can read it also its status, machine, queue, goals and
+        which of its routines are on."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -258,6 +263,7 @@ def register(app, auth, settings, settings_admin, store):
                 value["goals"] = config["goals"] or ""
             if level["read"]:
                 value["cant_run"] = cant_run(c, bot)
+                value["routines"] = routines.of_bot(c, bot)
             reports = value.get("reports_to") or ""
             if reports.startswith("human:"):
                 person = H.human(c, reports[6:])
@@ -283,8 +289,8 @@ def register(app, auth, settings, settings_admin, store):
             access = auth.bot_accesses(c, who)
             roster, configs = views.roster(c), views.entries(c)
             archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
-            # The Strategy Bot heads the chart: bots move on the chart only; each keeps the `reports_to` it has
-            # (backend/strategy_bot.py). A person who hid the Strategy Bot from their chart gets it without the Strategy
+            # The Strategy Owner heads the chart: bots move on the chart only; each keeps the `reports_to` it has
+            # (backend/strategy_bot.py). A person who hid the Strategy Owner from their chart gets it without the Strategy
             # Bot, nothing moved under it.
             from . import strategy_bot
 
@@ -302,7 +308,7 @@ def register(app, auth, settings, settings_admin, store):
             by_id = {row["id"]: row for row in view["bots"]}
             departments = P.bot_departments(configs, roster, archived)
 
-            # On the chart: what the caller may see, less the Strategy Bot when they hid it (those under it hang from
+            # On the chart: what the caller may see, less the Strategy Owner when they hid it (those under it hang from
             # the next thing up, as under a bot they may not see; their `reports_to` stays the stored one).
             def drawn(slug):
                 return access.get(slug, auth.FULL)["see"] and not (hide_strategy and slug == strategy_bot.SLUG)

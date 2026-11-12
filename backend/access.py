@@ -722,7 +722,7 @@ def transfer(c, actor, roster, owner, target_id, *, expected_revision, previous_
         "retired": emails(stored.get("retired")),
     }
     _store(c, OWNER, after)
-    # The owner's earlier Strategy Bot chat, history now, stays with the owner seat: the new owner reads it under
+    # The owner's earlier Strategy Owner chat, history now, stays with the owner seat: the new owner reads it under
     # "Earlier chats" (backend/assistant.py). Everyone keeps their own Assistant.
     from .assistant import move_strategy_room
 

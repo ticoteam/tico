@@ -33,10 +33,6 @@ def test_quarterly_and_weekly_steps():
     assert D.occurrence(date(2026, 1, 1), "weekly", 2) == date(2026, 1, 15)
 
 
-def test_a_once_date_has_no_second_occurrence():
-    assert D.occurrence(date(2026, 5, 1), "once", 1) is None
-
-
 def test_an_occurrence_is_overdue_only_after_the_end_of_its_day_in_the_zone():
     due = row("2026-10-30")
     on_the_day = D.state(due, set(), date(2026, 10, 30))

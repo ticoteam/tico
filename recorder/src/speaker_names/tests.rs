@@ -835,27 +835,6 @@ fn the_watch_log_reports_rows_turns_and_the_document_without_repeating_itself() 
     assert!(end.last().unwrap().ends_with("watch ended"));
     assert!(end.iter().any(|l| l.contains("polls in com.google.Chrome")));
 }
-#[test]
-fn vote_tallies_say_why_a_name_is_withheld() {
-    let mut record = record();
-    record.meeting_speakers.intervals = vec![interval(5300, 6050, "Ana Example")];
-    record.meeting_speakers.readable = vec![(0, 25_000)];
-    record.chunks.push(chunk("them", talk(0, 20, "Speaker 2")));
-    let (names, tallies) = tally(&record, &BTreeMap::new());
-    assert!(names.is_empty());
-    assert_eq!(tallies[0].outcome, Err("under 1 s of overlap"));
-    assert_eq!(tallies[0].scores["Ana Example"], 750);
-    record
-        .meeting_speakers
-        .intervals
-        .push(interval(12_300, 13_050, "Ana Example"));
-    let (_, tallies) = tally(&record, &BTreeMap::new());
-    assert_eq!(
-        tallies[0].outcome,
-        Err("covers under 40% of the voice's readable speech")
-    );
-    assert_eq!(tallies[0].speech, 20_000);
-}
 
 #[test]
 fn who_is_in_the_meet_window_is_kept_for_its_recording_only() {

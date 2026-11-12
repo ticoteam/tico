@@ -45,16 +45,17 @@ def place(c, slug):
     c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
 
-def ran(c, task_id, actor, state="completed", at=None, runner="r1"):
+def ran(c, task_id, actor, state="completed", at=None, runner="r1", comments=False):
     """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`, each
-    started in order (task_wakes.started), on the computer `runner`."""
+    started in order (task_wakes.started), on the computer `runner`. With `comments`, so has each queued message on
+    the task a person wrote to it."""
     from backend import task_wakes
 
     at = at or H.now()
     rows = c.execute(
         "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
-        "WHERE j.state='queued' AND j.bot_id=? AND m.wake_key LIKE ?",
-        (H.actor_id(actor), task_id + ":%"),
+        "WHERE j.state='queued' AND j.bot_id=? AND (m.wake_key LIKE ? OR (? AND json_extract(m.refs, '$.task') = ?))",
+        (H.actor_id(actor), task_id + ":%", comments, task_id),
     ).fetchall()
     for job_id, message_id in rows:
         run = H.new_id()
@@ -82,6 +83,8 @@ def requirement(c, stage_id, kind, **fields):
         "id": rid,
         "stage_id": stage_id,
         "kind": kind,
+        "source": fields.pop("source", None),
+        "condition": fields.pop("condition", None),
         "settings": json.dumps(fields.pop("settings", {})),
         "can_push_past": fields.pop("can_push_past", 1),
         "who_oks": fields.pop("who_oks", "none"),
@@ -96,6 +99,34 @@ def requirement(c, stage_id, kind, **fields):
         tuple(row.values()),
     )
     return rid
+
+
+def github(condition, **fields):
+    """A requirement spec of kind `item` on the task's GitHub PRs (`pipeline`'s `requirements`)."""
+    return {"kind": "item", "source": "github", "condition": condition, **fields}
+
+
+def github_installed(c, repository="acme/app"):
+    """The company's GitHub App, connected and installed, with `repository` In use (None: none is): a task with no PR
+    linked is its bot's to open one, not Paused on Connect GitHub or Choose a repository (item_sources.github
+    first_fix)."""
+    from backend.github_app import SCHEMA
+    from backend.repositories_schema import SCHEMA as REPOSITORIES
+
+    for statement in (SCHEMA + ";" + REPOSITORIES).split(";"):
+        if statement.strip():
+            c.execute(statement)
+    c.execute(
+        "INSERT OR REPLACE INTO github_app(id,app_id,slug,client_id,org,administration,installation_id,html_url,"
+        "ciphertext,nonce,created_at,created_by) VALUES('app',1,'tico','client','acme',0,1,'',x'00',x'00',?,?)",
+        (H.now(), ANA),
+    )
+    if repository:
+        c.execute(
+            "INSERT INTO repositories(id,full_name,enabled,updated_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(full_name) DO UPDATE SET enabled=1",
+            (H.new_id(), repository, H.now()),
+        )
 
 
 def _general(c, manager):
@@ -130,8 +161,8 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
     for position, spec in enumerate(rows):
         sid = f"{pid}-{_slug(spec['name'])}"
         c.execute(
-            "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, by_hand, task_limit, expected_minutes, "
-            "expected_bots_only, on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, by_hand, requests_move_on, task_limit, "
+            "expected_minutes, expected_bots_only, on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 sid,
                 pid,
@@ -140,6 +171,7 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
                 spec["name"],
                 spec.get("owner"),
                 1 if spec.get("by_hand") else 0,
+                1 if spec.get("requests_move_on") else 0,
                 spec.get("task_limit"),
                 spec.get("expected_minutes"),
                 1 if spec.get("expected_bots_only") else 0,

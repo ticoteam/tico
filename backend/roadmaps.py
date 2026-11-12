@@ -145,8 +145,8 @@ def settings(c):
 
 def suggestions_receiver(c):
     """The bot that gets visitor suggestions and the suggestions-full notice, and why: the bot chosen in settings
-    while it is active; otherwise Automatic, the first active or planned Product Manager, then an active Head of
-    Product. Returns (id or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
+    while it is active; otherwise Automatic, the first active or planned Product Owner, then an active Product
+    Lead. Returns (id or None, 'chosen' | 'automatic' | 'chosen_archived' | 'chosen_inactive'), the last two
     saying the chosen bot was passed over because it is archived (or gone), or paused, quarantined or planned."""
     chosen = settings(c)['suggestions_bot']
     source = 'automatic'
@@ -157,10 +157,9 @@ def suggestions_receiver(c):
             return chosen, 'chosen'
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (
-        ('product-manager', ('active', 'planned')),
+        ('segment-product-owner', ('active', 'planned')),
         ('product-lead', ('active',)),
-        ('product-team-manager', ('active',)),
-        ('segment-product-owner', ('active',)),
+        ('product-manager', ('active',)),
     ):
         row = c.execute(
             f"SELECT bc.bot FROM bot_config bc {BS.JOIN} JOIN bots b ON b.id=bc.bot "
@@ -194,7 +193,7 @@ def publication_payload(task_id, operation, values):
 
 def exact_approval(c, actor):
     """Whether `actor`'s public text needs an exact approved publish payload (approve): a bot's, or one acting for a
-    person, when the team asks for approval; the Strategy Bot's whatever the setting."""
+    person, when the team asks for approval; the Strategy Owner's whatever the setting."""
     if not H.is_bot(actor) and not H.VIA.get():
         return False
     from . import strategy_acts
@@ -208,10 +207,10 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
     from . import strategy_acts
 
     if strategy_acts.is_strategy_bot(actor) and not approval_id:
-        # Publishing is the owner's at every level: the Strategy Bot publishes only what a person approved, whatever the
+        # Publishing is the owner's at every level: the Strategy Owner publishes only what a person approved, whatever the
         # team's setting for other bots.
         strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
-    # From here the OK is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough. The OK
+    # From here the OK is checked exactly; for the Strategy Owner whatever the setting, so any id is not enough. The OK
     # (backend/task_asks.py) is the one this actor asked on this task for exactly this publication, given from its
     # preview by the person's own click, and it is used here, once.
     from . import task_asks

@@ -426,7 +426,7 @@ def test_guard_refusals_carry_cors_headers_for_allowed_origins(api):
 
 def _suggestions_receiver_order_and_states(api):
     with api.app.state.store.transaction() as c:
-        BS.update(c, 'cpo', {'template': 'product-manager'})
+        BS.update(c, 'cpo', {'template': 'segment-product-owner'})
         BS.update(c, 'cmo', {'template': 'product-lead'})
 
     def receiver(chosen, **states):
@@ -442,7 +442,7 @@ def _suggestions_receiver_order_and_states(api):
             return R.suggestions_receiver(c)
 
     assert receiver(None) == ('cpo', 'automatic')
-    assert receiver(None, cpo='planned') == ('cpo', 'automatic')  # today's Product Manager rule, unchanged
+    assert receiver(None, cpo='planned') == ('cpo', 'automatic')  # a planned Product Owner counts
     assert receiver(None, cpo='archived') == ('cmo', 'automatic')
     assert receiver(None, cpo='archived', cmo='planned') == (None, 'automatic')
     assert receiver(None, cpo='archived', cmo='archived') == (None, 'automatic')
@@ -479,10 +479,10 @@ def test_who_may_choose_the_suggestions_bot_and_which_bot_receives_them(api):
 def test_suggestions_receiver_is_a_new_org_product_bot_after_the_old_roles(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug IN ('cpo','cmo')")
-        BS.update(c, 'cpo', {'template': 'product-team-manager'})
+        BS.update(c, 'cpo', {'template': 'product-manager'})
         assert R.suggestions_receiver(c) == ('cpo', 'automatic')
         BS.update(c, 'cpo', {'template': 'segment-product-owner'})
         BS.update(c, 'cmo', {'template': 'product-lead'})
+        assert R.suggestions_receiver(c) == ('cpo', 'automatic')  # the Product Owner, who owns Product's Ideas
+        BS.update(c, 'cpo', {'template': None})
         assert R.suggestions_receiver(c) == ('cmo', 'automatic')
-        BS.update(c, 'cmo', {'template': None})
-        assert R.suggestions_receiver(c) == ('cpo', 'automatic')

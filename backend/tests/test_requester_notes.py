@@ -11,7 +11,7 @@ DEV = (
 )
 
 
-def dev_task(api, owner="bot:cpo", requester="bot:coo"):
+def dev_task(api, owner="bot:cpo", requester="bot:assistant"):
     with api.app.state.store.transaction() as c:
         X.pipeline(c, "dev", "Dev", DEV)
         task = X.new_task(c, requester, "Improve messages", "dev", assignee=owner)
@@ -35,25 +35,25 @@ def test_a_stage_move_wakes_no_requester(api):
     with api.app.state.store.transaction() as c:
         moved = E.move(c, task["id"], E.NEXT, "bot:cpo", "Built it", seen_version=task["version"])
         assert moved["stage"]["name"] == "Review 1"
-    assert heard(api, "coo")[0] == 0 and heard(api, "cpo")[0] == 0
+    assert heard(api, "assistant")[0] == 0 and heard(api, "cpo")[0] == 0
 
 
 def test_a_close_is_a_note_to_the_requester_and_wakes_nobody(api):
     task = dev_task(api)
     with api.app.state.store.transaction() as c:
         E.move(c, task["id"], E.CLOSED, "bot:cpo", "Not building this.", seen_version=task["version"])
-    assert heard(api, "coo") == (0, 1)
+    assert heard(api, "assistant") == (0, 1)
 
 
 def test_done_wakes_the_owner_of_the_task_that_filed_it_once(api):
     with api.app.state.store.transaction() as c:
-        lead = H.task_create(c, "human:ana", "Ship messages", "Plan it.", "bot:coo", lint=False)
+        lead = H.task_create(c, "human:ana", "Ship messages", "Plan it.", "bot:assistant", lint=False)
         sub = H.task_create(
-            c, "bot:coo", "Improve messages", "Build messages.", "bot:cpo", parent_id=lead["id"], lint=False
+            c, "bot:assistant", "Improve messages", "Build messages.", "bot:cpo", parent_id=lead["id"], lint=False
         )
         c.execute("DELETE FROM jobs")
         E.move(c, sub["id"], E.DONE, "bot:cpo", "Shipped.", seen_version=E.task(c, sub["id"])["version"])
-    assert heard(api, "coo")[0] == 1
+    assert heard(api, "assistant")[0] == 1
     with api.app.state.store.read() as c:
-        keys = [k for k, who in X.wakes(c, lead["id"]) if who == "bot:coo"]
+        keys = [k for k, who in X.wakes(c, lead["id"]) if who == "bot:assistant"]
     assert len([k for k in keys if ":filed:" in k]) == 1

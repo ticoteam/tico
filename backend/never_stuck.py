@@ -13,7 +13,8 @@ are on it:
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
   woken again 2 minutes after it stopped, then 15 minutes, then 1 hour. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
-- Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them.
+- Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
+  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`).
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
@@ -171,6 +172,7 @@ def check(
         quiet = quiet + 1 if conn.total_changes == changes else 0
     _keeping_reads(conn, "SAVEPOINT never_stuck_room")
     try:
+        done["moved"] += _requests(conn)  # before C10: a person's request takes the room first
         done["woken"] += _room(conn)
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
@@ -202,6 +204,38 @@ _FIRST_WAITING = (
 _FREED = "SELECT id FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
 
 
+# A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
+# oldest first.
+_REQUESTS = (
+    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+    "JOIN stages s ON s.id = t.stage_id "
+    "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL "
+    "AND s.requests_move_on=1 "
+    "AND v.entered_how='new' AND t.requester_id LIKE 'human:%' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
+    "ORDER BY v.entered_at, v.id"
+)
+
+
+def _requests(conn: "sqlite3.Connection") -> int:
+    """A task a person files into a by-hand stage whose "a person's request moves on" setting is on (Product's Ideas)
+    is not held there: the person already picked it. Once the stage's own requirements are met (Ideas has none) it moves
+    into the next stage as soon as that has room, oldest first, before the by-hand stage's owner is woken about room
+    (C10). Ideas a bot filed stay until someone moves them, and so does every task in a by-hand stage with the setting
+    off (Growth's Ideas, Monitoring's Watching). Returns how many moved."""
+    moved = 0
+    for (task_id,) in conn.execute(_REQUESTS).fetchall():
+        row = E.task(conn, str(task_id))
+        if not row or not E.not_held_by_hand(conn, row) or R.unmet(conn, row):
+            continue
+        nxt = E.next_stage(conn, row)
+        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt, task_row=row) or E.shut_out(conn, row, nxt):
+            continue
+        E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
+        moved += 1
+    return moved
+
+
 def room_key(stage_id: str, freed_by: str | None) -> str:
     """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it), and one
     for the room a stage has before any task ever left it."""
@@ -223,6 +257,8 @@ def _room(conn: "sqlite3.Connection") -> int:
         row = E.task(conn, str(first[0])) if first else None
         if not row or not row.get("visit"):
             continue
+        if stage_owner == "assignee":
+            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas)
         owner: str | None = stage_owner or row.get("owner_id")
         if not is_bot(owner) or not _reads(conn, owner, row):
             continue
@@ -361,7 +397,7 @@ def _one(
         _to_person(conn, row, level, done)
         return
     _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
-    _late(conn, row, at, done, seen)
+    _late(conn, row, at, done, seen, waits)
 
 
 # ----------------------------------------------------------------------------- the ladder
@@ -611,7 +647,14 @@ def _span(seconds: float) -> str:
     return f"{max(minutes, 1)} minutes"
 
 
-def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], seen: dict[str, str | None]) -> None:
+def _late(
+    conn: "sqlite3.Connection",
+    row: Row,
+    at: str,
+    done: dict[str, int],
+    seen: dict[str, str | None],
+    waits: "list[W.Wait] | None" = None,
+) -> None:
     H = _h()
     stage = row["stage"]
     minutes = int(stage.get("expected_minutes") or 0)
@@ -628,6 +671,9 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
         return
     spent = _spent(conn, visit, at)
     if spent < minutes * 60:
+        return
+    if _next_release_only(conn, W.of(conn, row, seen) if waits is None else waits):
+        _late_release(conn, row, at, spent, minutes, done)
         return
     manager = _manager(conn, row, seen)
     said = f"Late: {_span(spent)} in {stage['name']}, expected {_span(minutes * 60)}."
@@ -653,8 +699,19 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
                 f"{said} It waits on: {waits_on}. Look once: push past with a reason where that is allowed, "
                 "reassign it, snooze it or close it."
             )
+            if _asks_only(waits):
+                # It waits only on people's answers. The manager bot's one move is to push past an ask it may push
+                # past (docs/pipelines-v3.md "A task waits a day on you"); with none it is not woken. Never a snooze:
+                # the ask stays in the person's list, and Late at 3 times adds nothing to a person's turn.
+                lead = (
+                    f"{said} It waits on: {waits_on}. It stays in {_name(conn, head.who)}'s list. Look once: if the "
+                    "answer is not needed, push past it with a reason where that is allowed; otherwise leave the task "
+                    "as it is."
+                    if _pushable(conn, waits)
+                    else ""
+                )
             key = f"{row['id']}:{visit['id']}:late"
-            if task_wakes.add(
+            if lead and task_wakes.add(
                 conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
             ):
                 done["woken"] += 1
@@ -668,6 +725,41 @@ def _late(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int], s
             # Still there at 3 times the expected time: one person's list, once. Already a person's turn, or paused
             # with its cause in a person's list: nothing.
             _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
+
+
+def _next_release_only(conn: "sqlite3.Connection", waits: "list[W.Wait]") -> bool:
+    """Whether all the task waits on is the next release of a repository Tico does not cut releases for (In a release
+    with no Release with): a release a person cuts, or the repository's own train."""
+    from .item_sources import github_release
+
+    if not waits or any(wait.state != W.SOURCE or not wait.requirement_id for wait in waits):
+        return False
+    for wait in waits:
+        requirement = R.get(conn, str(wait.requirement_id))
+        if not requirement or not github_release.waits_for_next_release(requirement):
+            return False
+    return True
+
+
+def _late_release(
+    conn: "sqlite3.Connection", row: Row, at: str, spent: float, minutes: int, done: dict[str, int]
+) -> None:
+    """A task that waits only for the next release, which no bot can bring: no bot is told Late or woken. After a week
+    (github_release.RELEASE_WAIT_S), or the stage's expected time when that is longer, it is Late and lands in one
+    person's list, once."""
+    from .item_sources import github_release
+
+    visit = row["visit"]
+    bound = max(minutes * 60, github_release.RELEASE_WAIT_S)
+    if spent < bound or visit.get("late_person_at"):
+        return
+    conn.execute(
+        "UPDATE visits SET late_told_at=COALESCE(late_told_at, ?), late_person_at=? WHERE id=?", (at, at, visit["id"])
+    )
+    _event(conn, row["id"], "late", None, None, {"expected_minutes": int(bound // 60)})
+    done["late"] += 1
+    fresh = E.task(conn, row["id"]) or row
+    _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
 
 
 def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int]) -> None:
@@ -685,6 +777,24 @@ def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, 
     conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
     _event(conn, row["id"], "late", None, None, {"due_at": row.get("due_at")})
     done["late"] += 1
+
+
+def _asks_only(waits: list[W.Wait]) -> bool:
+    """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
+    Connect GitHub)."""
+    return bool(waits) and all((wait.state == W.PERSON and wait.ask) or wait.fix for wait in waits)
+
+
+def _pushable(conn: "sqlite3.Connection", waits: list[W.Wait]) -> bool:
+    """Whether a bot may push past any of these asks: its switch is on and it is not people only (task_engine
+    ._may_push_past refuses the rest)."""
+    for wait in waits:
+        if wait.fix:
+            continue  # pushing past it would not get round its cause: the next stage needs it as well
+        requirement = R.get(conn, str(wait.requirement_id)) if wait.requirement_id else None
+        if requirement and R.can_push_past(requirement) and not R.people_only(requirement):
+            return True
+    return False
 
 
 def _looks(conn: "sqlite3.Connection", row: Row, waits: list[W.Wait], manager: str | None, head: str | None) -> bool:
@@ -763,11 +873,16 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         waits = W.of(conn, row, seen)
         if not waits:
             broken.append(Break(f"1: task {task_id} waits on nothing", [task_id]))
+        for wait in waits:
+            if wait.state == W.TASKS and wait.who and _waits_for_its_room(conn, row, str(wait.who), seen):
+                said = f"1: task {task_id} waits on {wait.who}, which waits for room in the stage {task_id} holds"
+                broken.append(Break(said, [task_id, wait.who]))
         if row.get("snooze"):
-            continue
+            # Set aside: nobody's turn is chased. A bot's snooze still hides no ask from the person it names (rule 3).
+            waits = W.listed(waits, row)
         visit = row["visit"]
         ladder = W.turn(conn, row, waits)  # the one bot a next try is for
-        for wait in waits:
+        for wait in [] if row.get("snooze") else waits:
             if wait.state == W.BOT and not (
                 (visit.get("level") or "owner") != "owner"
                 or task_wakes.live_run(conn, row, wait.who, now, live)
@@ -815,6 +930,19 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     broken += _rule_6(conn)
     broken += _rule_7(conn)
     return broken
+
+
+def _waits_for_its_room(conn: "sqlite3.Connection", row: Row, filed: str, seen: dict[str, str | None]) -> bool:
+    """The task waits on a task it filed, and that one waits for room in the limited stage the task is in: neither can
+    move until something else leaves. The engine lets a sub-task in on its filer's slot (`task_engine.rides_with_filer`),
+    so this is a safety net."""
+    child = E.task(conn, filed)
+    if not child or child["status"] != "open" or child.get("snooze") or not child.get("stage"):
+        return False
+    ahead = E.next_stage(conn, child)
+    if not ahead or ahead["id"] != row["stage_id"] or E.has_room(conn, ahead, task_row=child):
+        return False
+    return any(wait.state == W.ROOM for wait in W.of(conn, child, seen))
 
 
 def _told(told: str | None, visit: Row) -> bool:
@@ -874,8 +1002,9 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
     out += _lines(
         conn,
         "SELECT e.key, v.task_id FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
-        "WHERE e.kind='queue_pr' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
-        "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='dequeue_pr')",
+        "WHERE e.kind='act' AND e.state IN ('owed', 'done') AND v.how IN ('back', 'closed') AND NOT EXISTS "
+        "(SELECT 1 FROM effects u WHERE u.visit_id = e.visit_id AND u.kind='undo' AND u.source = e.source "
+        "AND u.action = e.action)",
         "5: effect {0} of task {1} was not undone when it moved back or closed",
         (1,),
     )
@@ -885,7 +1014,8 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
 def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     """A forward move never overfills a stage. Counted: the open tasks that came into a limited stage by a forward move
     since the stage's settings last changed and were never snoozed there. A task that came back, was reopened or had a
-    snooze end may sit one over."""
+    snooze end may sit one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's
+    slot (task_engine.rides_with_filer)."""
     return _lines(
         conn,
         "SELECT s.id, COUNT(*), s.task_limit FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
@@ -893,6 +1023,8 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
         "WHERE s.kind='work' AND s.task_limit > 0 AND v.entered_how IN ('met', 'pushed_past') "
         "AND v.entered_at >= s.updated_at "
         "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.visit_id = v.id) "
+        "AND NOT EXISTS (SELECT 1 FROM links l JOIN visits f ON f.id = l.visit_id "
+        "WHERE l.to_task_id = t.id AND f.stage_id = s.id) "
         "GROUP BY s.id HAVING COUNT(*) > s.task_limit",
         "6: stage {0} holds {1} tasks that moved forward into it, over its limit of {2}",
     )

@@ -165,29 +165,62 @@ def _job(conn: "sqlite3.Connection", row: Row, page: Row) -> tuple[Row, Row]:
         if version
         else (None, False)
     )
+    links = conn.execute(
+        "SELECT repo, number, detail FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+        "AND number IS NOT NULL ORDER BY created_at, id",
+        (page["task_id"],),
+    ).fetchall()
+    return job_of(
+        {**requirement, "name": R.name_of(requirement)},
+        task,
+        {"file_id": row["file_id"], "version": row["version"], "digest": (version or {}).get("digest") or ""},
+        text,
+        cut,
+        judged,
+        # The work's repo, PR and PR author, as an attachment is judged with (pipeline_judges.pr_work), when the task
+        # links one PR. With more, each PR and its newest commit are in the context's `heads`.
+        {"repo": links[0][0], "number": links[0][1], "detail": links[0][2]} if len(links) == 1 else None,
+    )
+
+
+def job_of(
+    requirement: Row, task: Row, page: Row, text: str | None, cut: bool, judged: Row, link: Row | None = None
+) -> tuple[Row, Row]:
+    """`_job` with nothing read: the requirement (its id and name), the task (title, body, version, pipeline), the page
+    (file_id, version, digest), its text and whether it was cut, what it is judged against (`judged_against`: the
+    rubric and the context), and the task's PR link (repo, number, detail) when it links one. The eval
+    (evals/pipeline_judge) builds its page cases through this, so the judge is shown there exactly what it is shown
+    here."""
+    from . import pipeline_judges as PJ
+
     pipeline: Row = task.get("pipeline") or {}
     asked: Row = {
         "id": requirement["id"],
-        "name": R.name_of(requirement),
-        "rubric": judged.get("rubric") or R.name_of(requirement),
+        "name": requirement.get("name") or "",
+        "rubric": judged.get("rubric") or requirement.get("name") or "",
         "goal": pipeline.get("goal") or "",
         "pipeline_id": task.get("pipeline_id"),
     }
+    ref = f"page:{page['file_id']}@{page['version']}"
     attachment: Row = {
-        "id": f"page:{row['file_id']}@{row['version']}",
-        "source": f"page:{row['file_id']}@{row['version']}",
-        "file_version": int(row["version"]),
-        "digest": (version or {}).get("digest") or "",
+        "id": ref,
+        "source": ref,
+        "file_version": int(page["version"]),
+        "digest": page.get("digest") or "",
         "text": text,
         "truncated": cut,
         "task_title": task.get("title") or "",
         "task_spec": task.get("body") or "",
         "task_work_version": task.get("version") or 0,
+        # The page is made for the work as it is now: without this Jev is shown evidence for version 0 of work at
+        # version N, and hedges on a page that is right (live rc.4, Nov 11).
+        "work_version": int(task.get("version") or 0),
         # The page is pinned (file and version), and what it is judged against (the rubric, the task, the heads, the
         # release) is in its rubric_hash: a change to any of them is another verdict. The task's own version moves on
         # with every edit and says nothing about this page, so a page is never out of date by it.
         "older_evidence_ok": True,
         "context": judged.get("context") or {},
+        **(PJ.pr_work(link) if link else {}),
     }
     return asked, attachment
 
@@ -197,6 +230,7 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
     it needed, else its ladder starts again. Jev's send back wakes a bot owner with the reasons."""
     from . import task_engine as E
     from . import task_requirements as R
+    from . import task_wakes
 
     said = str(verdict["verdict"])
     reasons = " ".join(str(verdict.get("reasons") or verdict.get("last_error") or "").split())
@@ -223,6 +257,41 @@ def _nudge(conn: "sqlite3.Connection", verdict: Row, pages: list[Row]) -> None:
                 else (f'Jev sent back "{R.name_of(requirement)}"')
             )
             E.tell_owner(conn, task_id, line, f"jev:{verdict['id']}")
+        elif said in ("unsure", "failed"):
+            _unsure_wake(conn, task_id, page, f"jev:{verdict['id']}")
+        # Jev has looked at a page a person OKs: commits since the reviews are a bot's to review first.
+        task_wakes.review_new(conn, task_id)
+
+
+def _unsure_wake(conn: "sqlite3.Connection", task_id: str, page: Row, what: str) -> None:
+    """Jev unsure on a stage a bot holds goes to bots first (task_requirements._unsure_to_bots): wake the bot it is back
+    with, with Jev's reason and the check line, or the manager bot that decides it (at once when Jev could not check).
+    A person's turn wakes nobody."""
+    from . import task_engine as E
+    from . import task_requirements as R
+    from . import task_wakes
+
+    row = E.task(conn, task_id)
+    requirement = R.get(conn, page["requirement_id"])
+    if not row or not requirement or row["status"] != "open" or row.get("snooze"):
+        return
+    answer = R.newest_answers(conn, row["visit"]["id"]).get(requirement["id"])
+    standing = R.standing(conn, row, requirement, answer)
+    name = R.name_of(requirement)
+    if standing.state == R.NOT_MET and standing.line.startswith(R.FIX_OR_EXPLAIN):
+        E.tell_owner(conn, task_id, f'Jev is unsure of "{name}": {standing.line}', what)
+    elif standing.state == R.WAITING and standing.line.startswith(R.DECIDE) and standing.on:
+        what_jev = "could not check" if "Jev couldn't check" in standing.line else "was unsure of"
+        twice = " twice" if what_jev == "was unsure of" else ""
+        lead = f'Jev {what_jev} "{name}"{twice}: you decide it, as the pipeline\'s manager.'
+        task_wakes.add(
+            conn,
+            row,
+            standing.on,
+            row["visit"],
+            task_wakes.body(conn, row, lead, to=standing.on),
+            wake_key=f"{row['id']}:{row['visit']['id']}:{what}",
+        )
 
 
 def run(store: Any, now: str | None = None) -> int:

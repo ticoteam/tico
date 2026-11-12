@@ -2,6 +2,7 @@
 
 import difflib
 import json
+import logging
 from types import SimpleNamespace
 
 from clients.catalog import free_slug, slug_from_name
@@ -355,23 +356,10 @@ class SettingsAdmin:
             raise Problem("template", f"Unknown template {template}. Use tico_template_list.{hint}", 422)
 
     def template_repo_defaults(self, template):
-        from pathlib import Path
-        import yaml
+        """The repository access the template's card declares for a bot made from it (repositories.card_access)."""
+        from .repositories import card_access
 
-        if not template:
-            return {}
-        try:
-            manifest = yaml.safe_load((Path(self.settings.catalog_dir) / template / "card.yaml").read_text()) or {}
-        except (OSError, yaml.YAMLError):
-            return {}
-        if not isinstance(manifest, dict):
-            return {}
-        mode, access = manifest.get("repo_access_mode"), manifest.get("repo_all_access", "read")
-        return (
-            {"repo_access_mode": mode, "repo_all_access": access}
-            if mode in ("own", "all") and access in ("read", "write")
-            else {}
-        )
+        return card_access(self.settings.catalog_dir, template)
 
     def template_private_default(self, template):
         """The `private_tasks_default` the template's card declares: a bot made from it keeps its tasks private unless
@@ -422,7 +410,9 @@ class SettingsAdmin:
     def pick_slug(self, c, name, fallback="bot"):
         """A free slug from the bot's name: never one in use, archived or reserved for the company's own bots."""
         return free_slug(
-            name, lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "coo", fallback
+            name,
+            lambda slug: bool(H.resolve_bot(c, slug)) or self.auth.system_bot(slug) or slug == "assistant",
+            fallback,
         )
 
     def template_name(self, template):
@@ -504,6 +494,20 @@ class SettingsAdmin:
         H.event(c, who.actor, report_managers.EVENT, bot, {"op": op, "manager": H.actor_id(who.actor)})
         return result
 
+    @staticmethod
+    def _private_pipelines(c):
+        """Legal and Finance are made the moment their owner bot is (pipeline_settings.ensure_private). Best effort in
+        its own savepoint: making a bot never fails on it, and the next start tries again."""
+        from . import pipeline_settings
+
+        c.execute("SAVEPOINT private_pipelines")
+        try:
+            pipeline_settings.ensure_private(c)
+        except Exception:
+            c.execute("ROLLBACK TO private_pipelines")
+            logging.getLogger(__name__).exception("private pipelines")
+        c.execute("RELEASE private_pipelines")
+
     def create_bot(self, c, who, body):
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
@@ -524,7 +528,7 @@ class SettingsAdmin:
         if existing:
             raise Problem("duplicate", "That bot slug already exists", 409)
         bot_id = H.new_bot_id(body.slug)
-        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "coo"):
+        if not privileged and (self.auth.system_bot(body.slug) or body.slug == "assistant"):
             # The company's own bots (the Assistant, BotOps, the Librarian, the COO) are added by an owner or an Admin.
             raise Problem(
                 "forbidden", "That name is reserved for the company's own bots; ask an owner or an admin", 403
@@ -665,9 +669,16 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
+        if config.get("repo_access_mode") == "all":
+            # The template's repository access (card.yaml), given by default: audited as any change, and not a choice,
+            # so a seat's default may still follow it (repositories.untouched).
+            access = {"mode": "all", "all_access": config.get("repo_all_access")}
+            H.event(c, who.actor, "bot.repos_changed", bot_id, {"before": None, "after": access, "default": True})
         from .finance import actions as FA
 
         FA.revalidate_org(c)  # a new bot joins the org chart Finance's grants follow (spec 7.5)
+        if body.template:
+            self._private_pipelines(c)
         if not body.model and config.get("gateway"):
             self._template_gateway_model(c, bot_id, config)
         from .report_order import arrive
@@ -695,10 +706,6 @@ class SettingsAdmin:
             bot_id,
             {"operator": operator, "owners": owners, "runner": body.runner_id},
         )
-        if body.slug == "librarian":
-            from . import listening
-
-            listening.seed_market(c, self.settings)  # once: its market posts (Settings > Listening)
         visible = self.auth.bot_accesses(c, who)
         same_name = [
             r["slug"]
@@ -730,6 +737,10 @@ class SettingsAdmin:
         default until the bot's owner picks one."""
         CA.gate(c, who.actor, "bots", "add a bot")
         self.validate_template(body.template)
+        if not body.slug and (asked := self._bot_being_set_up(c, body.template)):
+            # BotOps left the slug out while working a bot's own "Set up" task: that bot is the one asked for, so it
+            # answers (`created: false`, below) and no second one is made under a -2 slug.
+            body = body.model_copy(update={"slug": asked})
         if not body.slug:
             name = body.display_name or (self.template_name(body.template) if body.template else "")
             if not name.strip():
@@ -800,6 +811,23 @@ class SettingsAdmin:
             MessageBots.link(c, who.actor, bot_id, who.actor)  # BotOps built it for them: it is their message bot
         return {**result, **self.definition(c, bot_id), "created": True}
 
+    @staticmethod
+    def _bot_being_set_up(c, template):
+        """The slug of the bot whose setup task this call is made for (the task BotOps cites, H.DELEGATION), when it is
+        still open, the bot is not archived and it is from this template; else None."""
+        from .setup_live import bot_of
+
+        cited = str((H.DELEGATION.get() or {}).get("cited") or "")
+        bot_id = bot_of(c, cited)[0] if cited else None
+        if not bot_id:
+            return None
+        row = H.bot(c, bot_id)
+        if not row or row["state"] == "archived" or (template and BS.read(c, bot_id).get("template") != template):
+            return None
+        if not c.execute("SELECT 1 FROM tasks WHERE id=? AND status='open'", (cited,)).fetchone():
+            return None
+        return row["slug"]
+
     def co_owners(self, c, who, bot, add=(), remove=()):
         """Add or remove co-owners of a bot. Any of its owners may; whoever it reports up to and the Admins
         stay owners whatever this list says."""
@@ -853,16 +881,16 @@ class SettingsAdmin:
 
     def archive(self, c, who, bot, body):
         CA.gate(c, who.actor, "bots", f"remove {(H.bot(c, bot) or {}).get('slug', bot)}")
-        # The assistant, BotOps, the Librarian, the Strategy Bot, the Task Manager, the Bookkeeper, the Brand Owner, the Updates
+        # The assistant, BotOps, the Librarian, the Strategy Owner, the General Manager, the Finance Owner, the Design Owner, the Updates
         # Owner and the Automations Owner are built in: nobody archives them, the owner included.
         if bot in (
             self.settings.assistant_bot,
             "botops",
             "librarian",
-            "goal-manager",
-            "task-manager",
-            "bookkeeper",
-            H.BRAND_OWNER,
+            "strategy-owner",
+            "general-manager",
+            "finance-owner",
+            H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
         ):
@@ -875,12 +903,12 @@ class SettingsAdmin:
                     if bot == "botops"
                     else "The Librarian"
                     if bot == "librarian"
-                    else "The Task Manager"
-                    if bot == "task-manager"
-                    else "The Bookkeeper"
-                    if bot == "bookkeeper"
-                    else "The Brand Owner"
-                    if bot == H.BRAND_OWNER
+                    else "The General Manager"
+                    if bot == "general-manager"
+                    else "The Finance Owner"
+                    if bot == "finance-owner"
+                    else "The Design Owner"
+                    if bot == H.DESIGN_OWNER
                     else "The Updates Owner"
                     if bot == "updates-owner"
                     else "The Automations Owner"
@@ -1122,6 +1150,10 @@ class SettingsAdmin:
             c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (bot,))
             H.status_set(c, who.actor, bot, state="active", focus="", reason="Resumed in Settings")
             H.event(c, who.actor, "bot.resume", bot, {"via": "definition"})
+        if values["repo"] and values["repo"] != before.get("repo"):
+            from .repositories import note_chosen
+
+            note_chosen(c, values["repo"], self.settings.github_owner)  # a person's choice: Tico uses it
         BS.write(c, bot, declared)
         c.execute(
             "UPDATE bot_config SET description=?,reports_to=?,repo=?,thread_mode=?,"
@@ -2274,6 +2306,15 @@ def archive_bot(c, actor, bot, successor="", revoke_agent=True):
             (row["id"],),
         )
     c.execute("UPDATE schedules SET deleted_at=COALESCE(deleted_at,?),updated_at=? WHERE bot=?", (ts, ts, bot))
+    # Its routines are automations it owns (a template's `routines:`, seeded as the bot is built): they go the same way,
+    # as a delete retires an automation, so none stays listed under a bot that is gone.
+    from . import automations
+
+    if H._has_table(c, "automations"):
+        for row in c.execute(
+            "SELECT * FROM automations WHERE owner_id=? AND deleted_at IS NULL AND builtin=0", ("bot:" + bot,)
+        ).fetchall():
+            automations.remove(c, actor, row, via="bot.archived")
 
     # The team it rooted passes to the successor, which now heads it.
     people = read_cache.metadata(c, "people")

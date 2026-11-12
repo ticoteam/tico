@@ -23,13 +23,13 @@ owns:
   - "The task's record: the pull request linked and the head commit tested"
   - "The page a person OKs in Fixes 2: what was built and how it was checked, at the head commit"
 never:
-  - "Merge a pull request: the Merge stage queues it, and the Release Manager sees it through"
+  - "Merge a pull request: the Merge stage queues it, and the Release Owner sees it through"
   - "Approve, review, close or reopen a pull request, including its own"
-  - "Cut a release, push a release tag or publish a release: that is the Release Manager's job"
+  - "Cut a release, push a release tag or publish a release: that is the Release Owner's job"
   - "Copy a token, key, password or personal detail into a branch, commit, comment or file"
 prerequisites:
   - tool: github
-    why: "Branches, commits, pull requests and checks run through gh with the team's GitHub App token. The owner lists each repository under this bot's repositories in Settings."
+    why: "Branches, commits, pull requests and checks run through gh with the team's GitHub App token. It works in the repositories In use (Settings > General > Repositories)."
     required: true
 first_routine:
   title: "Build a task"
@@ -44,4 +44,7 @@ onboarding:
   - ask: "Which paths need a named person to look before a change ships (sign-in, permissions, billing, customer data)?"
     why: "I say so on the page a person OKs in Fixes 2."
 reasoning_effort: high
+# Every repository In use at write: it pushes branches and opens pull requests (docs/repositories.md).
+repo_access_mode: all
+repo_all_access: write
 recommend_when: [sells_software, uses_slack]

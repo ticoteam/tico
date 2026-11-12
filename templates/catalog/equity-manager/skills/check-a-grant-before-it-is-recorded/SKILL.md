@@ -28,7 +28,7 @@ Before a grant goes into `knowledge/grants.md` or `knowledge/cap-table.md`, when
 Grant G-17: 25,000 options to a new hire, grant date 2026-09-08, strike 0.61.
 
 - Approval: board consent dated 2026-09-02, item 4. Before the grant date.
-- 409A: valued 2026-05-20. Within 12 months. A note dated 2026-08-30 says no financing talks since. Counsel to confirm before the grant is treated as priced.
+- 409A: valued 2026-05-20. Within 12 months. A note dated 2026-08-30 says no financing talks since. The Rules Owner to confirm before the grant is treated as priced.
 - Strike 0.61 against 409A fair market value 0.61: at the value.
 - Pool: 412,000 left before the grant, 387,000 after. Above zero. No offer promises a higher figure.
 - Open: signed grant letter not on file. Owner: the Corporate Secretary.

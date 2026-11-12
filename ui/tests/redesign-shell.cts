@@ -1,6 +1,6 @@
 // The redesign's shell (ui/app/redesign.ts, ui/app/strategy-budget.ts) against fixtures shaped per the redesign CONTRACT
 // (fixtures/redesign-*.json, the Acme example): the sidebar's order, helpers off the Team list, old addresses
-// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Bot
+// redirected (System's to Automations' System jobs), Settings with no design switch, the Strategy tabs with no Strategy Owner
 // beside them (it is a helper of the Assistant; Ask is the way in), the Budget tab drawing (its tree and edits are
 // strategy-budget.cts), a task cap's 409 read as its message, and no "CEO Bot" anywhere. Phone first (390×844), then desktop.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots.
@@ -62,7 +62,7 @@ async function open(browser: import('playwright').Browser, {route = '#/updates',
   if (messageBot) {
     employees.push(
       {name: 'counsel', display_name: 'Counsel', reports_to: 'eng-lead', org_parent: 'b:eng-lead', team: 'eng', status: 'active', can_chat: true},
-      {name: 'tico-counsel', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
+      {name: 'rules-owner', display_name: 'Built-in Counsel', org_parent: 'b:eng-lead', status: 'active'},
     );
     humans.people.push({id: 'legal-mailbox', name: 'Legal mailbox', email: 'legal@acme.example', inbox_bot: 'counsel', org_parent: ''});
     messaging.bots.push({bot: 'counsel', name: 'Counsel', sources: [{kind: 'slack', id: 'slack:CLEGAL', name: '#legal'}]},
@@ -89,8 +89,6 @@ async function open(browser: import('playwright').Browser, {route = '#/updates',
     if (p === '/api/v2/goals/needs-you') return json({items: []});
     if (p === '/api/v2/strategy') return json({current: null, bets: [], may_edit: true});
     if (p === '/api/v2/conversations') return json({conversations: []});
-    if (p === '/api/v2/listening/destinations') return json({destinations: [{key: 'leads', category: 'leads', threshold: 0.75, receiver: 'bot:release', source: 'settings'}],
-      categories: [{id: 'leads', label: 'Leads'}], receivers: [{actor: 'bot:release', name: 'Release Manager'}]});
     if (p === '/api/v2/usage/limits') return json(fixture('redesign-usage-limits.json'));
     if (p === '/api/v2/task-caps') return method === 'GET' ? json(fixture('redesign-task-caps.json')) : json({ok: true});
     if (p.startsWith('/api/v2/usage/')) return json({ok: true});
@@ -127,7 +125,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await sources.locator('a').first().getAttribute('href'), '#/messaging?bot=counsel&source=email%3Alegal%40acme.example');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': sources are not duplicated in a separate section');
       assert.equal(await page.locator('#tree a[href*="slack%3ACBUILD"]').count(), 0, tag + ': other chart bots keep Slack in Tools');
-      for (const helper of ['botops', 'tico-counsel', 'mail-sorter'])
+      for (const helper of ['botops', 'rules-owner', 'mail-sorter'])
         assert.equal(await page.locator(`#tree [data-org="b:${helper}"]`).count(), 0, tag + ': built-in and explicit helpers stay off Team');
       assert.deepEqual(await page.evaluate(() => ({
         recruiting: recruitPlaces().some(([id]) => id === 'counsel'),
@@ -137,10 +135,10 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       })), {recruiting: true, audience: true, financeHelper: false, budgetParent: 'bot:eng-lead'}, tag + ': chart pickers and spending keep Counsel on the team');
       await page.evaluate(() => { location.hash = '#/strategy/org'; });
       await page.locator('.rd-org [data-rdo-ref="bot:counsel"]').waitFor();
-      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:tico-counsel"]').count(), 0);
+      assert.equal(await page.locator('.rd-org [data-rdo-ref="bot:rules-owner"]').count(), 0);
       await page.evaluate(() => { location.hash = '#/strategy/goals'; });
       await page.locator('#goal-tree [data-owner="bot:counsel"]').waitFor();
-      assert.equal(await page.locator('#goal-tree [data-owner="bot:tico-counsel"]').count(), 0);
+      assert.equal(await page.locator('#goal-tree [data-owner="bot:rules-owner"]').count(), 0);
       // Removing the manager leaves the bot at the root, still with its mailbox beneath it.
       await page.evaluate(() => {
         const bot = botRow('counsel'); bot.reports_to = ''; bot.org_parent = ''; bot.team = ''; renderTree();
@@ -151,7 +149,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       await page.close();
     }
 
-    // Phone first: the rail, old addresses redirected, the Strategy tabs with no Strategy Bot.
+    // Phone first: the rail, old addresses redirected, the Strategy tabs with no Strategy Owner.
     {
       const tag = 'phone';
       // The goals tree answers slowly: #/goals/g-1 is left before it arrives, as a person tapping on would.
@@ -167,17 +165,20 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       assert.equal(await page.getAttribute('a[data-nav="strategy"]', 'href'), '#/strategy/market', tag + ': Strategy opens on Market');
       assert.deepEqual(await page.locator('#mobile-nav .mobile-nav-item:not([hidden]) .mobile-nav-label').allInnerTexts(), PHONE_BAR, tag + ': the phone bar is the mock\'s');
       for (const [from, to] of [['#/tasks/routines', '#/automations'], ['#/recurring', '#/automations'], ['#/goals', '#/strategy/goals'],
-        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/strategy/market/listening']] as const) {
+        ['#/goals/g-1', '#/strategy/goals/g-1'], ['#/settings/listening', '#/listening'], ['#/strategy/market/listening', '#/listening']] as const) {
         await page.evaluate(h => { location.hash = h; }, from);
         assert.ok(await hashSoon(page, to), `${tag}: ${from} lands on ${to}`);
       }
-      await page.locator('[data-rdm-settings]').click();
-      await page.locator('[data-listen-dest="leads"]').waitFor();
-      // Every slow tree asked for has been read and acted on: the goal left behind must not open over Listening.
+      await page.locator('#au-root.au-lst').waitFor({state: 'attached'});
+      assert.equal(await page.locator('#side a[data-nav="listening"].cur').count(), 1, tag + ': Listening is current');
+      assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 0, tag + ': and Automations is not');
+      await page.evaluate(() => { location.hash = '#/strategy/market'; });
+      await page.locator('.mkt-pg #mkt-q-saying a[href="#/listening"]').waitFor();
+      // Every slow tree asked for has been read and acted on: the goal left behind must not open over Market.
       await page.waitForFunction(n => (window as unknown as {__treeRead: number}).__treeRead >= n, goals.asked);
-      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market/listening', tag + ': a goal left before it loaded keeps off the address');
+      assert.equal(await page.evaluate(() => location.hash), '#/strategy/market', tag + ': a goal left before it loaded keeps off the address');
       assert.equal(await page.locator('#goal-panel[open]').count(), 0, tag + ': and does not open');
-      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': Listening is a question on Market');
+      assert.equal(await page.locator('.mkt-pg #mkt-q-saying').count(), 1, tag + ': What are buyers saying? is a question on Market');
       await page.evaluate(() => { location.hash = '#/automations'; });
       await page.locator('#au-root, #automations-root').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('#side a[data-nav="automations"].cur').count(), 1, tag + ': Automations is current');
@@ -187,7 +188,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       const org = await page.locator('.rd-org').innerText();
       assert.ok(org.includes('Builder'), tag + ': Org lists the chart');
       assert.ok(!org.includes('BotOps'), tag + ': helpers are off the Org chart');
-      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot panel or button');
+      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Owner panel or button');
       await page.evaluate(() => { location.hash = '#/strategy/budget'; });
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       assert.ok(await noSideScroll(page), tag + ': no sideways scroll');
@@ -196,7 +197,7 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       await page.locator('#goal-body').waitFor();
       assert.equal(await page.locator('#goal-manager-panel').count(), 0, tag + ': Goals has no rail of its own');
       assert.equal(await page.locator('#goal-tree .gt-sep').count(), 0, tag + ': helpers are off Goals too');
-      // The roster fixture stores the old default name, which state.js shows as the Strategy Bot: it must not appear.
+      // The roster fixture stores the old default name, which state.js shows as the Strategy Owner: it must not appear.
       assert.ok(!(await page.locator('body').innerText()).includes('CEO Bot'), tag + ': no "CEO Bot" anywhere');
       await page.locator('#mobile-more').click();
       await shot(page, 'phone-sidebar');
@@ -204,18 +205,18 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       await page.close();
     }
 
-    // Desktop: the rail reads as the mock, no Strategy Bot beside any tab, and a task cap's 409 reads as its message.
+    // Desktop: the rail reads as the mock, no Strategy Owner beside any tab, and a task cap's 409 reads as its message.
     {
       const tag = 'desktop';
       const {page, errors} = await open(browser, {viewport: DESKTOP, route: '#/strategy/budget'});
       await page.locator('[data-bt-open="bot:builder"]').waitFor();
       const shown = await shownRail(page);
-      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Rules', 'Library', 'Docs', 'Files', 'Skills', 'Tools', 'Meetings'], tag + ': the rail, with no Strategy Bot entry');
-      assert.equal(await page.locator('#tree [data-org="b:goal-manager"]').count(), 0, tag + ': the Strategy Bot is off the Team list');
+      assert.deepEqual(shown, ['Tasks', 'Calendar', 'Updates', 'Company', 'Strategy', 'Growth', 'Automations', 'Listening', 'Rules', 'Library', 'Docs', 'Files', 'Skills', 'Tools', 'Meetings'], tag + ': the rail, with no Strategy Owner entry');
+      assert.equal(await page.locator('#tree [data-org="b:strategy-owner"]').count(), 0, tag + ': the Strategy Owner is off the Team list');
       assert.ok(!shown.includes('Goals'), tag + ': Goals left the rail');
       assert.equal(await page.locator('#nav-inboxes-section').isVisible(), false, tag + ': Message bots hidden');
       assert.equal(await page.locator('#side a[data-nav="strategy"].cur').count(), 1, tag + ': Strategy is current');
-      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Bot rail');
+      assert.equal(await page.locator('#sbot, #sbot-fab').count(), 0, tag + ': no Strategy Owner rail');
       assert.equal(await page.locator('#main').evaluate(el => el.classList.contains('sbot-open')), false);
       await shot(page, 'desktop-budget');
       if (shots) { await page.evaluate(() => (window as unknown as {ticoTheme: {set(t: string): void}}).ticoTheme.set('light')); await shot(page, 'desktop-budget-light'); await page.evaluate(() => (window as unknown as {ticoTheme: {set(t: string): void}}).ticoTheme.set('dark')); }
@@ -231,17 +232,17 @@ const noSideScroll = (page: import('playwright').Page) => page.evaluate(() => do
       }, CAP_409.message);
       assert.ok(/refused ·\s*Ana takes 10 tasks a day from Engineering Lead and 10 are open\. Nothing was queued\./.test(chat), tag + ': the chat shows the refusal: ' + chat);
 
-      for (const [hash, tab] of [['#/strategy/market/listening', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']] as const) {
+      for (const [hash, tab] of [['#/strategy/market', 'Market'], ['#/strategy', 'Strategy'], ['#/strategy/lenses', 'Strategy'], ['#/strategy/goals', 'Goals'], ['#/strategy/org', 'Org']] as const) {
         await page.evaluate(h => { location.hash = h; }, hash);
         await page.waitForFunction(t => document.querySelector('.strat-tabs a.cur')?.textContent === t, tab);
-        assert.equal(await page.locator('#sbot').count(), 0, `${tag}: no Strategy Bot beside ${hash}`);
+        assert.equal(await page.locator('#sbot').count(), 0, `${tag}: no Strategy Owner beside ${hash}`);
         if (hash === '#/strategy/goals') await shot(page, 'desktop-goals');
         if (hash === '#/strategy') await shot(page, 'desktop-strategy');
         if (hash === '#/strategy/org') await shot(page, 'desktop-org');
-        if (hash === '#/strategy/market/listening') await shot(page, 'desktop-listening');
+        if (hash === '#/strategy/market') await shot(page, 'desktop-market');
       }
       await page.evaluate(() => { location.hash = '#/tasks'; });
-      // The roster fixture stores the old default name, which state.js shows as the Strategy Bot: it must not appear.
+      // The roster fixture stores the old default name, which state.js shows as the Strategy Owner: it must not appear.
       assert.ok(!(await page.locator('body').innerText()).includes('CEO Bot'), tag + ': no "CEO Bot" anywhere');
       await page.evaluate(() => { location.hash = '#/settings'; });
       await page.locator('#settings-tabs').waitFor();

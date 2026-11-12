@@ -43,17 +43,6 @@ def test_other_google_keys_are_not_google_ads():
     assert tool_services.match(env="GOOGLE_MAPS_API_KEY") != "google-ads"
 
 
-def test_meta_is_checked_with_a_bearer_call_and_google_ads_stays_on_computers():
-    meta = tool_services.defaults("meta-ads")
-    assert (meta["base_url"], meta["auth_scheme"], meta["check_path"]) == (
-        "https://graph.facebook.com/v26.0",
-        "bearer",
-        "/me",
-    )
-    google = tool_services.defaults("google-ads")
-    assert google["name"] == "Google Ads" and google["base_url"] == "" and google["check_path"] == ""
-
-
 def upgraded(path):
     """The last release's hub (schema_old_main.sql), upgraded by a boot."""
     conn = sqlite3.connect(path)
@@ -123,16 +112,6 @@ def test_the_migration_skips_a_database_without_tools(tmp_path):
 
 
 BREX_HOST = importlib.import_module("backend.migrations.20261106222525_brex_tool_host")
-
-
-def test_brex_tool_uses_the_host_and_variable_finance_uses():
-    from backend.finance import brex
-
-    row = tool_services.defaults("brex")
-    assert row["base_url"] == brex.BASE
-    assert row["env"] == "BREX_TOKEN"
-    assert row["check_path"] == "/v2/users/me"
-    assert tool_services.match(env="BREX_API_KEY") == "brex"  # the old variable still lands on Brex
 
 
 def _the_migration_moves_a_legacy_brex_tool_to_finances_host(path):

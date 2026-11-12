@@ -54,9 +54,9 @@ draft, not yet reviewed". Nothing is sent and no one is enrolled.
 
 ## 6. Check the routines
 
-Setting you up switched on your first routine, the weekday outbound run. Check it with `tico automation list`; if it shows off,
-run `tico automation update <id> --enable`. Then turn on the weekly read-out the same way: `tico automation update <id> --enable`
-for `weekly-outbound-readout`, using the id from that list.
+Setting you up switched on both routines, the weekday outbound run and the weekly read-out. Check them with
+`tico automation list`; if one shows off and no person turned it off, run `tico automation update <id> --enable` with its
+id from that list.
 
 Tell the human in one line each: "I will run outbound every weekday at 08:00: replies sorted, stops applied, touches drafted for
 your review." and "I will publish the outbound read-out every Monday at 08:30." They can change or turn off either one any time;

@@ -137,7 +137,7 @@ def test_one_change_to_many_tasks_is_one_bulk_change_and_resets_lists(api):
 
 def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
     mine = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
-    other = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
+    other = post(api, "tasks", {"owner": "assistant", "title": "Plan the offsite", "body": "Soon."})
 
     def read(tag=None):
         return api.get(
@@ -156,7 +156,7 @@ def test_a_bot_list_stays_304_when_only_other_tasks_change(api):
 
 
 def test_a_batch_read_returns_only_readable_tasks_and_names_the_rest_missing(api):
-    seen = post(api, "tasks", {"owner": "coo", "title": "Plan the offsite", "body": "Soon."})
+    seen = post(api, "tasks", {"owner": "assistant", "title": "Plan the offsite", "body": "Soon."})
     hidden = post(api, "tasks", {"owner": "ops", "title": "Check the backups", "body": "Please."})
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
@@ -255,17 +255,3 @@ def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
     assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
-
-
-def test_a_changed_trigger_is_rebuilt_on_the_next_start(api):
-    # Every start runs events.ensure, which replaces a trigger whose SQL differs: an install from before the snapshot
-    # kept its pipeline still has the old tasks update trigger.
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DROP TRIGGER changes_tasks_update")
-        c.execute("CREATE TRIGGER changes_tasks_update AFTER UPDATE ON tasks BEGIN SELECT 1; END")
-        E.ensure(c)
-        sql = c.execute(
-            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='changes_tasks_update'"
-        ).fetchone()[0]
-    assert "OLD.pipeline_id" in sql

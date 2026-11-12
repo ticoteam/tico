@@ -60,7 +60,7 @@ def _recipient_auth(c):
     from . import access
 
     policy = Auth.__new__(Auth)
-    policy.settings = getattr(c, "settings", SimpleNamespace(assistant_bot="coo", assistant_name="Assistant"))
+    policy.settings = getattr(c, "settings", SimpleNamespace(assistant_bot="assistant", assistant_name="Assistant"))
     policy.bot_admins = set(access.owner_and_admin_emails(c))
     policy.owner_email = (access._load_json(c, access.OWNER) or {}).get("email") or ""
     policy._owner_id = ""
@@ -175,7 +175,7 @@ def require_recipient(
                     )
                 in_assistant_room = True
             elif who.role in ("human", "owner") and H.actor_id(to) == strategy_bot.SLUG:
-                # No person chats with the Strategy Bot: their Assistant asks it (backend/assistant.py HELPERS). A
+                # No person chats with the Strategy Owner: their Assistant asks it (backend/assistant.py HELPERS). A
                 # person's post with no room (the Goals page, `tico chat`) goes to their Assistant instead; the
                 # owner's earlier chat with it is history, read-only. Bots still message it: its goals session.
                 if body.conversation_id or who.via:

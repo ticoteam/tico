@@ -68,7 +68,7 @@ Tico computes the channel numbers from these inputs, so nobody types a computed 
 - **LTV:CAC** = LTV ÷ CAC.
 - **Payback** = CAC ÷ profit per month, in months.
 
-**Who enters them.** The Head of Marketing (the `marketing-lead` template) enters each month's rows and the KPI readings
+**Who enters them.** The Head of Marketing (the `growth-manager` template) enters each month's rows and the KPI readings
 it owns, or that a goal it owns uses, in its weekly numbers routine. The routine ships off like every template routine: the bot's onboarding turns it on. It
 runs on Mondays at 07:00, before the growth meeting. Turn it off or on with `tico automation update <id> --disable` or
 `--enable`.
@@ -90,24 +90,23 @@ for. The numbers are entered from them each week; the rows stay in those systems
 
 ## Marketing tasks
 
-A marketing idea is a task in the General pipeline with a label that says where it is:
+A growth experiment is a task in **Growth Experiments** (Ideas, Building, Running), and a thing that worked and is kept
+is a task in **Growth Monitoring** (Watching, Slipping): docs/pipelines-v3.md "Growth and Success". Each channel has an
+Owner that files its ideas and owns its tasks in both pipelines from start to finish: SEO, Content, Email, CRO, Search
+Ads and Social Ads (the growth channel packs in the same section).
 
-| Where | Labels |
-|---|---|
-| On deck | `idea:on-deck` or `growth:ideas` |
-| In development | `idea:in-development` |
-| Live (a test running) | `idea:live` or `growth:running` |
-| Working (a test that worked, kept running) | `idea:working` |
-| Measuring | `growth:measuring` |
-| Paused | `idea:paused` |
+- **Channel.** A `channel:<slug>` label on the task or its sub-task. A channel's marketing work on this page is its open
+  tasks with that label, in any pipeline. The department is the task's team.
+- **Prediction and result.** The Go-live page in Building gives the prediction as a number; the Results page in Running
+  gives the number before and after. The result is a label: `result:failed`, `result:worked-once` or
+  `result:watching`, and `result:watching` files a Monitoring task as the experiment's follow-up.
+- **Ending.** A measured experiment is Done; one stopped before it is measured is Closed with the reason. A Monitoring
+  task that can no longer be fixed is Closed with the reason, and an idea is filed for what to try instead.
 
-- **Channel.** A `channel:<slug>` label on the task or its sub-task. The department is the task's team.
-- **Ending.** An idea that worked and stays is Done. One that failed, was inconclusive or was stopped is Closed, with a
-  note saying which, what was learned and the numbers behind it. A follow-up is a new task, related to the one it
-  follows.
-- **What a task needs.** A title, a channel and a body. There is no prediction, hypothesis, score or bet.
-
-A Growth pipeline with its own stages comes with the Product pipeline.
+The older form, an idea as a General task with a stage label (`growth:ideas` or `idea:on-deck`, `idea:in-development`,
+`growth:running` or `idea:live`, `idea:working`, `growth:measuring`, `idea:paused`; backend/marketing_tasks.py), is still
+read: a test's start and finish markers on the charts come from those labels. The Growth Manager and the segment
+Marketing Owners still file ideas that way.
 
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet
 view.

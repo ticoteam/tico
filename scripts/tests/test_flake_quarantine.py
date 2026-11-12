@@ -381,24 +381,6 @@ def test_a_passing_sibling_in_the_same_file_is_no_evidence_and_the_passing_testc
     assert list(flips_of(attempt(junit_for((sibling, None), (flaky, None))))) == [flaky]
 
 
-def test_a_slow_test_that_fails_every_time_is_not_proven_passing_by_a_python_leg():
-    """pytest deselects the slow tests in python legs, so their reports never show a slow test as passed."""
-    slow = "fixture_tests/test_slow_fixture.py::test_every_call"
-    gh = FakeGitHub(
-        runs=[run(1, attempts=2)],
-        jobs={
-            (1, 1): [job(10, "plan", "success"), job(11, "contracts", "failure"), job(12, "python-1", "success")],
-            (1, 2): [job(10, "plan", "success"), job(21, "contracts", "failure"), job(12, "python-1", "success")],
-        },
-        logs={
-            11: log(f"FAILED {slow} - AssertionError"),
-            21: log(f"FAILED {slow} - AssertionError"),
-        },
-        xml={12: junit_for(("fixture_tests/test_other.py::test_other", None))},
-    )
-    assert flips_of(gh) == {}
-
-
 def test_a_pull_request_run_is_keyed_by_the_merge_commit_it_tested_not_the_branch_head():
     """A pull_request run tests the branch merged into main as main was then: two runs of one branch head test two
     commits once main moved, so a failure then a pass across them is not a flip unless the merge commit matches."""

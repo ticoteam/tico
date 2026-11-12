@@ -598,7 +598,7 @@ def set_feeds_directory(c, actor, mailbox_id, on):
     """Turn a mailbox's feed into the Directory on or off. Its person (or an admin, for a shared inbox) decides. Turning it
     off stops new ingest; what it alone made stops showing (visible.py counts only feeding mailboxes)."""
     row = _require_row(c, mailbox_id)
-    _manager(c, actor, row, "switch its feed into the Directory")
+    _manager(c, actor, row, "switch its feed into Contacts")
     if bool(row.get("feeds_directory", 1)) == bool(on):
         return row
     c.execute("UPDATE mailboxes SET feeds_directory=?, updated_at=? WHERE id=?", (1 if on else 0, H.now(), row["id"]))
@@ -792,7 +792,7 @@ def ever_signed_in(c, person_id):
 
 
 def placeholders(c, people, configs):
-    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by Counsel): one with a message
+    """Roster entries that stand for a mailbox, not a person ("legal@ (mailbox)", read by the Rules Owner): one with a message
     bot that reads exactly their email, who has never signed in. Their mailbox is a shared inbox, linked to nobody.
     {person_id: address}."""
     from . import routines

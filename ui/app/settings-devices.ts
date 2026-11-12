@@ -610,6 +610,17 @@ function renderSettingsMachines() {
       <td class="machine-now${['idle', 'asleep', 'offline', 'revoked'].includes(now) ? ' muted' : ''}" data-machine-now>${esc(now)}${online && machine.restarting ? ' <span class="muted" data-machine-restarting>· restarting</span>' : ''}</td></tr>`;
   }).join('');
   const toolHead = (runtime: string) => `<th>${esc(machines.map(m => machineToolName(m, runtime)).find(Boolean) || subsToolName(runtime))}</th>`;
+  // A cloud machine not enrolled yet: its name and what it is doing (being made, starting, out of credit, failed), with
+  // Add credit or Replace machine when that is the way on.
+  const coming = (SETTINGS_DATA.cloudComing || []).map(row => {
+    const replace = row.replace && settingsIsAdmin()
+      ? ` <button type="button" class="ghost" data-cloud-coming-replace="${esc(row.key)}">Replace machine</button>` : '';
+    const credit = row.status === 'out_of_credit' ? cloudCreditLinkHTML() : '';
+    const dot = row.status === 'failed' || row.status === 'out_of_credit' ? 'failed' : '';
+    return `<tr class="machine-card" data-cloud-coming="${esc(row.key)}">
+      <td class="machine-cell"><span class="machine-head"><span class="machine-status"><span class="dot ${dot}" aria-hidden="true"></span></span><strong>${esc(row.label)}</strong></span><span class="settings-cell-note" data-cloud-coming-status>${esc(row.words)}${credit}${replace}</span></td>
+      <td class="num tnum machine-bot-count">—</td>${'<td></td>'.repeat(pickers.length + others.length + 1)}</tr>`;
+  }).join('');
   el.onchange = async (event: Event & {target: Element}) => {
     const pick = event.target.closest<HTMLSelectElement>('[data-subs-pick]');
     if (pick) { await subsPick(pick); return; }
@@ -672,7 +683,7 @@ function renderSettingsMachines() {
     if (add) { if (!add.disabled) computerAddOpen(add.dataset.addConnection!); return; }
     if (event.target.closest('[data-subs-cell] select, [data-subs-reconnect]')) {
       const reconnect = event.target.closest<HTMLElement>('[data-subs-reconnect]');
-      if (reconnect) subsDialog('reconnect', subsById(reconnect.dataset.subsReconnect));
+      if (reconnect) { const sub = subsById(reconnect.dataset.subsReconnect); if (sub) planSignIn({sub}); }
       return;
     }
     if (event.target.closest('#machine-add-dialog')) return;
@@ -688,6 +699,18 @@ function renderSettingsMachines() {
     }
     const login = event.target.closest<HTMLElement>('[data-machine-copy-login]');
     if (login) { void copyText(login.dataset.machineCopyLogin!).then(() => toast('Command copied')); return; }
+    const again = event.target.closest<HTMLButtonElement>('[data-cloud-coming-replace]');
+    if (again) {
+      const key = again.dataset.cloudComingReplace!;
+      if (!await settingsConfirm({title: 'Replace machine?', ok: 'Replace machine', text: 'Deletes this machine and its disk. The next task starts a fresh one.'})) return;
+      again.disabled = true;
+      try {
+        await (key === '_shared' ? writeRequest('DELETE', '/v2/cloud-machines/shared') : post(`/v2/bots/${encodeURIComponent(key)}/cloud-machine/replace`, {}));
+        await loadSettings();
+        toast('Machine replaced');
+      } catch (error) { toast(errorMessage(error, ''), true); again.disabled = false; }
+      return;
+    }
     const remove = event.target.closest<HTMLButtonElement>('[data-computer-remove]');
     if (remove) {
       const machine: DeviceMachine | undefined = SETTINGS_DATA.machines.find(m => m.id === remove.dataset.computerRemove);
@@ -718,7 +741,8 @@ function renderSettingsMachines() {
       <td>${agent.model ? `${esc(agent.model)}${agent.provider ? `<span class="settings-cell-note">${esc(agent.provider)}</span>` : ''}` : '<span class="muted">—</span>'}</td>
       <td><span class="machine-status"><span class="dot ${agent.revoked_at ? 'failed' : agent.online ? 'ok' : ''}" aria-hidden="true"></span>${agent.revoked_at ? 'revoked' : agent.online ? 'reporting in' : 'not reporting'}${agent.last_seen_at ? `<span class="muted"> · ${esc(ago(agent.last_seen_at))}</span>` : ''}</span></td></tr>`).join('');
   const empty = !SETTINGS_PRESENCE.at && SETTINGS_PRESENCE.failed ? 'Computer presence unavailable · checking…' : revoked ? 'No active computers.' : 'No computers yet.';
-  const list = `${cards ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${cards}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
+  const rows = coming + cards;
+  const list = `${rows ? `<div class="scroll"><table class="settings-table settings-machines"><thead><tr><th>Computer</th><th class="num">Bots</th>${pickers.map(toolHead).join('')}${others.map(toolHead).join('')}<th>Now</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">${empty}</div>`}
     ${revoked ? `<label class="settings-cell-note machine-show-revoked"><input type="checkbox" data-show-revoked-computers${showRevoked ? ' checked' : ''}> Show revoked (${revoked})</label>` : ''}
     ${agents ? `<h3 class="settings-agents-title">External agents${betaPill('external_agents')}</h3><div class="scroll"><table class="settings-table"><thead><tr><th>Agent</th><th>Owner</th><th>Model</th><th>Status</th></tr></thead><tbody>${agents}</tbody></table></div>` : ''}`;
   // Only the list is redrawn; the Add computer dialog (and the code it shows) keeps what was typed.

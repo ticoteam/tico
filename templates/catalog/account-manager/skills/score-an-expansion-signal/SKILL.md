@@ -17,7 +17,7 @@ Steps:
    - medium: one of the two, with the number and date;
    - weak: a feeling, a single spike, or usage that the customer has said is temporary.
    Propose only strong and medium signals. Weak ones are noted, not offered.
-5. Check health. If customer-success has the account as red, the signal waits. It goes to the Customer Success Manager first.
+5. Check health. If success-owner has the account as red, the signal waits. It goes to the Customer Success Manager first.
 6. Write the opportunity in one line: the account, the evidence with number and date, the option (for example "true-up to 45 seats
    at renewal"), and the rating. No evidence, no line.
 7. Attach the price, if any, only from the rules or the request. Otherwise it is a marked gap.

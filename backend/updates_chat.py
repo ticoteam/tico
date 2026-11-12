@@ -1,10 +1,10 @@
-"""The Updates chat (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Bot v3, section 10.8): a person's own chat
+"""The Updates chat (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Owner v3, section 10.8): a person's own chat
 bot beside the Updates page: their Assistant, the owner's included.
 
 - It is the same conversation as their menu tab: the page reads and posts through GET /api/v2/assistant and POST
   /api/v2/assistant/messages, which say `place: "updates"` on the message (`refs.updates`). No new room, session, spend
   type or cap: each question is one turn of that bot on the company's usual model path, and a reply is a chat message,
-  never a Needs you item, so it does not count toward the Strategy Bot's 5 a day (backend/strategy_bot.py).
+  never a Needs you item, so it does not count toward the Strategy Owner's 5 a day (backend/strategy_bot.py).
 - What its turn is handed (`for_turn`, backend/execution.py; rendered by runner-rs/src/prompt.rs): only a turn the
   person started from the Updates chat, in their own chat, gets `updates`: the recent daily and weekly updates that
   person may read, read now by the same rules as their Updates page (`updates.visible_authors`, the meetings flag), less

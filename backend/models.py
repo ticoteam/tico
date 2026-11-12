@@ -293,8 +293,17 @@ class TaskMove(Contract):
 
 
 class TaskQueue(Contract):
-    """Queue a task's PRs again after GitHub took them out of the merge queue (merge_queue.requeue)."""
+    """Queue a task's PRs again after GitHub took them out of the merge queue (item_sources.github.requeue)."""
 
+    version: Version | None = None
+    on_behalf_of: ID | None = None
+
+
+class TaskRelease(Contract):
+    """Ask Tico to cut the release a task waits for, the way its In a release names (github_release.cut). `tag` names
+    the tag when the repository releases from a tag."""
+
+    tag: Annotated[str, Field(min_length=1, max_length=100)] | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
 
@@ -455,7 +464,7 @@ class PipelineRetire(Contract):
 
 class ReleaseScheduleUpdate(Contract):
     """The team's release schedule (backend/release_schedule_routes.py); only what is sent changes. `bot` and `writer`
-    name the Release Manager and Technical Writer ("" finds them by starter template)."""
+    name the Release Owner and Technical Writer ("" finds them by starter template)."""
 
     on: bool | None = None
     times: list[Annotated[str, Field(max_length=5)]] | None = Field(default=None, max_length=2)
@@ -464,7 +473,7 @@ class ReleaseScheduleUpdate(Contract):
 
 
 class ReleaseNow(Contract):
-    """Ask the Release Manager for a release now; `note` goes in its task."""
+    """Ask the Release Owner for a release now; `note` goes in its task."""
 
     note: str | None = Field(default=None, max_length=1000)
 
@@ -2301,7 +2310,7 @@ class StrategyBotLevel(Contract):
     level: Literal[1, 2, 3]
 
 
-# Several bots' asks waiting on one person, made one Strategy Bot item (backend/strategy_merge.py).
+# Several bots' asks waiting on one person, made one Strategy Owner item (backend/strategy_merge.py).
 class StrategyBotMerge(Contract):
     person: str = Field(min_length=1, max_length=200)
     title: str = Field(min_length=1, max_length=300)
@@ -2309,7 +2318,7 @@ class StrategyBotMerge(Contract):
     tasks: list[str] = Field(min_length=2, max_length=10)
 
 
-# One change in a decision the Strategy Bot makes alone at level 3 (backend/strategy_acts.py).
+# One change in a decision the Strategy Owner makes alone at level 3 (backend/strategy_acts.py).
 class StrategyBotChange(Contract):
     do: Literal["create", "reorder", "reassign", "close"]
     task_id: str | None = Field(default=None, max_length=100)
@@ -2470,6 +2479,8 @@ class OnboardingAnswers(Contract):
     briefings: dict[Department, Annotated[str, Field(max_length=500)]] = Field(default_factory=dict, max_length=9)
     # Where the company serves (a company file's company.regions): free text, 0..12 places, each 1..60 characters.
     regions: Annotated[list[str], AfterValidator(_places_rule)] = Field(default_factory=list, max_length=12)
+    # The default chart's teams switched off on setup's Your team step, by name ("Growth"); the rest are created.
+    teams_off: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(default_factory=list, max_length=20)
 
 
 class OnboardingSelection(Contract):
@@ -2568,8 +2579,21 @@ class AttemptThread(Contract):
     source_continuation: SourceContinuation | None = None
 
 
+class FailedTool(Contract):
+    """A tool call that failed in a run, as its runner scrubbed it (runner-rs run_diagnostics.rs failed_tool)."""
+
+    item_id: str = Field(max_length=200)
+    tool: str = Field(default="", max_length=200)
+    command: str = Field(default="", max_length=4000)
+    exit_code: int | None = None
+    output_tail: str = Field(default="", max_length=8192)
+
+
 class AttemptStderr(Contract):
-    tail: str = Field(max_length=65536)
+    """A run's bounded diagnostics: its harness's stderr tail, its failed tool calls, or both."""
+
+    tail: str | None = Field(default=None, max_length=65536)
+    failed_tools: list[FailedTool] = Field(default_factory=list, max_length=20)
 
 
 class Event(Contract):
@@ -3056,6 +3080,21 @@ class LoginCode(Contract):
     code: Annotated[str, Field(min_length=1, max_length=700)]
 
 
+class LoginPhase(Contract):
+    phase: str = Field(max_length=60)
+    elapsed_ms: int = Field(default=0, ge=0)
+    exit_code: int | None = None
+
+
+class LoginTrace(Contract):
+    """Why a Connect failed, as its computer saw it (runner-rs/src/login.rs `Diag`); model_login.clean_trace scrubs it
+    again before anything is kept."""
+
+    category: str = Field(default="", max_length=60)
+    phases: list[LoginPhase] = Field(default_factory=list, max_length=80)
+    screen: str = Field(default="", max_length=4000)
+
+
 class LoginReport(Contract):
     state: Literal["starting", "waiting", "finishing", "signed_in", "signed_out", "done", "failed"]
     url: str = Field(default="", max_length=2100)
@@ -3063,6 +3102,7 @@ class LoginReport(Contract):
     lines: list[str] = Field(default_factory=list, max_length=40)
     message: str = Field(default="", max_length=500)
     code_taken: bool = False
+    trace: LoginTrace | None = None
 
 
 class HarnessAction(Contract):
@@ -3398,5 +3438,5 @@ class MailboxAccessUpdate(Contract):
     level: MailboxLevel
 
 
-class MailboxDirectoryUpdate(Contract):
+class MailboxContactsUpdate(Contract):
     on: StrictBool

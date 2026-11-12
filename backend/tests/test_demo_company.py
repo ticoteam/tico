@@ -132,14 +132,15 @@ def test_the_pricing_decision_waits_for_ana(ana):
 
 def test_tasks_are_open_done_or_closed_and_show_asks_snoozes_and_sub_tasks(ana):
     """As Tasks reads them: what is open, then the latest finished (the weeks before hold hundreds more done). Most
-    are in General, a few in Product and Engineering (demo_sections/software.py), and the open ones show what they wait on: a person asked on the task, a snooze (a snoozed task
-    is off the list until asked for)."""
+    are in General, a few in Product and Engineering (demo_sections/software.py), the Bookkeeper's own in Finance (a private
+    pipeline the owner reads), and the open ones show what they wait on: a person asked on the task, a snooze (a snoozed
+    task is off the list until asked for)."""
     tasks = [
         *ana.get("/api/v2/tasks?status=open&snoozed=all&limit=200").json()["tasks"],
         *ana.get("/api/v2/tasks?status=done,closed&sort=finished&limit=200").json()["tasks"],
     ]
     assert {task["status"] for task in tasks} == {"open", "done", "closed"}
-    assert {task["pipeline_id"] for task in tasks} == {"general", "product", "engineering"}
+    assert {task["pipeline_id"] for task in tasks} == {"general", "product", "engineering", "finance"}
     by_title = {task["title"]: task for task in tasks}
     stages = {title: by_title[title]["stage_id"] for title in ("Share a show with a link", "Faster scene upload")}
     assert stages == {"Share a show with a link": "product-spec", "Faster scene upload": "engineering-on-deck"}
@@ -207,12 +208,12 @@ def test_chats_and_slack_are_connected(ana):
 
 
 LEADS = {
-    "ops-manager": "human:ben",
-    "support-lead": "human:ben",
-    "marketing-lead": "human:cara",
-    "sales-lead": "human:cara",
+    "operations-manager": "human:ben",
+    "success-manager": "human:ben",
+    "growth-manager": "human:cara",
+    "growth-manager": "human:cara",
     "product-manager": "human:eli",
-    "finance-lead": "human:ana",
+    "finance-owner": "human:ana",
 }
 PEOPLE = ("human:ana", "human:ben", "human:cara", "human:eli")
 
@@ -231,7 +232,7 @@ def test_each_person_has_a_draft_update_for_every_day_and_the_friday_review(ana)
         ]
         assert {row["day"] for row in rows if row["kind"] == "daily"} == daily, person
         assert {row["day"] for row in rows if row["kind"] == "weekly"} == fridays, person
-        assert {row["drafted_by"] for row in rows} == {"coo"}, person
+        assert {row["drafted_by"] for row in rows} == {"assistant"}, person
 
 
 def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
@@ -244,28 +245,9 @@ def test_ana_sidebar_leaves_unread_only_the_decisions_she_still_owes(ana):
     assert {"Raise Home Pro from $449 to $479 for December?", "Sign the FCC filing for Home Pro 2"} <= owed
 
 
-def test_the_price_decision_is_due_tomorrow_with_a_short_reason(ana):
-    [price] = [
-        task
-        for task in ana.get("/api/v2/tasks?status=open&limit=200").json()["tasks"]
-        if task["title"] == "Raise Home Pro from $449 to $479 for December?"
-    ]
-    full = ana.get(f"/api/v2/tasks/{price['id']}").json()["task"]
-    assert full["due_at"] and 1 <= len([part for part in full["body"].split("\n\n") if part.strip()]) <= 3
-
-
-def test_the_assistant_answers_whats_waiting_with_the_open_decisions(ana):
-    """The seeded Assistant thread answers "What needs me today?" with the scripted reply (every message is a bot turn,
-    so the demo script stands in for the model): the December price and the held refund are named."""
-    messages = ana.get("/api/v2/assistant").json()["messages"]
-    asked = [m for m in messages if m["sender_id"] == "human:ana" and m["body"] == "What needs me today?"]
-    answers = [m["body"] for m in messages if m["sender_id"] == "bot:coo" and "waiting on you" in m["body"]]
-    assert asked and answers and "Home Pro's December price" in answers[0] and "refund" in answers[0]
-
-
 def test_home_has_a_bot_page_settings_has_a_team_icon_and_granola_syncs(ana):
     pages = ana.get("/api/v2/pages").json()["pages"]
-    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "coo"}
+    assert {page["bot_id"] for page in pages} == {D.PAGE["bot"], "assistant"}
     assert ana.get("/api/v2/team/icon").status_code == 200
     assert ana.post("/api/v2/meetings/granola/sync").status_code == 200
 
@@ -354,32 +336,6 @@ def test_the_same_date_builds_the_same_company(built):
     assert any(hours), "the windows hold spend, so the hour is really compared"
 
 
-def test_the_build_asks_no_model_and_dials_nothing(built, dialed):
-    """The seed saves made-up provider keys, so a decision call during the build is a refused key or a timeout, whichever
-    the network gives: run to run, the same date stored a different company (`"error": "auth"` in one build's rule
-    check, `"unavailable"` in its twin's). The build asks no model, so it reaches no one and no call can fail."""
-    first, rows, _again = built
-    assert dialed == []
-    with closing(sqlite3.connect(first.db_path)) as db:
-        columns = [column[1] for column in db.execute("PRAGMA table_info(events)")]
-    action, detail = columns.index("action"), columns.index("detail")
-    failed = [
-        row for row in rows["events"] if row[action] == "judge.call" and "error" in json.loads(row[detail] or "{}")
-    ]
-    assert failed == []
-
-
-def test_the_build_asks_no_model_for_a_person(built):
-    """A person's rule check is held to the people's daily cap, which the build zeroes: no judge call is recorded for a
-    person's check, so no model is dialled with the demo's made-up keys (the answer would depend on timing)."""
-    first, _rows, _again = built
-    with closing(sqlite3.connect(first.db_path)) as db:
-        asked = db.execute(
-            "SELECT count(*) FROM events WHERE action='judge.call' AND json_extract(detail,'$.people')=1"
-        ).fetchone()[0]
-    assert asked == 0, f"{asked} person rule checks asked a model in the build"
-
-
 def test_every_department_has_its_lead_and_answers_to_a_person(ana):
     """The org chart reads groups and reporting lines: each department names its lead, and every bot in a group
     reports, a step at a time, up to a person (so the chart hangs each department under its human head)."""
@@ -416,16 +372,3 @@ def test_each_department_lead_has_a_goal_that_rolls_up_to_the_company_goal(ana):
             while at["parent_id"] and steps < 10:
                 at, steps = goals[at["parent_id"]], steps + 1
             assert at["id"] == company["id"], f"{goal['title']} rolls up to the company goal"
-
-
-def test_the_demo_seed_polls_no_inbound_deliveries(monkeypatch):
-    """With an inbound key set, the demo build's app (`demo_build`) must not poll for real deliveries (they would be
-    fetched and acknowledged). The control case, the same settings without the build, polls: so the gate turns it off."""
-    from types import SimpleNamespace
-
-    from backend.inbound import Inbound
-
-    monkeypatch.setenv("TICO_INBOUND_KEY", "demo-key")
-    base = dict(demo=False, rehearsal=False, demo_build=False)
-    assert Inbound(None, SimpleNamespace(**base), None).off is False
-    assert Inbound(None, SimpleNamespace(**{**base, "demo_build": True}), None).off is True

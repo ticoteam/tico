@@ -14,19 +14,20 @@ those stages.
 
 | # | Role | Starter template | What it does |
 |---|---|---|---|
-| 1 | Product Manager | `product-manager` | Owns Product: writes the Spec page, files the Engineering task, checks it in production |
-| 2 | Engineering Manager | `engineering-manager` | Manages Engineering: picks up what is late or stuck and decides what happens next |
+| 1 | Product Owner | `segment-product-owner` | Owns Product's stages: writes the Spec page, files the Engineering task, checks it in production |
+| 2 | Product Manager and Engineering Manager | `product-manager`, `engineering-manager` | Each leads its team and manages its pipeline: picks up what is late or stuck and decides what happens next |
 | 3 | Builder | `builder` | Owns Build and the Fixes stages: opens the PR, makes every fix, shows what was built |
-| 4 | Reviewer 1 | `pr-reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
-| 5 | Reviewer 2 | `pr-reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
-| 6 | Release Manager | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
+| 4 | Reviewer 1 | `reviewer`, preferably on a different model company from the Builder | Review 1: a Review page for the newest commit |
+| 5 | Reviewer 2 | `reviewer`, on another model (Codex if the company has it) | Review 2: a second review of the updated change |
+| 6 | Release Owner | `release-owner` | Owns Merge and Release: sees the PR through the merge queue and into a release |
 | 7 | Security | `security-engineer` (Security Engineer) | Tests each release build; holds a release only for serious problems (below) |
-| 8 | Technical Writer | `docs-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
+| 8 | Technical Writer | `technical-writer` (Technical Writer) | After each release, updates the help docs for the changes people will see and writes the release notes |
 | 9 | DevOps | `devops-engineer` (DevOps Engineer) | Failed builds and pipeline problems; watches the factory's cost and speed |
 
-Two managers sit above the line. **Product Manager** (`product-manager`) decides *what* to build: it triages feature
-ideas, writes the spec and acceptance tests, and keeps the roadmap. **Engineering Manager** (`engineering-manager`) decides
-*how*: it splits an approved spec into tasks, picks the Builder and sets the merge rules. A small team can
+The **Product Owner** (`segment-product-owner`) decides *what* to build: it triages feature ideas, writes the spec and
+acceptance tests, and keeps the roadmap. The **Product Manager** (`product-manager`) and the **Engineering Manager**
+(`engineering-manager`) each lead their team's bots and keep their pipeline's tasks moving: when one stops, the Manager
+reassigns, moves back, moves on, snoozes or closes it, and never does a stage's work. A small team can
 let one bot cover Security and DevOps. Start with the Builder, Reviewer 1 and Reviewer 2, and add the
 rest as your release pace grows.
 
@@ -53,7 +54,7 @@ approval before merge.
 
 ## Rules that make it work
 
-1. **Product decides what, engineering decides how.** Feature ideas go to the Product Manager first. Bugs and small
+1. **Product decides what, engineering decides how.** Feature ideas go to the Product Owner first. Bugs and small
    changes go straight to Engineering as a task.
 2. **Prefer different models for checks.** Reviewers and QA prefer a bot of a different model company than the
    Builder. Set this per bot (its task model, or its model), or use a check model on a sub-task
@@ -73,16 +74,16 @@ pass. Each review is a Review page for the PR's newest commit, attached to the t
 after a review needs a page for the new head. In Fixes 2 the Builder attaches a page showing what was built, Jev checks
 it and a person OKs it. On entering Merge, Tico queues the PRs in the repository's merge queue
 ([Merge queue](releasing.md#merge-queue)); no bot runs a merge command. If GitHub drops a PR from the queue, the
-Release Manager pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
+Release Owner pushes a fix to the PR's branch or queues it again with `tico task queue <task> --version N`. The task
 leaves Release once the merge is in a published release (a repo that publishes no releases: once merged).
 
 ## Visual specs
 
-A spec can be a visual page. The product manager publishes it on the task it describes with
+A spec can be a visual page. The Product Owner publishes it on the task it describes with
 `tico page publish <file.html> --spec --task <task>`. The page's styles are inlined at publish, so its mockups read as
 Tico does. Every task filed under that task, and their own sub-tasks, gets the spec's page link and text in its body.
 A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
-`templates/catalog/product-manager/skills/build-the-spec-page/SKILL.md`.
+`templates/catalog/segment-product-owner/skills/build-the-spec-page/SKILL.md`.
 
 ## When Security holds a release
 
@@ -98,7 +99,7 @@ release.
 
 ## What each release carries
 
-The Release Manager keeps one checklist per release:
+The Release Owner keeps one checklist per release:
 - a QA pass for each change people will see
 - the security result
 - the release notes
@@ -109,4 +110,4 @@ Nobody is asked to name a private task.
 ## After launch
 
 For features with a success measure, the Customer Insights Analyst reports "did it work?" 14 days after launch. The
-Product Manager uses that report at the next triage.
+Product Owner uses that report at the next triage.

@@ -1,0 +1,228 @@
+[
+ {
+  "argv": [
+   "gateway",
+   "catalog"
+  ],
+  "tools": [
+   [
+    "tico_gateway_catalog",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "gateway/catalog",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "catalog",
+   "older_than:30d"
+  ],
+  "tools": [
+   [
+    "tico_gateway_catalog",
+    {
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "gateway/catalog?query=older_than%3A30d",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "search",
+   "older_than:30d"
+  ],
+  "tools": [
+   [
+    "tico_gateway_search",
+    {
+     "operation_id": null,
+     "query": "older_than:30d"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/search",
+    {
+     "query": "older_than:30d",
+     "max_results": 5
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "image",
+   "prompt-1",
+   "--model",
+   "low",
+   "--category",
+   "storyboard",
+   "--quality",
+   "standard",
+   "--ref",
+   "task:42",
+   "--ref",
+   "task:42b",
+   "--size",
+   "size-1",
+   "--count",
+   "5",
+   "--out",
+   "out-1"
+  ],
+  "tools": [
+   [
+    "tico_gateway_image",
+    {
+     "category": "storyboard",
+     "count": 5,
+     "model": "low",
+     "operation_id": null,
+     "out": "out-1",
+     "prompt": "prompt-1",
+     "quality": "standard",
+     "refs": [
+      "task:42",
+      "task:42b"
+     ],
+     "size": "size-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: count is 1 to 4\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "gateway",
+   "video",
+   "prompt-1"
+  ],
+  "tools": [
+   [
+    "tico_gateway_video",
+    {
+     "operation_id": null,
+     "prompt": "prompt-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/videos",
+    {
+     "prompt": "prompt-1",
+     "seconds": 8,
+     "resolution": "720p",
+     "aspect": "16:9",
+     "audio": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": null,\n  \"status\": \"queued\",\n  \"seconds\": 8,\n  \"resolution\": \"720p\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "search",
+   "best crm",
+   "--max",
+   "3"
+  ],
+  "tools": [
+   [
+    "tico_gateway_search",
+    {
+     "max_results": 3,
+     "operation_id": null,
+     "query": "best crm"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/search",
+    {
+     "query": "best crm",
+     "max_results": 3
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "gateway",
+   "video",
+   "a red door",
+   "--audio",
+   "--seconds",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_gateway_video",
+    {
+     "audio": true,
+     "operation_id": null,
+     "prompt": "a red door",
+     "seconds": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "gateway/videos",
+    {
+     "prompt": "a red door",
+     "seconds": 5,
+     "resolution": "720p",
+     "aspect": "16:9",
+     "audio": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": null,\n  \"status\": \"queued\",\n  \"seconds\": 5,\n  \"resolution\": \"720p\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

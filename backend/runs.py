@@ -48,7 +48,7 @@ def state(attempt_state):
 RUNNER_WIRE = re.compile(
     r"/api/v2/(?:runners/(?:enroll|errors|heartbeat|desired|assignments|eligible|adopt|me|connectors|importers"
     r"|performance|watchers)(?:/.*)?|runner-[^/]+(?:/.*)?|attempts/.+|jobs/claim|files/uploads|enrollments(?:/.*)?"
-    r"|bots/[^/]+/memory/report|imports/sources/[^/]+/status|github/token|connectors(?:/.*)?)"
+    r"|bots/[^/]+/(?:memory/report|template/refresh)|imports/sources/[^/]+/status|github/token|connectors(?:/.*)?)"
 )
 
 _KEY, _PUBLIC_KEY = b'"attempt_id":', b'"run_id":'

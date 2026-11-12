@@ -1,7 +1,7 @@
 # pyright: strict
 """The linker (spec §7.1, steps 1 and 2): after a text is written, it links the text to the entities it is about.
 
-Step 1, the run trace: the entities a bot's attempt read with `tico directory get` or `rules` (store.run_lookups) are the
+Step 1, the run trace: the entities a bot's attempt read with `tico contacts get` or `rules` (store.run_lookups) are the
 subjects of that attempt's text, role subject, with no quote.
 
 Step 2, exact match: an email, a domain (a bare one, or a URL's host) or a name an entity has (its name or an alias,

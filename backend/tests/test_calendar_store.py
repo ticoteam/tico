@@ -28,7 +28,7 @@ def standup(c, calendar, **extra):
         "start": "2026-11-02T09:30:00",
         "end": "2026-11-02T09:45:00",
         "repeat": "weekly on mon,wed",
-        "attendees": ["human:ben", "bot:coo", "guest@outside.example"],
+        "attendees": ["human:ben", "bot:assistant", "guest@outside.example"],
     } | extra
     return CS.create_event(c, calendar["id"], fields, "human:ana")
 
@@ -44,7 +44,7 @@ def test_calendar_for_is_made_once_on_first_use(company):
         first = CS.calendar_for(c, "human", "ben")
         assert CS.calendar_for(c, "human", "ben")["id"] == first["id"]
         assert (first["home"], first["time_zone"], first["name"]) == ("tico", "UTC", "Ben")
-        assert CS.calendar_for(c, "bot", "coo")["owner_id"] == "coo"
+        assert CS.calendar_for(c, "bot", "assistant")["owner_id"] == "assistant"
         with pytest.raises(Problem) as missing:
             CS.calendar_for(c, "human", "nobody")
         assert missing.value.status == 404

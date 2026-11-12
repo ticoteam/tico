@@ -13,7 +13,7 @@ declared_as: |
     identity: <org>/<repo>              # one entry per repository or group of repositories
     can: [read]                         # read | draft (branches and review PRs) | write
     note: review PRs only; a person merges; never push to main
-writes: approval
+writes: allowed
 owner: owner
 ---
 

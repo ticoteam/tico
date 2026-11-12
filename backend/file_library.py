@@ -233,7 +233,7 @@ class _Text(HTMLParser):
 
 def extract(mime, data, full=False):
     """The searchable text of one version's bytes, or "" for a type Tico does not read (PDF and office files later).
-    `full`: the whole text the bytes hold (up to READ_MAX bytes), with no cut for the search index (Counsel reads it)."""
+    `full`: the whole text the bytes hold (up to READ_MAX bytes), with no cut for the search index (the Rules Owner reads it)."""
     mime = (mime or "").split(";", 1)[0].strip().lower()
     data = data[:READ_MAX]
     if mime in TEXT_TYPES:

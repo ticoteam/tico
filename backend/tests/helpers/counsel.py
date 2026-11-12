@@ -11,11 +11,11 @@ def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
         c.execute(
-            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')"
+            "INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('rules-owner', 'rules-owner', 'Counsel', 'active')"
         )
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('tico-counsel','','ana')")
-        BS.write(c, 'tico-counsel', {})
-    as_bot(api, "tico-counsel", "counsel-test")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,team,owner_id) VALUES('rules-owner','','ana')")
+        BS.write(c, 'rules-owner', {})
+    as_bot(api, "rules-owner", "counsel-test")
 
 
 def store_file(api, text, title="Acme Vendor Terms", bot="ops"):
@@ -53,8 +53,8 @@ def counsel_run(api):
     from backend.tests.helpers.api import assign, claim, ready, runner
 
     r = runner(api, "ana")
-    assign(api, r, "tico-counsel")
-    ready(api, r, ["tico-counsel"])
+    assign(api, r, "rules-owner")
+    ready(api, r, ["rules-owner"])
     attempt = claim(api, r)
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
     return r, attempt

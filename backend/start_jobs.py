@@ -39,14 +39,6 @@ def run(store, onboarding, telemetry):
             onboarding.complete_company(c, failed=telemetry.capture)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("complete_company", exc)
-    # The Librarian gets the market posts from Listening, once (Settings > Listening). After the Librarian exists.
-    try:
-        from . import listening
-
-        with _transaction(store) as c:
-            listening.seed_market(c, settings)
-    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
-        telemetry.capture("listening", exc)
     # A message bot made before the server linked it to its person is linked now, when there is no doubt whose
     # it is. A backfill: the bot works unlinked meanwhile, as it did before.
     try:
@@ -66,3 +58,12 @@ def run(store, onboarding, telemetry):
             ship_deployed(c, settings)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("github", exc)
+    # Production runs another release: a bot's snooze in a stage that checks the release production runs (Product's
+    # Validate) ends now, not at the clock time it guessed the release would land (task_engine.end_release_snoozes).
+    try:
+        from . import releases, task_engine
+
+        with _transaction(store) as c:
+            task_engine.end_release_snoozes(c, releases.version(), settings.release_repo)
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("release_snoozes", exc)

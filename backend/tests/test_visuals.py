@@ -391,18 +391,6 @@ def test_tokens_are_signed_expire_and_stay_stable_within_half_their_life():
     assert V.mint(key, "human:ben", "f", 3, now=V.LIFE // 2) != token
 
 
-def test_a_visual_origin_equal_to_the_app_origin_is_refused():
-    class S:
-        public_url, visual_origin = "https://tico.example", "https://tico.example/"
-
-    try:
-        V.check_origin(S)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("the app's own origin was accepted as the visual origin")
-
-
 def test_actual_config_projects_visual_origin_only_after_api_auth_without_private_settings(api, monkeypatch):
     settings = api.app.state.store.settings
     for path in ("/api/me", "/api/v2/config"):

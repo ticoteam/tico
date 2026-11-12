@@ -9,7 +9,7 @@ choice.
 2. **Read `readiness` in the answer.**
    - `can_run: false`: the bot's computer cannot run that model. Tico refuses the change and answers with `fix` and
      `link`. Run `tico computer list`: if another computer the person may use can run it, offer the move first, in one
-     sentence: "Release Manager can't run Claude on Tico Team box. Reply yes and I'll move it to PNY Mac, which can."
+     sentence: "Release Owner can't run Claude on Tico Team box. Reply yes and I'll move it to PNY Mac, which can."
      Only when no computer can, give the sign-in fix with the link, or offer to keep the current model.
    - `can_run: null`: the computer has not said (offline, or too old to report). Say so and check again.
    - `applicable: false`: an external agent (Hermes, OpenClaw, Grok Bot) runs this bot outside Tico. There is no

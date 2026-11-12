@@ -1,0 +1,115 @@
+[
+ {
+  "argv": [
+   "org"
+  ],
+  "tools": [
+   [
+    "tico_team_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "org",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "tico: \"tico org\" is now \"tico team show\"; the old name stops working in the next release",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "org",
+   "order",
+   "manager-1"
+  ],
+  "tools": [
+   [
+    "tico_org_order",
+    {
+     "manager": "manager-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "org/order/manager-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "org",
+   "order",
+   "manager-1",
+   "--set",
+   "unit=customer"
+  ],
+  "tools": [
+   [
+    "tico_org_order",
+    {
+     "manager": "manager-1",
+     "operation_id": null,
+     "set": [
+      "unit=customer"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "org/order/manager-1",
+    {
+     "reports": [
+      "unit=customer"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "org",
+   "models"
+  ],
+  "tools": [
+   [
+    "tico_org_models",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "org-models",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

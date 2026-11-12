@@ -34,7 +34,7 @@ Then write one JSON line per claim to your own file, `batches/r<round>-<batch>.c
   `channel`, `person`, `event`, `rule`.
 - `claim`: one plain sentence in your words. `quote`: the page's exact words, copied, 5 to 40 words. Never edit a
   quote, fix its spelling or join two parts of a page.
-- `source_kind`: `site`, `pricing`, `review`, `forum`, `reddit`, `news`, `filing`, `earnings-call`, `job-post`,
+- `source_kind`: `site`, `pricing-analyst`, `review`, `forum`, `reddit`, `news`, `filing`, `earnings-call`, `job-post`,
   `stat`, `other`.
 - `date`: the date of the review, post or document, if the page shows it; else empty.
 - `tags`: short words for what the claim is about (`lasts-one-season`, `app-pairing`, `price`, `setup`), so the

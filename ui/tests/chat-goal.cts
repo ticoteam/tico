@@ -24,7 +24,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (/\.(?:js|ts)$/.test(p)) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'coo', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'assistant', display_name: 'Assistant', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p.startsWith('/vendor/fonts/') && fs.existsSync(uiFile(p.slice(1)))) return route.fulfill({contentType: 'font/woff2', body: fs.readFileSync(uiFile(p.slice(1)))});
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/assistant') return json(assistantView('c1', {messages}));
@@ -45,12 +45,12 @@ async function serverNotice(browser: import('playwright').Browser) {
      refs: {command: true, goal_action: 'set', goal_id: 'g9', goal_revision: t(1, 0), goal_objective: 'Produce the revised Acme summary'}},
     {id: 'm2', kind: 'say', sender_id: 'human:ana', body: '/goal clear', created_at: t(2, 0), refs: {command: true, goal_action: 'pause', goal_id: 'g9'}},
     {id: 'm3', kind: 'say', sender_id: 'human:ana', body: '/goal Produce the revised Acme summary', created_at: t(3, 0), refs: {command: true, goal_action: 'resume', goal_id: 'g9'}},
-    {id: 'm4', kind: 'say', sender_id: 'bot:coo', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
+    {id: 'm4', kind: 'say', sender_id: 'bot:assistant', body: 'Summary revised and posted.', created_at: t(9, 0), refs: {}},
     // As backend/chat_goals.py writes it: refs {chat_goal, goal_status}; a two-line objective, then the note.
-    {id: 'm5', kind: 'notice', sender_id: 'bot:coo', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
+    {id: 'm5', kind: 'notice', sender_id: 'bot:assistant', body: 'Goal met: Produce the revised Acme summary\nwith the Q3 numbers\nThe condition holds.', created_at: t(9, 5),
      refs: {chat_goal: 'g9', goal_status: 'met'}},
   ];
-  const goal = {id: 'g9', conversation_id: 'c1', bot: 'coo', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',
+  const goal = {id: 'g9', conversation_id: 'c1', bot: 'assistant', objective: 'Produce the revised Acme summary\nwith the Q3 numbers', status: 'met',
     note: 'The condition holds.', set_at: t(1, 0), updated_at: t(9, 5), ended_at: t(9, 5)};
   for (const [viewport, touch, name] of [[{width: 1280, height: 860}, false, 'desktop'], [{width: 390, height: 844}, true, 'phone']] as [{width: number; height: number}, boolean, string][]) {
     const api = await open(browser, viewport, touch, {messages, goal, theme: 'dark'}), {page} = api;

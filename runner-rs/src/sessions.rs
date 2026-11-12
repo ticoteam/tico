@@ -480,7 +480,7 @@ pub fn git_reason(out: &Out) -> String {
 }
 
 /// The main checkout's upstream as a remote-tracking ref (`origin/main`), or "" when Git confirms it has none: HEAD is
-/// on no branch, or its branch names no upstream. Any other failure is an UPSTREAM_LOOKUP_FAILED fault, with Git's
+/// on no branch, its branch names no upstream, or the remote-tracking branch it names is not there. Any other failure is an UPSTREAM_LOOKUP_FAILED fault, with Git's
 /// reason, since a lookup that failed says nothing about whether there is one.
 pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     let failed = |why: String| {
@@ -525,6 +525,36 @@ pub async fn upstream(main: &Path, env: &Env) -> Result<String, Fault> {
     .map_err(looked)?;
     if merge.code == 1 {
         return Ok(String::new()); // the branch names no upstream
+    }
+    // The branch names an upstream on a configured remote whose remote-tracking branch is not there: never fetched
+    // (a bot that set `origin/main` itself while its GitHub repository was out of reach, Acme Nov 11) or since
+    // pruned. Git confirms there is no commit to share, so it is no upstream, as before it was set; every task turn
+    // used to wait two minutes and be handed back for it, forever. Read by ref name, not Git's translated `[gone]`.
+    let named = g(
+        main,
+        env,
+        &[
+            "for-each-ref",
+            "--format=%(upstream)",
+            &format!("refs/heads/{branch}"),
+        ],
+        15,
+    )
+    .await
+    .map_err(looked)?;
+    let tracking = named.stdout.trim();
+    if named.ok() && tracking.starts_with("refs/remotes/") {
+        let present = g(
+            main,
+            env,
+            &["show-ref", "--verify", "--quiet", tracking],
+            15,
+        )
+        .await
+        .map_err(looked)?;
+        if present.code == 1 {
+            return Ok(String::new());
+        }
     }
     Err(failed(git_reason(&done)))
 }
@@ -742,7 +772,7 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
     if let Err(problem) = crate::repo_safety::outside_installation(path) {
         return problem;
     }
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let timeout = 45;
     let done: Result<String, Fault> = async {
         let folders: Vec<&str> = MEMORY_FOLDERS
@@ -1025,7 +1055,7 @@ pub async fn sync_shared(path: &Path, turn: &Env) -> String {
     if !path.join(".git").exists() {
         return "the checkout is missing".into();
     }
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let done: Result<String, Fault> = async {
         let dirty = g(path, &env, &["status", "--porcelain"], 15).await?;
         if !dirty.ok() {
@@ -1110,9 +1140,10 @@ pub fn own_sync_line(path: &Path, problem: &str) -> String {
 }
 
 /// After a push refused as behind: put the unpushed commits on top of what the remote gained (merge when they
-/// hold a merge), or say why not. Never forces or drops a commit; a conflict is undone (service.py catch_up).
+/// hold a merge), or say why not. Never forces or drops a commit. Lines both sides added to a memory note are both
+/// kept (safegit::MERGE_ATTRIBUTES); any other conflict is undone (service.py catch_up).
 pub async fn catch_up(path: &Path, turn: &Env) -> String {
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let mut step = "rebase";
     let done: Result<String, Fault> = async {
         let dirty = g(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
@@ -1751,8 +1782,11 @@ impl Runner {
             }
         }
         ensure_reads(&self.config.projects_dir(), path).await?;
-        // A built-in bot's product files follow the release (crate::product_files); a task lane pushes them at once.
-        crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
+        // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
+        if crate::product_files::refresh_due(&place.bot, &attempt["config"]) {
+            let _git = self.lanes.git_lock(path).lock_owned().await;
+            crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
+        }
         if !place.task.is_empty() && !place.private && crate::product_files::unpushed(&place.bot) {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             if self.push_checkout(path, env).await {
@@ -1924,8 +1958,8 @@ impl Runner {
         }
     }
 
-    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is a
-    /// person's job, said once an hour per checkout (service.py push).
+    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is BotOps'
+    /// job: the line said once an hour per checkout is what the health check files for BotOps (service.py push).
     pub async fn push_checkout(&self, path: &Path, env: &Env) -> bool {
         self.push_checkout_as(path, env, true).await
     }
@@ -1938,7 +1972,12 @@ impl Runner {
             let (ahead, mut error) = crate::execute::push_repo(path, env).await;
             let mut ahead = ahead;
             if error == "non-fast-forward" && !catch_up_remote {
-                error = "the remote has commits this checkout doesn't; it is rebased after the bot's next turn".into();
+                // Not stuck: the bot's next turn rebases and pushes. Only a catch-up that fails is BotOps' to fix.
+                log(&format!(
+                    "Tico runner: {} has {ahead} unpushed commits behind its remote; they are rebased and pushed after the bot's next turn",
+                    path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                ));
+                return false;
             } else if error == "non-fast-forward" {
                 error = catch_up(path, env).await;
                 if error.is_empty() {
@@ -1962,7 +2001,7 @@ impl Runner {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); leaving it for a person"));
+            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); left for BotOps"));
         }
         false
     }
@@ -2230,12 +2269,15 @@ mod tests {
         let client = crate::client::Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
         let lanes = Arc::new(Lanes::new(Arc::new(Repositories::new(&dir, &dir, client))));
         let lost = Arc::new(AtomicBool::new(false));
-        let running = lanes.checkout("coo").try_lock_owned().unwrap(); // a main-lane turn holds it
+        let running = lanes.checkout("assistant").try_lock_owned().unwrap(); // a main-lane turn holds it
         let order = Arc::new(Mutex::new(vec![]));
         let wait = |who: &'static str, person: bool| {
             let (lanes, lost, order) = (lanes.clone(), lost.clone(), order.clone());
             tokio::spawn(async move {
-                let held = lanes.hold_checkout("coo", person, &lost).await.unwrap();
+                let held = lanes
+                    .hold_checkout("assistant", person, &lost)
+                    .await
+                    .unwrap();
                 order.lock().unwrap().push(who);
                 tokio::time::sleep(Duration::from_millis(50)).await;
                 drop(held);
@@ -2245,11 +2287,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(100)).await;
         let person = wait("person", true);
         tokio::time::sleep(Duration::from_millis(100)).await;
-        assert!(lanes.person_waiting("bot:coo") && lanes.try_checkout("coo").is_none());
+        assert!(lanes.person_waiting("bot:assistant") && lanes.try_checkout("assistant").is_none());
         drop(running);
         let _ = tokio::join!(routine, person);
         assert_eq!(*order.lock().unwrap(), vec!["person", "routine"]);
-        assert!(!lanes.person_waiting("coo"));
+        assert!(!lanes.person_waiting("assistant"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -654,7 +654,7 @@ SCENARIOS = [
             Check("the first mail creates Dana's Assistant, a bot", W3, assistant_created),
             Check("the llm turn names Dana's Assistant, not another session", W3, turn_names_assistant),
         ],
-        bots={"coo": ("assistant", "claude")},
+        bots={"assistant": ("assistant", "claude")},
     ),  # the team's Assistant bot (settings assistant_bot)
     Scenario(
         20,

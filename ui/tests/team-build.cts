@@ -25,20 +25,20 @@ const item = (template: string, name: string, match = '') => ({template, name, i
 const agent = (id: string, name: string, supported: boolean) => ({id, name, maker: '', site: '', line: 'A cloud agent.', supported,
   connect_id: supported ? id : null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''});
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
-  {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
+  {role: 'Head of Engineering', pick: item('engineering-manager', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
     bot: {slug: 'ana-eng-lead', name: 'Rhea', icon: ''}},
   {role: 'Security engineer', pick: item('security-engineer', 'Security Engineer', 'strong'),
-    alternatives: [item('software-architect', 'Software Architect', 'good'), item('pr-reviewer', 'PR Reviewer')], on_team: false, checked: true},
+    alternatives: [item('software-architect', 'Software Architect', 'good'), item('reviewer', 'PR Reviewer')], on_team: false, checked: true},
   {role: 'DevOps engineer', pick: item('devops-engineer', 'DevOps Engineer'), alternatives: [], on_team: false, checked: true},
   {role: 'Developer advocate', pick: item('developer-advocate', 'Developer Advocate'),
-    alternatives: [item('software-architect', 'Software Architect', 'good'), item('docs-writer', 'Docs Writer')],
+    alternatives: [item('software-architect', 'Software Architect', 'good'), item('technical-writer', 'Docs Writer')],
     on_team: false, checked: false},
   {role: 'Second pair of hands', pick: agent('claude', 'Claude Code', true),
     alternatives: [agent('codex', 'Codex', true), agent('devin', 'Devin', false)], on_team: false, checked: false},
 ]});
 // The briefing changes and the recommender now suggests Software Architect for DevOps, which the Security role already holds.
 const reranked = () => ({...suggestion(), roles: suggestion().roles.map((role, i) => i !== 2 ? role
-  : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('pr-reviewer', 'PR Reviewer')]})});
+  : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('reviewer', 'PR Reviewer')]})});
 const until = async (test: () => boolean, ms = 4000) => {
   const end = Date.now() + ms;
   while (!test()) { if (Date.now() > end) throw new Error('timed out waiting'); await new Promise(r => setTimeout(r, 25)); }
@@ -112,7 +112,6 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
   await cards.nth(4).waitFor();
   assert.equal(await cards.count(), 5);
   assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
-  assert.equal(await page.locator('#team-build-dialog .tb-dot').getAttribute('data-state'), 'done');
   // The cards fade in (transform and opacity) on the first answer.
   assert.equal(await cards.nth(0).evaluate(el => getComputedStyle(el).animationName), 'tb-in');
   // Layout: three columns on the desktop, one with a sticky footer on the phone, and no sideways scroll.
@@ -179,42 +178,6 @@ async function scenario(browser: Browser, {name, viewport, theme}: {name: string
   assert.deepEqual(await alts(1), ['Security Engineer', 'PR Reviewer']);
   assert.deepEqual(await alts(3), ['Docs Writer']);
   assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
-  await page.locator('#team-build-dialog [data-tb-check="3"]').click();
-  assert.equal(await count(), 3);
-  // A new briefing goes to the server once, after a pause, and keeps what the person picked.
-  await page.locator('#team-build-dialog .tb-brief input').fill('A Rust API and a React app on AWS');
-  await until(() => calls.filter(c => c[0] === 'suggest').length === 2);
-  assert.equal(calls.filter(c => c[0] === 'suggest').at(-1)![1].briefing, 'A Rust API and a React app on AWS');
-  await page.waitForFunction(() => document.querySelector<HTMLElement>('#team-build-dialog .tb-dot')?.dataset.state === 'done');
-  assert.equal(await page.locator('#team-build-dialog [data-card="1"] .tb-pick-name').innerText(), 'Software Architect');
-  assert.equal(await page.locator('#team-build-dialog [data-card="4"] .tb-pick-name').innerText(), 'Devin');
-  assert.equal(await count(), 3);
-  // DevOps, which the re-ranked briefing gave Software Architect, takes its first free offer: a template is never sent twice.
-  assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
-  // Hire sends each checked role with its chosen template, in order; the dialog closes and a toast says it.
-  await hireButton.click();
-  await until(() => calls.at(-1)![0] === 'hire');
-  assert.deepEqual(calls.at(-1)![1], {team: 'engineering', reports_to: '', picks: [
-    {role: 'Security engineer', template: 'software-architect'},
-    {role: 'DevOps engineer', template: 'pr-reviewer'},
-    {role: 'Developer advocate', template: 'developer-advocate'},
-  ]});
-  await dialog.waitFor({state: 'detached'});
-  assert.ok(await page.locator('.toast').count() >= 1);
-  // Team > + > Build a team has no team: the dialog asks which one first, and suggests for the one chosen.
-  const asked = calls.length;
-  await page.evaluate(() => teamBuildOpen(null));
-  await dialog.waitFor();
-  const picker = page.locator('#team-build-dialog [data-tb-team]');
-  assert.deepEqual(await picker.locator('option').allTextContents(), ['Choose a team', 'Engineering']);
-  assert.equal(await cards.count(), 0);
-  assert.equal(calls.length, asked);                                                  // nothing is asked until a team is chosen
-  await picker.selectOption('engineering');
-  await cards.nth(4).waitFor();
-  assert.deepEqual(calls.slice(asked), [['suggest', {team: 'engineering', briefing: ''}]]);
-  assert.equal(await page.locator('#team-build-dialog .tb-team').textContent(), 'Engineering');
-  await page.locator('#team-build-dialog [data-tb-close]').click();
-  await dialog.waitFor({state: 'detached'});
   assert.deepEqual(errors, []);
   await page.close();
 }

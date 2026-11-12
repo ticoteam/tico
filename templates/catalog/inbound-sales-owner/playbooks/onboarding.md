@@ -56,9 +56,9 @@ draft, not yet reviewed". Nothing is sent.
 
 ## 6. Check the routines
 
-Setting you up switched on your first routine, the inbound sweep. Check it with `tico automation list`; if it shows off,
-run `tico automation update <id> --enable`. Then turn on the weekly read-out the same way, by its id from that list:
-`tico automation update <id> --enable` for `weekly-inbound-readout`.
+Setting you up switched on both routines, the inbound sweep and the weekly read-out. Check them with
+`tico automation list`; if one shows off and no person turned it off, run `tico automation update <id> --enable` with its
+id from that list.
 
 Tell the human in one line each: "I will sweep inbound leads on weekdays at 09:00, 11:00, 13:00, 15:00 and 17:00 and
 prepare replies for your review." and "I will publish the inbound read-out every Monday at 08:00." They can change or

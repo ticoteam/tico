@@ -143,6 +143,7 @@ function botCantRunFixHTML(slug: string, fix: BotCantRun['fix']): string {
     case 'resume_company': return `<a class="${cls}" href="${BOT_BILLING}">Resume company</a>`;
     case 'unlock_cloud': return `<a class="${cls}" href="${BOT_BILLING}">Unlock</a>`;
     case 'add_credit': return `<a class="${cls}" href="${BOT_BILLING}">Add credit</a>`;
+    case 'open_computers': return `<a class="${cls}" href="#/settings/computers">Computers</a>`;
     default: return '';
   }
 }
@@ -323,7 +324,7 @@ async function pageBot(slug: string, tab: string | undefined) {
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
     <div id="bot-review-host">${botReviewHTML(slug)}</div>
-    ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
+    ${slug === 'strategy-owner' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
       <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
@@ -611,7 +612,7 @@ function showBotTab(tab: string | null | undefined) {
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', (slug: string) => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
-  if (view === 'info' && BOT.slug === 'goal-manager' && strategyBotLogShown())
+  if (view === 'info' && BOT.slug === 'strategy-owner' && strategyBotLogShown())
     once('strategy-log', () => renderStrategyBotLog($('#strategy-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {

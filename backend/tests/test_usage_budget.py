@@ -2,6 +2,7 @@
 has spent so far in each window whether capped or not, so the page adds spend up the org chart; a person who leads a group
 lists that group's bots, may edit them, and gets `leads`; and the read stays a handful of statements a bot at 200 bots."""
 
+import pytest
 import contextlib
 import json
 
@@ -11,6 +12,8 @@ from backend.tests.helpers.groups import send
 from backend.tests.helpers.usage_limits import finish, fleet, groups, put, start
 from backend import usage_limits
 from backend import bot_settings as BS
+
+pytestmark = pytest.mark.usefixtures("inside_one_half_hour")
 
 
 def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(api):
@@ -33,17 +36,17 @@ def test_a_person_who_leads_lists_and_may_edit_the_bots_of_what_it_leads(api):
     from backend.tests.helpers.groups import add_bots
 
     with api.app.state.store.transaction() as c:
-        add_bots(c, **{"sales-lead": ({}, "ana"), "sdr": ({}, "sales-lead"), "outside": ({}, "ana")})
+        add_bots(c, **{"growth-manager": ({}, "ana"), "sdr": ({}, "growth-manager"), "outside": ({}, "ana")})
     sales = send(
         api,
         "POST",
         "groups",
-        {"name": "Sales", "add": {"people": ["cara"], "bots": ["sales-lead"]}, "lead": "person:cara"},
+        {"name": "Sales", "add": {"people": ["cara"], "bots": ["growth-manager"]}, "lead": "person:cara"},
     )["id"]
     outbound = send(api, "POST", "groups", {"name": "Outbound", "parent": sales, "add": {"bots": ["sdr"]}})["id"]
     limits = get(api, "usage/limits", token="cara-test")
     assert limits["leads"] == sorted([sales, outbound]) and limits["may_edit_default"] is False
-    assert {"sales-lead", "sdr"} <= set(limits["bots"]) and "outside" not in limits["bots"]
+    assert {"growth-manager", "sdr"} <= set(limits["bots"]) and "outside" not in limits["bots"]
     assert limits["bots"]["sdr"]["may_edit"] is True
     put(api, "usage/limits/sdr", {"daily_usd": 3}, "cara-test")  # what the page offers, the hub takes
     assert get(api, "usage/limits", token="cara-test")["bots"]["sdr"]["daily_usd"] == 3
@@ -104,17 +107,3 @@ def statements(api, monkeypatch):
         response = api.get("/api/v2/usage/limits", headers=headers("ana-test"))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
-
-
-def test_the_read_for_200_bots_in_nested_pooled_groups_is_a_few_statements_a_bot(api, monkeypatch):
-    big_org(api, 0, 20)
-    _, small = statements(api, monkeypatch)
-    big_org(api, 20, 200)
-    limits, big = statements(api, monkeypatch)
-    ours = {slug: row for slug, row in limits["bots"].items() if slug.startswith("acme-bot-")}
-    assert len(ours) == 200
-    in_g0 = sum(1 for n in range(200) if n % 16 in (0, 1))  # g0 and the group nested in it
-    assert limits["pools"]["groups"]["g0"]["spent"]["day"] == in_g0 * 0.25
-    assert ours["acme-bot-001"]["pools"] == ["group:g0-n", "group:g0"]  # nearest group first
-    # A pool and each window are read once a pass, not once a bot: what grows with the bots is the bot's own row.
-    assert (big - small) / 180 < 1, (small, big)

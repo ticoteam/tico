@@ -67,7 +67,7 @@ def test_a_books_check_run_categorizes_a_row_and_records_a_receipt_match(api):
 
     err, found = call(api, "tico_finance_search", {"kind": "feed", "q": "Mercury"}, token=token)
     fee = next(r for r in found["results"] if r["provider_kind"] == "wireFee")
-    _library_file(api, "file-receipt", "bookkeeper")
+    _library_file(api, "file-receipt", "finance-owner")
     err, matched = ask(
         api,
         token,

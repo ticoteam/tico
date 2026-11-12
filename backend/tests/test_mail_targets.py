@@ -38,7 +38,7 @@ def test_targets_are_the_message_bots_declared_mailboxes_not_every_person(api):
     assigned(api)
     with api.app.state.store.read() as c:
         assert routines.token_mailboxes(c, "inbox") == [DECLARED]
-        assert routines.token_mailboxes(c, "coo") == []
+        assert routines.token_mailboxes(c, "assistant") == []
 
 
 def test_org_read_in_bot_yaml_reads_no_reports_mail(api):
@@ -51,7 +51,7 @@ def test_org_read_in_bot_yaml_reads_no_reports_mail(api):
         with api.app.state.store.read() as c:
             assert routines.token_mailboxes(c, "inbox") == [DECLARED], setting
             assert routines.inbox_of(c, "inbox") == {"mailboxes": [DECLARED]}
-            assert routines.token_mailboxes(c, "coo") == []
+            assert routines.token_mailboxes(c, "assistant") == []
 
 
 # The runner: a domain the key can't act for is reported once, not failed on every cycle.
@@ -151,11 +151,11 @@ def named(api, person, body, token="ana-test", expected=200):
 def test_only_an_owner_or_admin_names_a_message_bot_and_one_bot_serves_one_person(api):
     seed_org(api)
     named(
-        api, "ben", {"inbox_bot": "coo", "mailbox": "ben@acme.team"}, token="cara-test", expected=403
+        api, "ben", {"inbox_bot": "assistant", "mailbox": "ben@acme.team"}, token="cara-test", expected=403
     )  # a member cannot
     named(api, "ben", {"inbox_bot": "inbox"}, expected=409)  # Ana's message bot
     named(api, "ben", {"mailbox": "ben@acme.team"}, expected=422)  # an address needs the bot that reads it
     named(api, "ben", {"inbox_bot": "no-such-bot"}, expected=404)
-    named(api, "ben", {"inbox_bot": "coo", "mailbox": "not an address"}, expected=422)
+    named(api, "ben", {"inbox_bot": "assistant", "mailbox": "not an address"}, expected=422)
     with api.app.state.store.read() as c:
-        assert routines.token_mailboxes(c, "coo") == []
+        assert routines.token_mailboxes(c, "assistant") == []

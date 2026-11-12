@@ -1,7 +1,7 @@
 # Page audit
 
-Triggered by a task that names a page or a question ("why don't we show up for X?"), or by the weekly report choosing a
-page. Budget 25 minutes.
+Triggered by a task that names a page or a question ("why don't we show up for X?"), or by a bet or a
+slipping page set that needs one. Budget 25 minutes.
 
 Outcome: one note on the task that says what is wrong with the page for a buyer and for search, the drafted change in
 `knowledge/drafts/`, and what could not be checked. Never edit the live page.

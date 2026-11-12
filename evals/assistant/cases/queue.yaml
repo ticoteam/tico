@@ -30,7 +30,7 @@
         actor: "human:dana"
         count: 11
         by_kind: {task: 7, ask: 4}
-        bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-lead": 1}
+        bots: {"bot:technical-writer": 3, "bot:botops": 4, "bot:release-manager": 2, "bot:chief-of-staff": 1, "bot:engineering-manager": 1}
         items:
           - kind: task
             id: c2d3e4f5-1000-4000-8000-000000000011
@@ -39,7 +39,7 @@
             line: "Website preview deploy failing"
             missing: ["Done"]
             since: "2026-10-14T09:00:00Z"
-            task: {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:engineering-lead"}
+            task: {id: c2d3e4f5-1000-4000-8000-000000000011, number: 97, title: "Website preview deploy failing", status: open, version: 1, pipeline_id: general, stage_id: general-todo, owner: "human:dana", requester_id: "bot:engineering-manager"}
           - kind: ask
             id: 2a7f0c9e-4000-4000-8000-000000000001
             task_id: b1c2d3e4-1000-4000-8000-000000000007
@@ -254,7 +254,7 @@
         actor: "human:dana"
         count: 193
         by_kind: {task: 130, ask: 63}
-        bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-lead": 19, "bot:release-manager": 18, "bot:pr-reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
+        bots: {"bot:technical-writer": 20, "bot:botops": 26, "bot:engineering-manager": 19, "bot:release-manager": 18, "bot:reviewer": 15, "bot:chief-of-staff": 11, "bot:ceo-bot": 12, "bot:finance-analyst": 14, "bot:recruiting": 9, "bot:website": 6, "bot:growth": 20, "bot:support-bot": 1}
         items:
           - kind: ask
             id: 5f3e21c0-4000-4000-8000-000000000002
@@ -272,8 +272,8 @@
             line: "OK to merge tico PR 2041 into main"
             missing: ["OK to merge tico PR 2041 into main"]
             since: "2026-11-02T14:00:00Z"
-            task: {id: a3b4c5d6-1000-4000-8000-000000000012, number: 2041, title: "Release branch: merge PR 2041", status: open, version: 6, pipeline_id: engineering, stage_id: review, owner: "bot:pr-reviewer"}
-            ask: {requirement_id: 9d4e5f60-4000-4000-8000-000000000005, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:pr-reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
+            task: {id: a3b4c5d6-1000-4000-8000-000000000012, number: 2041, title: "Release branch: merge PR 2041", status: open, version: 6, pipeline_id: engineering, stage_id: review, owner: "bot:reviewer"}
+            ask: {requirement_id: 9d4e5f60-4000-4000-8000-000000000005, kind: ok, line: "OK to merge tico PR 2041 into main", met: false, who: "human:dana", asked_by: "bot:reviewer", choices: null, shows: ["pr:2041"], answer: null, may: [ok, no, give, thumbs]}
           - kind: ask
             id: 6a1b2c3d-4000-4000-8000-000000000003
             task_id: 8e6d2f1b-1000-4000-8000-000000000009
@@ -317,7 +317,7 @@
         actor: "human:dana"
         messages:
           - {id: 0a6d4b92-2000-4000-8000-000000000001, kind: notice, from_actor: "bot:release-manager", text: "Waiting on your OK to publish v0.5.0 to stable.", refs: {task: 7d21c4a0-1000-4000-8000-000000000008}, created: "2026-11-01T09:00:00Z"}
-          - {id: 0a6d4b92-2000-4000-8000-000000000002, kind: notice, from_actor: "bot:pr-reviewer", text: "Waiting on your OK to merge tico PR 2041.", refs: {task: a3b4c5d6-1000-4000-8000-000000000012}, created: "2026-11-02T14:00:00Z"}
+          - {id: 0a6d4b92-2000-4000-8000-000000000002, kind: notice, from_actor: "bot:reviewer", text: "Waiting on your OK to merge tico PR 2041.", refs: {task: a3b4c5d6-1000-4000-8000-000000000012}, created: "2026-11-02T14:00:00Z"}
         more_messages: false
         tasks: []
         notices: []
@@ -377,7 +377,7 @@
           - "Release v0.5.20 shipped at 23:00 UTC; its docs task is finished but still open."
         waiting_on_you: {count: 11}
         bots_down: []
-        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Manager is waiting on your OK to publish v0.5.0."
+        what_bots_said: "Technical Writer filed 3 docs tasks overnight. Release Owner is waiting on your OK to publish v0.5.0."
     - match: '^needs-you show'
       out: *q_needs
     - match: '^health check'

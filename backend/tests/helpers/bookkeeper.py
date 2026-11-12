@@ -9,7 +9,7 @@ from backend.tests.helpers.goal_manager import BASE
 from backend.tests.helpers.onboarding import draft, machine, signed_in
 
 
-TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "catalog" / "bookkeeper"
+TEMPLATE = Path(__file__).resolve().parents[3] / "templates" / "catalog" / "finance-owner"
 
 
 DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards", "finance.rules"}
@@ -17,7 +17,7 @@ DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "fi
 
 def built(environment):
     api = environment(seed={}, cards=BASE)
-    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "bookkeeper")
+    shutil.copytree(TEMPLATE, Path(api.app.state.store.settings.catalog_dir) / "finance-owner")
     machine(api)
     draft(api)
     api.post("/api/v2/onboarding/complete", json={}, headers=signed_in())

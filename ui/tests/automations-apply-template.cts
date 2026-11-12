@@ -61,7 +61,7 @@ async function openApply(page: Page) {
       await shot(page, 'apply-template-desktop');
       await page.locator('.au-nd [data-go]').click();
       await page.waitForSelector('.au-board');
-      assert.equal(await page.locator('dialog.au-nd').count(), 0);
+      await page.waitForFunction(() => !document.querySelector('dialog.au-nd'));   // the dialog leaves on its close event, a task later
       const w = writes.filter(x => x.method === 'PATCH');
       assert.equal(w.length, 1);
       assert.equal(w[0]!.path, '/api/v2/automations/au_old');

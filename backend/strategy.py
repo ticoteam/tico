@@ -13,18 +13,18 @@ watched against the numbers and the market.
   market ids it rests on (`cites`), and a status (proposed, active, retired). `rules_out` and `wrong_if` are optional
   (the fit check watches a bet only when it has a `wrong_if`), and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
-- The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
+- The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Owner drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
 - Every change is a `history_events` row (subject_type `strategy`, its values in `data`), like the market's changes.
 - Publishing emits `strategy.published`, puts `/strategy/summary` in every run's context from the next run
   (backend/learned.py `for_turn`, runner-rs/src/prompt.rs), and files one Decide card for the owner when a bet with
   goals was retired or rewritten (`strategy_realign`, decided through the goal proposals).
 - `watch` is the fit check: each active bet of the published version is checked against its wrong-if from the KPI
-  status pass, from each KPI reading and from each market write. A trip files one task for the Strategy Bot per bet per
+  status pass, from each KPI reading and from each market write. A trip files one task for the Strategy Owner per bet per
   version, at every level.
 
 Who may: everyone signed in reads the published version; only the owner, on their own click, sees and writes the
-draft and the bets and publishes (backend/goal_routes.py `company_editor`). A bot, the Strategy Bot included, proposes
+draft and the bets and publishes (backend/goal_routes.py `company_editor`). A bot, the Strategy Owner included, proposes
 (`goal_proposals` kind `strategy_draft`) and the owner confirms; a confirmed proposal writes the draft, never publishes.
 
 Unversioned and idempotent (`ensure`), like the company profile: an older release never reads the tables or the
@@ -562,6 +562,8 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
         if "vision" in changes:
             _vision_event(c, actor, row["vision"], changes["vision"])
         sync_vision(c)
+    if "vision" in changes or "summary" in changes:
+        settle_vision(c)
     H.event(c, actor, "strategy.draft", "", {"fields": sorted(changes)})
     return draft(c)
 
@@ -767,7 +769,7 @@ def update_bet(
     return bet(c, bet_id), _bet_revision(c, actor, revision)
 
 
-# ----------------------------------------------------------------------------- the Strategy Bot's proposal
+# ----------------------------------------------------------------------------- the Strategy Owner's proposal
 def proposal_error(c, payload):
     """What is wrong with a `strategy_draft` goal proposal (backend/goals.py), in a sentence, or None. The payload is
     partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
@@ -901,6 +903,7 @@ def publish(c, actor, note="", revision=None):
     if last and last["vision"] != row["vision"]:
         _vision_event(c, actor, last["vision"], row["vision"])
     sync_vision(c)
+    settle_vision(c)
     _event(c, actor, "published", {"n": n, "note": note})
     H.event(c, actor, "strategy.publish", f"v{n}", {"n": n})
     published = version(c, n)
@@ -951,7 +954,7 @@ def _realign_goals(c, before, after):
 def realign(c, owner, before, after):
     """One Decide card for the owner after a publish that retired or rewrote bets with live goals: a
     `strategy_realign` proposal listing each goal with retire goal / move to another bet / keep, filed as a task in
-    the owner's queue at every level and outside the Strategy Bot's daily room. Returns the proposal or None."""
+    the owner's queue at every level and outside the Strategy Owner's daily room. Returns the proposal or None."""
     from . import goals as G
 
     goals = _realign_goals(c, before, after)
@@ -974,8 +977,8 @@ def realign(c, owner, before, after):
 
 
 def file_card(c, owner, proposal):
-    """The task that asks the owner to decide `proposal`, tracked like the Strategy Bot's asks (backend/goal_asks.py) so
-    it closes once decided. Filed now, whatever the Strategy Bot's level and its room today."""
+    """The task that asks the owner to decide `proposal`, tracked like the Strategy Owner's asks (backend/goal_asks.py) so
+    it closes once decided. Filed now, whatever the Strategy Owner's level and its room today."""
     from . import goal_asks as GA
     from . import goals as G
 
@@ -993,7 +996,7 @@ def file_card(c, owner, proposal):
 
 
 def settle_card(c, actor, proposal_id, note):
-    """A decided strategy card closes its task now, whether or not the Strategy Bot's pass runs on this install."""
+    """A decided strategy card closes its task now, whether or not the Strategy Owner's pass runs on this install."""
     row = H._one(c, "SELECT * FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
     if not row:
         return
@@ -1002,6 +1005,22 @@ def settle_card(c, actor, proposal_id, note):
         # The decision stands whether or not its task can be closed now.
         H.attempt(c, H.task_close, actor, task["id"], note, task["version"])
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
+
+
+def settle_vision(c):
+    """The vision ask ("Tell your Strategy Owner what this team is for", backend/goal_asks.py) closes once a vision is
+    saved, at once, as the Strategy Owner: a draft saved with one, or the strategy published. Not at the next hourly
+    pass (kpi_asks), which left it in Needs you for up to an hour after the owner had done it."""
+    if not vision(c, editor=True):
+        return
+    from . import goal_asks as GA
+    from . import goals as G
+
+    for ref, owner, task_id in c.execute("SELECT ref, owner, task_id FROM goal_asks WHERE kind='vision'").fetchall():
+        task = H.task(c, task_id)
+        if task and task["status"] in GA.LIVE:
+            H.attempt(c, H.task_close, G.AUTO_ACTOR, task["id"], GA._resolved(c, "vision", ref), task.get("version"))
+        c.execute("DELETE FROM goal_asks WHERE kind='vision' AND ref=? AND owner=?", (ref, owner))
 
 
 def card_view(c, proposal):
@@ -1140,8 +1159,8 @@ def local_day():
 def watch(c, kpi_id=None, market_id=None, today=None):
     """The fit check: each active bet of the published version against its wrong-if. `kpi_id` or `market_id` limits
     it to the bets that name that id (a reading, a market write); neither checks every bet (the KPI status pass).
-    A trip is one `bet_tripped` event and one task for the Strategy Bot per bet per version, whatever its level; nothing
-    while the owner has its regular checks off or there is no Strategy Bot. Returns the tripped bet ids."""
+    A trip is one `bet_tripped` event and one task for the Strategy Owner per bet per version, whatever its level; nothing
+    while the owner has its regular checks off or there is no Strategy Owner. Returns the tripped bet ids."""
     from . import strategy_bot
     from . import goal_asks as GA
     from . import goals as G
@@ -1208,7 +1227,7 @@ def install(app, store, auth, mutate):
         auth.domain(who)
 
     def editor(c, who):
-        """The owner on their own click; a bot, the Strategy Bot included, proposes and the owner confirms."""
+        """The owner on their own click; a bot, the Strategy Owner included, proposes and the owner confirms."""
         auth.domain(who)
         if goal_routes.company_editor(who):
             return
@@ -1346,7 +1365,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/strategy/guides")
     def strategy_guides(request: Request):
-        """Deprecated: the Strategy Bot's drafting questions, the default guide only. The exercises run against a
+        """Deprecated: the Strategy Owner's drafting questions, the default guide only. The exercises run against a
         strategy are lenses (GET /lenses)."""
         reader(request.state.identity)
         return listed_guides()

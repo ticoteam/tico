@@ -1,0 +1,167 @@
+[
+ {
+  "argv": [
+   "health",
+   "check"
+  ],
+  "tools": [
+   [
+    "tico_health_check",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "health/issues",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "health",
+   "metrics"
+  ],
+  "tools": [
+   [
+    "tico_health_metrics",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "system/metrics",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "health",
+   "metrics",
+   "--minutes",
+   "5",
+   "--section",
+   "section-1"
+  ],
+  "tools": [
+   [
+    "tico_health_metrics",
+    {
+     "minutes": 5,
+     "operation_id": null,
+     "section": "section-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "system/metrics?minutes=5&section=section-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "health",
+   "report"
+  ],
+  "tools": [
+   [
+    "tico_health_report",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: name a finding's key\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "health",
+   "ready",
+   "--bot",
+   "bots-1",
+   "--bot",
+   "bots-1b",
+   "--no-github"
+  ],
+  "tools": [
+   [
+    "tico_health_ready",
+    {
+     "bots": [
+      "bots-1",
+      "bots-1b"
+     ],
+     "github": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "health",
+    null
+   ],
+   [
+    "GET",
+    "bots",
+    null
+   ],
+   [
+    "GET",
+    "github/app",
+    null
+   ],
+   [
+    "GET",
+    "repositories",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ready\": false,\n  \"summary\": \"Not ready: 1 blocker, 1 warnings.\",\n  \"blockers\": [\n    {\n      \"check\": \"unknown_bots\",\n      \"detail\": \"No such bot: bots-1, bots-1b\",\n      \"fix\": \"tico bot list\"\n    }\n  ],\n  \"warnings\": [\n    {\n      \"check\": \"github\",\n      \"detail\": \"GitHub is not connected.\",\n      \"fix\": \"tico github status\"\n    }\n  ],\n  \"github\": {\n    \"connected\": false,\n    \"installed\": false,\n    \"summary\": \"GitHub is not connected.\"\n  },\n  \"computers\": {\n    \"online\": [],\n    \"offline\": []\n  },\n  \"bots\": {\n    \"total\": 0,\n    \"active\": 0,\n    \"planned\": [],\n    \"needs_setup\": [],\n    \"quarantined\": [],\n    \"paused\": []\n  },\n  \"checked\": null\n}\n",
+  "stderr": "",
+  "exit": 1
+ }
+]

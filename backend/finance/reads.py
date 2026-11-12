@@ -3152,7 +3152,7 @@ def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str
 
 
 def new_posting_rules(c: sqlite3.Connection, since: str) -> list[Row]:
-    """Posting rules made since a time, newest first: the Bookkeeper's weekly digest (rules are company-wide)."""
+    """Posting rules made since a time, newest first: the Finance Owner's weekly digest (rules are company-wide)."""
     from .store import banking as SK
 
     return [

@@ -1,4 +1,4 @@
-/* Library › Directory (ui/app/directory.ts, directory-entity.ts) and Settings › Directory (directory-settings.ts).
+/* Library › Contacts (ui/app/directory.ts, directory-entity.ts) and Settings › Contacts (directory-settings.ts).
    Tokens only, so light and dark both follow the theme; the list stacks at phone width with the shared .tt-list rules. */
 .dir .tt-tabs{margin-bottom:12px;overflow-x:auto;scrollbar-width:none}
 .dir-tab-n{color:var(--muted);font-weight:500;margin-left:2px}

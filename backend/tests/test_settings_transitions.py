@@ -92,13 +92,13 @@ def test_resume_and_restore_check_the_repository_before_activating(api):
     assert post(api, "bots/ops/restore", {})["status"] == "active"
     # Built-in repositories are built by their assigned computer, even on older configs without materialize.
     with api.app.state.store.transaction() as c:
-        BS.write(c, 'coo', {'template': 'assistant'})
-        c.execute("UPDATE bots SET state='paused' WHERE slug='coo'")
+        BS.write(c, 'assistant', {'template': 'assistant'})
+        c.execute("UPDATE bots SET state='paused' WHERE slug='assistant'")
     ready(api, r, [])
-    pending = post(api, "bots/coo/go-live", {"setup": False})
+    pending = post(api, "bots/assistant/go-live", {"setup": False})
     assert pending["state"] == "active" and pending["building"] and pending["setup_started"] is False
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT runner_id FROM assignments WHERE bot='coo'").fetchone()[0] == r["runner_id"]
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot='assistant'").fetchone()[0] == r["runner_id"]
 
 
 def test_settings_resume_clears_a_control_pause_but_keeps_an_active_deploy_drain(api):
@@ -251,7 +251,7 @@ def test_a_go_live_that_breaks_while_finishing_never_fails_the_heartbeat(api, mo
     def broken(self, c, who, slug):  # a fault in Tico while it finishes
         raise ValueError("bogus validation error")
 
-    monkeypatch.setattr(Onboarding, "arm_first_routine", broken)
+    monkeypatch.setattr(Onboarding, "arm_routines", broken)
     ready(api, machine, ["cpo"])  # 200, not a failed heartbeat
     ready(api, machine, ["cpo"])
     assert _record(api)["failed"]["code"] == "finish_error"

@@ -28,10 +28,12 @@ type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: s
 // GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
 type SettingsLimits = {bots?: Record<string, UseLimit>; default?: UseDefault};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
-type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
+// A cloud machine whose computer has not enrolled yet (backend/cloud_machines.py coming_rows): listed before it is one.
+type SettingsCloudComing = {key: string; label: string; shared: boolean; bot: string | null; status: string; words: string; replace: boolean};
+type SettingsOperations = {machines: SettingsMachine[]; cloud_coming?: SettingsCloudComing[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
 type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; cloudComing?: SettingsCloudComing[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
@@ -54,17 +56,18 @@ function settingsVisualsLine() {
 // ----------------------------------------------------------------- settings
 // People stay deliberately compact. Bot ownership, model, and physical placement are separate
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
-// Teams come from the team's data; a name reads as its words (`customer-success` is Customer Success).
+// Teams come from the team's data; a name reads as its words (`success-owner` is Customer Success).
 const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.name || String(t || '').replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
 const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
-function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request) {
+function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request, coming: SettingsCloudComing[] = []) {
   if (request < SETTINGS_PRESENCE.applied) return;
   SETTINGS_PRESENCE.applied = request;
   SETTINGS_PRESENCE.at = Date.now();
   SETTINGS_PRESENCE.failed = false;
   SETTINGS_DATA.machines = machines;
+  SETTINGS_DATA.cloudComing = coming;
 }
 async function settingsMachinesRead() {
   const request = ++SETTINGS_PRESENCE.request;
@@ -75,7 +78,7 @@ async function settingsMachinesRead() {
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
     ]);
     if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
-    settingsMachinesSnapshot(operations.machines, request);
+    settingsMachinesSnapshot(operations.machines, request, Array.isArray(operations.cloud_coming) ? operations.cloud_coming : []);
     return operations;
   } finally { clearTimeout(timer); }
 }
@@ -122,7 +125,7 @@ let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
 // Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'directory', 'security', 'history',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history',
   'health', 'billing'];
 // System (it was Rules, before that Routines) is gone: settingsMovedOut sends its addresses on. chat: the old Chat tab; providers and
 // subscriptions: what is the Models tab now; limits: its turn levels; gateway: the Gateway page, now the Tico Gateway
@@ -135,9 +138,9 @@ const SETTINGS_ALIAS: Record<string, string> = {humans: 'people', computers: 'de
 const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 // The Gateway card once drawn (renderSettingsProviders marks it), so a link to the old Gateway page lands on it filled in.
 const SETTINGS_GATEWAY_CARD = '#settings-gateway-card[data-drawn]';
-// System's cards left Settings: its jobs are Automations' System jobs, Releases, Task Manager and the Strategy Bot are
+// System's cards left Settings: its jobs are Automations' System jobs, Releases, General Manager and the Strategy Owner are
 // those built-in bots' Settings, Screening is Security. The router asks for an old address's new home (or '' to stay).
-const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-task-manager-card': 'task-manager', 'set-strategy-bot-card': 'goal-manager'};
+const SETTINGS_SYSTEM_BOTS: Record<string, string> = {'set-general-manager-card': 'general-manager', 'set-strategy-bot-card': 'strategy-owner'};
 function settingsMovedOut(tab: string, card = '') {
   if (tab === 'strategy-bot') card = 'set-strategy-bot-card';
   else if (tab === 'releases') card = 'set-release-card';
@@ -147,7 +150,7 @@ function settingsMovedOut(tab: string, card = '') {
   if (SETTINGS_SYSTEM_BOTS[card]) return `#/bot/${SETTINGS_SYSTEM_BOTS[card]}/settings`;
   return AUTOMATIONS + '/' + AU_SYSJOBS;
 }
-// Releases is the Release Manager's (the one the schedule names or finds); with none, Settings > Bots.
+// Releases is the Release Owner's (the one the schedule names or finds); with none, Settings > Bots.
 async function settingsReleasesOpen() {
   let v = null;
   try { v = await releaseScheduleLoad(); } catch { /* no schedule to read: Bots */ }
@@ -280,7 +283,7 @@ function pageSettings() {
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
       <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
-      <button type="button" data-settings-tab="directory" role="tab">Directory</button>
+      <button type="button" data-settings-tab="contacts" role="tab">Contacts</button>
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="security" role="tab">Security</button>' : ''}
       <button type="button" data-settings-tab="history" role="tab">History</button>
       <details class="settings-more" id="settings-more"><summary>More</summary><div>
@@ -337,7 +340,7 @@ function pageSettings() {
     ${settingsIsAdmin() ? `<div class="settings-pane" id="settings-security" role="tabpanel" hidden>
       <section class="card" id="set-screening-card"><header><h2>Screening</h2></header><div id="set-screening">${skelRows(3, {card: true, dot: false})}</div></section>
     </div>` : ''}
-    <div class="settings-pane" id="settings-directory" role="tabpanel" hidden><div id="set-directory"></div></div>
+    <div class="settings-pane" id="settings-contacts" role="tabpanel" hidden><div id="set-contacts"></div></div>
     <div class="settings-pane" id="settings-tasks" role="tabpanel" hidden>
       <section class="card" id="set-ask-filter-card"><header><h2>What bots may put on you</h2></header><div id="set-ask-filter"></div></section>
       <section class="card" id="settings-roadmaps"></section>
@@ -490,8 +493,8 @@ function settingsShow(tab: string) {
   if (billingPane) { billingPane.hidden = SETTINGS_TAB !== 'billing'; if (SETTINGS_TAB === 'billing') void renderSettingsBilling(); }
   const healthPane = $('#settings-health');
   if (healthPane) { healthPane.hidden = SETTINGS_TAB !== 'health'; if (SETTINGS_TAB === 'health') window.hlMount?.(); }
-  const directoryPane = document.getElementById('settings-directory'), directoryBody = document.getElementById('set-directory');
-  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'directory'; if (SETTINGS_TAB === 'directory') void directorySettingsShow(directoryBody); }
+  const directoryPane = document.getElementById('settings-contacts'), directoryBody = document.getElementById('set-contacts');
+  if (directoryPane && directoryBody) { directoryPane.hidden = SETTINGS_TAB !== 'contacts'; if (SETTINGS_TAB === 'contacts') void directorySettingsShow(directoryBody); }
   const securityPane = $('#settings-security');
   if (securityPane) { securityPane.hidden = SETTINGS_TAB !== 'security'; if (SETTINGS_TAB === 'security') void renderScreeningCard(); }
   // Once route() has put a newly opened page at its top, which would undo a scroll to a card already drawn.
@@ -663,6 +666,7 @@ async function loadSettings() {
     S.emps = namedRoster(employees);
     setPeople(people);
     SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
+      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing || [] : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],

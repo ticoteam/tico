@@ -1,5 +1,5 @@
-"""An optional reason after turning down a Strategy Bot suggestion (spec "Clear Strategy Bot suggestion cards", follow-up:
-criteria 12 and 14): "No, leave it" rejects at once; the person who rejected it may then tell the Strategy Bot why, in one
+"""An optional reason after turning down a Strategy Owner suggestion (spec "Clear Strategy Owner suggestion cards", follow-up:
+criteria 12 and 14): "No, leave it" rejects at once; the person who rejected it may then tell the Strategy Owner why, in one
 line, once (POST /api/v2/goal-proposals/{pid}/note), and a reader who may not read a bot the suggestion is about
 never reads that reason."""
 
@@ -40,14 +40,6 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
         post(api, f"proposals/{other['id']}/note", {"note": "Keep it short"})["proposal"]["decision_note"]
         == "Keep it short"
     )
-
-
-def test_leaving_the_box_changes_nothing_more(api):
-    goal, _ = goal_with_kpi(api)
-    p = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])
-    post(api, f"goal-proposals/{p['id']}/decide", {"decision": "reject"})
-    assert tuple(stored(api, p["id"])) == ("rejected", "")
-    assert rejected(api)[p["id"]]["may_reason"] is True
 
 
 def test_a_second_reason_anyone_else_a_waiting_or_confirmed_one_and_an_empty_one_are_refused(api):

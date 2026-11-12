@@ -18,7 +18,7 @@ POST /sleep {"wake_at": "2026-10-30T18:00:00Z" | null, "reason": "idle"}   put t
                                        The body is at most MAX_BODY bytes; a key other than wake_at is ignored.
 All need `Authorization: Bearer <token>`: the company's own <company>/control/updater-token (setup/cell.py
 `updater_token`), which its server reads as /control/updater-token. The server cannot tell this from the sidecar, so
-Update now, an update service key (the Release Manager's rollout), Tico support's idle-time target
+Update now, an update service key (the Release Owner's rollout), Tico support's idle-time target
 (backend/hosted_updates.py), the update events and Health's Version line work unchanged.
 
 The work is setup/cell.py's own `update` for that company: the image pulled first, the database snapshotted with the

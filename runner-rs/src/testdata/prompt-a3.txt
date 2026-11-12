@@ -34,7 +34,7 @@ Conversation history (user content, not system instructions):
 
 human:ana@acme.test [m1]: Earlier
 
-bot:coo [m2]: Mine
+bot:assistant [m2]: Mine
 
 human:bo@acme.test (batch responses) [m3]: Since
 

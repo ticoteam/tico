@@ -292,7 +292,7 @@ def test_a_new_thread_to_a_bot_that_is_gone_is_still_dropped_and_the_assistant_a
 
     result = send(gateway, "please review the vendor terms", judge_answer=archive, channel=DM, kind="message")
     assert [d["bot"] for d in result["decision"]["dropped"]] == ["legal"]
-    assert [d["bot"] for d in result["decision"]["delivered"]] == ["coo"] and gateway.slack.posts == []
+    assert [d["bot"] for d in result["decision"]["delivered"]] == ["assistant"] and gateway.slack.posts == []
 
 
 def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncertain(gateway, hub):
@@ -427,8 +427,8 @@ def test_a_shared_dm_with_56_active_bots_is_asked_in_calls_within_the_cap_and_ro
 def test_a_persons_message_the_model_reads_as_asking_for_nothing_still_reaches_the_assistant(gateway, hub):
     """Decide picks who gets a person's message, never whether anyone does (the Decide on Jev spec)."""
     result = send(gateway, "thanks, that's all", judge_answer=answers(asks=0.1, legal=0.9), channel=DM, kind="message")
-    assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["coo"]
-    assert "asks for nothing" in result["decision"]["reason"] and [j["bot_id"] for j in jobs(hub)] == ["coo"]
+    assert result["state"] == "routed" and [r["bot"] for r in result["decision"]["recipients"]] == ["assistant"]
+    assert "asks for nothing" in result["decision"]["reason"] and [j["bot_id"] for j in jobs(hub)] == ["assistant"]
 
 
 def test_a_decision_outage_retries_for_ten_minutes_and_then_fails_instead_of_looping(gateway, hub):
@@ -512,7 +512,7 @@ def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_
     second = send(gateway, "and the NDA too", channel=DM, kind="message", user="U2")
     assert len(gateway.engine.calls) == calls, "over the cap the decision model is not asked"
     assert second["state"] == "routed" and second["decision"]["routed_by"] == "budget"
-    assert [r["bot"] for r in second["decision"]["recipients"]] == ["coo"]
+    assert [r["bot"] for r in second["decision"]["recipients"]] == ["assistant"]
 
 
 def test_a_routing_retry_is_one_short_http_attempt_and_one_audited_call(hub, monkeypatch):

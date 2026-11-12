@@ -64,7 +64,7 @@ GROUPS = [
 ]
 GROUP_WORDS = dict(GROUPS)
 DEPARTMENT = "Engineering"  # a built-in's tag until departments are edited (a label only: it changes no permission)
-FINANCE = "Finance"  # the Bookkeeper's checks
+FINANCE = "Finance"  # the Finance Owner's checks
 
 # Which route answered a Decide call, from the answering provider (judge.py's order: Gateway, own key, company AI).
 ROUTE_WORDS = {"gateway": "Gateway", "own_key": "Company key", "team_llm": "Company AI"}
@@ -122,28 +122,28 @@ ACTIONS = {
         ("health", "invariants", "production", "alert", "stuck"),
     ),
     "report_tasks": (
-        "list each department's stalled, overdue and out-of-step tasks for the Task Manager",
+        "list each department's stalled, overdue and out-of-step tasks for the General Manager",
         ("tasks", "stalled", "overdue", "department", "report"),
     ),
-    "wake_task_manager": (
+    "wake_general_manager": (
         "open a Task check task for each department that has something to fix",
-        ("tasks", "wake", "task manager"),
+        ("tasks", "wake", "general manager"),
     ),
     "check_books": (
-        "read the Bookkeeper's Finance work queue: rows to categorize, bills, payments due, overdue "
+        "read the Finance Owner's Finance work queue: rows to categorize, bills, payments due, overdue "
         "invoices, receipts, failed syncs, months ready to close",
         ("finance", "books", "bills", "inbox"),
     ),
     "wake_bookkeeper": (
-        "open or update one Books check task for the Bookkeeper only when the queue has something new",
+        "open or update one Books check task for the Finance Owner only when the queue has something new",
         ("finance", "bookkeeper", "wake"),
     ),
     "check_watch": (
-        "read the Bookkeeper's Watch checks: runway, unusual spend, duplicate charges, price increases",
+        "read the Finance Owner's Watch checks: runway, unusual spend, duplicate charges, price increases",
         ("finance", "watch", "runway", "spend", "duplicate", "price"),
     ),
     "wake_watch": (
-        "open or update one Watch task for the Bookkeeper only when a check finds something new",
+        "open or update one Watch task for the Finance Owner only when a check finds something new",
         ("finance", "bookkeeper", "wake", "watch"),
     ),
     "check_rules_digest": (
@@ -151,7 +151,7 @@ ACTIONS = {
         ("finance", "rules", "digest"),
     ),
     "wake_rules_digest": (
-        "open the week's rules digest task for the Bookkeeper when there are new rules",
+        "open the week's rules digest task for the Finance Owner when there are new rules",
         ("finance", "rules", "digest", "wake"),
     ),
     "free_dead_starts": (
@@ -209,7 +209,7 @@ ACTIONS = {
     "tell_setup_stuck": ("tell a person about a bot stuck in setup", ("setup", "remind")),
     "check_release": ("check for a new Tico release", ("release", "update")),
     "ask_release": (
-        "ask the Release Manager for a release at the daily release hour",
+        "ask the Release Owner for a release at the daily release hour",
         ("release", "schedule", "daily"),
     ),
     "fetch_feeds": ("fetch subscribed updates", ("feeds", "updates")),
@@ -252,7 +252,7 @@ ACTIONS = {
         ("webhooks", "computers", "support", "screening", "deadline"),
     ),
     "start_strategy_note": (
-        "start or pause the Strategy Bot's Monday note to match its level",
+        "start or pause the Strategy Owner's Monday note to match its level",
         ("strategy", "note", "monday"),
     ),
     "read_cloud_access": (
@@ -332,7 +332,7 @@ def _gateway_connected(c, settings):
 
 
 def _bookkeeper(c, settings):
-    row = H.bot(c, "bookkeeper")
+    row = H.bot(c, "finance-owner")
     return bool(row) and row["state"] != "archived"
 
 
@@ -345,7 +345,7 @@ def _pages_watched(c, settings):
 
 
 def _release_manager(c, settings):
-    # The daily release asks the Release Manager (release_schedule_routes.release_manager); with none, it has no one to ask.
+    # The daily release asks the Release Owner (release_schedule_routes.release_manager); with none, it has no one to ask.
     from . import release_schedule_routes
 
     return release_schedule_routes.release_manager(c) is not None
@@ -423,19 +423,19 @@ JOBS = [
     ),
     Job(
         "task_manager_report",
-        "Task Manager report",
+        "General Manager report",
         "Lists each department's paused tasks, held bots, runs waiting on an owner's review and duplicate tasks in plain "
-        "code, and opens one task for the Task Manager per department that has something.",
+        "code, and opens one task for the General Manager per department that has something.",
         CHECKS,
         "Hourly on weekdays, 08:00 to 18:00",
         3600,
         control=True,
-        then=("report_tasks", "wake_task_manager"),
+        then=("report_tasks", "wake_general_manager"),
     ),
     Job(
         "bookkeeper_check",
         "Books check",
-        "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
+        "Reads the Finance Owner's Finance work queue in plain code and opens one task for the Finance Owner only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
         CHECKS,
         "Hourly",
@@ -449,7 +449,7 @@ JOBS = [
         "bookkeeper_watch",
         "Books watch",
         "Reads runway, unusual spend, duplicate charges and price increases in plain code, and opens one Watch task for "
-        "the Bookkeeper only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
+        "the Finance Owner only when a check finds something new. Nothing new is a quiet run: no task, no model call.",
         CHECKS,
         "Daily",
         86400,
@@ -460,7 +460,7 @@ JOBS = [
     Job(
         "bookkeeper_rules_digest",
         "Rules digest",
-        "Once a week, lists the posting rules made that week and opens the Bookkeeper's digest task for them. No new "
+        "Once a week, lists the posting rules made that week and opens the Finance Owner's digest task for them. No new "
         "rules is a quiet run.",
         CHECKS,
         "Weekly",
@@ -564,7 +564,7 @@ JOBS = [
     Job(
         "release_hour",
         "Daily release",
-        "At each hour the release schedule names, asks the Release Manager for a release as Release now does: one "
+        "At each hour the release schedule names, asks the Release Owner for a release as Release now does: one "
         "Release task, or its unfinished one. Each hour fires once.",
         HOUSEKEEPING,
         "At the release hours",
@@ -697,7 +697,7 @@ JOBS = [
     Job(
         "strategy_note",
         "Strategy note check",
-        "Starts the Strategy Bot's Monday note once its level is above Passive, and pauses it at Passive.",
+        "Starts the Strategy Owner's Monday note once its level is above Passive, and pauses it at Passive.",
         CHECKS,
         "Hourly",
         3600,
@@ -1439,16 +1439,18 @@ def listing(c, settings, now=None, who=None, auth=None, everything=False):
         }
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
-            from .task_manager import active as task_manager_active
+            from .general_manager import active as general_manager_active
 
             item["note"] = (
-                None if task_manager_active(c) else "Opens no tasks while the Task Manager is paused (Settings > Bots)"
+                None
+                if general_manager_active(c)
+                else "Opens no tasks while the General Manager is paused (Settings > Bots)"
             )
         if job.key in ("bookkeeper_check", "bookkeeper_watch", "bookkeeper_rules_digest"):
             from .bookkeeper import active as bookkeeper_active
 
             item["note"] = (
-                None if bookkeeper_active(c) else "Opens no tasks while the Bookkeeper is paused (Settings > Bots)"
+                None if bookkeeper_active(c) else "Opens no tasks while the Finance Owner is paused (Settings > Bots)"
             )
         if row:
             item["last"] = {

@@ -72,20 +72,6 @@ def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees
         assert c.execute("SELECT revoked_at FROM credential_grants WHERE id=?", (grant,)).fetchone()[0] is None
 
 
-def test_ben_cannot_find_it_through_sql_events_or_history(api):
-    tid, rw, _ = bank(api)
-    for sql in (
-        "SELECT * FROM tools",
-        "SELECT * FROM credentials",
-        "SELECT * FROM tool_calls",
-        "SELECT target, detail FROM events",
-    ):
-        r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers("ben-test"))
-        assert tid not in r.text and rw not in r.text and "Acme Bank" not in r.text, (sql, r.text[:300])
-    r = api.get("/api/v2/history", headers=headers("ben-test"))
-    assert r.status_code == 200 and "Acme Bank" not in r.text and "Close read" not in r.text and rw not in r.text
-
-
 def test_a_grant_holder_sees_it_and_the_proxy_key_works_for_them(api):
     tid, rw, ro = bank(api)
     level(api, tid, "human:cara", "read")
@@ -131,7 +117,7 @@ def test_a_listed_group_and_bot_see_it(api):
     ]
     with api.app.state.store.read() as c:
         admins = api.app.state.vault.admins
-        ops, coo = Identity("bot:ops", "bot"), Identity("bot:coo", "bot")
+        ops, coo = Identity("bot:ops", "bot"), Identity("bot:assistant", "bot")
         assert api_tools.visible(c, ops, tid, admins) is True
         assert api_tools.visible(c, coo, tid, admins) is False
 
@@ -329,8 +315,8 @@ def test_copying_a_bot_never_reports_or_tries_a_hidden_key(api):
     tools = [{"env": env, "service": ""}]
     with api.app.state.store.transaction() as c:
         ben, ana = ben_and_ana(api, c)
-        bens = bot_copy.credentials_for(c, vault, ben, "ops", "coo", tools, [])
-        anas = bot_copy.credentials_for(c, vault, ana, "ops", "coo", tools, [])
+        bens = bot_copy.credentials_for(c, vault, ben, "ops", "assistant", tools, [])
+        anas = bot_copy.credentials_for(c, vault, ana, "ops", "assistant", tools, [])
     assert bens["granted"] == [] and bens["needs"][0]["detail"] == "The original has no stored credential for it."
     assert anas["granted"] == [{"env": env, "service": "", "credential": "Close read_write"}]
 

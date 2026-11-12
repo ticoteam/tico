@@ -1,0 +1,747 @@
+[
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/channels",
+    null
+   ]
+  ],
+  "stdout": "slug           name           stage    track        owner  budget/mo\ngoogle-search  Google search  testing  performance\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list",
+   "--retired"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "include_retired": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/channels?include_retired=true",
+    null
+   ]
+  ],
+  "stdout": "slug           name           stage    track        owner  budget/mo\ngoogle-search  Google search  testing  performance\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "list",
+   "--json"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/channels",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"channels\": [\n    {\n      \"slug\": \"google-search\",\n      \"name\": \"Google search\",\n      \"stage\": \"testing\",\n      \"track\": \"performance\"\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "show",
+   "google-search"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_show",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/channels/google-search",
+    null
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "add",
+   "google-search",
+   "--name",
+   "name-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_add",
+    {
+     "name": "name-1",
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/channels",
+    {
+     "slug": "google-search",
+     "name": "name-1"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "operation_id": null,
+     "slug": "google-search"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "channel",
+   "update",
+   "google-search",
+   "--name",
+   "name-1",
+   "--track",
+   "performance",
+   "--stage",
+   "idea",
+   "--owner",
+   "me",
+   "--budget",
+   "2.5",
+   "--source",
+   "source-id-1",
+   "--why",
+   "why-1",
+   "--guardrail-kpi",
+   "guardrail-kpi-id-1",
+   "--guardrail-max",
+   "2.5",
+   "--sort",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_growth_channel_update",
+    {
+     "budget_month": 2.5,
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "name": "name-1",
+     "operation_id": null,
+     "owner": "me",
+     "slug": "google-search",
+     "sort": 5,
+     "source_id": "source-id-1",
+     "stage": "idea",
+     "track": "performance",
+     "why": "why-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/channels/google-search",
+    {
+     "name": "name-1",
+     "track": "performance",
+     "stage": "idea",
+     "budget_month": 2.5,
+     "source_id": "source-id-1",
+     "why": "why-1",
+     "guardrail_kpi_id": "guardrail-kpi-id-1",
+     "guardrail_max": 2.5,
+     "sort": 5,
+     "owner_ref": "bot:ana"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/sources",
+    null
+   ]
+  ],
+  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "list",
+   "--retired"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_list",
+    {
+     "include_retired": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/sources?include_retired=true",
+    null
+   ]
+  ],
+  "stdout": "id  truth for  system      reach    may\ns1  ad spend   Google Ads  mcp:ads\n\nConflicts:\n- truth_for: bookings\n  sources:\n    - s2\n    - s3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "add",
+   "--truth-for",
+   "truth-for-1",
+   "--system",
+   "system-1",
+   "--reach-kind",
+   "mcp"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_add",
+    {
+     "operation_id": null,
+     "reach_kind": "mcp",
+     "system": "system-1",
+     "truth_for": "truth-for-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources",
+    {
+     "truth_for": "truth-for-1",
+     "system": "system-1",
+     "reach_kind": "mcp"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "update",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_update",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "growth/sources/id-1",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "source",
+   "retire",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_growth_source_retire",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "growth/sources/id-1/retire",
+    {}
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/cohorts",
+    null
+   ]
+  ],
+  "stdout": "month    channel  spend  bot  new  d30  d90  d180  quality\n2026-10  unknown  900         3\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "channel": "google-search",
+     "month": "2026-10",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "google-search",
+     "month": "2026-10"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "google-search",
+   "--month",
+   "2026-10",
+   "--spend",
+   "2.5",
+   "--bot-cost",
+   "2.5",
+   "--new",
+   "5",
+   "--d30",
+   "2.5",
+   "--d90",
+   "2.5",
+   "--d180",
+   "2.5",
+   "--revenue",
+   "2.5",
+   "--margin",
+   "2.5",
+   "--quality",
+   "actual",
+   "--source",
+   "spend=Google Ads",
+   "--source",
+   "spend=Google Adsb"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "bot_cost": 2.5,
+     "channel": "google-search",
+     "kept_d180": 2.5,
+     "kept_d30": 2.5,
+     "kept_d90": 2.5,
+     "margin_pct": 2.5,
+     "month": "2026-10",
+     "new_customers": 5,
+     "operation_id": null,
+     "quality": "actual",
+     "revenue_month": 2.5,
+     "source": [
+      "spend=Google Ads",
+      "spend=Google Adsb"
+     ],
+     "spend": 2.5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "google-search",
+     "month": "2026-10",
+     "spend": 2.5,
+     "bot_cost": 2.5,
+     "new_customers": 5,
+     "kept_d30": 2.5,
+     "kept_d90": 2.5,
+     "kept_d180": 2.5,
+     "revenue_month": 2.5,
+     "margin_pct": 2.5,
+     "quality": "actual",
+     "sources": {
+      "spend": "Google Adsb"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "economics"
+  ],
+  "tools": [
+   [
+    "tico_growth_economics",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/economics",
+    null
+   ]
+  ],
+  "stdout": "Month: 2026-10\nchannel        spend  bot  new  CAC  months  LTV   LTV:CAC  payback\nGoogle search  900         3    300          1200  4\ntotal          900         3    300\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "numbers"
+  ],
+  "tools": [
+   [
+    "tico_growth_numbers",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/numbers",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "kpis"
+  ],
+  "tools": [
+   [
+    "tico_growth_kpis",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "growth/kpis",
+    null
+   ]
+  ],
+  "stdout": "kpis:\n  - id: k1\n    name: Bookings\n    role: north_star\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "settings",
+   "--set",
+   "unit=customer",
+   "--set",
+   "unit=customerb"
+  ],
+  "tools": [
+   [
+    "tico_growth_settings",
+    {
+     "operation_id": null,
+     "set": [
+      "unit=customer",
+      "unit=customerb"
+     ]
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "growth/settings",
+    {
+     "unit": "customerb"
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "growth",
+   "cohort",
+   "set",
+   "--channel",
+   "1",
+   "--month",
+   "1",
+   "--spend",
+   "1",
+   "--bot-cost",
+   "1",
+   "--new",
+   "1",
+   "--d30",
+   "1",
+   "--d90",
+   "1",
+   "--d180",
+   "1",
+   "--revenue",
+   "1",
+   "--margin",
+   "1",
+   "--quality",
+   "actual",
+   "--source",
+   "new=1",
+   "--source",
+   "spend=1"
+  ],
+  "tools": [
+   [
+    "tico_growth_cohort_set",
+    {
+     "bot_cost": 1.0,
+     "channel": "1",
+     "kept_d180": 1.0,
+     "kept_d30": 1.0,
+     "kept_d90": 1.0,
+     "margin_pct": 1.0,
+     "month": "1",
+     "new_customers": 1,
+     "operation_id": null,
+     "quality": "actual",
+     "revenue_month": 1.0,
+     "source": [
+      "new=1",
+      "spend=1"
+     ],
+     "spend": 1.0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PUT",
+    "growth/cohorts",
+    {
+     "channel": "1",
+     "month": "1",
+     "spend": 1.0,
+     "bot_cost": 1.0,
+     "new_customers": 1,
+     "kept_d30": 1.0,
+     "kept_d90": 1.0,
+     "kept_d180": 1.0,
+     "revenue_month": 1.0,
+     "margin_pct": 1.0,
+     "quality": "actual",
+     "sources": {
+      "new": "1",
+      "spend": "1"
+     }
+    }
+   ]
+  ],
+  "stdout": "ok: True\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

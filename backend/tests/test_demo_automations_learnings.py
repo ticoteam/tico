@@ -70,7 +70,7 @@ def _review_replies_are_done_while_bens_read_tasks_wait_for_him(built):
                 if (step.get("outputs") or {}).get("task")
             ]
             assert {task["owner_id"]: task["status"] for task in tasks} == {
-                "bot:reputation": "done",
+                "bot:reputation-manager": "done",
                 "human:ben": "open",
             }
 
@@ -93,7 +93,7 @@ def _learnings_shows_a_week_of_nights(built):
         assert len(nights) == 7
         assert sorted(night["status"] for night in nights) == ["done"] * 6 + ["quiet"]
         correction = next(night for night in nights if night["night"] == "2026-09-21")
-        packet = api.get(f"/api/v2/learnings/{correction['id']}/packets/support-lead")
+        packet = api.get(f"/api/v2/learnings/{correction['id']}/packets/success-manager")
         assert packet.status_code == 200
         assert any("refund" in item["text"].lower() for item in packet.json()["items"])
 
@@ -109,8 +109,8 @@ def _last_night_shows_the_routed_correction_with_its_source(built):
         last = nights[0]
         assert last["night"] == "2026-09-25" and last["updates"] == 1
         detail = api.get(f"/api/v2/learnings/{last['id']}").json()
-        bot = next(row for row in detail["sections"]["bots"] if row["id"] == "technical-support")
-        assert bot["id"] == "technical-support" and "1 task" in bot["saw"]
+        bot = next(row for row in detail["sections"]["bots"] if row["id"] == "technical-support-engineer")
+        assert bot["id"] == "technical-support-engineer" and "1 task" in bot["saw"]
         [entry] = bot["entries"]
         assert "flat surface" in entry["title"]
         [source] = [s for s in entry["sources"] if "Correction" in s["quote"]]
@@ -126,7 +126,7 @@ def _the_night_before_saves_a_smaller_change(built):
         bot = next(
             row
             for row in api.get(f"/api/v2/learnings/{night['id']}").json()["sections"]["bots"]
-            if row["id"] == "technical-support"
+            if row["id"] == "technical-support-engineer"
         )
         [entry] = bot["entries"]
         assert "hold the phone still" in entry["title"].lower()
@@ -246,7 +246,7 @@ def _the_packet_runs_leave_technical_support_its_focus(built):
     _, settings = built
     with signed_in(settings) as api:
         status = {row["bot"]: row for row in api.get("/api/v2/status").json()["bots"]}
-        assert status["technical-support"]["focus"] == "Calibration callbacks"
+        assert status["technical-support-engineer"]["focus"] == "Calibration callbacks"
 
 
 def _learning_deliveries_leave_later_assignments_unstarted(built):

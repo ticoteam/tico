@@ -1,6 +1,6 @@
-// Library › Directory on a real hub seeded with the scenario org and the Directory's rows (evals/redesign/seeds.py
-// "directory", the same rows as the demo): the list → a person → their organization → a place, on a desktop and a
-// phone. Set TICO_DIRECTORY_SHOTS to a folder to keep a screenshot of each page.
+// Library › Contacts (it was Library › Directory) on a real hub seeded with the scenario org and its contacts
+// (evals/redesign/seeds.py "directory", the same rows as the demo): the list → a person → their organization → a place,
+// on a desktop and a phone. The Library list says Contacts, never Directory, and the old address lands on the new page. Set TICO_DIRECTORY_SHOTS to a folder to keep a screenshot of each page.
 import type {Page} from 'playwright';
 import type * as RealHubSupport from './support/real-hub.cts';
 const {chromium} = require('playwright') as typeof import('playwright');
@@ -13,13 +13,22 @@ const SHOTS = process.env.TICO_DIRECTORY_SHOTS || '';
 const shot = async (page: Page, name: string) => { if (!SHOTS) return; await page.waitForTimeout(600); await page.screenshot({path: path.join(SHOTS, `directory-${name}.png`), fullPage: true}); };
 
 async function flow(page: Page, tag: string) {
-  await page.goto(page.url().split('#')[0] + '#/library/directory');
+  await page.goto(page.url().split('#')[0] + '#/library/contacts');
+  // Contacts is the icon on the Team header, not a Library row, and nothing is called Directory.
+  // Each row's name without its icon's ligature text.
+  const library = await page.locator('#rd-lib .nav-link').evaluateAll(links => links.map(a =>
+    [...a.childNodes].filter(n => n.nodeType === Node.TEXT_NODE).map(n => n.textContent || '').join('').trim()));
+  assert.ok(!library.some(name => /contacts|directory/i.test(name)), tag + ': no Contacts or Directory row in Library');
+  assert.equal(await page.locator('#org-contacts-link').getAttribute('href'), '#/library/contacts', tag + ': the Team header opens Contacts');
   // The list: People first, the seeded people with their organization, relationship and where they are known from.
   const jane = page.locator('[data-dir-row="person/jane-ortiz"]');
   await jane.waitFor({timeout: t(20000)});
   assert.equal(await page.locator('[data-dir-tab].cur').getAttribute('data-dir-tab'), 'person');
-  assert.deepEqual(await page.locator('[data-dir-tab]').evaluateAll(tabs => tabs.slice(0, 4).map(a => a.dataset.dirTab)),
-    ['person', 'organization', 'place', 'document']);
+  // Documents are files, not contacts: never a tab.
+  const tabs = await page.locator('[data-dir-tab]').evaluateAll(tabs => tabs.map(a => a.dataset.dirTab));
+  assert.deepEqual(tabs.slice(0, 3), ['person', 'organization', 'place']);
+  assert.ok(!tabs.includes('document'), tag + ': no Documents tab');
+  assert.match(await page.locator('#main h1').first().innerText(), /^Contacts$/);
   assert.match(await jane.innerText(), /Bright Homes Retail/);
   assert.match(await jane.locator('[data-dir-rel]').innerText(), /Customer/);
   assert.match(await page.locator('[data-dir-count]').innerText(), /^8 people$/);
@@ -29,11 +38,13 @@ async function flow(page: Page, tag: string) {
   await page.waitForFunction(() => document.querySelectorAll('[data-dir-row]').length === 1, null, {timeout: t(10000)});
   assert.equal(await page.locator('[data-dir-row]').getAttribute('data-dir-row'), 'person/raj-patel');
   assert.match(page.url(), /q=Ra/);
+  // The old address, from before it was Contacts, lands on the new page with its query.
   await page.goto(page.url().split('#')[0] + '#/library/directory?link=customer_of');
+  await page.waitForFunction(() => location.hash === '#/library/contacts?link=customer_of', null, {timeout: t(10000)});
   // Customers' people (Bright Homes, Cedar Venues, Maple Street: backend/demo_sections/directory.py), in any order.
   await page.waitForFunction(() => [...(document.querySelectorAll('[data-dir-row]') as unknown as Iterable<HTMLElement>)].map(r => r.dataset.dirRow).sort().join()
     === 'person/dev-shah,person/jane-ortiz,person/priya-nair,person/sam-brooks', null, {timeout: t(10000)});
-  await page.goto(page.url().split('#')[0] + '#/library/directory');
+  await page.goto(page.url().split('#')[0] + '#/library/contacts');
   await jane.waitFor({timeout: t(10000)});
   await shot(page, `list-${tag}`);
 
@@ -92,9 +103,10 @@ async function flow(page: Page, tag: string) {
         await flow(page, phone ? 'phone' : 'desktop');
         if (phone) assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'no sideways scroll on a phone');
         else {
-          // Settings › Directory: the types with their counts, and the shared places.
-          await page.goto(page.url().split('#')[0] + '#/settings/directory');
+          // Settings › Contacts: the types with their counts, and the shared places.
+          await page.goto(page.url().split('#')[0] + '#/settings/contacts');
           await page.locator('[data-dirs-type="person"]').waitFor({timeout: t(20000)});
+          assert.equal(await page.locator('[data-dirs-type="document"]').count(), 0, 'documents are not a contact type');
           assert.match(await page.locator('[data-dirs-type="person"]').innerText(), /8/);
           await page.locator('[data-dirs-field="title"]').count();
           await page.locator('[data-dirs-places-on]').waitFor({timeout: t(10000)});
@@ -109,7 +121,7 @@ async function flow(page: Page, tag: string) {
           await shot(page, 'settings-desktop');
           // Light theme too: the page uses theme tokens only.
           await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
-          await page.goto(page.url().split('#')[0] + '#/library/directory/' + encodeURIComponent('organization/bright-homes-retail'));
+          await page.goto(page.url().split('#')[0] + '#/library/contacts/' + encodeURIComponent('organization/bright-homes-retail'));
           await page.locator('[data-dir-rules-empty]').waitFor({timeout: t(10000)});
           await shot(page, 'org-light');
         }
@@ -121,13 +133,13 @@ async function flow(page: Page, tag: string) {
     const member = await pageAs(browser, hub, 'omar');
     try {
       await member.waitForFunction(() => document.querySelector('#main')?.children.length! > 0, null, {timeout: t(20000)});
-      await member.goto(member.url().split('#')[0] + '#/settings/directory');
+      await member.goto(member.url().split('#')[0] + '#/settings/contacts');
       await member.locator('[data-dirs-place="place:us-tx"]').waitFor({timeout: t(20000)});
       assert.equal(await member.locator('[data-dirs-unplace], [data-dirs-place-q]').count(), 0);
     } finally {
       await member.context().close();
     }
-    console.log('directory: ok');
+    console.log('contacts: ok');
   } finally {
     await browser?.close();
     await hub.stop();

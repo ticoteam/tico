@@ -6,8 +6,8 @@ from backend.tests.helpers.api import assign, post, ready, runner
 def start(api, tid, person="ben-test", key=None, machine=None):
     if machine is None:
         machine = runner(api)
-        assign(api, machine, "coo")
-        ready(api, machine, ["coo"], capabilities=["make_page"])
+        assign(api, machine, "assistant")
+        ready(api, machine, ["assistant"], capabilities=["make_page"])
     sent = post(api, f"tasks/{tid}/make-page", {"text": "Make the alert flow with three scenario tabs."}, person, key)
     attempt = post(api, "jobs/claim", {"next_run": True}, machine["token"], key="claim:" + sent["message"]["id"])[
         "attempt"

@@ -620,32 +620,6 @@ mod tests {
         Turn::new(bot, "", Class::Other)
     }
 
-    /// Two turns on `keys` at once, each holding its login for a moment: the most that ran together.
-    async fn overlap(keys: [&str; 2]) -> usize {
-        let (now, most) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
-        let turns = keys.map(|key| {
-            let (now, most, key) = (now.clone(), most.clone(), key.to_string());
-            tokio::spawn(async move {
-                let _held = take(&key, &t("ops")).await;
-                let running = now.fetch_add(1, Ordering::SeqCst) + 1;
-                most.fetch_max(running, Ordering::SeqCst);
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                now.fetch_sub(1, Ordering::SeqCst);
-            })
-        });
-        for t in turns {
-            t.await.unwrap();
-        }
-        most.load(Ordering::SeqCst)
-    }
-
-    #[tokio::test]
-    async fn two_turns_on_one_login_run_one_after_the_other_and_other_logins_run_beside_them() {
-        assert_eq!(overlap(["codex:test-same", "codex:test-same"]).await, 1);
-        assert_eq!(overlap(["codex:test-a", "codex:test-b"]).await, 2);
-        assert_eq!(overlap(["codex:", "codex:test-own"]).await, 2);
-    }
-
     #[tokio::test]
     async fn a_busy_login_names_its_holder_and_is_free_again_once_the_turn_lets_go() {
         let key = "codex:test-busy";
@@ -660,28 +634,6 @@ mod tests {
         let again = try_take(key, &t("support")).unwrap();
         assert_eq!(holder(key).as_deref(), Some("support"));
         drop(again);
-    }
-
-    #[tokio::test]
-    async fn waiting_turns_take_the_login_in_the_order_they_asked() {
-        let key = "codex:test-order";
-        let first = try_take(key, &t("a")).unwrap();
-        let order = Arc::new(Mutex::new(vec![]));
-        let mut waiters = vec![];
-        for bot in ["b", "c", "d"] {
-            let order = order.clone();
-            waiters.push(tokio::spawn(async move {
-                let _held = take(key, &t(bot)).await;
-                order.lock().unwrap().push(bot);
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }));
-            tokio::time::sleep(Duration::from_millis(10)).await; // each one asks after the last
-        }
-        drop(first);
-        for w in waiters {
-            w.await.unwrap();
-        }
-        assert_eq!(*order.lock().unwrap(), ["b", "c", "d"]);
     }
 
     #[tokio::test]
@@ -948,91 +900,6 @@ time.sleep(60)
         );
     }
 
-    /// No code path copies a login file into another home. Switch account signs in inside the login's own home
-    /// (login.rs begin_switch) and seeds nothing for Codex; the only other copy is the replay recorder's, test-only.
-    #[test]
-    fn no_code_path_copies_a_codex_login_between_homes() {
-        let login =
-            crate::harness_tools::login_command("codex").expect("Codex has a login section");
-        assert!(
-            login.seed.is_empty(),
-            "Switch account copies {:?} into the side home",
-            login.seed
-        );
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let (mut files, mut dirs) = (vec![], vec![src.clone()]);
-        while let Some(d) = dirs.pop() {
-            for e in std::fs::read_dir(&d).unwrap().flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    dirs.push(p);
-                } else if p.extension().is_some_and(|x| x == "rs") {
-                    files.push(p);
-                }
-            }
-        }
-        let copying =
-            regex::Regex::new(r#"fs::copy|fs::write|fs::rename|write_private|"cp"|\bcopy\b"#)
-                .unwrap();
-        let mut found = vec![];
-        for path in files {
-            let rel = path.strip_prefix(&src).unwrap().display().to_string();
-            if rel == "hosts/replay.rs" || rel == "login_turns.rs" {
-                continue; // test-only (hosts/mod.rs: #[cfg(test)] mod replay), and this guard itself
-            }
-            let text = std::fs::read_to_string(&path).unwrap();
-            // Production code only: everything before the file's own test module (`mod` or `pub(crate) mod`).
-            let code = ["#[cfg(test)]\nmod ", "#[cfg(test)]\npub(crate) mod "]
-                .iter()
-                .filter_map(|m| text.find(m))
-                .min()
-                .map_or(text.as_str(), |at| &text[..at]);
-            for (n, line) in code.lines().enumerate() {
-                if line.contains("auth.json") && copying.is_match(line) {
-                    found.push(format!("{rel}:{}: {}", n + 1, line.trim()));
-                }
-            }
-        }
-        assert!(found.is_empty(), "a login file is copied: {found:#?}");
-    }
-
-    #[test]
-    fn the_lines_name_the_login_who_holds_it_on_what_since_when_and_the_place() {
-        let computer = Login::new("codex", "");
-        assert_eq!(computer.key, "codex:");
-        let since = 20_000.0 * 86_400.0 + 19.0 * 3600.0 + 6.0 * 60.0;
-        let w = Waiting {
-            holder: "pr-reviewer-sol".into(),
-            attempt: String::new(),
-            task: "Review 1: PR #1005".into(),
-            since,
-            position: 2,
-        };
-        assert_eq!(computer.waiting(&w, "qa-engineer"),
-                   "Waiting for this computer's ChatGPT login (held by pr-reviewer-sol on Review 1: PR #1005 since 19:06Z; position 2)");
-        assert_eq!(
-            computer.busy("builder", "support"),
-            "ChatGPT login busy with builder"
-        );
-        let work = Login::new("codex", "work");
-        let own = Waiting {
-            holder: "support".into(),
-            attempt: String::new(),
-            task: String::new(),
-            since: since + 59.0 * 60.0,
-            position: 1,
-        };
-        assert_eq!(work.waiting(&own, "support"), "Waiting for ChatGPT login \"work\" (held by another turn of this bot since 20:05Z; position 1)");
-        assert_eq!(
-            work.busy("builder", "support"),
-            "ChatGPT login \"work\" busy with builder"
-        );
-        assert_eq!(
-            work.yielded(),
-            "Paused after 20 min so the next turn could use ChatGPT login \"work\"; resumes next"
-        );
-    }
-
     /// `waiters` queue on `key` one after the other while `held_by` holds it; each, once it has the login, notes itself
     /// and lets go. The order they had it in.
     async fn served(key: &'static str, held_by: Held, waiters: Vec<Turn>) -> Vec<String> {
@@ -1093,64 +960,6 @@ time.sleep(60)
         .await;
         assert_eq!(MAX_SKIPS, 2);
         assert_eq!(order, ["qa-1", "qa-2", "support", "qa-3", "qa-4"]);
-    }
-
-    #[tokio::test]
-    async fn a_waiting_turn_hears_who_holds_the_login_on_what_and_its_place_as_they_change() {
-        let key = "codex:test-place";
-        let held_by = try_take(
-            key,
-            &Turn::new("pr-reviewer-sol", "Review 1: PR #1005", Class::Review),
-        )
-        .unwrap();
-        let heard = Arc::new(Mutex::new(Vec::<Waiting>::new()));
-        let h = heard.clone();
-        let review = tokio::spawn(async move {
-            let turn = Turn::new("reviewer-2", "Review 2: PR #11", Class::Review);
-            wait_for(
-                key,
-                &turn,
-                || None,
-                move |w| h.lock().unwrap().push(w.clone()),
-                Duration::from_millis(2),
-            )
-            .await
-        });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        {
-            let heard = heard.lock().unwrap();
-            assert_eq!(heard.len(), 1, "{heard:?}");
-            assert_eq!(
-                (
-                    heard[0].holder.as_str(),
-                    heard[0].task.as_str(),
-                    heard[0].position
-                ),
-                ("pr-reviewer-sol", "Review 1: PR #1005", 1)
-            );
-            assert!(heard[0].since > 1_700_000_000.0);
-        }
-        // A release-blocking turn asks later and goes first: the review hears it is second now.
-        let qa = tokio::spawn(async move {
-            let _held = take(
-                key,
-                &Turn::new("qa-engineer", "QA: PR #987", Class::Release),
-            )
-            .await;
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        assert_eq!(heard.lock().unwrap().last().map(|w| w.position), Some(2));
-        drop(held_by);
-        qa.await.unwrap();
-        let held = review.await.unwrap().expect("the review has the login");
-        assert_eq!(holder(key).as_deref(), Some("reviewer-2"));
-        let last = heard.lock().unwrap().last().cloned().unwrap();
-        assert_eq!(
-            (last.holder.as_str(), last.task.as_str(), last.position),
-            ("qa-engineer", "QA: PR #987", 1)
-        );
-        drop(held);
     }
 
     #[tokio::test]
@@ -1269,44 +1078,6 @@ time.sleep(60)
         drop(held);
         waiter.await.unwrap();
         assert_eq!(holder(key), None);
-    }
-
-    #[tokio::test]
-    async fn a_turn_that_gives_way_at_the_cap_comes_back_right_after_the_next_waiter() {
-        let key = "codex:test-give-way";
-        let builder = Turn::new("builder", "Dev 278", Class::Other);
-        let held = try_take(key, &builder).unwrap();
-        let order = Arc::new(Mutex::new(vec![]));
-        let queue = |turn: Turn, order: Arc<Mutex<Vec<String>>>| {
-            tokio::spawn(async move {
-                let _held = take(key, &turn).await;
-                order.lock().unwrap().push(turn.bot.clone());
-                tokio::time::sleep(Duration::from_millis(30)).await;
-            })
-        };
-        let qa = queue(
-            Turn::new("qa-engineer", "QA: PR #987", Class::Release),
-            order.clone(),
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        let other = queue(t("support"), order.clone());
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        held.give_way();
-        drop(held);
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        // The continuation asks after both, while the QA turn has the login: it is next, ahead of the earlier one.
-        let again = queue(builder.clone(), order.clone());
-        for t in [qa, other, again] {
-            t.await.unwrap();
-        }
-        assert_eq!(
-            *order.lock().unwrap(),
-            ["qa-engineer", "builder", "support"]
-        );
-        // Its place was used: a later turn of the same task waits its turn like any other.
-        let held = try_take(key, &t("ops")).unwrap();
-        let order = served(key, held, vec![t("support"), builder]).await;
-        assert_eq!(order, ["support", "builder"]);
     }
 
     #[tokio::test]

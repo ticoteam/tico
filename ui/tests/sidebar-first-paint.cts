@@ -145,8 +145,8 @@ const newContext = (browser: import('playwright').Browser, phone: boolean) => br
         const v = await visit(context, {phone, finance: 'no'});
         same(v, tag + ', no Finance');
         const keys = v.painted.rows.filter(r => r.on).map(r => r.key);
-        assert.deepEqual(keys.slice(0, 14), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'strategy', 'growth',
-          'automations', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
+        assert.deepEqual(keys.slice(0, 15), ['tasks', 'calendar', 'threads', 'updates', 'overview', 'Company pages', 'strategy', 'growth',
+          'automations', 'listening', 'rules', 'library', 'Library pages', 'docs', 'files'], tag + ': the order, from the first paint');
         assert.equal(await v.page.locator('#side a[data-nav="overview"]').evaluate(a => a.textContent!.trim()), 'Company', tag + ': Overview is Company');
         assert.ok(!keys.includes('connections'), tag + ': Connections is part of Tools');
         assert.ok(keys.includes('threads') && keys.includes('organisation'), tag + ': Threads and the Team section too');

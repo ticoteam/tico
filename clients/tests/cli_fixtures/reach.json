@@ -1,0 +1,115 @@
+[
+ {
+  "argv": [
+   "reach",
+   "show"
+  ],
+  "tools": [
+   [
+    "tico_reach_show",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "reach",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "reach",
+   "set",
+   "party-1"
+  ],
+  "tools": [
+   [
+    "tico_reach_set",
+    {
+     "operation_id": null,
+     "party": "party-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: Give at least one of mode, chats_per_day, tasks_per_day\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "reach",
+   "set",
+   "party-1",
+   "--mode",
+   "open",
+   "--chats-per-day",
+   "chats-per-day-1",
+   "--tasks-per-day",
+   "tasks-per-day-1"
+  ],
+  "tools": [
+   [
+    "tico_reach_set",
+    {
+     "chats_per_day": "chats-per-day-1",
+     "mode": "open",
+     "operation_id": null,
+     "party": "party-1",
+     "tasks_per_day": "tasks-per-day-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: a per-day count is a whole number or inherit, not 'chats-per-day-1'\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "reach",
+   "set",
+   "bot:ana",
+   "--chats-per-day",
+   "5",
+   "--tasks-per-day",
+   "inherit"
+  ],
+  "tools": [
+   [
+    "tico_reach_set",
+    {
+     "chats_per_day": "5",
+     "operation_id": null,
+     "party": "bot:ana",
+     "tasks_per_day": "inherit"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "reach/settings/bot:ana",
+    {
+     "chats_per_day": 5,
+     "tasks_per_day": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

@@ -65,7 +65,7 @@ def _saved_demo_reopens_with_edits_and_the_same_owner_session(built):
         with signed_in(settings) as api:
             response = api.post(
                 "/api/v2/tasks",
-                json={"title": "Keep this demo edit", "body": "Sample work", "owner": "bot:support"},
+                json={"title": "Keep this demo edit", "body": "Sample work", "owner": "bot:support-owner"},
                 headers={"Idempotency-Key": "restart-edit"},
             )
             assert response.status_code == 200
@@ -125,7 +125,7 @@ def test_a_public_demo_is_read_only(tmp_path):
             "/api/v2/local-signin"
         )
         blocked = api.post(
-            "/api/v2/tasks", json={"title": "x", "owner": "bot:support"}, headers={"Idempotency-Key": "p1"}
+            "/api/v2/tasks", json={"title": "x", "owner": "bot:support-owner"}, headers={"Idempotency-Key": "p1"}
         )
         assert blocked.status_code == 403 and blocked.json()["error"]["code"] == "demo"
         assert api.post("/api/v2/updates/read", json={"ids": []}, headers={"Idempotency-Key": "p2"}).status_code == 200

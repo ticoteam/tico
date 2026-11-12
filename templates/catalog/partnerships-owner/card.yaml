@@ -28,7 +28,7 @@ never:
   - "Pay, promise or change a referral fee, margin or discount"
   - "Share pipeline, pricing or customer data with a partner beyond what the agreement allows"
   - "Send any message to a partner or prospect, unless the task asks for it and a granted Tool allows it"
-  - "Hire, create, change or remove a bot or a role, or route another team's work; a proposed role is a note on a task for the Corporate Team Manager"
+  - "Hire, create, change or remove a bot or a role, or route another team's work; a proposed role is a note on a task for the Corporate Manager"
 prerequisites:
   - tool: hub
     why: "Registrations, partner requests and agreements arrive as tasks, and each decision goes back on one for a human."

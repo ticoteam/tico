@@ -111,7 +111,7 @@ def test_a_runner_from_before_the_report_yields_the_model_and_repository_only(ap
     assert [t["id"] for t in tools_of(api)["tools"]] == ["model", "repo"]
     assert tools_of(api)["tools"][0]["status"] == "ready"
     # A bot with no computer at all still answers.
-    bare = tools_of(api, "coo")
+    bare = tools_of(api, "assistant")
     assert bare["computer"] is None and bare["online"] is False and bare["tools"][0]["id"] == "model"
 
 

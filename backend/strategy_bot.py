@@ -1,12 +1,12 @@
-"""The Strategy Bot: every install has one, at the top of its org chart (docs/strategy-bot.md; spec: Head of Product,
-Strategy Bot v3).
+"""The Strategy Owner: every install has one, at the top of its org chart (docs/strategy-bot.md; spec: Head of Product,
+Strategy Owner v3).
 
-Its slug stays `goal-manager` (actor `bot:goal-manager`), so its KPI readings, goal events and old messages stay
-attached. It is named "Strategy Bot" unless the owner renames it (`name`); the names it had before are read only by
+Its slug stays `strategy-owner` (actor `bot:strategy-owner`), so its KPI readings, goal events and old messages stay
+attached. It is named "Strategy Owner" unless the owner renames it (`name`); the names it had before are read only by
 `migrate`.
 
 - `migrate` (every start, backend/store.py) moves what an earlier install kept under its old names, and names the bot
-  "Strategy Bot" where it still had an old name. It records `on` in this install's `registry_metadata` row, which says
+  "Strategy Owner" where it still had an old name. It records `on` in this install's `registry_metadata` row, which says
   the one-time part ran; no person sees it or turns it off.
 - The org chart (`chart_entries`) shows it under the owner, and under it the bots that would hang straight under the
   owner and are a Head or have no manager, and (`chart_groups`) the top-level groups those Heads are in. Built-in bots,
@@ -14,15 +14,15 @@ attached. It is named "Strategy Bot" unless the owner renames it (`name`); the n
   written, so who manages whom (the access chain in backend/auth.py, goal rights in backend/goals.py, `bot_contact`) is
   exactly what it was.
 - "Hide from my chart" (`hidden_for`, preference `chart.hide_strategy_bot` in the caller's own `preferences` row) is one
-  person's view: on their chart the Strategy Bot is not drawn and nothing moves under it. Everyone else's chart, and the
+  person's view: on their chart the Strategy Owner is not drawn and nothing moves under it. Everyone else's chart, and the
   bot itself (its config, `reports_to`, access, level, Goals, chat), are as they were.
 - "Regular checks" (`checks`, default on) are the KPI pass routine and the automatic goal colours. Off, neither runs
   until the owner turns them back on; the owner's chat still works.
-- "How much your Strategy Bot does" (`level`): Passive (1), Suggests actions (2, where every install starts), Acts on
+- "How much your Strategy Owner does" (`level`): Passive (1), Suggests actions (2, where every install starts), Acts on
   its own (3). At Passive it does nothing on its own beyond the regular checks (`proactive`).
 
 Only the owner changes the level, the regular checks and its name, on their own click (backend/goal_routes.py,
-backend/settings_admin.py); a bot never does, the Strategy Bot included."""
+backend/settings_admin.py); a bot never does, the Strategy Owner included."""
 
 import json
 from datetime import datetime, timezone
@@ -41,10 +41,10 @@ KEY = "strategy-bot"
 # rollback reads and writes. For one release this one writes both keys alike (`_save`, `mirror_hide`), and `migrate`
 # takes what that release wrote there since.
 OLD_KEY = "ceo-bot"
-SLUG = "goal-manager"
-NAME = "Strategy Bot"
+SLUG = "strategy-owner"
+NAME = "Strategy Owner"
 # The names the bot had before, and "" when it had none: `migrate` renames these, and `name` treats them as no name.
-OLD_NAMES = ("Goal Manager", "CEO Bot")
+OLD_NAMES = ("Goal Manager", "CEO Bot", "Strategy Bot")
 # The notes a withdrawn recovery carried before the rename: `migrate` rewrites them to the current note.
 OLD_WITHDRAWN = (
     "Withdrawn: the CEO Bot was set to Passive, where it suggests no task changes",
@@ -63,7 +63,7 @@ def _record(c):
 
 
 def name(c):
-    """What a person sees it called: the name the owner gave it, else "Strategy Bot"."""
+    """What a person sees it called: the name the owner gave it, else "Strategy Owner"."""
     current = ((H.bot(c, SLUG) or {}).get("display_name") or "").strip()
     return current if current and current not in OLD_NAMES else NAME
 
@@ -113,7 +113,7 @@ def _rename(c, actor, display_name):
 def migrate(c):
     """Every start, once the tables are renamed (backend/hubdb.py `migrate`). Each step does nothing once it is done:
     the registry row and "Hide from my chart" take what their old keys hold; a withdrawn recovery with an old note
-    reads the current note; and the bot's name becomes "Strategy Bot" where it had none or an old one, a name the
+    reads the current note; and the bot's name becomes "Strategy Owner" where it had none or an old one, a name the
     owner chose stays. The old keys stay, kept equal to the new ones (OLD_KEY): where one differs, an older release
     reopened the file and wrote it since, so what it holds wins (each of its fields over the record; the later "Hide
     from my chart"), and a choice the owner made then is kept. Also run where the bot is built in later
@@ -201,7 +201,7 @@ PASS = SLUG + ":kpi-pass"
 
 
 def held_routine(c, schedule):
-    """Why a scheduled run of the Strategy Bot's KPI pass is skipped (the regular checks are off), or None."""
+    """Why a scheduled run of the Strategy Owner's KPI pass is skipped (the regular checks are off), or None."""
     if schedule["id"] == PASS and not checks(c):
         return "regular checks are off"
     return None
@@ -285,26 +285,26 @@ def _outside(slug, entry, assistant, helpers):
             "assistant",
             "botops",
             "librarian",
-            H.COUNSEL,
+            H.RULES_OWNER,
             SLUG,
             "health-monitor",
-            "task-manager",
-            "bookkeeper",
-            H.BRAND_OWNER,
+            "general-manager",
+            "finance-owner",
+            H.DESIGN_OWNER,
         )
         or slug == assistant
         or str((entry or {}).get("template") or "") in helpers
     )
 
 
-# "Hide from my chart" on the Strategy Bot (its menu on the Team sidebar, Settings > Bots > Strategy Bot): one person's
+# "Hide from my chart" on the Strategy Owner (its menu on the Team sidebar, Settings > Bots > Strategy Owner): one person's
 # own preference, kept like their other view settings in `preferences` (actor, key). True hides it; anything else shows
 # it.
 HIDE_PREF = "chart.hide_strategy_bot"
 
 
 def hidden_for(c, who):
-    """Whether the caller, a person, chose Hide from my chart on the Strategy Bot. A bot's or a token's view is never
+    """Whether the caller, a person, chose Hide from my chart on the Strategy Owner. A bot's or a token's view is never
     hidden. Only the chart reads it (`chart_entries`, `chart_groups`, `chart_hidden_row`)."""
     if getattr(who, "role", "") not in ("owner", "human") or getattr(who, "via_token", False):
         return False
@@ -313,20 +313,24 @@ def hidden_for(c, who):
 
 
 def chart_hidden_row(slug, hidden):
-    """What a bot's row says on a chart the caller hid the Strategy Bot from: the Strategy Bot's row carries
+    """What a bot's row says on a chart the caller hid the Strategy Owner from: the Strategy Owner's row carries
     `chart_hidden`, so the Team sidebar leaves it off while Goals, its chat and Settings > Bots still list it."""
     return {"chart_hidden": True} if hidden and slug == SLUG else {}
 
 
 def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
-    """`entries` as the org chart draws them. The Strategy Bot reports to the owner, and so do on the chart the bots
+    """`entries` as the org chart draws them. The Strategy Owner reports to the owner, and so do on the chart the bots
     that hang straight under the owner and are a Head (a `lead: true` card) or have no manager at all. Built-in bots,
     helpers and message bots stay where they are, and so does anyone under a group or another person. A copy; with no
-    Strategy Bot (or no owner on the roster) yet, or on the chart of a person who hid it (`hidden`, from `hidden_for`),
-    `entries` itself. Only for drawing the chart: permission checks read the stored `reports_to`."""
+    Strategy Owner (or no owner on the roster) yet, or on the chart of a person who hid it (`hidden`, from `hidden_for`),
+    `entries` itself; and when the Strategy Owner reports to a bot, as it does to the General Manager in a company
+    started on the Manager chart, `entries` itself too: nothing is re-hung. Only for drawing the chart: permission checks read the stored `reports_to`."""
     archived = set(archived or ())
     if hidden or SLUG not in (entries or {}) or SLUG in archived:
         return entries
+    line = P._clean((entries[SLUG] or {}).get("reports_to"))
+    if line and not line.startswith("human:"):
+        return entries  # it reports to a bot (the General Manager): the chart is the reporting lines as they are
     owner = P.person((roster or {}).get("default_user"), roster)
     if not owner or owner.get("hidden"):
         return entries
@@ -351,10 +355,10 @@ def chart_entries(c, settings, roster, entries, archived=(), hidden=False):
 
 def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
     """`groups` (`org_view` rows) as the chart draws them. A Head is usually in a group of its own department, which
-    sits at the top of the chart: a top-level group that holds a bot the Strategy Bot heads on the chart (`chart`, from
-    `chart_entries`) hangs under the Strategy Bot, so the department sits in its subtree. Never the group the owner is
-    in, since the Strategy Bot hangs under the owner. With nothing moved, or on the chart of a person who hid the
-    Strategy Bot (`hidden`), `groups` itself."""
+    sits at the top of the chart: a top-level group that holds a bot the Strategy Owner heads on the chart (`chart`, from
+    `chart_entries`) hangs under the Strategy Owner, so the department sits in its subtree. Never the group the owner is
+    in, since the Strategy Owner hangs under the owner. With nothing moved, or on the chart of a person who hid the
+    Strategy Owner (`hidden`), `groups` itself."""
     if hidden or chart is entries:
         return groups
     archived = set(archived or ())
@@ -373,8 +377,8 @@ def chart_groups(roster, entries, chart, groups, archived=(), hidden=False):
 
 
 # ----------------------------------------------------------------------------- how much it does
-# "How much your Strategy Bot does" (Settings > Strategy Bot): three levels, chosen by the owner on their own click,
-# never by an admin or a bot, the Strategy Bot included (backend/goal_routes.py). Every install starts at Suggests
+# "How much your Strategy Owner does" (Settings > Strategy Owner): three levels, chosen by the owner on their own click,
+# never by an admin or a bot, the Strategy Owner included (backend/goal_routes.py). Every install starts at Suggests
 # actions (level 2) until its owner chooses another; a level the owner stored, Passive included, is kept. Each change is
 # kept in the record with who and when. Level 2 asks goal owners, proposes Why lines, sends the Monday note and suggests
 # recoveries (backend/goal_asks.py, backend/strategy_suggest.py, backend/strategy_merge.py). Level 3 also decides alone
@@ -407,7 +411,7 @@ HISTORY_KEEP = 50
 
 
 def level(c):
-    """The level this install's Strategy Bot works at: 2 (Suggests actions) unless the owner chose another."""
+    """The level this install's Strategy Owner works at: 2 (Suggests actions) unless the owner chose another."""
     value = _record(c).get("level")
     return value if value in LEVELS else DEFAULT_LEVEL
 
@@ -485,7 +489,7 @@ def mirror_hide(c, actor, value_json, updated):
 
 
 # ----------------------------------------------------------------------------- what it asked today
-# The Strategy Bot has no daily limit on a person's Needs you. The server counts the tasks it filed for that person
+# The Strategy Owner has no daily limit on a person's Needs you. The server counts the tasks it filed for that person
 # since midnight UTC, whoever filed them for it: its own `tico task create` and the asks backend/goal_asks.py files in
 # its name, and the items it merged several bots' asks into (backend/strategy_merge.py).
 NO_LIMIT = 10**6  # no daily cap: the room never runs out
@@ -498,8 +502,8 @@ def day_start(at=None):
 
 
 def asked_today(c, person, at=None):
-    """How many tasks the Strategy Bot filed for this person today (UTC), closed ones included, and merged items. A
-    merged item is a task filed for them since step 6b; one filed before was the Strategy Bot's own."""
+    """How many tasks the Strategy Owner filed for this person today (UTC), closed ones included, and merged items. A
+    merged item is a task filed for them since step 6b; one filed before was the Strategy Owner's own."""
     since = day_start(at)
     return (
         c.execute(
@@ -515,7 +519,7 @@ def asked_today(c, person, at=None):
 
 
 def asked_today_all(c, at=None):
-    """{person actor: tasks the Strategy Bot filed for them today}, for the people it filed any for."""
+    """{person actor: tasks the Strategy Owner filed for them today}, for the people it filed any for."""
     since, out = day_start(at), {}
     for who, n in c.execute(
         "SELECT owner_id, COUNT(*) FROM tasks WHERE requester_id=? AND owner_id LIKE 'human:%' AND created_at>=? GROUP BY owner_id "
@@ -528,5 +532,5 @@ def asked_today_all(c, at=None):
 
 
 def room_today(c, person, at=None):
-    """How many more items the Strategy Bot may put in this person's Needs you today: no limit."""
+    """How many more items the Strategy Owner may put in this person's Needs you today: no limit."""
     return NO_LIMIT

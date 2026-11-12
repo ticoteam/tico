@@ -119,7 +119,7 @@ def _ipv6(match):
     return "[ip]"
 
 
-WORD_MIN = 4  # a name or slug shorter than this is not a word: `coo` or `pm` would relabel ordinary text
+WORD_MIN = 4  # a name or slug shorter than this is not a word: `assistant` or `pm` would relabel ordinary text
 ACTOR = re.compile(r"(?<![A-Za-z0-9])(bot|human):([A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)")
 
 
@@ -127,7 +127,7 @@ class Redactor:
     """Every string in a bundle goes through `text()`. `people` and `bots` are the names to turn into labels; a label is
     made once per bundle, in sorted order, so the same person is the same `person-N` wherever they appear.
 
-    A name or slug is relabeled as a word only when it has WORD_MIN letters or more. A short one (`coo`) is still
+    A name or slug is relabeled as a word only when it has WORD_MIN letters or more. A short one (`assistant`) is still
     relabeled where it cannot be an ordinary word: as an exact `bot:<slug>` or `human:<id>` actor reference, in `label()`,
     and inside an email address, which is always relabeled (or, for an address nobody here owns, `[email]`)."""
 

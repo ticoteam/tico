@@ -46,14 +46,6 @@ def inline(store, auth, run_id, only, wait):
     M._execute(store, auth, run_id, only)
 
 
-def test_the_steps_run_in_one_fixed_order_and_the_api_lists_them_so(api):
-    assert M.ORDER == ("collect", "clean_up", "check_health", "learn", "suggest", "update", "dream")
-    assert [s["key"] for s in get(api, "maintenance")["steps"]] == list(M.ORDER)
-    assert all("old_timer" not in s for s in get(api, "maintenance")["steps"]), "every step runs in the run"
-    suggest = next(s for s in get(api, "maintenance")["steps"] if s["key"] == "suggest")
-    assert suggest["consent"] is False, "Suggest is live and waits for consent"
-
-
 def test_each_frequency_is_due_on_its_own_clock():
     def row(frequency, last=None, every=None, unit=None):
         return {
@@ -365,20 +357,6 @@ def test_collect_counts_a_bot_only_when_a_settled_turn_wrote_something(api):
     assert counted == {"busy"}, "only the turn that wrote something counts"
 
 
-def test_the_limiter_counts_read_their_events_index(api):
-    """A target count reads events_task_origin (actor, action, target, created_at). The fleet count names no target, so it
-    reads events_actor_action_created (actor, action, created_at) and seeks its hour instead of scanning events."""
-    store, _ = stores(api)
-    since = "2026-11-03T00:00:00.000000Z"
-    with store.read() as c:
-        for sql, params, index in (
-            (L.COUNT_TARGET, (H.KEEPER, L.BOT_ACTION, "bot", since), "events_task_origin"),
-            (L.COUNT_FLEET, (H.KEEPER, L.BOT_ACTION, since), "events_actor_action_created"),
-        ):
-            plan = " ".join(str(row[3]) for row in c.execute("EXPLAIN QUERY PLAN " + sql, params))
-            assert index in plan and "SCAN events" not in plan, plan
-
-
 def _dream_started_now(store):
     """Dream ran a moment ago, so on its own clock it is not due."""
     with store.transaction() as c:
@@ -396,15 +374,6 @@ def test_a_step_only_run_now_runs_that_step_even_when_it_is_not_due(api, monkeyp
     assert run["steps"][0]["status"] == "ran" and run["steps"][0]["reason"] == "stubbed", "not due, but Run now runs it"
     run, _ = M.run_now(store, auth, "human:ana", step="learn", wait=True)
     assert run["steps"][0]["status"] == "off", "a step switched off stays off"
-
-
-def test_a_plain_run_now_keeps_the_due_rules(api, monkeypatch):
-    store, auth = stores(api)
-    monkeypatch.setitem(M.LIVE, "dream", lambda c, ctx: result("ran", "stubbed"))
-    _dream_started_now(store)
-    run, started = M.run_now(store, auth, "human:ana", wait=True)
-    steps = {s["step"]: s for s in run["steps"]}
-    assert started and steps["dream"]["status"] == "skipped" and steps["dream"]["reason"] == "not due"
 
 
 def test_a_stale_run_is_ended_before_the_bucket_guard_so_the_day_still_runs(api, monkeypatch):

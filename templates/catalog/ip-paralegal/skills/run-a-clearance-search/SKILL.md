@@ -20,6 +20,6 @@ Checks before you finish:
 - Every database, term, class and date is listed.
 - Nothing says the name is free to use or registrable.
 - "Nothing found" states what was searched.
-- Counsel is asked the questions the search could not answer.
+- The Rules Owner is asked the questions the search could not answer.
 
 Example (invented, for illustration): "Searched: USPTO, term 'AKME FLO', classes 9 and 42, 2026-10-01. Found: one application in class 9, filed 2026-09-08, sounds the same, goods related. Listed first."

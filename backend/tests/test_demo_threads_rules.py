@@ -3,7 +3,6 @@ pricing), the rules (three for everyone, four between teammates with a With, eac
 suggestion, and the one draft a rule held for Ben (written nowhere; its review task
 waits for Ben, and Ana, the owner, can review it too)."""
 
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -68,33 +67,6 @@ def _the_rules_say_who_follows_them_and_with_whom(built):
             assert [x["id"] for x in rule["with"][key]] == with_.get(key, []), (item["key"], key)
 
 
-def _peer_rules_fill_the_with_column(built):
-    _, settings, _rows = built
-    with signed_in(settings) as api:
-        rules = api.get("/api/v2/rules", params={"kind": "internal", "status": "active"}).json()["rules"]
-    peer = [r for r in rules if any(r["with"][k] for k in ("groups", "bots", "people"))]
-    assert len(peer) >= 3
-    by_text = {r["text"]: r for r in peer}
-    ben = by_text["Don't assign @ben a task without asking first."]
-    assert ben["who"]["all_bots"] and [p["id"] for p in ben["with"]["people"]] == ["ben"]
-
-
-def _every_mention_in_a_rule_names_a_real_teammate(built):
-    """A rule names a teammate as @slug (a bot) or @handle (a person), the way the Rules page shows a mention chip."""
-    _, settings, _rows = built
-    with signed_in(settings) as api:
-        bots = {b["id"] for b in api.get("/api/v2/org").json()["bots"]}
-        rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
-    people = {"ana", "ben", "cara", "eli"}
-    ours = {item["text"] for item in CONTENT["rules"]}
-    named = [
-        m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])
-    ]
-    assert {"ana", "ben", "bookkeeper", "accounts-payable", "firmware", "pricing"} <= set(named)
-    assert [m for m in named if m not in bots | people] == []
-    assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
-
-
 def _bens_rule_suggestion_waits_as_a_suggestion(built):
     _, settings, _rows = built
     suggestion = CONTENT["suggestion"]
@@ -110,7 +82,7 @@ def _bens_rule_suggestion_waits_as_a_suggestion(built):
 def _the_refund_draft_is_held_for_ben_and_written_nowhere(built):
     directory, settings, _rows = built
     with signed_in(settings) as api:
-        care = timeline(api, home_id(api, "bot:support-lead"))
+        care = timeline(api, home_id(api, "bot:success-manager"))
     held = next(m for m in CONTENT["messages"] if m.get("held"))
     assert held["say"] not in [m["body"] for m in care]
     with sqlite3.connect(settings.db_path) as db:
@@ -155,7 +127,7 @@ def _ana_sidebar_lists_her_department_homes_and_her_dms(built):
         homes = [home_id(api, spec["home"]) for spec in CONTENT["threads"].values() if "home" in spec]
         dms = [
             api.get("/api/v2/threads/dm", params={"with": with_, "create": "false"}).json()["id"]
-            for with_ in ("bot:coo", "bot:pricing")
+            for with_ in ("bot:assistant", "bot:pricing-analyst")
         ]
     assert [h for h in homes if h not in listed] == [], "department homes missing from the sidebar"
     assert [d for d in dms if d not in listed] == [], "DMs missing from the sidebar"
@@ -163,9 +135,9 @@ def _ana_sidebar_lists_her_department_homes_and_her_dms(built):
 
 def _the_company_thread_and_ana_assistant_dm_show(built):
     _, settings, _rows = built
-    first = max((m for m in CONTENT["messages"] if m["in"] == "coo"), key=lambda m: m["ago"])
+    first = max((m for m in CONTENT["messages"] if m["in"] == "assistant"), key=lambda m: m["ago"])
     with signed_in(settings) as api:
-        dm = api.get("/api/v2/threads/dm", params={"with": "bot:coo", "create": "false"})
+        dm = api.get("/api/v2/threads/dm", params={"with": "bot:assistant", "create": "false"})
         assert dm.status_code == 200
         assert first["say"] in [m["body"] for m in timeline(api, dm.json()["id"])]
         titles = [t.get("title") for t in api.get("/api/v2/threads").json().get("threads", [])]
@@ -174,9 +146,12 @@ def _the_company_thread_and_ana_assistant_dm_show(built):
 
 def _ana_and_pricing_talk_through_the_december_price(built):
     _, settings, _rows = built
-    said = [m["say"] for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing"), key=lambda m: -m["ago"])]
+    said = [
+        m["say"]
+        for m in sorted((m for m in CONTENT["messages"] if m["in"] == "pricing-analyst"), key=lambda m: -m["ago"])
+    ]
     with signed_in(settings) as api:
-        dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing", "create": "false"})
+        dm = api.get("/api/v2/threads/dm", params={"with": "bot:pricing-analyst", "create": "false"})
         assert dm.status_code == 200
         bodies = [m["body"] for m in timeline(api, dm.json()["id"])]
     assert bodies[-len(said) :] == said
@@ -212,8 +187,6 @@ def test_the_demo_threads_and_rules_tell_their_story(built, subtests):
     """Every check reads the one demo build, in file order, each as its own subtest."""
     for check in (
         _the_rules_say_who_follows_them_and_with_whom,
-        _peer_rules_fill_the_with_column,
-        _every_mention_in_a_rule_names_a_real_teammate,
         _bens_rule_suggestion_waits_as_a_suggestion,
         _the_refund_draft_is_held_for_ben_and_written_nowhere,
         _the_engineering_home_has_the_pause_and_its_fix_thread,

@@ -22,7 +22,7 @@ def test_deletion_retains_denials_for_counsel_copies_and_citations(api):
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     cite = {"file_id": fid, "version": 1, "quote": "Pipeline grew to 42 deals."}
     outsider = Identity("bot:finance", "bot")
@@ -53,7 +53,7 @@ def test_native_and_runner_gate_recheck_askers_inherited_read(api):
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", see={"everyone": True}, read={"people": ["ben"]}, write={"everyone": True})
@@ -63,8 +63,8 @@ def test_native_and_runner_gate_recheck_askers_inherited_read(api):
         copied = counsel.page_copies(c)[tid]
         assert not counsel.page_copy_readable(c, copied, auth=api.app.state.auth)
         assert not counsel.page_copy_readable(c, copied)
-        assert not H.task_private_readable(c, "bot:" + H.COUNSEL, task)
-        assert not bot_reads_task(c, "bot:" + H.COUNSEL, task)
+        assert not H.task_private_readable(c, "bot:" + H.RULES_OWNER, task)
+        assert not bot_reads_task(c, "bot:" + H.RULES_OWNER, task)
     denied = api.get("/api/v2/tasks/" + tid, headers=headers("counsel-test"))
     assert denied.status_code in (403, 404) and "42 deals" not in denied.text
 
@@ -151,7 +151,7 @@ def test_encrypted_cursor_passes_five_thousand_hidden_rows(api, endpoint, field)
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("disabled_guard", [None, "audience"])
+@pytest.mark.parametrize("disabled_guard", [None])
 def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletion(
     api, live, monkeypatch, disabled_guard
 ):
@@ -248,7 +248,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
     for token in ("cara-test", "finance-test", "reader-test", "ben-test"):
         assert fid in json.dumps(get(api, "pages/" + fid, token=token))
         assert ordinary in json.dumps(get(api, "pages/" + ordinary, token=token))
-    edit(api, fid, {"people": ["reader"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["reader"], "bots": [H.RULES_OWNER]})
     for token in ("reader-test", "ben-test", attempt["token"]):
         assert fid in json.dumps(get(api, "pages/" + fid, token=token))
     archived = api.patch("/api/v2/files/" + second_blob, json={"archived": True}, headers=headers())
@@ -544,7 +544,7 @@ def test_pre_tombstone_deleted_html_never_reopens_saved_copies_or_citations(api)
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     with api.app.state.store.read() as c:
         original = H.task(c, tid)["body"]

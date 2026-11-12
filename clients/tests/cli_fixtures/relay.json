@@ -1,0 +1,112 @@
+[
+ {
+  "argv": [
+   "relay",
+   "status"
+  ],
+  "tools": [
+   [
+    "tico_relay_status",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "relay",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"key\": \"connected\",\n  \"relays\": 1,\n  \"last_error\": \"\",\n  \"pending\": 0\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "relay",
+   "set",
+   "trigger-1",
+   "--wake",
+   "wake-1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico relay set: error: argument --wake: use on or off",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "relay",
+   "set",
+   "stripe",
+   "--wake",
+   "on"
+  ],
+  "tools": [
+   [
+    "tico_relay_set",
+    {
+     "operation_id": null,
+     "trigger": "stripe",
+     "wake": true
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/relay/wake",
+    {
+     "wake": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"trigger\": \"stripe\",\n  \"address\": \"https://gateway.example/r/stripe\",\n  \"wake\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "relay",
+   "set",
+   "stripe",
+   "--wake",
+   "off"
+  ],
+  "tools": [
+   [
+    "tico_relay_set",
+    {
+     "operation_id": null,
+     "trigger": "stripe",
+     "wake": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "triggers/stripe/relay/wake",
+    {
+     "wake": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"trigger\": \"stripe\",\n  \"address\": \"https://gateway.example/r/stripe\",\n  \"wake\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

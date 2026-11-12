@@ -18,7 +18,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
 const VECTORS: Vectors = JSON.parse(fs.readFileSync(path.join(__dirname, 'support', 's3-link-vectors.json'), 'utf8'));
 const TASK = '5b0c1d2e-3f40-4a5b-8c6d-7e8f90a1b2c3';
 const VIEW = 'https://d1234example.cloudfront.net';
-const UNMAPPED = 's3://other-bucket/email-marketing/deliverables/0f8e5c1e-1111-2222-3333-444455556666/2026-09-09-follow-up-draft-final.md';
+const UNMAPPED = 's3://other-bucket/email-owner/deliverables/0f8e5c1e-1111-2222-3333-444455556666/2026-09-09-follow-up-draft-final.md';
 const LONG = 'https://docs.example.com/projects/launch/2026/plans/a-very-long-folder-name/overview.html?tab=1';
 const BODY = ['Two drafts for review.', '',
   '- Draft: s3://acme-files/email/deliverables/1234/2026-09-09-launch.md',

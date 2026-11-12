@@ -1,0 +1,709 @@
+[
+ {
+  "argv": [
+   "goal",
+   "read-back",
+   "changes-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_read_back",
+    {
+     "changes": "changes-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 20 change objects\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "goal",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_goal_list",
+    {
+     "all": false,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"goals\": [\n    {\n      \"id\": \"g1\",\n      \"title\": \"Launch\",\n      \"status\": \"green\",\n      \"owner\": \"bot:ana\",\n      \"kpis\": []\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "list",
+   "--owner",
+   "me",
+   "--all",
+   "--status",
+   "status-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_list",
+    {
+     "all": true,
+     "operation_id": null,
+     "owner": "me",
+     "status": "status-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals?all=1&status=status-1",
+    null
+   ]
+  ],
+  "stdout": "[\n  {\n    \"id\": \"g1\",\n    \"title\": \"Launch\",\n    \"status\": \"green\",\n    \"owner\": \"bot:ana\",\n    \"kpis\": []\n  }\n]\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "show",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_show",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals/id-1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "create",
+   "--owner",
+   "me",
+   "--title",
+   "Launch"
+  ],
+  "tools": [
+   [
+    "tico_goal_create",
+    {
+     "operation_id": null,
+     "owner": "me",
+     "title": "Launch",
+     "top": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "goals",
+    {
+     "owner": "bot:ana",
+     "title": "Launch",
+     "parent_id": null,
+     "body": "",
+     "top": false,
+     "bet_id": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "status",
+   "id-1",
+   "red"
+  ],
+  "tools": [
+   [
+    "tico_goal_status",
+    {
+     "id": "id-1",
+     "note": "",
+     "operation_id": null,
+     "status": "red"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/id-1/status",
+    {
+     "status": "red",
+     "note": ""
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "status",
+   "id-1",
+   "red",
+   "note-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_status",
+    {
+     "id": "id-1",
+     "note": "note-1",
+     "operation_id": null,
+     "status": "red"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/id-1/status",
+    {
+     "status": "red",
+     "note": "note-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "update",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_update",
+    {
+     "id": "id-1",
+     "operation_id": null,
+     "top": false
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/id-1",
+    {
+     "title": null,
+     "body": null,
+     "parent_id": null,
+     "rank": null,
+     "bet_id": null,
+     "owner": null,
+     "top": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"g1\",\n  \"title\": \"Launch\",\n  \"status\": \"green\",\n  \"owner\": \"bot:ana\",\n  \"kpis\": []\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "refresh"
+  ],
+  "tools": [
+   [
+    "tico_goal_refresh",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/refresh",
+    {
+     "goal_ids": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "refresh",
+   "--goal",
+   "goal-ids-1",
+   "--goal",
+   "goal-ids-1b"
+  ],
+  "tools": [
+   [
+    "tico_goal_refresh",
+    {
+     "goal_ids": [
+      "goal-ids-1",
+      "goal-ids-1b"
+     ],
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/refresh",
+    {
+     "goal_ids": [
+      "goal-ids-1",
+      "goal-ids-1b"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "checkin",
+   "id-1",
+   "Hello all"
+  ],
+  "tools": [
+   [
+    "tico_goal_checkin",
+    {
+     "body": "Hello all",
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/id-1/checkins",
+    {
+     "body": "Hello all",
+     "signal": null,
+     "kpi_id": null,
+     "from_actor": null
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "checkin",
+   "id-1",
+   "Hello all",
+   "--signal",
+   "on_track",
+   "--from",
+   "from-actor-1",
+   "--kpi",
+   "kpi-id-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_checkin",
+    {
+     "body": "Hello all",
+     "from_actor": "from-actor-1",
+     "id": "id-1",
+     "kpi_id": "kpi-id-1",
+     "operation_id": null,
+     "signal": "on_track"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "goals/id-1/checkins",
+    {
+     "body": "Hello all",
+     "signal": "on_track",
+     "kpi_id": "kpi-id-1",
+     "from_actor": "from-actor-1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"id\": \"c1\",\n  \"goal_id\": \"g1\",\n  \"text\": \"On track\",\n  \"author\": \"bot:ana\"\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "checkin-list",
+   "id-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_checkin_list",
+    {
+     "id": "id-1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals/id-1/checkins",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "needs-you"
+  ],
+  "tools": [
+   [
+    "tico_goal_needs_you",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals/needs-you",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "company"
+  ],
+  "tools": [
+   [
+    "tico_goal_company",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "company",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy-bot",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot-merge",
+   "person-1",
+   "Launch",
+   "question-1",
+   "tasks-1",
+   "tasks-1b"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot_merge",
+    {
+     "operation_id": null,
+     "person": "person-1",
+     "question": "question-1",
+     "tasks": [
+      "tasks-1",
+      "tasks-1b"
+     ],
+     "title": "Launch"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "strategy-bot/merge",
+    {
+     "person": "person-1",
+     "title": "Launch",
+     "question": "question-1",
+     "tasks": [
+      "tasks-1",
+      "tasks-1b"
+     ]
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot-level3-offer"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot_level3_offer",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "strategy-bot/level3-offer",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot-decide",
+   "reason-1",
+   "changes-1"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot_decide",
+    {
+     "changes": "changes-1",
+     "operation_id": null,
+     "reason": "reason-1"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: changes is a JSON list of changes: Expecting value: line 1 column 1 (char 0)\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot-log"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot_log",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy-bot/log",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "strategy-bot-log",
+   "--before",
+   "before-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_goal_strategy_bot_log",
+    {
+     "before": "before-1",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "strategy-bot/log?before=before-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "save",
+   "POST",
+   "/api/v2/goal-proposals/turned-down",
+   "1",
+   "--on-behalf-of",
+   "turn"
+  ],
+  "tools": [
+   [
+    "tico_goal_save",
+    {
+     "body": "1",
+     "method": "POST",
+     "on_behalf_of": "turn",
+     "operation_id": null,
+     "path": "/api/v2/goal-proposals/turned-down"
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"ValueError: body must be a JSON object\"\n}\n",
+  "stderr": "",
+  "exit": 1
+ },
+ {
+  "argv": [
+   "goal",
+   "list",
+   "--all"
+  ],
+  "tools": [
+   [
+    "tico_goal_list",
+    {
+     "all": true,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals?all=1",
+    null
+   ]
+  ],
+  "stdout": "[\n  {\n    \"id\": \"g1\",\n    \"title\": \"Launch\",\n    \"status\": \"green\",\n    \"owner\": \"bot:ana\",\n    \"kpis\": []\n  }\n]\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "goal",
+   "list",
+   "--owner",
+   "human:1"
+  ],
+  "tools": [
+   [
+    "tico_goal_list",
+    {
+     "all": false,
+     "operation_id": null,
+     "owner": "human:1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "goals?owner=human%3A1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"goals\": [\n    {\n      \"id\": \"g1\",\n      \"title\": \"Launch\",\n      \"status\": \"green\",\n      \"owner\": \"bot:ana\",\n      \"kpis\": []\n    }\n  ]\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

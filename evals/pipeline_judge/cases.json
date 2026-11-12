@@ -189,30 +189,6 @@
    "trap": null
   },
   {
-   "id": "dev-shot-wrong-screen",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "billing.png",
-    "text": "Screenshot text read from the image: Billing page. Plan: Team. Invoices table. No Dark mode control visible.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": "wrong_screen"
-  },
-  {
    "id": "dev-shot-old",
    "domain": "dev",
    "requirement": {
@@ -254,54 +230,6 @@
    "attachment": null,
    "expected": "not_met",
    "trap": "missing_file"
-  },
-  {
-   "id": "dev-shot-blank",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "shot.png",
-    "text": "Image is almost entirely white. No text could be read from it. 1280x800.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": null
-  },
-  {
-   "id": "dev-shot-one-theme",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "settings-light.png",
-    "text": "Settings page. Appearance section. 'Dark mode' toggle shown off, light theme only. No second panel.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": "partial"
   },
   {
    "id": "dev-review-done",
@@ -745,6 +673,1394 @@
    },
    "expected": "not_met",
    "trap": "old_version"
+  },
+  {
+   "id": "acme-review-1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 3,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review1_v1.md",
+    "text": "Reviewed commit 1927310520c10dd7b70de3077ff3dac747f24d0d (ticoteam/pipeline-sandbox#38, branch 4-subtract)\n\n# Review 1: Add subtract(a, b) to calc.py\n\n**Summary:** Adds `subtract(a, b)` returning `a - b` in calc.py, plus five tests in test_calc.py. Nothing blocks. Blocking issues: 0.\n\n## Blocking issues\nNone.\n\n## Questions\n- question: The spec's open question about float rounding (0.3 - 0.1) has no answer in the page I read, so I assumed the default (Python's own result). The tests avoid such values (2.5 - 0.5 is exact), which is consistent with that default. Nothing to change if the default stands.\n\n## Suggestions\n- suggestion: `test_subtract_floats` uses `assertEqual(subtract(2.5, 0.5), 2.0)`. It is exact in binary floating point, so it is safe today. If a later test uses values like 0.3 and 0.1, use `assertAlmostEqual`.\n\n## Praise\n- praise: Each test maps to one acceptance criterion in the spec (AC-1 to AC-5), so the next reader can trace test to requirement. The change adds no extra functions, conversion or dependency, which matches the spec's non-goals.\n\n## Spec check (page file-081da932887d667c6d39e073 v1)\n| AC | Covered by | Result |\n|---|---|---|\n| AC-1 subtract(5, 3) == 2 | test_subtract_positive | met |\n| AC-2 subtract(3, 5) == -2 | test_subtract_negative_result | met |\n| AC-3 subtract(2.5, 0.5) == 2.0 | test_subtract_floats | met |\n| AC-4 subtract(7, 0) == 7 | test_subtract_zero | met |\n| AC-5 TypeError for \"a\", None | test_subtract_rejects_non_numbers | met |\n| AC-6 `from calc import subtract` | the test module imports it | met |\n| AC-7 earlier tests still pass | test_add still passes | met |\n\n## What I read\n- The whole diff against main (calc.py, test_calc.py, 1 commit, +26 lines), and the spec page.\n- Callers: none other than the tests. calc.py had only `add`, so `subtract` clashes with nothing.\n- Do the tests fail on the old code? Yes: on main, `from calc import add, subtract` raises ImportError, so every new test fails there.\n\n## Not checked\n- I ran `python3 -m unittest` on the head commit: 6 tests, all pass. I did not run the GitHub Actions jobs myself; Acme's link shows the check at this commit as passed.\n- Other open pull requests touching calc.py or test_calc.py (the spec mentions a separate `negate` task) could not be listed here: `gh` has no login on this computer. Expect a trivial merge conflict if both edit the end of calc.py.\n- `knowledge/standards.md` does not exist yet (setup has not finished), so I applied no team-specific checklist, only the spec.\n- No `ui/` files changed; no screens apply.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Review 1 page (Nov 11): judged unsure with no reason, a person OK'd it"
+  },
+  {
+   "id": "acme-review-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 5,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "review2_v1.md",
+    "text": "Reviewed commit 1927310520c10dd7b70de3077ff3dac747f24d0d (pull request #38, ticoteam/pipeline-sandbox), Review 2.\n\n# Review: Add subtract(a, b) to calc.py\n\n**Summary:** The change adds `subtract(a, b)` returning `a - b`, with five tests. I read the whole diff (2 files, 25 lines added) at the commit above. Nothing blocks it. No screens changed.\n\n## Blocking\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- suggestion: `test_calc.py`, `test_subtract_floats`: `self.assertEqual(subtract(2.5, 0.5), 2.0)` is exact only because these values are exact in binary. A later float test such as `0.3 - 0.1` would fail with `assertEqual`; use `assertAlmostEqual` there. The spec leaves that rounding to Python, so nothing needs changing now.\n\n## Praise\n- praise: each test maps to a spec criterion (AC-1 to AC-5) and the `TypeError` test covers both `\"a\"` and `None`.\n\n## What I checked\n- **Spec:** all seven acceptance criteria are covered. `subtract(5, 3)`, `subtract(3, 5)`, `subtract(2.5, 0.5)`, `subtract(7, 0)` and the `TypeError` cases are tested. The import works. The existing `add` test is untouched.\n- **Scope:** only `subtract` was added. No other function, no dependency, no change to `add`.\n- **Tests:** I ran `python3 -m unittest` on the commit: 6 tests pass. With the new `test_calc.py` against `calc.py` from main, the run fails with an error, so the new tests prove the change.\n- **Checks:** Acme reports the GitHub checks as passed at this commit.\n- **Risk:** no sign-in, billing, deletion, migration or data surface. A pure function.\n\n## Not checked\n- I did not rerun the GitHub Actions jobs; I rely on Acme's report that they passed.\n- I could not list other open pull requests (for example the `negate` task) because `gh` has no login on this computer, so I did not check for conflicts with them.\n- `knowledge/standards.md` does not exist yet, so I reviewed against the spec and the review method only.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Review 2 page (Nov 11): judged unsure with no reason, a person OK'd it"
+  },
+  {
+   "id": "acme-fixes-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## How it was checked\n- Five new tests in test_calc.py: `subtract(5, 3) == 2`, `subtract(3, 5) == -2`, `subtract(2.5, 0.5) == 2.0`, `subtract(7, 0) == 7`, and `TypeError` for `\"a\"` and `None`.\n- Before the change the tests failed (ImportError: no `subtract`). After it, `python3 -m unittest` runs 6 tests, all pass (the existing `add` test included).\n- Not checked: float rounding such as 0.3 - 0.1, NaN, infinity, very large numbers (out of scope in the spec).\n\n## Checks at the head commit\nPassing: `checks`, `knobs` and `advisory`; `shards` skipped (not requested). https://github.com/ticoteam/pipeline-sandbox/pull/38/checks\n\n## Review findings\n- Reviewer 1: no comments on the pull request and no review page attached. Nothing to fix.\n- Reviewer 2: no comments on the pull request. Nothing to fix.\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Engineering Fixes 2 pre-release page (Nov 11): judged unsure with no reason"
+  },
+  {
+   "id": "acme-spec",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "3508775e-54a7-4d37-b90d-fee88b4e9020"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "spec_v1.md",
+    "text": "# subtract(a, b): Spec, 2026-11-11\n\nTask requested by human:owner. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `subtract(a, b)` function in calc.py. They write `a - b` themselves. The owner asked for `subtract(a, b)` returning a - b, with a test in test_calc.py.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:owner, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for the owner to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked (`tico goal list` is empty). Target: missing, to be set by the owner.\n- Measure: `subtract` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `subtract(a, b)` in calc.py, returning `a - b`.\n- Works for int and float; other types follow Python's binary minus.\n- Tests for it in test_calc.py.\n\n## Non-goals\n- No other new functions (no `negate`, `abs`, etc.; `negate` has its own task).\n- No input conversion: strings are not turned into numbers.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive numbers, When `subtract(5, 3)` is called, Then it returns 2. Check: before release.\n- AC-2. Given a result below zero, When `subtract(3, 5)` is called, Then it returns -2. Check: before release.\n- AC-3. Given floats, When `subtract(2.5, 0.5)` is called, Then it returns 2.0. Check: before release.\n- AC-4. Given zero as the second argument, When `subtract(7, 0)` is called, Then it returns 7. Check: before release.\n- AC-5. Given a value that is not a number (for example `\"a\"` or `None`), When `subtract` is called, Then it raises `TypeError`, as `-` does. Check: before release.\n- AC-6. Given the module, When a developer runs `from calc import subtract`, Then the import works. Check: before release.\n- AC-7. Given the existing test suite, When it runs after the change, Then all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own (e.g. 0.3 - 0.1), NaN and infinity, very large numbers.\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `subtract`? The negate spec assumed it did; this task assumes not. Owner: Builder checks at start; if it exists, stop and tell human:owner.\n- Is rounding for float results (0.3 - 0.1) left as Python's? Owner: human:owner, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release; no work needed before.\n- Possible duplicate of an existing function (see first open question). Cheapest check: grep calc.py.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Product Spec page (Nov 11): judged met"
+  },
+  {
+   "id": "acme-validate",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.",
+    "work_version": 5,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "3508775e-54a7-4d37-b90d-fee88b4e9020",
+     "release": [
+      "v6"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "validate.md",
+    "text": "# Checked in production: subtract(a, b), 2026-11-11\n\nTask 3508775e (requester human:owner). Spec: specs/subtract.md, version 1. Engineering task 0d6a5b92 (done), PR ticoteam/pipeline-sandbox#38, merged 2026-11-11 08:08 UTC.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v6` (commit b52868c, 2026-11-11 08:07 UTC), is the merge of PR #38, so it carries the change. Read 2026-11-11 from a fresh fetch of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v6`, exported with `git archive`, in a clean directory.\n\n- AC-1 `subtract(5, 3)` returns 2: met (returned 2).\n- AC-2 `subtract(3, 5)` returns -2: met (returned -2).\n- AC-3 `subtract(2.5, 0.5)` returns 2.0: met (returned 2.0).\n- AC-4 `subtract(7, 0)` returns 7: met (returned 7).\n- AC-5 `\"a\"` or `None` raises TypeError: met (both raised TypeError).\n- AC-6 `from calc import subtract` works: met.\n- AC-7 earlier tests still pass: met. `python3 -m unittest` on v6 ran 6 tests, all OK, including the original `test_add`.\n\nScope check: calc.py gained only `subtract`; `add` is unchanged. No other function or dependency was added.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, read at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `subtract` before (it held only `add`), so there was no duplicate.\n- Float rounding was left to Python's, as the spec's default said. The spec was OK'd with that default.\n\n## Not checked\nGitHub CI results for the PR could not be read (no GitHub access from this bot); the local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v6.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "source": "Acme rc.3 case 1, Product Validate page (Nov 11): judged met"
+  },
+  {
+   "id": "dev-prerelease-no-reviews",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## How it was checked\n- Five new tests in test_calc.py: `subtract(5, 3) == 2`, `subtract(3, 5) == -2`, `subtract(2.5, 0.5) == 2.0`, `subtract(7, 0) == 7`, and `TypeError` for `\"a\"` and `None`.\n- Before the change the tests failed (ImportError: no `subtract`). After it, `python3 -m unittest` runs 6 tests, all pass (the existing `add` test included).\n- Not checked: float rounding such as 0.3 - 0.1, NaN, infinity, very large numbers (out of scope in the spec).\n\n## Checks at the head commit\nPassing: `checks`, `knobs` and `advisory`; `shards` skipped (not requested). https://github.com/ticoteam/pipeline-sandbox/pull/38/checks\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_review_findings",
+   "source": "The Acme Fixes 2 page with its review findings cut: what both reviewers found is missing"
+  },
+  {
+   "id": "dev-prerelease-unchecked",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add subtract(a, b) to calc.py",
+    "spec": "Add a `subtract(a, b)` function to calc.py in ticoteam/pipeline-sandbox, with a test in test_calc.py.\n\nSpec: page:file-081da932887d667c6d39e073@1",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "0d6a5b92-5320-43e1-be14-14a41baca6ff",
+     "heads": {
+      "ticoteam/pipeline-sandbox#38": "1927310520c10dd7b70de3077ff3dac747f24d0d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 38,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "fixes2_v1.md",
+    "text": "# subtract(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/38 at head 1927310520c10dd7b70de3077ff3dac747f24d0d\n\n## What changed\nDevelopers can now `from calc import subtract` and call `subtract(a, b)` to get `a - b`. It works for ints and floats, and raises `TypeError` for non-numbers, as Python's `-` does. Nothing else in calc.py changed.\n\n## Review findings\n- Reviewer 1: no comments on the pull request and no review page attached. Nothing to fix.\n- Reviewer 2: no comments on the pull request. Nothing to fix.\n\n## To decide\nNothing blocking. Spec open question on float rounding: left as Python's own (the default).\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_checks",
+   "source": "The Acme Fixes 2 page with how it was checked and the checks cut"
+  },
+  {
+   "id": "live-a-spec",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-682e6072a064b08326b89531_v1.md",
+    "text": "# power(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `power(a, b)` function in calc.py. They write `a ** b` themselves, and get no clear error for bad input, and Python quietly returns a complex number for some inputs. Chris asked for `power(a, b)` (a raised to b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier). Integer and decimal powers only; no roots, logs or complex numbers.\n- Same shape as the multiply and divide specs: non-numeric input raises a clear TypeError.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `power` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `power(a, b)` in calc.py, returning `a` raised to `b` (`power(2, 3)` is 8).\n- Works for int and float, including negative and zero exponents (`power(2, -1)` is 0.5; `power(5, 0)` is 1).\n- `a == 0` with a negative `b` raises `ZeroDivisionError` with a clear message, e.g. `power() argument 'a' must not be zero when 'b' is negative`.\n- A negative `a` with a non-whole `b` (which Python turns into a complex number) raises `ValueError` with a clear message, e.g. `power() cannot raise a negative number to a non-whole power`. The function never returns a complex number.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `power() argument 'a' must be a number, not str`. Exact wording is the Builder's.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `sqrt`, `root`, `exp`, `log`, `modulo`, etc.).\n- No complex-number results, no modular power (`pow(a, b, m)`).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive whole numbers, When `power(2, 3)` is called, Then it returns 8. Check: before release.\n- AC-2. Given an exponent of zero, When `power(5, 0)` is called, Then it returns 1. Check: before release.\n- AC-3. Given a negative exponent, When `power(2, -2)` is called, Then it returns 0.25. Check: before release.\n- AC-4. Given a negative base and a whole exponent, When `power(-2, 3)` is called, Then it returns -8. Check: before release.\n- AC-5. Given a float exponent, When `power(9, 0.5)` is called, Then it returns 3.0. Check: before release.\n- AC-6. Given zero as the base and a positive exponent, When `power(0, 5)` is called, Then it returns 0. Check: before release.\n- AC-7. Given zero as the base and a negative exponent, When `power(0, -1)` is called, Then it raises `ZeroDivisionError` with a non-empty message that names argument `a`. Check: before release.\n- AC-8. Given a negative base and a non-whole exponent, When `power(-8, 0.5)` is called, Then it raises `ValueError` with a non-empty message, and does not return a complex number. Check: before release.\n- AC-9. Given a non-numeric first argument, When `power(\"a\", 3)` is called, Then it raises `TypeError` and the message names argument `a` and type `str`. Check: before release.\n- AC-10. Given a non-numeric second argument, When `power(3, None)` is called, Then it raises `TypeError` and the message names argument `b` and type `NoneType`. Check: before release.\n- AC-11. Given the module, When a developer runs `from calc import power`, Then the import works. Check: before release.\n- AC-12. Given the test suite, When it runs after the change, Then test_calc.py has a test for AC-1 to AC-10 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own, NaN and infinity, very large results (overflow), lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `power`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Zero to a negative power raises `ZeroDivisionError` (default, matches Python). Owner: human:chris, by the OK.\n- Negative base with a non-whole exponent raises `ValueError` instead of returning a complex number (default, keeps the library real-number arithmetic). Owner: human:chris, by the OK; say so if you want something else.\n- Is `True`/`False` accepted as a number? Owner: human:chris, by the OK. Default: yes (bool is an int in Python); not tested.\n- Is float rounding left as Python's? Owner: human:chris, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Huge exponents (`power(10, 10**9)`) can hang or overflow. Accepted for now; cheapest check: a note in the docstring.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.85
+  },
+  {
+   "id": "live-a-review-1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-682e6072a064b08326b89531@1\n\nChris's notes on the spec, given with their OK:\nOK. One extra rule: power(0, 0) returns 1, with its own test. The defaults in your open questions are fine (bools count as numbers, Python's float rounding).",
+    "work_version": 4,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "41b82c98-d281-4478-b5a9-f9ef2ccc3b27",
+     "heads": {
+      "ticoteam/pipeline-sandbox#43": "b194657efe9bb6f2ccd779cfa2f187c7ffaefa69"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 43,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-24f446486895e800cfce082d_v1.md",
+    "text": "Reviewed commit b194657efe9bb6f2ccd779cfa2f187c7ffaefa69 (ticoteam/pipeline-sandbox#43, \"Add power(a, b)\")\n\n# Review: power(a, b), Review 1\n\n**Summary.** Adds `power(a, b)` to calc.py and 11 tests to test_calc.py, following the spec (page:file-682e6072a064b08326b89531@1) and Chris's extra rule (`power(0, 0)` is 1, own test). Nothing blocks this change. Checks passed at this commit.\n\n## Blocking issues\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- `suggestion:` calc.py, `power`: the spec's Risks section accepts huge exponents \"with a note in the docstring\". The function has no docstring, so that note is missing. `multiply` has none either, so a one-line docstring here would be new style, but it is the only place the accepted risk gets written down. For example: `\"\"\"Return a raised to b. Very large results may raise OverflowError or take a long time.\"\"\"`\n- `suggestion:` calc.py, `power`: when the result is too large for a float, Python raises `OverflowError` (e.g. `power(2, 10000.5)` gives `OverflowError (34, 'Numerical result out of range')`). That is outside the spec's scope (overflow is listed as out of scope), so it is fine to ship; a later change could give it the same clear message as the other errors.\n\n## Nits\n- `nit:` test_calc.py, `test_power_negative_base_non_whole_exponent_raises`: it asserts only that the message is non-empty. That matches AC-8. Checking that the result is not complex is implied by the raise, so nothing to change.\n\n## Checks against the spec\n- AC-1 to AC-6: met, one test each (`power(2, 3)`, `(5, 0)`, `(2, -2)`, `(-2, 3)`, `(9, 0.5)`, `(0, 5)`).\n- AC-7: met. `power(0, -1)` raises `ZeroDivisionError`, message names `'a'`.\n- AC-8: met. `power(-8, 0.5)` raises `ValueError`.\n- AC-9, AC-10: met. Messages name the argument and the type (`str`, `NoneType`).\n- AC-11: met. The tests import `power` from `calc`.\n- AC-12: met. All 29 tests pass at this commit; the new tests cover AC-1 to AC-10 and the `power(0, 0)` rule.\n- Chris's rule `power(0, 0) == 1`: met, and `a == 0 and b < 0` does not catch it. It has its own test.\n- Style: same type-check loop and message shape as `multiply`. Existing functions are unchanged.\n- Scope: only calc.py and test_calc.py changed (+61, -1). No new dependency, no other new function.\n\n## Praise\n- `praise:` The error message wording follows `multiply` exactly, so a developer sees one shape across the library.\n\n## Other behaviour I tried\n- `power(-2, 3.0)` returns -8.0 (a whole float exponent is allowed), as intended.\n- `power(True, 2)` returns 1: bools count as numbers, as Chris's notes say. Not tested, as the spec says.\n- `power(0.0, -1)` raises `ZeroDivisionError` like the int zero.\n- `power(-8, float(\"inf\"))` raises `ValueError` (infinity is not a whole number). Spec leaves NaN and infinity out of scope.\n\n## Not checked\n- Overflow and very large exponents (out of scope in the spec), NaN and infinity beyond the one call above.\n- Float rounding beyond Python's own (the spec accepts it).\n- Python versions other than the one on my computer. I ran `python3 -m unittest` on the PR branch: 29 tests, all OK.\n- The repository's CI configuration; I read only that the checks passed.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.8
+  },
+  {
+   "id": "live-a-review-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-682e6072a064b08326b89531@1\n\nChris's notes on the spec, given with their OK:\nOK. One extra rule: power(0, 0) returns 1, with its own test. The defaults in your open questions are fine (bools count as numbers, Python's float rounding).",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "41b82c98-d281-4478-b5a9-f9ef2ccc3b27",
+     "heads": {
+      "ticoteam/pipeline-sandbox#43": "b8db1114a8052a65e2820573ea3c229b39f3711d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 43,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ce7784de1314371a3a41a8d2_v1.md",
+    "text": "Reviewed commit b8db1114a805 (ticoteam/pipeline-sandbox#43, \"Add power(a, b)\")\n\n# Review: power(a, b), Review 2\n\n**Summary.** Adds `power(a, b)` to calc.py with tests in test_calc.py, per the spec (page:file-682e6072a064b08326b89531@1) and Chris's extra rule (`power(0, 0)` is 1). Since Review 1 (b194657) one commit was added: a one-line docstring on `power`. Nothing blocks this change. CI checks passed at this commit. No screens changed (no `ui/` files in the diff).\n\n## Blocking issues\nNone.\n\n## Questions\nNone.\n\n## Suggestions\nNone new. Review 1's two suggestions were handled:\n- Docstring note on huge exponents: taken (calc.py, `power`: `\"\"\"Return a raised to b. Very large results may raise OverflowError or take a long time.\"\"\"`). It records the risk the spec accepted.\n- Clearer `OverflowError` message: declined by the Builder because overflow is out of scope in the spec. I agree; a later change can add it.\n\n## Nits\n- Review 1's test nit was left as is. It matches AC-8, so nothing to change.\n\n## What I checked\n- Read the diff between b194657 and b8db111: only a docstring line in calc.py. No code or test change, so Review 1's findings on behaviour still hold.\n- Re-read `power` in full: type check, then `a == 0 and b < 0` -> `ZeroDivisionError` naming `'a'`, then `a < 0 and b % 1 != 0` -> `ValueError`, then `a**b`. `power(0, 0)` skips both guards and returns 1.\n- Scope against base: only calc.py and test_calc.py changed (+62, -1). The one removed line in test_calc.py is the import line extended to include `power`. No existing function or test changed. No new dependency.\n- Ran `python3 -m unittest` on the PR branch at b8db111: 29 tests, all OK.\n- Spec ACs: AC-1 to AC-12 and the `power(0, 0)` rule are met (same evidence as Review 1).\n\n## Praise\n- `praise:` The accepted risk is now written where a developer will read it, in the docstring, with no change to behaviour.\n\n## Not checked\n- Overflow and very large exponents (out of scope in the spec), NaN and infinity beyond the Review 1 call.\n- Float rounding beyond Python's own (the spec accepts it).\n- Python versions other than the one on my computer.\n- The repository's CI configuration; I read only that the checks passed.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.83
+  },
+  {
+   "id": "live-a-fixes-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-682e6072a064b08326b89531@1\n\nChris's notes on the spec, given with their OK:\nOK. One extra rule: power(0, 0) returns 1, with its own test. The defaults in your open questions are fine (bools count as numbers, Python's float rounding).",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "41b82c98-d281-4478-b5a9-f9ef2ccc3b27",
+     "heads": {
+      "ticoteam/pipeline-sandbox#43": "b8db1114a8052a65e2820573ea3c229b39f3711d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 43,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-58653c182bfd995ebae47c9e_v1.md",
+    "text": "PR https://github.com/ticoteam/pipeline-sandbox/pull/43 at head b8db1114a805\n\n# power(a, b): what was built\n\n## What changed\nDevelopers can now call `power(a, b)` from `calc.py` and get a raised to b, with clear errors instead of silent complex numbers or bare Python errors. Following Chris's rule, `power(0, 0)` returns 1.\n\n## What it does\n| Call | Result |\n|---|---|\n| `power(2, 3)` | 8 |\n| `power(5, 0)` | 1 |\n| `power(0, 0)` | 1 |\n| `power(2, -2)` | 0.25 |\n| `power(-2, 3)` | -8 |\n| `power(9, 0.5)` | 3.0 |\n| `power(0, 5)` | 0 |\n| `power(0, -1)` | ZeroDivisionError: power() argument 'a' must not be zero when 'b' is negative |\n| `power(-8, 0.5)` | ValueError: power() cannot raise a negative number to a non-whole power |\n| `power(\"a\", 3)` | TypeError: power() argument 'a' must be a number, not str |\n| `power(3, None)` | TypeError: power() argument 'b' must be a number, not NoneType |\n\n## How it was checked\n- 11 new tests (class PowerTests in test_calc.py), one for each spec case AC-1 to AC-10 plus `power(0, 0)`. Before the change they failed (the import of `power` failed); after it, `python3 -m unittest` runs 29 tests, all OK.\n- Checks at the head commit pass: https://github.com/ticoteam/pipeline-sandbox/pull/43/checks\n- Only calc.py and test_calc.py changed. No existing function or test changed.\n- Not checked: overflow and huge exponents, NaN and infinity, Python versions other than the one used (all out of scope or accepted in the spec).\n\n## Review findings\n- Reviewer 1: nothing blocking. Suggestion to add a docstring noting the huge-exponent risk: done (b8db111). Suggestion for a clearer OverflowError message: declined, overflow is out of scope in the spec. Test nit: left, it matches AC-8.\n- Reviewer 2: nothing blocking, no new findings; agreed with the above.\n\n## To decide\nNothing blocks merge. Later option: a clear message for overflow on huge results.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.8
+  },
+  {
+   "id": "live-a-validate",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02",
+     "release": [
+      "v10"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-feee87e69b53f6bfe0bf2945_v1.md",
+    "text": "# Checked in production: power(a, b), 2026-11-11\n\nTask bd85ed6c (requester human:chris). Spec: specs/power.md (page v1), plus Chris's OK note: `power(0, 0)` returns 1 with its own test (AC-13 below); bools count as numbers and float rounding is Python's. Engineering task 41b82c98 (done), PR ticoteam/pipeline-sandbox#43, merged as 34d14f5.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v10`, points at 34d14f5, the merge of PR #43, so it carries the change. Read 2026-11-11 from a fresh clone of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v10`, exported with `git archive`, in a clean directory.\n\n- AC-1 `power(2, 3)` returns 8: met (8).\n- AC-2 `power(5, 0)` returns 1: met (1).\n- AC-3 `power(2, -2)` returns 0.25: met (0.25).\n- AC-4 `power(-2, 3)` returns -8: met (-8).\n- AC-5 `power(9, 0.5)` returns 3.0: met (3.0).\n- AC-6 `power(0, 5)` returns 0: met (0).\n- AC-7 `power(0, -1)` raises ZeroDivisionError naming `a`: met (\"power() argument 'a' must not be zero when 'b' is negative\").\n- AC-8 `power(-8, 0.5)` raises ValueError, no complex result: met (\"power() cannot raise a negative number to a non-whole power\").\n- AC-9 `power(\"a\", 3)` raises TypeError naming `a` and `str`: met (\"power() argument 'a' must be a number, not str\").\n- AC-10 `power(3, None)` raises TypeError naming `b` and `NoneType`: met (\"power() argument 'b' must be a number, not NoneType\").\n- AC-11 `from calc import power` works: met.\n- AC-12 test_calc.py has a test for AC-1 to AC-10 and earlier tests still pass: met. `python3 -m unittest -v` on v10 ran 29 tests, all OK; PowerTests has one test per case, and the add, subtract, negate and multiply tests pass.\n- AC-13 (added by Chris at the OK) `power(0, 0)` returns 1, with its own test: met (returns 1; `test_power_zero_to_the_zero_is_one` passes). Note: this rule is in Chris's OK note, not in the spec page v1.\n\nScope check: calc.py gained only `power` (with a docstring noting that very large results may overflow or be slow, the spec's accepted risk); other functions are unchanged. No dependency added.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `power` before, so no duplicate.\n- Zero to a negative power raises ZeroDivisionError and a negative base with a non-whole exponent raises ValueError: both confirmed by Chris's OK.\n- `True`/`False` count as numbers and float rounding is Python's: confirmed by Chris; not tested.\n\n## Not checked\nGitHub CI results for the PR could not be read (no GitHub access from this bot); the local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v10.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.87
+  },
+  {
+   "id": "live-b-spec",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "297ea16f-992d-44fa-8ab3-8cd210df003f"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-b68f3162afd37520a873078f_v1.md",
+    "text": "# modulo(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `modulo(a, b)` function in calc.py. They write `a % b` themselves and get no clear error for bad input. Chris asked for `modulo(a, b)` (the remainder of a divided by b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n- Same shape as the divide spec: a zero second argument raises `ZeroDivisionError`; non-numeric input raises a clear `TypeError`.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `modulo` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `modulo(a, b)` in calc.py, returning the remainder of `a` divided by `b` (`modulo(7, 3)` is 1).\n- Works for int and float. Int inputs give an int; any float input gives a float.\n- Sign rule: the result takes the sign of `b`, as Python's `%` does (`modulo(-7, 3)` is 2; `modulo(7, -3)` is -2).\n- `b == 0` raises `ZeroDivisionError` with a clear message, e.g. `modulo() argument 'b' must not be zero`.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `modulo() argument 'a' must be a number, not str`. Exact wording is the Builder's.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `divmod`, `floor_divide`, `remainder` with the other sign rule, etc.).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive whole numbers, When `modulo(7, 3)` is called, Then it returns 1. Check: before release.\n- AC-2. Given a first number that divides evenly, When `modulo(6, 3)` is called, Then it returns 0. Check: before release.\n- AC-3. Given a first number smaller than the second, When `modulo(2, 5)` is called, Then it returns 2. Check: before release.\n- AC-4. Given a negative first number, When `modulo(-7, 3)` is called, Then it returns 2. Check: before release.\n- AC-5. Given a negative second number, When `modulo(7, -3)` is called, Then it returns -2. Check: before release.\n- AC-6. Given floats, When `modulo(5.5, 2)` is called, Then it returns 1.5. Check: before release.\n- AC-7. Given zero as the first argument, When `modulo(0, 5)` is called, Then it returns 0. Check: before release.\n- AC-8. Given zero as the second argument, When `modulo(5, 0)` is called, Then it raises `ZeroDivisionError` with a non-empty message that names argument `b`. Check: before release.\n- AC-9. Given a non-numeric first argument, When `modulo(\"a\", 3)` is called, Then it raises `TypeError` and the message names argument `a` and type `str`. Check: before release.\n- AC-10. Given a non-numeric second argument, When `modulo(3, None)` is called, Then it raises `TypeError` and the message names argument `b` and type `NoneType`. Check: before release.\n- AC-11. Given the module, When a developer runs `from calc import modulo`, Then the import works. Check: before release.\n- AC-12. Given the test suite, When it runs after the change, Then test_calc.py has a test for AC-1 to AC-10 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own, NaN and infinity, very large numbers, lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `modulo`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Sign rule for negatives: the result takes the sign of `b` (Python's `%`, default) rather than the sign of `a` (C-style `math.fmod`). Owner: human:chris, by the OK; say so if you want the other.\n- Zero as second argument raises `ZeroDivisionError` (default, matches Python and divide). Owner: human:chris, by the OK.\n- Is `True`/`False` accepted as a number? Default: yes (bool is an int in Python); not tested. Owner: human:chris, by the OK.\n- Is float rounding left as Python's? Default: yes. Owner: human:chris, by the OK.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Users who expect C-style negative remainders get a different answer. Cheapest check: the docstring states the sign rule with an example.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.87
+  },
+  {
+   "id": "live-b-review-1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-b68f3162afd37520a873078f@1\n\nChris's notes on the spec, given with their OK:\nOK. Python's sign rule (sign of b) is right; the defaults are fine.",
+    "work_version": 4,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "b8aa1304-4db8-44b8-bd3f-64f6e00a2cbd",
+     "heads": {
+      "ticoteam/pipeline-sandbox#44": "36ca9fc051833f21a2b2b4963a98f38380b24a3f"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 44,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-c28ef9f28769e003a2ce0df8_v1.md",
+    "text": "# Review: pipeline-sandbox#44 at commit 36ca9fc051833f21a2b2b4963a98f38380b24a3f\n\n**Summary:** Adds `modulo(a, b)` to calc.py with 11 tests, as the spec asks. Nothing blocks it. I read the whole diff (calc.py, test_calc.py), ran the suite on this commit (40 tests, all pass), and checks `checks`, `advisory` and `knobs` passed on GitHub.\n\nRisk map: no sign-in, money, personal data, migration, dependency, config or CI surface. The only public-interface change is one new function, so existing callers are not affected.\n\n## Blocking issues\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- suggestion: calc.py, `if not isinstance(value, (int, float)):` — `True` and `False` pass this check (bool is an int), so `modulo(True, 2)` returns 1. The spec says to accept bools by default and not to test them, so this matches. If you want it written down, one line in the docstring is enough. Optional.\n- suggestion: test_calc.py has no test for AC-11 (`from calc import modulo`). The import at the top of the file covers it, so no change is needed.\n\n## Nits\n- nit: the type-check loop is now copied into `multiply`, `power` and `modulo`. That is the file's existing style and the spec says to follow it, so I would leave it. If a fourth function arrives, a shared helper would be worth a look.\n\n## Checked against the spec\n- AC-1 to AC-7: each has its own test, and I ran the values (`modulo(7, 3)` is 1, `modulo(-7, 3)` is 2, `modulo(7, -3)` is -2, `modulo(5.5, 2)` is 1.5).\n- AC-8: `modulo(5, 0)` and `modulo(5, 0.0)` both raise `ZeroDivisionError(\"modulo() argument 'b' must not be zero\")`. The test checks that the message names `'b'`.\n- AC-9 and AC-10: `TypeError` names the argument and the type (`str`, `NoneType`), and the tests assert both.\n- The zero check runs after the type check, so `modulo(\"a\", 0)` reports the type error, as `power` does.\n- Existing functions are unchanged, and the 29 earlier tests still pass.\n- praise: the sign rule is in the docstring with an example (`modulo(-7, 3)` is 2), which the spec's risk section asked for. The tests also pin the sign of `b` in both directions.\n\n## Not checked\n- NaN and infinity: `modulo(float(\"nan\"), 2)` returns `nan` and `modulo(inf, 3)` returns `nan`. The spec lists these as out of scope, so I did not treat them as findings.\n- The `shards` check was skipped by CI (not requested for this change). It is not required.\n- I did not check the merge queue or the release workflow. That belongs to Merge.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.82
+  },
+  {
+   "id": "live-b-review-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-b68f3162afd37520a873078f@1\n\nChris's notes on the spec, given with their OK:\nOK. Python's sign rule (sign of b) is right; the defaults are fine.",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "b8aa1304-4db8-44b8-bd3f-64f6e00a2cbd",
+     "heads": {
+      "ticoteam/pipeline-sandbox#44": "36ca9fc051833f21a2b2b4963a98f38380b24a3f"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 44,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-560b0558ef65c31cf759ce96_v1.md",
+    "text": "Reviewed commit 36ca9fc051833f21a2b2b4963a98f38380b24a3f (pull request #44, ticoteam/pipeline-sandbox), Review 2.\n\n# Review: Add modulo(a, b) to calc.py\n\n**Summary:** The change adds `modulo(a, b)` (the remainder of a divided by b, with the sign of b) and 11 tests. I read the whole diff (calc.py, test_calc.py) at the commit above. Nothing blocks it. No screens changed. The commit is the same one Review 1 read, so nothing new arrived since.\n\n## Blocking\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- suggestion: `calc.py`, `if not isinstance(value, (int, float)):` accepts `True` and `False`, so `modulo(True, 2)` returns 1. Chris's notes keep the spec defaults, which accept bools, so this is correct. Optional: one docstring line saying so.\n- suggestion: the type-check loop is now copied in `multiply`, `power` and `modulo`. Leave it, as the spec says to follow the file's style; a shared helper is worth it when a fourth function needs it.\n\n## Praise\n- praise: the sign rule is in the docstring with an example (`modulo(-7, 3)` is 2), and the tests pin the sign of `b` in both directions.\n\n## What I checked\n- **Spec and Chris's notes:** the result takes the sign of `b` and the defaults hold. I ran `modulo(7, 3)`=1, `modulo(-7, 3)`=2, `modulo(7, -3)`=-2, `modulo(5.5, 2)`=1.5, `modulo(0, 5)`=0, `modulo(7, 3.0)`=1.0. AC-1 to AC-7 each have a test.\n- **Errors:** `modulo(5, 0)` and `modulo(5, 0.0)` raise `ZeroDivisionError` naming `'b'`. `modulo(\"a\", 3)` and `modulo(3, None)` raise `TypeError` naming the argument and `str` / `NoneType`. The tests check the message text. The type check runs before the zero check, as in `power`.\n- **Tests:** `python3 -m unittest` on this commit: 40 tests, all pass. Int inputs give an int (tested).\n- **Scope:** only `modulo` and its import were added. No other function, no dependency, no change to existing functions.\n- **Checks:** Acme reports the required GitHub checks as passed at this commit.\n- **Risk:** no sign-in, billing, deletion, migration or data surface. A pure function.\n\n## Not checked\n- NaN and infinity: `modulo(float(\"nan\"), 2)` returns `nan`. The spec lists them as out of scope.\n- I did not rerun the GitHub Actions jobs; I rely on Acme's report. `gh` has no login here, so I could not list other open pull requests for conflicts.\n- Merge queue and release workflow belong to Merge.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.88
+  },
+  {
+   "id": "live-b-fixes-2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-b68f3162afd37520a873078f@1\n\nChris's notes on the spec, given with their OK:\nOK. Python's sign rule (sign of b) is right; the defaults are fine.",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "b8aa1304-4db8-44b8-bd3f-64f6e00a2cbd",
+     "heads": {
+      "ticoteam/pipeline-sandbox#44": "36ca9fc051833f21a2b2b4963a98f38380b24a3f"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 44,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-9a778d820e90770d037a7974_v1.md",
+    "text": "# modulo(a, b): what was built\n\nPull request: https://github.com/ticoteam/pipeline-sandbox/pull/44 at commit 36ca9fc051833f21a2b2b4963a98f38380b24a3f\n\n## What changed\nDevelopers can now call `modulo(a, b)` from `calc.py` and get the remainder of a divided by b. The result takes the sign of b, as Python's `%` does, as Chris confirmed. Zero as the second argument and non-numbers give clear errors that name the argument.\n\n| Call | Result |\n|---|---|\n| `modulo(7, 3)` | 1 |\n| `modulo(6, 3)` | 0 |\n| `modulo(2, 5)` | 2 |\n| `modulo(-7, 3)` | 2 |\n| `modulo(7, -3)` | -2 |\n| `modulo(5.5, 2)` | 1.5 |\n| `modulo(0, 5)` | 0 |\n| `modulo(5, 0)` | `ZeroDivisionError: modulo() argument 'b' must not be zero` |\n| `modulo(\"a\", 3)` | `TypeError: modulo() argument 'a' must be a number, not str` |\n| `modulo(3, None)` | `TypeError: modulo() argument 'b' must be a number, not NoneType` |\n\n## How it was checked\n- 11 new tests in `test_calc.py` (one per case above, plus int in gives int out). Before the change the suite could not import `modulo`; after it, `python3 -m unittest` runs 40 tests and all pass.\n- GitHub checks `checks`, `advisory` and `knobs` pass at this commit (https://github.com/ticoteam/pipeline-sandbox/pull/44/checks). `shards` was skipped by CI, not required.\n- Not checked: NaN and infinity (out of scope in the spec).\n\n## Reviews\n- Reviewer 1: nothing blocking. Optional docstring line about bools: not added, the spec accepts bools by default. Shared type-check helper: left for when a fourth function needs it.\n- Reviewer 2: nothing blocking, same two optional suggestions, same answers.\n- The pull request has no comments. No new commits since the reviews, so both cover this head.\n\n## To decide\nNothing. Only `modulo` was added; no existing function changed.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.75
+  },
+  {
+   "id": "live-b-validate",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "297ea16f-992d-44fa-8ab3-8cd210df003f",
+     "release": [
+      "v11"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ad26e3533890c3f12d4fe877_v1.md",
+    "text": "# Checked in production: modulo(a, b), 2026-11-11\n\nTask 297ea16f (requester human:chris). Spec: specs/modulo.md (page v1), plus Chris's OK note: Python's sign rule (sign of b) is right and the defaults are fine. PR ticoteam/pipeline-sandbox#44, merged as 43a6846.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v11`, contains 43a6846 (the merge of PR #44), so it carries the change. Read 2026-11-11 from a fresh clone of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v11`, exported with `git archive`, in a clean directory.\n\n- AC-1 `modulo(7, 3)` returns 1: met (1).\n- AC-2 `modulo(6, 3)` returns 0: met (0).\n- AC-3 `modulo(2, 5)` returns 2: met (2).\n- AC-4 `modulo(-7, 3)` returns 2: met (2).\n- AC-5 `modulo(7, -3)` returns -2: met (-2).\n- AC-6 `modulo(5.5, 2)` returns 1.5: met (1.5).\n- AC-7 `modulo(0, 5)` returns 0: met (0).\n- AC-8 `modulo(5, 0)` raises ZeroDivisionError naming `b`: met (\"modulo() argument 'b' must not be zero\").\n- AC-9 `modulo(\"a\", 3)` raises TypeError naming `a` and `str`: met (\"modulo() argument 'a' must be a number, not str\").\n- AC-10 `modulo(3, None)` raises TypeError naming `b` and `NoneType`: met (\"modulo() argument 'b' must be a number, not NoneType\").\n- AC-11 `from calc import modulo` works: met.\n- AC-12 test_calc.py has a test for AC-1 to AC-10 and earlier tests still pass: met. `python3 -m unittest -v` on v11 ran 40 tests, all OK; ModuloTest has 11 tests covering every case, and the earlier tests pass.\n\nScope check: calc.py gained only `modulo` (docstring states the sign rule with an example); the diff from v10 to v11 touches only calc.py and test_calc.py. No dependency added.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `modulo` before, so no duplicate.\n- Sign of the result follows `b` (Python's `%`), zero second argument raises ZeroDivisionError, float rounding is Python's: confirmed by Chris's OK.\n- `True`/`False` count as numbers (default); not tested.\n\n## Not checked\nGitHub CI results for the PR could not be read (no GitHub access from this bot); the local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v11.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.89
+  },
+  {
+   "id": "live-c-spec-v1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "57580d48-66e5-466a-b61e-4818a8ae94ef"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-98076b37a579026bbaf2e1e6_v1.md",
+    "text": "# absolute(a): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `absolute(a)` function in calc.py. They write `abs(a)` themselves and get no clear error for bad input. Chris asked for `absolute(a)` (a without its sign), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n- Same shape as the multiply and modulo specs: non-numeric input raises a clear `TypeError`.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `absolute` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `absolute(a)` in calc.py, returning `a` without its sign (`absolute(-5)` is 5).\n- Works for int and float. Int input gives an int; float input gives a float.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `absolute() argument 'a' must be a number, not str`. Same style as `multiply`, `power` and `modulo`. Exact wording is the Builder's.\n- A short docstring with one example.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `sign`, `negate` changes, `distance`, etc.).\n- No input conversion: strings are not turned into numbers.\n- No complex numbers, no NaN or infinity handling beyond what Python's `abs` does.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given a negative whole number, When `absolute(-5)` is called, Then it returns 5. Check: before release.\n- AC-2. Given a positive whole number, When `absolute(5)` is called, Then it returns 5. Check: before release.\n- AC-3. Given zero, When `absolute(0)` is called, Then it returns 0. Check: before release.\n- AC-4. Given a negative float, When `absolute(-2.5)` is called, Then it returns 2.5. Check: before release.\n- AC-5. Given a negative float zero, When `absolute(-0.0)` is called, Then it returns 0.0 (sign removed, as Python's `abs`). Check: before release.\n- AC-6. Given a non-numeric argument, When `absolute(\"a\")` is called, Then it raises `TypeError` and the message names argument `a` and type `str`. Check: before release.\n- AC-7. Given `None`, When `absolute(None)` is called, Then it raises `TypeError` and the message names argument `a` and type `NoneType`. Check: before release.\n- AC-8. Given the module, When a developer runs `from calc import absolute`, Then the import works. Check: before release.\n- AC-9. Given the test suite, When it runs after the change, Then test_calc.py has a test for AC-1 to AC-7 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: NaN and infinity, very large numbers, lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `absolute`? Owner: Builder checks at start; if it exists, stop and tell human:chris. (Product Owner's read of main on 2026-11-11: it does not.)\n- Is `True`/`False` accepted as a number? Default: yes (bool is an int in Python); not tested. Owner: human:chris, by the OK.\n\n## Risks\n- Low value if nobody uses it (Python already has `abs`). Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.89
+  },
+  {
+   "id": "live-c-spec-v2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.",
+    "work_version": 3,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "57580d48-66e5-466a-b61e-4818a8ae94ef"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-98076b37a579026bbaf2e1e6_v2.md",
+    "text": "# absolute(a): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `absolute(a)` function in calc.py. They write `abs(a)` themselves and get no clear error for bad input. Chris asked for `absolute(a)` (a without its sign), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n- Same shape as the multiply and modulo specs: non-numeric input raises a clear `TypeError`.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `absolute` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `absolute(a)` in calc.py, returning `a` without its sign (`absolute(-5)` is 5).\n- Works for int and float. Int input gives an int; float input gives a float.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `absolute() argument 'a' must be a number, not str`. Same style as `multiply`, `power` and `modulo`. Exact wording is the Builder's.\n- A short docstring with one example.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `sign`, `negate` changes, `distance`, etc.).\n- No input conversion: strings are not turned into numbers.\n- No complex numbers, no NaN or infinity handling beyond what Python's `abs` does.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given a negative whole number, When `absolute(-5)` is called, Then it returns 5. Check: before release.\n- AC-2. Given a positive whole number, When `absolute(5)` is called, Then it returns 5. Check: before release.\n- AC-3. Given zero, When `absolute(0)` is called, Then it returns 0. Check: before release.\n- AC-4. Given a negative float, When `absolute(-2.5)` is called, Then it returns 2.5. Check: before release.\n- AC-5. Given a negative float zero, When `absolute(-0.0)` is called, Then it returns 0.0 (sign removed, as Python's `abs`). Check: before release.\n- AC-6. Given a string, When `absolute(\"a\")` is called, Then it raises `TypeError` and the message names argument `a` and type `str`; the string is not converted, even `absolute(\"-5\")`. Check: before release.\n- AC-7. Given a bool, When `absolute(True)` is called, Then it returns the int 1, and `absolute(False)` returns the int 0 (a bool counts as a number, as in `multiply`, `power` and `modulo`; it does not raise). Check: before release.\n- AC-8. Given `None`, When `absolute(None)` is called, Then it raises `TypeError` and the message names argument `a` and type `NoneType`. Check: before release.\n- AC-9. Given the module, When a developer runs `from calc import absolute`, Then the import works. Check: before release.\n- AC-10. Given the test suite, When it runs after the change, Then test_calc.py has a test for each of AC-1 to AC-8 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: NaN and infinity, very large numbers, lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Open questions\n- Does calc.py already define `absolute`? Owner: Builder checks at start; if it exists, stop and tell human:chris. (Product Owner's read of main on 2026-11-11: it does not.)\n- Is a bool accepted as a number (AC-7)? Default: yes, returning 1 or 0, because the existing functions accept it (bool is an int in Python). Owner: human:chris, by the OK; say so if you want a bool to raise `TypeError` instead.\n\n## Risks\n- Low value if nobody uses it (Python already has `abs`). Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n\n## Change log\n- 2026-11-11: first version.\n- 2026-11-11: sent back by Chris. Added AC-6 (string) and AC-7 (bool) as separate criteria; renumbered the rest.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.87
+  },
+  {
+   "id": "live-c-review-1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 4,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "62de57f623fc266cca01ac5f8714f2e0dc46dfa3"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-d3b329cd116722d1965ed16e_v1.md",
+    "text": "Reviewed commit 62de57f623fc266cca01ac5f8714f2e0dc46dfa3 (ticoteam/pipeline-sandbox#45)\n\n# Review: Add absolute(a) to the calculator\n\n**Summary:** adds `absolute(a)` to `calc.py` with ten tests. It matches the spec (page file-98076b37a579026bbaf2e1e6, version 2). Nothing blocks it. 0 blocking issues.\n\n## Blocking issues\nNone.\n\n## Questions\n- question: PR #41 (`divide(a, b)`) also edits `calc.py` and `test_calc.py`. Both add code at the end of `calc.py` and change the `from calc import ...` line in `test_calc.py`, so whichever merges second will probably need a small rebase. Is the merge order set? It is only a text conflict, not a logic one.\n\n## Suggestions\n- suggestion: `calc.py`, `absolute`: the check is a single `isinstance` instead of the `for name, value in (...)` loop used by `multiply`, `power` and `modulo`. That is the right size for one argument, and the message has the same shape (`absolute() argument 'a' must be a number, not str`). No change needed. I note it only because it is a small difference in style from the existing functions.\n\n## Nits\n- nit: `test_calc.py`, `test_absolute_rejects_string` checks `\"str\"` appears in the message. That would also pass for a message with an unrelated \"str\" in it. Asserting the full message, as spec AC-6 words it, is a little stricter. Optional.\n\n## Praise\n- praise: `test_absolute_negative_float_zero` checks the sign of the result with `math.copysign`. `-0.0 == 0.0` is true in Python, so a plain `assertEqual` would pass even if the sign were kept. This test would fail on an implementation that did not remove it.\n\n## Spec check (AC-1 to AC-10)\n| AC | Test | Met |\n|---|---|---|\n| 1 `absolute(-5)` is 5 | `test_absolute_negative_whole_number` | yes |\n| 2 `absolute(5)` is 5 | `test_absolute_positive_whole_number` | yes |\n| 3 `absolute(0)` is 0 | `test_absolute_zero` | yes |\n| 4 `absolute(-2.5)` is 2.5 | `test_absolute_negative_float` | yes |\n| 5 `absolute(-0.0)` is 0.0, sign removed | `test_absolute_negative_float_zero` | yes |\n| 6 string raises `TypeError` naming `a` and `str`, `\"-5\"` not converted | `test_absolute_rejects_string`, `test_absolute_does_not_convert_numeric_string` | yes |\n| 7 `True` gives int 1, `False` gives int 0 | `test_absolute_accepts_bool_as_int` | yes |\n| 8 `None` raises `TypeError` naming `a` and `NoneType` | `test_absolute_rejects_none` | yes |\n| 9 `from calc import absolute` works | the test module's own import line | yes |\n| 10 a test for each of AC-1 to AC-8, earlier tests pass | all 40 earlier tests still in the run | yes |\n\nTests that would fail on a wrong version: each assertion depends on the new function (the import itself fails without it). The type tests (`assertIsInstance`, `assertIs(type(...))`) would fail if the result were converted to float. The bool test would fail if `bool` were rejected or returned as `True`.\n\nScope: only `calc.py` and `test_calc.py` change. No existing function is touched, no new dependency, nothing in sign-in, money, personal data, deletion, a public interface other than the one new function, configuration or CI. The 1 deleted line in `test_calc.py` is the old import line, replaced by the longer one.\n\n## What I did and did not check\n- Read: the whole diff (2 files), the PR description, the spec, the full `calc.py` at this commit, and the other open PRs on the same files (only #41).\n- Ran: I fetched both files at this commit into a scratch folder and ran `python3 -m unittest`: 50 tests, OK. I also tried `absolute(-0.0)`, `absolute(float('-inf'))`, `absolute(True)` and `absolute(-2**70)` by hand: results 0.0, inf, 1 and 1180591620717411303424, the same as Python's `abs` (the spec leaves NaN and infinity out of scope).\n- CI on GitHub for this commit: `checks`, `advisory` and `knobs` passed; `shards` was skipped (not run, so not counted as green).\n- Not checked: the effect of merging after #41 (I did not try the merge); lists and other sequences (spec says they are rejected like strings, and `isinstance` rejects them, but there is no test for it); the team's own review standard (`knowledge/standards.md` does not exist yet), so I used the repository's existing style as the standard.\n- This is a review of one commit. It does not say the change is safe.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.82
+  },
+  {
+   "id": "live-c-review-2-v1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 5,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "62de57f623fc266cca01ac5f8714f2e0dc46dfa3"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-078e34b9f96d4bba1f22c5ea_v1.md",
+    "text": "Reviewed commit 62de57f623fc266cca01ac5f8714f2e0dc46dfa3 (ticoteam/pipeline-sandbox#45), Review 2\n\n# Review 2: Add absolute(a) to the calculator\n\n**Summary:** the head is unchanged since Review 1 (62de57f). `absolute(a)` in `calc.py` matches spec version 2 and nothing blocks it. 0 blocking issues. I re-ran everything myself rather than copy Review 1, and I tried the merge that Review 1 left unchecked.\n\n## Blocking issues\nNone.\n\n## Questions\n- question: merge order. This PR merges cleanly onto today's `main` (43a6846), and the merged result passes all 50 tests. The open divide branch (`8-divide`, PR #41) already conflicts with `main` in `calc.py` and `test_calc.py`, and conflicts with this PR in the same two files. So the divide branch needs a rebase whichever merges first; this PR does not.\n\n## Suggestions\n- suggestion: `calc.py`, `absolute`: `if not isinstance(a, (int, float)):` is a single check, not the `for name, value in (...)` loop of `multiply`, `power` and `modulo`. That is the right size for one argument and the message has the same shape. No change needed.\n\n## Nits\n- nit: `test_calc.py`, `test_absolute_rejects_string` only checks that `\"str\"` appears in the message. Asserting the full message would be stricter. Optional.\n- nit: no test for a list (the spec says it is rejected like a string). `isinstance` rejects it; spec AC-10 only asks tests for AC-1 to AC-8.\n\n## Praise\n- praise: `test_absolute_negative_float_zero` uses `math.copysign`, so it fails if the sign of `-0.0` were kept; a plain `assertEqual` would not catch that.\n\n## Spec check (AC-1 to AC-10)\n| AC | Test | Met |\n|---|---|---|\n| 1 `absolute(-5)` is 5 | `test_absolute_negative_whole_number` | yes |\n| 2 `absolute(5)` is 5 | `test_absolute_positive_whole_number` | yes |\n| 3 `absolute(0)` is 0 | `test_absolute_zero` | yes |\n| 4 `absolute(-2.5)` is 2.5 | `test_absolute_negative_float` | yes |\n| 5 `absolute(-0.0)` is 0.0, sign removed | `test_absolute_negative_float_zero` | yes |\n| 6 string raises `TypeError` naming `a` and `str`; `\"-5\"` not converted | `test_absolute_rejects_string`, `test_absolute_does_not_convert_numeric_string` | yes |\n| 7 `True` gives int 1, `False` gives int 0 | `test_absolute_accepts_bool_as_int` | yes |\n| 8 `None` raises `TypeError` naming `a` and `NoneType` | `test_absolute_rejects_none` | yes |\n| 9 `from calc import absolute` works | the test module's own import line | yes |\n| 10 a test for each of AC-1 to AC-8; earlier tests pass | 10 new tests, 40 earlier tests pass | yes |\n\nScope: only `calc.py` (+9 lines) and `test_calc.py` (+48, -1: the import line) change. No existing function is touched, no new dependency, nothing in sign-in, money, personal data, deletion, configuration or CI.\n\n## What I did and did not check\n- Read: the whole diff (2 files), the spec, the Review 1 page, the full `calc.py` at this commit, and the other open branch on the same files (`8-divide`).\n- Ran: a fresh clone at 62de57f, `python3 -m unittest`: 50 tests, OK. Merged this PR onto `main` 43a6846 in a scratch checkout: no conflict, 50 tests OK. `git merge-tree` of this PR with `8-divide`: conflicts in both files.\n- CI on GitHub for this commit: `checks` and `advisory` passed; `shards` was skipped (not run, so not counted as green). (Review 1 also listed `knobs`; it was not in the list I read this time.)\n- Not checked: the divide branch's own correctness; the team's review standard (`knowledge/standards.md` does not exist), so I used the existing functions' style.\n- This reviews one commit. It does not say the change is safe.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.79
+  },
+  {
+   "id": "live-c-review-2-v2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 5,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "62de57f623fc266cca01ac5f8714f2e0dc46dfa3"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-078e34b9f96d4bba1f22c5ea_v2.md",
+    "text": "Reviewed commit 62de57f623fc266cca01ac5f8714f2e0dc46dfa3 (ticoteam/pipeline-sandbox#45), Review 2\n\n# Review 2: Add absolute(a) to the calculator\n\n**Coverage:** one linked PR (#45), read at its newest commit 62de57f623fc (confirmed against the PR head and the task link). Read: full diff, spec, Review 1. Run: 50 tests, a merge onto main, a merge test against the divide branch. Blocks: nothing, so there is nothing to fix.\n\n**Summary:** the head is unchanged since Review 1 (62de57f). `absolute(a)` in `calc.py` matches spec version 2 and nothing blocks it. 0 blocking issues. I re-ran everything myself rather than copy Review 1, and I tried the merge that Review 1 left unchecked.\n\n## Blocking issues\nNone.\n\n## Questions\n- question: merge order. This PR merges cleanly onto today's `main` (43a6846), and the merged result passes all 50 tests. The open divide branch (`8-divide`, PR #41) already conflicts with `main` in `calc.py` and `test_calc.py`, and conflicts with this PR in the same two files. So the divide branch needs a rebase whichever merges first; this PR does not.\n\n## Suggestions\n- suggestion: `calc.py`, `absolute`: `if not isinstance(a, (int, float)):` is a single check, not the `for name, value in (...)` loop of `multiply`, `power` and `modulo`. That is the right size for one argument and the message has the same shape. No change needed.\n\n## Nits\n- nit: `test_calc.py`, `test_absolute_rejects_string` only checks that `\"str\"` appears in the message. Asserting the full message would be stricter. Optional.\n- nit: no test for a list (the spec says it is rejected like a string). `isinstance` rejects it; spec AC-10 only asks tests for AC-1 to AC-8.\n\n## Praise\n- praise: `test_absolute_negative_float_zero` uses `math.copysign`, so it fails if the sign of `-0.0` were kept; a plain `assertEqual` would not catch that.\n\n## Spec check (AC-1 to AC-10)\n| AC | Test | Met |\n|---|---|---|\n| 1 `absolute(-5)` is 5 | `test_absolute_negative_whole_number` | yes |\n| 2 `absolute(5)` is 5 | `test_absolute_positive_whole_number` | yes |\n| 3 `absolute(0)` is 0 | `test_absolute_zero` | yes |\n| 4 `absolute(-2.5)` is 2.5 | `test_absolute_negative_float` | yes |\n| 5 `absolute(-0.0)` is 0.0, sign removed | `test_absolute_negative_float_zero` | yes |\n| 6 string raises `TypeError` naming `a` and `str`; `\"-5\"` not converted | `test_absolute_rejects_string`, `test_absolute_does_not_convert_numeric_string` | yes |\n| 7 `True` gives int 1, `False` gives int 0 | `test_absolute_accepts_bool_as_int` | yes |\n| 8 `None` raises `TypeError` naming `a` and `NoneType` | `test_absolute_rejects_none` | yes |\n| 9 `from calc import absolute` works | the test module's own import line | yes |\n| 10 a test for each of AC-1 to AC-8; earlier tests pass | 10 new tests, 40 earlier tests pass | yes |\n\nScope: only `calc.py` (+9 lines) and `test_calc.py` (+48, -1: the import line) change. No existing function is touched, no new dependency, nothing in sign-in, money, personal data, deletion, configuration or CI.\n\n## What I did and did not check\n- Read: the whole diff (2 files), the spec, the Review 1 page, the full `calc.py` at this commit, and the other open branch on the same files (`8-divide`).\n- Ran: a fresh clone at 62de57f, `python3 -m unittest`: 50 tests, OK. Merged this PR onto `main` 43a6846 in a scratch checkout: no conflict, 50 tests OK. `git merge-tree` of this PR with `8-divide`: conflicts in both files.\n- CI on GitHub for this commit: `checks`, `advisory`, `knobs` and the CI workflow passed; `shards` was skipped (not run, so not counted as green); the Vercel and Sentry suites were still pending when I looked, so not counted.\n- Not checked: the divide branch's own correctness; the team's review standard (`knowledge/standards.md` does not exist), so I used the existing functions' style.\n- This reviews one commit. It does not say the change is safe.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.84
+  },
+  {
+   "id": "live-c-fixes-2-v1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "62de57f623fc266cca01ac5f8714f2e0dc46dfa3"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ffac94f0331e627bdc22a3e8_v1.md",
+    "text": "Pull request: https://github.com/ticoteam/pipeline-sandbox/pull/45 at head commit 62de57f623fc266cca01ac5f8714f2e0dc46dfa3\n\n# Built: absolute(a) for the calculator\n\n## What changed\nDevelopers can now call `absolute(a)` from `calc.py` to get a number without its sign: `absolute(-5)` is 5 and `absolute(-2.5)` is 2.5. A whole number stays whole and a decimal stays a decimal. `True` counts as a number and gives 1, as in the other functions. Text or `None` is refused with a clear error that names the argument and its type; a string like \"-5\" is not converted. Only `calc.py` (+9 lines) and `test_calc.py` (+48) changed.\n\n## How it was checked\n- Ten new tests, one or more per spec criterion AC-1 to AC-8 (AC-9, the import, is the test file's own import line). The `-0.0` test checks the sign with `math.copysign`.\n- `python3 -m unittest` on my computer at this head: 50 tests, OK (40 earlier, 10 new). Tests were written first and failed on the old code (the import failed).\n- Not checked by me: lists and other sequences (no test; the spec only asks tests for AC-1 to AC-8), NaN and infinity (out of scope in the spec).\n\n## Checks at the head commit\nPassing on GitHub at 62de57f: `checks`, `advisory`, `knobs`. `shards` was skipped (not run, so not counted as green). https://github.com/ticoteam/pipeline-sandbox/actions/runs/43010673024\n\n## What the reviewers found\n- Reviewer 1 (page file-d3b329cd116722d1965ed16e), 0 blocking:\n  - Question on merge order with the divide PR (#41): answered on the PR; order is the Release Owner's.\n  - Suggestion on the single type check: kept, one argument needs no loop.\n  - Nit on a stricter message assertion: kept, optional.\n- Reviewer 2 (page file-078e34b9f96d4bba1f22c5ea), 0 blocking, same head, re-ran everything:\n  - Merge order: this PR merges cleanly onto main and 50 tests pass; the divide branch (#41) conflicts with main and this PR, so it needs a rebase either way.\n  - Same suggestion and nit as Reviewer 1: kept.\n  - New nit, no list test: not added, outside the spec's test requirement.\n- No code changed after review, so the head is still 62de57f.\n\n## For you to decide\n- Merge order: this PR can go first without trouble. Divide (#41) needs a rebase afterwards; I will keep both sides when I do it.\n- Spec question on bool (AC-7) was answered by Chris's \"Good\" on the default (bool returns 1 or 0).\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.53
+  },
+  {
+   "id": "live-c-fixes-2-v2",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 7,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "eace67e94458c521b46c20b988db0eca5910373c"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ffac94f0331e627bdc22a3e8_v2.md",
+    "text": "Pull request: https://github.com/ticoteam/pipeline-sandbox/pull/45 at head commit eace67e94458\n\n# Built: absolute_value(a) for the calculator\n\nRenamed from `absolute` to `absolute_value` at Chris's request: function, error message, docstring, import and all ten tests.\n\n## What changed\nDevelopers can now call `absolute_value(a)` from `calc.py` to get a number without its sign: `absolute_value(-5)` is 5 and `absolute_value(-2.5)` is 2.5. A whole number stays whole and a decimal stays a decimal. `True` counts as a number and gives 1, as in the other functions. Text or `None` is refused with a clear error that names the argument and its type; a string like \"-5\" is not converted. Only `calc.py` (+9 lines) and `test_calc.py` (+48) changed.\n\n## How it was checked\n- Ten new tests, one or more per spec criterion AC-1 to AC-8 (AC-9, the import, is the test file's own import line). The `-0.0` test checks the sign with `math.copysign`.\n- `python3 -m unittest` on my computer at this head: 50 tests, OK (40 earlier, 10 new). Tests were written first and failed on the old code (the import failed). After the rename the same 50 tests pass.\n- Not checked by me: lists and other sequences (no test; the spec only asks tests for AC-1 to AC-8), NaN and infinity (out of scope in the spec).\n\n## Checks at the head commit\nPassing on GitHub at eace67e: `checks`, `advisory`, `knobs`. `shards` was skipped (not run, so not counted as green). https://github.com/ticoteam/pipeline-sandbox/actions/runs/43011245976\n\n## What the reviewers found\n- Reviewer 1 (page file-d3b329cd116722d1965ed16e), 0 blocking:\n  - Question on merge order with the divide PR (#41): answered on the PR; order is the Release Owner's.\n  - Suggestion on the single type check: kept, one argument needs no loop.\n  - Nit on a stricter message assertion: kept, optional.\n- Reviewer 2 (page file-078e34b9f96d4bba1f22c5ea), 0 blocking, same head, re-ran everything:\n  - Merge order: this PR merges cleanly onto main and 50 tests pass; the divide branch (#41) conflicts with main and this PR, so it needs a rebase either way.\n  - Same suggestion and nit as Reviewer 1: kept.\n  - New nit, no list test: not added, outside the spec's test requirement.\n- Both reviews were of 62de57f. The only change since is the rename (eace67e); the behaviour and tests are otherwise identical, so their findings still apply, but they did not review the renamed head.\n\n## For you to decide\n- Merge order: this PR can go first without trouble. Divide (#41) needs a rebase afterwards; I will keep both sides when I do it.\n- Spec question on bool (AC-7) was answered by Chris's \"Good\" on the default (bool returns 1 or 0).\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.62,
+   "allow_unsure": true
+  },
+  {
+   "id": "live-c-validate-v1",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "57580d48-66e5-466a-b61e-4818a8ae94ef",
+     "release": [
+      "v12"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-11a4eac2ef0978c244e7058f_v1.md",
+    "text": "# Checked in production: absolute_value(a), 2026-11-11\n\nTask 57580d48 (requester human:chris). Spec: specs/absolute.md (page v2), OK'd by Chris with the note \"Good\". PR ticoteam/pipeline-sandbox#45, merged as 168f283.\n\n## Name change\nThe spec says `absolute(a)`. During the build Chris sent the work back: \"Rename the function to absolute_value(a) everywhere, tests included.\" Production therefore has `absolute_value`, and there is no `absolute`. Every criterion below is checked under the new name; AC-8 is the import of the new name. This was Chris's decision, so it is not counted as a failure. The spec's change log records it.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v12`, contains 168f283 (the merge of PR #45), so it carries the change. Read 2026-11-11 from a fresh clone of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v12` from a fresh clone, checked out at the tag.\n\n- AC-1 `absolute_value(-5)` returns 5: met (5).\n- AC-2 `absolute_value(5)` returns 5: met (5).\n- AC-3 `absolute_value(0)` returns 0: met (0).\n- AC-4 `absolute_value(-2.5)` returns 2.5: met (2.5).\n- AC-5 `absolute_value(-0.0)` returns 0.0 with the sign removed: met (0.0, sign bit positive).\n- AC-6 `absolute_value(\"a\")` raises TypeError naming `a` and `str`, and `\"-5\"` is not converted: met (\"absolute_value() argument 'a' must be a number, not str\"; `\"-5\"` raises the same).\n- AC-7 `absolute_value(True)` returns int 1 and `absolute_value(False)` returns int 0: met (1 and 0, both type int).\n- AC-8 `absolute_value(None)` raises TypeError naming `a` and `NoneType`: met (\"absolute_value() argument 'a' must be a number, not NoneType\").\n- AC-9 `from calc import absolute_value` works: met. (`from calc import absolute` fails, by Chris's rename.)\n- AC-10 test_calc.py has a test for each of AC-1 to AC-8 and earlier tests still pass: met. `python3 -m unittest -v` on v12 ran 50 tests, all OK; AbsoluteValueTest has 10 tests covering every case, and the 40 earlier tests pass.\n\nScope check: the diff from v11 to v12 touches only calc.py (one new function) and test_calc.py. No dependency added, no existing function changed.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `absolute` before, so no duplicate.\n- A bool counts as a number and returns 1 or 0 (AC-7); Chris OK'd the spec with that default.\n\n## Not checked\nGitHub CI results for the PR could not be read by me (no GitHub access from this bot); the Builder reported checks, advisory and knobs passing at eace67e, and my own local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v12, under the name `absolute_value`.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.78
+  },
+  {
+   "id": "live-c-validate-v3",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "57580d48-66e5-466a-b61e-4818a8ae94ef",
+     "release": [
+      "v12"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-11a4eac2ef0978c244e7058f_v3.md",
+    "text": "# Checked in production: absolute_value(a), 2026-11-11\n\nTask 57580d48 (requester human:chris). Spec: specs/absolute.md (page v2), OK'd by Chris with the note \"Good\". PR ticoteam/pipeline-sandbox#45, merged as 168f283.\n\n## Name change\nThe spec says `absolute(a)`. During the build Chris sent the work back: \"Rename the function to absolute_value(a) everywhere, tests included.\" Production therefore has `absolute_value`, and there is no `absolute`. Every criterion below is checked under the new name; AC-8 is the import of the new name. This was Chris's decision, so it is not counted as a failure. The spec's change log records it.\n\n## Version production runs\n**Production runs `v12`, and v12 holds this change.** The sandbox has no deployed service; what it ships is its published GitHub release, cut automatically on every merge to main. Read 2026-11-11:\n- The latest published release of ticoteam/pipeline-sandbox (not a draft, not a pre-release) is `v12`, published 2026-11-11 11:23:59 UTC, target commit 168f283.\n- `v12` is commit 168f283, the merge of PR #45 (the work this task filed). `main` is at 168f283 too, so no release is newer and none is missing this change. The previous release, `v11` (43a6846), does not contain `absolute_value`.\n- The Engineering task for PR #45 shows it merged and its release as v12; its checks (`checks`, `advisory`, `knobs`, workflow `ci`) passed at the PR head eace67e, with `shards` skipped.\nNot checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v12` from a fresh clone, checked out at the tag (`git checkout v12`), so this is what production runs. Each result below is the output of that run.\n\n- AC-1 `absolute_value(-5)` returns 5: met (5).\n- AC-2 `absolute_value(5)` returns 5: met (5).\n- AC-3 `absolute_value(0)` returns 0: met (0).\n- AC-4 `absolute_value(-2.5)` returns 2.5: met (2.5).\n- AC-5 `absolute_value(-0.0)` returns 0.0 with the sign removed: met (0.0, sign bit positive).\n- AC-6 `absolute_value(\"a\")` raises TypeError naming `a` and `str`, and `\"-5\"` is not converted: met (\"absolute_value() argument 'a' must be a number, not str\"; `\"-5\"` raises the same).\n- AC-7 `absolute_value(True)` returns int 1 and `absolute_value(False)` returns int 0: met (1 and 0, both type int).\n- AC-8 `absolute_value(None)` raises TypeError naming `a` and `NoneType`: met (\"absolute_value() argument 'a' must be a number, not NoneType\").\n- AC-9 `from calc import absolute_value` works: met. (`from calc import absolute` fails, by Chris's rename.)\n- AC-10 test_calc.py has a test for each of AC-1 to AC-8 and earlier tests still pass: met. `python3 -m unittest -v` on v12 ran 50 tests, all OK; AbsoluteValueTest has 10 tests covering every case, and the 40 earlier tests pass.\n\nScope check: the diff from v11 to v12 touches only calc.py (one new function) and test_calc.py. No dependency added, no existing function changed.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `absolute` before, so no duplicate.\n- A bool counts as a number and returns 1 or 0 (AC-7); Chris OK'd the spec with that default.\n\n## Not checked\nGitHub CI results for the PR could not be read by me (no GitHub access from this bot); the Builder reported checks, advisory and knobs passing at eace67e, and my own local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v12, under the name `absolute_value`.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null,
+   "live_p": 0.75
+  },
+  {
+   "id": "trap-review-old-commit",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-b68f3162afd37520a873078f@1\n\nChris's notes on the spec, given with their OK:\nOK. Python's sign rule (sign of b) is right; the defaults are fine.",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "b8aa1304-4db8-44b8-bd3f-64f6e00a2cbd",
+     "heads": {
+      "ticoteam/pipeline-sandbox#44": "36ca9fc051833f21a2b2b4963a98f38380b24a3f"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 44,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-560b0558ef65c31cf759ce96_v1.md",
+    "text": "Reviewed commit 9f1c2e7a4b8d0c6e5f3a2b1c0d9e8f7a6b5c4d3e (pull request #44, ticoteam/pipeline-sandbox), Review 2.\n\n# Review: Add modulo(a, b) to calc.py\n\n**Summary:** The change adds `modulo(a, b)` (the remainder of a divided by b, with the sign of b) and 11 tests. I read the whole diff (calc.py, test_calc.py) at the commit above. Nothing blocks it. No screens changed. The commit is the same one Review 1 read, so nothing new arrived since.\n\n## Blocking\nNone.\n\n## Questions\nNone.\n\n## Suggestions\n- suggestion: `calc.py`, `if not isinstance(value, (int, float)):` accepts `True` and `False`, so `modulo(True, 2)` returns 1. Chris's notes keep the spec defaults, which accept bools, so this is correct. Optional: one docstring line saying so.\n- suggestion: the type-check loop is now copied in `multiply`, `power` and `modulo`. Leave it, as the spec says to follow the file's style; a shared helper is worth it when a fourth function needs it.\n\n## Praise\n- praise: the sign rule is in the docstring with an example (`modulo(-7, 3)` is 2), and the tests pin the sign of `b` in both directions.\n\n## What I checked\n- **Spec and Chris's notes:** the result takes the sign of `b` and the defaults hold. I ran `modulo(7, 3)`=1, `modulo(-7, 3)`=2, `modulo(7, -3)`=-2, `modulo(5.5, 2)`=1.5, `modulo(0, 5)`=0, `modulo(7, 3.0)`=1.0. AC-1 to AC-7 each have a test.\n- **Errors:** `modulo(5, 0)` and `modulo(5, 0.0)` raise `ZeroDivisionError` naming `'b'`. `modulo(\"a\", 3)` and `modulo(3, None)` raise `TypeError` naming the argument and `str` / `NoneType`. The tests check the message text. The type check runs before the zero check, as in `power`.\n- **Tests:** `python3 -m unittest` on this commit: 40 tests, all pass. Int inputs give an int (tested).\n- **Scope:** only `modulo` and its import were added. No other function, no dependency, no change to existing functions.\n- **Checks:** Acme reports the required GitHub checks as passed at this commit.\n- **Risk:** no sign-in, billing, deletion, migration or data surface. A pure function.\n\n## Not checked\n- NaN and infinity: `modulo(float(\"nan\"), 2)` returns `nan`. The spec lists them as out of scope.\n- I did not rerun the GitHub Actions jobs; I rely on Acme's report. `gh` has no login here, so I could not list other open pull requests for conflicts.\n- Merge queue and release workflow belong to Merge.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "old_commit",
+   "source": "Run B's Review 2 page, naming a commit that is not the PR's newest"
+  },
+  {
+   "id": "trap-review-nothing-run",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "A review of the newest commit of every linked PR, naming that commit: what was read and run, what blocks and what to fix, or that nothing blocks. A summary of the change with nothing read, run or checked does not count."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.\n\nSpec: page:file-682e6072a064b08326b89531@1\n\nChris's notes on the spec, given with their OK:\nOK. One extra rule: power(0, 0) returns 1, with its own test. The defaults in your open questions are fine (bools count as numbers, Python's float rounding).",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "41b82c98-d281-4478-b5a9-f9ef2ccc3b27",
+     "heads": {
+      "ticoteam/pipeline-sandbox#43": "b8db1114a8052a65e2820573ea3c229b39f3711d"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 43,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ce7784de1314371a3a41a8d2_v1.md",
+    "text": "Reviewed commit b8db1114a805 (ticoteam/pipeline-sandbox#43, \"Add power(a, b)\")\n\n# Review: power(a, b)\n\nThe pull request adds `power(a, b)` to calc.py with tests in test_calc.py, and a docstring about very large exponents. The change is small and follows the style of the other functions. Looks good to me; nothing blocks.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "summary_only",
+   "source": "A review page that names the newest commit but only summarises the change: nothing read, run or checked"
+  },
+  {
+   "id": "trap-validate-older-version",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02",
+     "release": [
+      "v10"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-feee87e69b53f6bfe0bf2945_v1.md",
+    "text": "# Checked in production: power(a, b), 2026-11-11\n\nTask bd85ed6c (requester human:chris). Spec: specs/power.md (page v1), plus Chris's OK note: `power(0, 0)` returns 1 with its own test (AC-13 below); bools count as numbers and float rounding is Python's. Engineering task 41b82c98 (done), PR ticoteam/pipeline-sandbox#43, merged as 34d14f5.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v9`, points at 3c1d2e0; PR #43 merged after it. Read 2026-11-11 from a fresh clone of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## Criteria (all tagged before release)\nI ran the code of tag `v9`, exported with `git archive`, in a clean directory.\n\n- AC-1 `power(2, 3)` returns 8: met (8).\n- AC-2 `power(5, 0)` returns 1: met (1).\n- AC-3 `power(2, -2)` returns 0.25: met (0.25).\n- AC-4 `power(-2, 3)` returns -8: met (-8).\n- AC-5 `power(9, 0.5)` returns 3.0: met (3.0).\n- AC-6 `power(0, 5)` returns 0: met (0).\n- AC-7 `power(0, -1)` raises ZeroDivisionError naming `a`: met (\"power() argument 'a' must not be zero when 'b' is negative\").\n- AC-8 `power(-8, 0.5)` raises ValueError, no complex result: met (\"power() cannot raise a negative number to a non-whole power\").\n- AC-9 `power(\"a\", 3)` raises TypeError naming `a` and `str`: met (\"power() argument 'a' must be a number, not str\").\n- AC-10 `power(3, None)` raises TypeError naming `b` and `NoneType`: met (\"power() argument 'b' must be a number, not NoneType\").\n- AC-11 `from calc import power` works: met.\n- AC-12 test_calc.py has a test for AC-1 to AC-10 and earlier tests still pass: met. `python3 -m unittest -v` on v9 ran 29 tests, all OK; PowerTests has one test per case, and the add, subtract, negate and multiply tests pass.\n- AC-13 (added by Chris at the OK) `power(0, 0)` returns 1, with its own test: met (returns 1; `test_power_zero_to_the_zero_is_one` passes). Note: this rule is in Chris's OK note, not in the spec page v1.\n\nScope check: calc.py gained only `power` (with a docstring noting that very large results may overflow or be slow, the spec's accepted risk); other functions are unchanged. No dependency added.\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `power` before, so no duplicate.\n- Zero to a negative power raises ZeroDivisionError and a negative base with a non-whole exponent raises ValueError: both confirmed by Chris's OK.\n- `True`/`False` count as numbers and float rounding is Python's: confirmed by Chris; not tested.\n\n## Not checked\nGitHub CI results for the PR could not be read (no GitHub access from this bot); the local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v9.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "older_version",
+   "source": "Run A's Validate page, checked on v9 while the work's release is v10"
+  },
+  {
+   "id": "trap-validate-nothing-shown",
+   "domain": "dev",
+   "requirement": {
+    "name": "Checked in production",
+    "rubric": "Names the version production runs and shows the change working in that version: what was run or looked at there, and what it gave. If that version is older than the release that holds this work, it is not yet."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.",
+    "work_version": 4,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "57580d48-66e5-466a-b61e-4818a8ae94ef",
+     "release": [
+      "v12"
+     ]
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-11a4eac2ef0978c244e7058f_v1.md",
+    "text": "# Checked in production: absolute_value(a), 2026-11-11\n\nTask 57580d48 (requester human:chris). Spec: specs/absolute.md (page v2), OK'd by Chris with the note \"Good\". PR ticoteam/pipeline-sandbox#45, merged as 168f283.\n\n## Name change\nThe spec says `absolute(a)`. During the build Chris sent the work back: \"Rename the function to absolute_value(a) everywhere, tests included.\" Production therefore has `absolute_value`, and there is no `absolute`. Every criterion below is checked under the new name; AC-8 is the import of the new name. This was Chris's decision, so it is not counted as a failure. The spec's change log records it.\n\n## Version production runs\nThe sandbox has no deployed service; its release is the git tag. The newest tag, `v12`, contains 168f283 (the merge of PR #45), so it carries the change. Read 2026-11-11 from a fresh clone of ticoteam/pipeline-sandbox. Not checked: any installed copy elsewhere (none is known).\n\n## After-launch checks\nNone were set in the spec. Use after release is not measured: no usage export is connected and no goal is linked. Watcher: Product Owner, at the next weekly review, looking at issues on the repository only.\n\n## Answers to the spec's open questions\n- calc.py had no `absolute` before, so no duplicate.\n- A bool counts as a number and returns 1 or 0 (AC-7); Chris OK'd the spec with that default.\n\n## Not checked\nGitHub CI results for the PR could not be read by me (no GitHub access from this bot); the Builder reported checks, advisory and knobs passing at eace67e, and my own local run above stands in for them.\n\n## Verdict\nValidated: every criterion met in v12, under the name `absolute_value`.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "not_shown",
+   "source": "Run C's Validate page with its criteria run cut: names the version but shows nothing working"
+  },
+  {
+   "id": "trap-spec-no-done",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a modulo function to the calculator",
+    "spec": "Add modulo(a, b) to the calculator: it returns the remainder of a divided by b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "297ea16f-992d-44fa-8ab3-8cd210df003f"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-b68f3162afd37520a873078f_v1.md",
+    "text": "# modulo(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `modulo(a, b)` function in calc.py. They write `a % b` themselves and get no clear error for bad input. Chris asked for `modulo(a, b)` (the remainder of a divided by b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier).\n- Same shape as the divide spec: a zero second argument raises `ZeroDivisionError`; non-numeric input raises a clear `TypeError`.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Scope\n- A `modulo(a, b)` function in calc.py, with tests.\n\n## Non-goals\n- No other new functions (no `divmod`, `floor_divide`, `remainder` with the other sign rule, etc.).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Open questions\n- Does calc.py already define `modulo`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Sign rule for negatives: the result takes the sign of `b` (Python's `%`, default) rather than the sign of `a` (C-style `math.fmod`). Owner: human:chris, by the OK; say so if you want the other.\n- Zero as second argument raises `ZeroDivisionError` (default, matches Python and divide). Owner: human:chris, by the OK.\n- Is `True`/`False` accepted as a number? Default: yes (bool is an int in Python); not tested. Owner: human:chris, by the OK.\n- Is float rounding left as Python's? Default: yes. Owner: human:chris, by the OK.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Users who expect C-style negative remainders get a different answer. Cheapest check: the docstring states the sign rule with an example.\n\n## Change log\n- 2026-11-11: first version.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_done",
+   "source": "Run B's Spec page with its acceptance criteria, its goal measures and its scope's cases cut: no what done looks like"
+  },
+  {
+   "id": "trap-fixes-2-checks-old-head",
+   "domain": "dev",
+   "requirement": {
+    "name": "Review page",
+    "rubric": "Shows what was built, with output from how it was checked; that the checks pass at the newest commit; and what Reviewer 1 and Reviewer 2 found on the commit they reviewed, or that they found nothing to fix. Enough for a person to OK it without opening the code."
+   },
+   "work": {
+    "title": "Add an absolute value function to the calculator",
+    "spec": "Add absolute(a) to the calculator: it returns a without its sign. Follow the style of the existing functions, with tests.\n\nSpec: page:file-98076b37a579026bbaf2e1e6@2\n\nChris's notes on the spec, given with their OK:\nGood.",
+    "work_version": 6,
+    "goal": "From a task to a published release.",
+    "context": {
+     "task": "f356a484-4dcc-4847-8db8-88cdb4ec62d8",
+     "heads": {
+      "ticoteam/pipeline-sandbox#45": "eace67e94458c521b46c20b988db0eca5910373c"
+     }
+    },
+    "repo": "ticoteam/pipeline-sandbox",
+    "pr": 45,
+    "author": "tico-acme-test[bot]"
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-ffac94f0331e627bdc22a3e8_v1.md",
+    "text": "Pull request: https://github.com/ticoteam/pipeline-sandbox/pull/45 at head commit 62de57f623fc266cca01ac5f8714f2e0dc46dfa3\n\n# Built: absolute(a) for the calculator\n\n## What changed\nDevelopers can now call `absolute(a)` from `calc.py` to get a number without its sign: `absolute(-5)` is 5 and `absolute(-2.5)` is 2.5. A whole number stays whole and a decimal stays a decimal. `True` counts as a number and gives 1, as in the other functions. Text or `None` is refused with a clear error that names the argument and its type; a string like \"-5\" is not converted. Only `calc.py` (+9 lines) and `test_calc.py` (+48) changed.\n\n## How it was checked\n- Ten new tests, one or more per spec criterion AC-1 to AC-8 (AC-9, the import, is the test file's own import line). The `-0.0` test checks the sign with `math.copysign`.\n- `python3 -m unittest` on my computer at this head: 50 tests, OK (40 earlier, 10 new). Tests were written first and failed on the old code (the import failed).\n- Not checked by me: lists and other sequences (no test; the spec only asks tests for AC-1 to AC-8), NaN and infinity (out of scope in the spec).\n\n## Checks at the head commit\nPassing on GitHub at 62de57f: `checks`, `advisory`, `knobs`. `shards` was skipped (not run, so not counted as green). https://github.com/ticoteam/pipeline-sandbox/actions/runs/43010673024\n\n## What the reviewers found\n- Reviewer 1 (page file-d3b329cd116722d1965ed16e), 0 blocking:\n  - Question on merge order with the divide PR (#41): answered on the PR; order is the Release Owner's.\n  - Suggestion on the single type check: kept, one argument needs no loop.\n  - Nit on a stricter message assertion: kept, optional.\n- Reviewer 2 (page file-078e34b9f96d4bba1f22c5ea), 0 blocking, same head, re-ran everything:\n  - Merge order: this PR merges cleanly onto main and 50 tests pass; the divide branch (#41) conflicts with main and this PR, so it needs a rebase either way.\n  - Same suggestion and nit as Reviewer 1: kept.\n  - New nit, no list test: not added, outside the spec's test requirement.\n- No code changed after review, so the head is still 62de57f.\n\n## For you to decide\n- Merge order: this PR can go first without trouble. Divide (#41) needs a rebase afterwards; I will keep both sides when I do it.\n- Spec question on bool (AC-7) was answered by Chris's \"Good\" on the default (bool returns 1 or 0).\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "checks_old_head",
+   "source": "Run C's pre-release page v1 (checks at 62de57f) after the head moved to eace67e"
+  },
+  {
+   "id": "grow-golive-email",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Second welcome email: turn on reminders",
+    "spec": "Channel Owner: Email Owner. Add a second email to the trial welcome flow, sent on day 2, asking new studios to turn on text reminders.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-email.md",
+    "text": "# Go-live: second welcome email, turn on reminders\n\nGX-31, Email Owner, Acme\n\n## What goes live\nSent on day 2 of the trial welcome flow, to every new trial studio that has not turned on reminders.\n\nSubject: Your first no-show is one text away\nPreview line: Turn on reminders in two clicks.\nBody:\n> Hi {first name}, most studios lose a class spot a week to people who forget. Acme can text each client the day\n> before. Turn it on in Settings, Reminders. It takes two clicks. [Turn on reminders]\n\n## The bet\n- Metric: share of trial studios that turn on reminders within 7 days (product analytics, trial cohort).\n- Prediction: from 18% to 26% by Jan 19, 2027.\n- Why: 18% of the Oct trial cohort turned reminders on (analytics, read Nov 10). Studios with reminders on convert at 2x.\n- Cost: no money. 15 minutes of Priya's time to load it in the email platform.\n- Runs: 6 weeks, Dec 8 to Jan 19.\n- Stop early if: complaints pass 0.1% or unsubscribes pass 1% on this email.\n\n## Checks\n- Brand check: passed. Design Owner, GX-32, Nov 12.\n- Who puts it live: Priya (runs the email platform).\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-golive-page",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-page.md",
+    "text": "# Go-live: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme\n\n## What goes live\nOn acme.example/reminders, a new first section headed \"How to cut no-shows at your studio\": four short steps, the\n2026 numbers from our reminder report (dated Oct 2026, linked), and a link to the setup guide. New title: \"Cut no-shows\nat your studio with text reminders | Acme\". The full section as it will look is below.\n\n> ## How to cut no-shows at your studio\n> 1. Text each client the day before. 2. Let them confirm or cancel by reply. 3. Fill the spot from the waitlist.\n> 4. Track no-shows a month. Studios on Acme cut no-shows by a third in 2026 (Acme reminder report, Oct 2026).\n\n## The bet\n- Metric: organic clicks to acme.example/reminders, brand terms left out (Search Console, Web).\n- Prediction: from 120 to 180 clicks a week by Jan 12, 2027.\n- Why: 4,100 views a week for no-show questions and a 2.9% click rate (Search Console, 28 days to Nov 9).\n- Cost: no money. About 20 minutes of Dana's time.\n- Runs: 8 weeks, Nov 17 to Jan 12.\n- Stop early if: clicks drop below 100 a week two weeks in a row, or the page stops loading.\n\n## Checks\n- Brand check: passed. Design Owner, GX-15, Nov 12.\n- Who puts it live: Dana (edits the site).\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-golive-no-brand-card",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-no-brand-card.md",
+    "text": "# Go-live: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme\n\n## What goes live\nOn acme.example/reminders, a new first section headed \"How to cut no-shows at your studio\": four short steps, the\n2026 numbers from our reminder report (dated Oct 2026, linked), and a link to the setup guide. New title: \"Cut no-shows\nat your studio with text reminders | Acme\". The full section as it will look is below.\n\n> ## How to cut no-shows at your studio\n> 1. Text each client the day before. 2. Let them confirm or cancel by reply. 3. Fill the spot from the waitlist.\n> 4. Track no-shows a month. Studios on Acme cut no-shows by a third in 2026 (Acme reminder report, Oct 2026).\n\n## The bet\n- Metric: organic clicks to acme.example/reminders, brand terms left out (Search Console, Web).\n- Prediction: from 120 to 180 clicks a week by Jan 12, 2027.\n- Why: 4,100 views a week for no-show questions and a 2.9% click rate (Search Console, 28 days to Nov 9).\n- Cost: no money. About 20 minutes of Dana's time.\n- Runs: 8 weeks, Nov 17 to Jan 12.\n- Stop early if: clicks drop below 100 a week two weeks in a row, or the page stops loading.\n\n## Checks\n- Brand: no brand card is published yet, so there was no brand check. The section uses our plain product words\n  and no claims beyond the dated report.\n- Who puts it live: Dana (edits the site).\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-golive-ad",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Search ad group for 'class booking app'",
+    "spec": "Channel Owner: Search Ads Owner. A new ad group on the 'class booking app' search terms, sending to the signup page.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-ad.md",
+    "text": "# Go-live: search ad group for \"class booking app\"\n\nGX-40, Search Ads Owner, Acme\n\n## What goes live\nA new ad group in the Studios campaign. Keywords (phrase match): \"class booking app\", \"studio booking app\",\n\"yoga class booking software\". Negative: \"free\", \"jobs\".\n\nAd 1: Book classes in two taps | Acme for studios | Text reminders cut no-shows. Try it free for 14 days.\nAd 2: The booking app studios switch to | Waitlists, reminders, payments | Set up in an afternoon.\nLanding page: acme.example/signup?src=gx40\n\n## The bet\n- Metric: cost per new customer from search ads (ads account + signup records).\n- Prediction: from $210 to $160 per new customer by Jan 26, 2027.\n- Why: these terms had 2,400 searches in October (Keyword Planner, read Nov 9) and our two closest terms convert at 4.1%.\n- Cost: $40 a day, $1,680 in all, inside the approved monthly budget.\n- Runs: 6 weeks, Dec 15 to Jan 26.\n- Stop early if: cost per new customer passes $320 after 10 new customers, or spend passes $1,680.\n\n## Checks\n- Brand check: passed. Design Owner, GX-41, Nov 13.\n- Who puts it live: Sam (has edit access to the ads account).\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-golive-no-prediction",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Second welcome email: turn on reminders",
+    "spec": "Channel Owner: Email Owner. Add a second email to the trial welcome flow, sent on day 2, asking new studios to turn on text reminders.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-no-prediction.md",
+    "text": "# Go-live: second welcome email, turn on reminders\n\nGX-31, Email Owner, Acme\n\n## What goes live\nSent on day 2 of the trial welcome flow, to every new trial studio that has not turned on reminders.\n\nSubject: Your first no-show is one text away\nPreview line: Turn on reminders in two clicks.\nBody:\n> Hi {first name}, most studios lose a class spot a week to people who forget. Acme can text each client the day\n> before. Turn it on in Settings, Reminders. It takes two clicks. [Turn on reminders]\n\n## The bet\n- Metric: share of trial studios that turn on reminders within 7 days (product analytics, trial cohort).\n- Prediction: more studios turn reminders on.\n- Why: 18% of the Oct trial cohort turned reminders on (analytics, read Nov 10). Studios with reminders on convert at 2x.\n- Cost: no money. 15 minutes of Priya's time to load it in the email platform.\n- Runs: 6 weeks, Dec 8 to Jan 19.\n- Stop early if: complaints pass 0.1% or unsubscribes pass 1% on this email.\n\n## Checks\n- Brand check: passed. Design Owner, GX-32, Nov 12.\n- Who puts it live: Priya (runs the email platform).\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_prediction"
+  },
+  {
+   "id": "grow-golive-no-stop-rule",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Search ad group for 'class booking app'",
+    "spec": "Channel Owner: Search Ads Owner. A new ad group on the 'class booking app' search terms, sending to the signup page.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-no-stop-rule.md",
+    "text": "# Go-live: search ad group for \"class booking app\"\n\nGX-40, Search Ads Owner, Acme\n\n## What goes live\nA new ad group in the Studios campaign. Keywords (phrase match): \"class booking app\", \"studio booking app\",\n\"yoga class booking software\". Negative: \"free\", \"jobs\".\n\nAd 1: Book classes in two taps | Acme for studios | Text reminders cut no-shows. Try it free for 14 days.\nAd 2: The booking app studios switch to | Waitlists, reminders, payments | Set up in an afternoon.\nLanding page: acme.example/signup?src=gx40\n\n## The bet\n- Metric: cost per new customer from search ads (ads account + signup records).\n- Prediction: from $210 to $160 per new customer by Jan 26, 2027.\n- Why: these terms had 2,400 searches in October (Keyword Planner, read Nov 9) and our two closest terms convert at 4.1%.\n- Cost: $40 a day, $1,680 in all, inside the approved monthly budget.\n- Runs: 6 weeks, Dec 15 to Jan 26.\n\n## Checks\n- Brand check: passed. Design Owner, GX-41, Nov 13.\n- Who puts it live: Sam (has edit access to the ads account).\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_stop_rule"
+  },
+  {
+   "id": "grow-golive-no-brand-check",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-no-brand-check.md",
+    "text": "# Go-live: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme\n\n## What goes live\nOn acme.example/reminders, a new first section headed \"How to cut no-shows at your studio\": four short steps, the\n2026 numbers from our reminder report (dated Oct 2026, linked), and a link to the setup guide. New title: \"Cut no-shows\nat your studio with text reminders | Acme\". The full section as it will look is below.\n\n> ## How to cut no-shows at your studio\n> 1. Text each client the day before. 2. Let them confirm or cancel by reply. 3. Fill the spot from the waitlist.\n> 4. Track no-shows a month. Studios on Acme cut no-shows by a third in 2026 (Acme reminder report, Oct 2026).\n\n## The bet\n- Metric: organic clicks to acme.example/reminders, brand terms left out (Search Console, Web).\n- Prediction: from 120 to 180 clicks a week by Jan 12, 2027.\n- Why: 4,100 views a week for no-show questions and a 2.9% click rate (Search Console, 28 days to Nov 9).\n- Cost: no money. About 20 minutes of Dana's time.\n- Runs: 8 weeks, Nov 17 to Jan 12.\n- Stop early if: clicks drop below 100 a week two weeks in a row, or the page stops loading.\n\n## Checks\n- Who puts it live: Dana (edits the site).\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_brand_check"
+  },
+  {
+   "id": "grow-golive-not-shown",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Go-live page",
+    "rubric": "Shows the thing that goes live, its copy or a picture of it (the email, the page change, the ad), and names the metric it moves, the prediction as a number, the cost, how long it runs and when to stop it early. Says how it fits the brand card and that the brand check passed, or says plainly that no brand card is published yet."
+   },
+   "work": {
+    "title": "Search ad group for 'class booking app'",
+    "spec": "Channel Owner: Search Ads Owner. A new ad group on the 'class booking app' search terms, sending to the signup page.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-golive-not-shown.md",
+    "text": "# Go-live: search ad group for \"class booking app\"\n\nGX-40, Search Ads Owner, Acme\n\n## What goes live\nA new ad group with a few keywords and two ads; copy to follow.\n\n## The bet\n- Metric: cost per new customer from search ads (ads account + signup records).\n- Prediction: from $210 to $160 per new customer by Jan 26, 2027.\n- Why: these terms had 2,400 searches in October (Keyword Planner, read Nov 9) and our two closest terms convert at 4.1%.\n- Cost: $40 a day, $1,680 in all, inside the approved monthly budget.\n- Runs: 6 weeks, Dec 15 to Jan 26.\n- Stop early if: cost per new customer passes $320 after 10 new customers, or spend passes $1,680.\n\n## Checks\n- Brand check: passed. Design Owner, GX-41, Nov 13.\n- Who puts it live: Sam (has edit access to the ads account).\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "not_shown"
+  },
+  {
+   "id": "grow-results-email-once",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Second welcome email: turn on reminders",
+    "spec": "Channel Owner: Email Owner. Add a second email to the trial welcome flow, sent on day 2, asking new studios to turn on text reminders.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-email-once.md",
+    "text": "# Results: second welcome email, turn on reminders\n\nGX-31, Email Owner, Acme. Ran Dec 8, 2026 to Jan 19, 2027.\n\n- Before: 18% of trial studios turned reminders on within 7 days (Oct 1 to Nov 30, 2026; product analytics, trial cohort).\n- After: 25% (Dec 8, 2026 to Jan 19, 2027; same report).\n- Predicted: 26%. Reached 7 of the predicted 8 points (88%), and beat the baseline.\n- Result: result:worked-once. The email stays in the flow as the flow's own upkeep; there is nothing new to watch.\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-results-page-watching",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-page-watching.md",
+    "text": "# Results: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme. Ran Nov 17, 2026 to Jan 12, 2027.\n\n- Before: 120 organic clicks a week, brand terms left out (Search Console, Web, Oct 20 to Nov 16, 2026).\n- After: 171 clicks a week (Search Console, Web, Dec 15, 2026 to Jan 11, 2027).\n- Predicted: 180. Reached 51 of the predicted 60 (85%), and beat the baseline.\n- Result: result:watching. The section stays on the page, so its clicks are watched: Monitoring task GM-7,\n  \"Reminders page clicks\", filed as this task's follow-up, range 150 to 220 clicks a week.\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-results-ad-failed",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Search ad group for 'class booking app'",
+    "spec": "Channel Owner: Search Ads Owner. A new ad group on the 'class booking app' search terms, sending to the signup page.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-ad-failed.md",
+    "text": "# Results: search ad group for \"class booking app\"\n\nGX-40, Search Ads Owner, Acme. Ran Dec 15, 2026 to Jan 26, 2027.\n\n- Before: $210 per new customer from search ads (ads account + signup records, Nov 1 to Dec 14, 2026).\n- After: $236 per new customer for the new ad group (same sources, Dec 15, 2026 to Jan 26, 2027); 7 new customers.\n- Predicted: $160. The baseline was not beaten.\n- Result: result:failed. The ad group is paused. Search terms brought trial seekers, not studios.\n",
+    "work_version": 2
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "grow-results-no-dates-or-source",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Second welcome email: turn on reminders",
+    "spec": "Channel Owner: Email Owner. Add a second email to the trial welcome flow, sent on day 2, asking new studios to turn on text reminders.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-no-dates-or-source.md",
+    "text": "# Results: second welcome email, turn on reminders\n\nGX-31, Email Owner, Acme. Ran Dec 8, 2026 to Jan 19, 2027.\n\n- Before: 18% of trial studios turned reminders on within 7 days.\n- After: 25%.\n- Predicted: 26%. Reached 7 of the predicted 8 points (88%), and beat the baseline.\n- Result: result:worked-once. The email stays in the flow as the flow's own upkeep; there is nothing new to watch.\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_dates_or_source"
+  },
+  {
+   "id": "grow-results-watching-no-link",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-watching-no-link.md",
+    "text": "# Results: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme. Ran Nov 17, 2026 to Jan 12, 2027.\n\n- Before: 120 organic clicks a week, brand terms left out (Search Console, Web, Oct 20 to Nov 16, 2026).\n- After: 171 clicks a week (Search Console, Web, Dec 15, 2026 to Jan 11, 2027).\n- Predicted: 180. Reached 51 of the predicted 60 (85%), and beat the baseline.\n- Result: result:watching. We will keep an eye on it.\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_monitoring_link"
+  },
+  {
+   "id": "grow-results-no-result-tag",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Search ad group for 'class booking app'",
+    "spec": "Channel Owner: Search Ads Owner. A new ad group on the 'class booking app' search terms, sending to the signup page.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-no-result-tag.md",
+    "text": "# Results: search ad group for \"class booking app\"\n\nGX-40, Search Ads Owner, Acme. Ran Dec 15, 2026 to Jan 26, 2027.\n\n- Before: $210 per new customer from search ads (ads account + signup records, Nov 1 to Dec 14, 2026).\n- After: $236 per new customer for the new ad group (same sources, Dec 15, 2026 to Jan 26, 2027); 7 new customers.\n- Predicted: $160. The baseline was not beaten.\n- The ad group is paused. Search terms brought trial seekers, not studios.\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "no_result_tag"
+  },
+  {
+   "id": "grow-results-worked-below-bar",
+   "domain": "marketing",
+   "requirement": {
+    "name": "Results page",
+    "rubric": "It worked when the baseline was beaten and at least 60% of the predicted change was reached. Gives the number before and after, each with its dates and its source, and the result, tagged result:failed when it did not work, or, when it worked, result:watching (what was kept needs watching) or result:worked-once (nothing to watch). On result:watching it names the Monitoring task filed as this task's follow-up."
+   },
+   "work": {
+    "title": "Answer the no-show question on the reminders page",
+    "spec": "Channel Owner: SEO Owner. Add a section to acme.example/reminders answering how studios cut no-shows.",
+    "work_version": 2,
+    "goal": "Test growth ideas, keep what works, drop the rest.",
+    "context": {}
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "grow-results-worked-below-bar.md",
+    "text": "# Results: answer \"how do I cut no-shows?\" on the reminders page\n\nGX-14, SEO Owner, Acme. Ran Nov 17, 2026 to Jan 12, 2027.\n\n- Before: 120 organic clicks a week, brand terms left out (Search Console, Web, Oct 20 to Nov 16, 2026).\n- After: 138 clicks a week (Search Console, Web, Dec 15, 2026 to Jan 11, 2027).\n- Predicted: 180. Beat the baseline.\n- Result: result:watching. Monitoring task GM-7, \"Reminders page clicks\", filed as this task's follow-up: range 150 to\n  220 clicks a week.\n",
+    "work_version": 2
+   },
+   "expected": "not_met",
+   "trap": "worked_below_bar"
+  },
+  {
+   "id": "long-spec-6500",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-682e6072a064b08326b89531_v1.md",
+    "text": "# power(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `power(a, b)` function in calc.py. They write `a ** b` themselves, and get no clear error for bad input, and Python quietly returns a complex number for some inputs. Chris asked for `power(a, b)` (a raised to b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier). Integer and decimal powers only; no roots, logs or complex numbers.\n- Same shape as the multiply and divide specs: non-numeric input raises a clear TypeError.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `power` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `power(a, b)` in calc.py, returning `a` raised to `b` (`power(2, 3)` is 8).\n- Works for int and float, including negative and zero exponents (`power(2, -1)` is 0.5; `power(5, 0)` is 1).\n- `a == 0` with a negative `b` raises `ZeroDivisionError` with a clear message, e.g. `power() argument 'a' must not be zero when 'b' is negative`.\n- A negative `a` with a non-whole `b` (which Python turns into a complex number) raises `ValueError` with a clear message, e.g. `power() cannot raise a negative number to a non-whole power`. The function never returns a complex number.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `power() argument 'a' must be a number, not str`. Exact wording is the Builder's.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `sqrt`, `root`, `exp`, `log`, `modulo`, etc.).\n- No complex-number results, no modular power (`pow(a, b, m)`).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive whole numbers, When `power(2, 3)` is called, Then it returns 8. Check: before release.\n- AC-2. Given an exponent of zero, When `power(5, 0)` is called, Then it returns 1. Check: before release.\n- AC-3. Given a negative exponent, When `power(2, -2)` is called, Then it returns 0.25. Check: before release.\n- AC-4. Given a negative base and a whole exponent, When `power(-2, 3)` is called, Then it returns -8. Check: before release.\n- AC-5. Given a float exponent, When `power(9, 0.5)` is called, Then it returns 3.0. Check: before release.\n- AC-6. Given zero as the base and a positive exponent, When `power(0, 5)` is called, Then it returns 0. Check: before release.\n- AC-7. Given zero as the base and a negative exponent, When `power(0, -1)` is called, Then it raises `ZeroDivisionError` with a non-empty message that names argument `a`. Check: before release.\n- AC-8. Given a negative base and a non-whole exponent, When `power(-8, 0.5)` is called, Then it raises `ValueError` with a non-empty message, and does not return a complex number. Check: before release.\n- AC-9. Given a non-numeric first argument, When `power(\"a\", 3)` is called, Then it raises `TypeError` and the message names argument `a` and type `str`. Check: before release.\n- AC-10. Given a non-numeric second argument, When `power(3, None)` is called, Then it raises `TypeError` and the message names argument `b` and type `NoneType`. Check: before release.\n- AC-11. Given the module, When a developer runs `from calc import power`, Then the import works. Check: before release.\n- AC-12. Given the test suite, When it runs after the change, Then test_calc.py has a test for AC-1 to AC-10 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own, NaN and infinity, very large results (overflow), lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Design notes\n- Put `power` after `divide` in calc.py, with the same shape: check the types first, then the edge cases, then compute.\n- Use Python's `**` for the result. Do not use `math.pow`: it always returns a float, and `power(2, 3)` must stay the int 8.\n- Check \"non-whole\" with `float(b).is_integer()`, so `power(-8, 2.0)` is allowed (it is 64.0) and `power(-8, 0.5)` raises.\n- `bool` passes the number check because it is an int; that is the default answer to the open question below.\n- Messages follow the existing pattern: `<function>() argument '<name>' must ...`.\n\n## Open questions\n- Does calc.py already define `power`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Zero to a negative power raises `ZeroDivisionError` (default, matches Python). Owner: human:chris, by the OK.\n- Negative base with a non-whole exponent raises `ValueError` instead of returning a complex number (default, keeps the library real-number arithmetic). Owner: human:chris, by the OK; say so if you want something else.\n- Is `True`/`False` accepted as a number? Owner: human:chris, by the OK. Default: yes (bool is an int in Python); not tested.\n- Is float rounding left as Python's? Owner: human:chris, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Huge exponents (`power(10, 10**9)`) can hang or overflow. Accepted for now; cheapest check: a note in the docstring.\n\n## Change log\n- 2026-11-11: first version.\n- 2026-11-11: design notes added after the Builder's question on `math.pow`.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "long-spec-12000",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-682e6072a064b08326b89531_v1.md",
+    "text": "# power(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `power(a, b)` function in calc.py. They write `a ** b` themselves, and get no clear error for bad input, and Python quietly returns a complex number for some inputs. Chris asked for `power(a, b)` (a raised to b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Background\nThe calculator started as four functions (add, subtract, multiply, divide) and has grown one small, well-tested function\nat a time. Each addition so far followed the same pattern: one public function, a type check that raises a clear\nTypeError, the edge cases Python gets surprising on handled explicitly, and tests beside it. Power is the first function\nwhere Python's own operator can return a type the library has never returned (a complex number), which is why this spec\nspends most of its words on what happens at the edges rather than on the happy path.\n\n## Alternatives considered\n- Wrap `math.pow`. Rejected: it turns every result into a float, which would make power(2, 3) return 8.0 where every\n  other function in the library keeps ints as ints.\n- Wrap the built-in `pow` with three arguments for modular power. Rejected: modular arithmetic is out of scope for a\n  plain calculator and nobody asked for it.\n- Return `None` on bad input instead of raising. Rejected: the library raises on bad input everywhere else, and a None\n  that travels on into later arithmetic fails far from where the mistake was made.\n- Allow complex results behind a flag. Rejected for now: no one has asked for complex numbers, and a flag is easy to add\n  later and hard to take away.\n- Accept numeric strings like \"2\". Rejected: no other function does, and quiet conversion hides mistakes.\n\n## Notes from earlier specs\n- The divide spec settled that a zero divisor raises ZeroDivisionError with a message, and power follows it for zero to\n  a negative exponent, since that is a division by zero in disguise.\n- The multiply spec settled the TypeError message shape. Reviewers checked the message text, so the tests here check it\n  too, by the argument's name and the type's name rather than the exact sentence.\n- The modulo spec left `bool` accepted as a number by default. Power does the same, so the library stays consistent.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier). Integer and decimal powers only; no roots, logs or complex numbers.\n- Same shape as the multiply and divide specs: non-numeric input raises a clear TypeError.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Goal and how we will know\n- Goal in Tico: none linked. Target: missing, to be set by Chris.\n- Measure: `power` is in calc.py on the main branch and its tests pass in CI.\n- Read date: at merge, then at the next release that contains it.\n- Guard: all existing tests in test_calc.py still pass.\n- Decision rule: keep if both hold; revert if any existing test fails.\n\n## Scope\n- New public function `power(a, b)` in calc.py, returning `a` raised to `b` (`power(2, 3)` is 8).\n- Works for int and float, including negative and zero exponents (`power(2, -1)` is 0.5; `power(5, 0)` is 1).\n- `a == 0` with a negative `b` raises `ZeroDivisionError` with a clear message, e.g. `power() argument 'a' must not be zero when 'b' is negative`.\n- A negative `a` with a non-whole `b` (which Python turns into a complex number) raises `ValueError` with a clear message, e.g. `power() cannot raise a negative number to a non-whole power`. The function never returns a complex number.\n- Non-numeric input (anything not an int or float) raises `TypeError` with a message naming the argument and its type, e.g. `power() argument 'a' must be a number, not str`. Exact wording is the Builder's.\n- Tests for each case in test_calc.py.\n\n## Non-goals\n- No other new functions (no `sqrt`, `root`, `exp`, `log`, `modulo`, etc.).\n- No complex-number results, no modular power (`pow(a, b, m)`).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Acceptance criteria\n- AC-1. Given two positive whole numbers, When `power(2, 3)` is called, Then it returns 8. Check: before release.\n- AC-2. Given an exponent of zero, When `power(5, 0)` is called, Then it returns 1. Check: before release.\n- AC-3. Given a negative exponent, When `power(2, -2)` is called, Then it returns 0.25. Check: before release.\n- AC-4. Given a negative base and a whole exponent, When `power(-2, 3)` is called, Then it returns -8. Check: before release.\n- AC-5. Given a float exponent, When `power(9, 0.5)` is called, Then it returns 3.0. Check: before release.\n- AC-6. Given zero as the base and a positive exponent, When `power(0, 5)` is called, Then it returns 0. Check: before release.\n- AC-7. Given zero as the base and a negative exponent, When `power(0, -1)` is called, Then it raises `ZeroDivisionError` with a non-empty message that names argument `a`. Check: before release.\n- AC-8. Given a negative base and a non-whole exponent, When `power(-8, 0.5)` is called, Then it raises `ValueError` with a non-empty message, and does not return a complex number. Check: before release.\n- AC-9. Given a non-numeric first argument, When `power(\"a\", 3)` is called, Then it raises `TypeError` and the message names argument `a` and type `str`. Check: before release.\n- AC-10. Given a non-numeric second argument, When `power(3, None)` is called, Then it raises `TypeError` and the message names argument `b` and type `NoneType`. Check: before release.\n- AC-11. Given the module, When a developer runs `from calc import power`, Then the import works. Check: before release.\n- AC-12. Given the test suite, When it runs after the change, Then test_calc.py has a test for AC-1 to AC-10 and all earlier tests still pass. Check: before release.\n- Edge cases not in scope: float rounding beyond Python's own, NaN and infinity, very large results (overflow), lists and other sequences (rejected like strings).\n- Not proved yet: use after release is not measured; nobody but the requester has asked for it.\n\n## Design notes\n- Put `power` after `divide` in calc.py, with the same shape: check the types first, then the edge cases, then compute.\n- Use Python's `**` for the result. Do not use `math.pow`: it always returns a float, and `power(2, 3)` must stay the int 8.\n- Check \"non-whole\" with `float(b).is_integer()`, so `power(-8, 2.0)` is allowed (it is 64.0) and `power(-8, 0.5)` raises.\n- `bool` passes the number check because it is an int; that is the default answer to the open question below.\n- Messages follow the existing pattern: `<function>() argument '<name>' must ...`.\n\n## Test plan\nEach acceptance criterion has one test in test_calc.py, named after it, so a reviewer can tick them off one by one.\n\n| Test | Covers | Input | Expected |\n|---|---|---|---|\n| test_power_whole_numbers | AC-1 | power(2, 3) | 8, an int |\n| test_power_zero_exponent | AC-2 | power(5, 0) | 1 |\n| test_power_negative_exponent | AC-3 | power(2, -2) | 0.25 |\n| test_power_negative_base_whole_exponent | AC-4 | power(-2, 3) | -8 |\n| test_power_float_exponent | AC-5 | power(9, 0.5) | 3.0 |\n| test_power_zero_base_positive_exponent | AC-6 | power(0, 5) | 0 |\n| test_power_zero_base_negative_exponent | AC-7 | power(0, -1) | ZeroDivisionError naming 'a' |\n| test_power_negative_base_fraction | AC-8 | power(-8, 0.5) | ValueError, no complex result |\n| test_power_rejects_text_base | AC-9 | power(\"a\", 3) | TypeError naming 'a' and str |\n| test_power_rejects_none_exponent | AC-10 | power(3, None) | TypeError naming 'b' and NoneType |\n| test_power_imports | AC-11 | from calc import power | no error |\n\nAC-12 is the whole suite: `python -m pytest test_calc.py` passes, with the eleven new tests and every earlier one.\n\nHow a person checks it before release, without reading the code:\n1. Open the PR's checks: the test job is green at the newest commit.\n2. In the test output, find the eleven `test_power_*` names, each passed.\n3. Run `python -c \"from calc import power; print(power(2, 3), power(2, -2), power(9, 0.5))\"` and see `8 0.25 3.0`.\n4. Run `python -c \"from calc import power; power(-8, 0.5)\"` and see a ValueError whose message says it cannot raise a negative number to a non-whole power.\n\n## Docs and examples\n- calc.py: a docstring on `power` with two examples (`power(2, 3)` is 8, `power(2, -1)` is 0.5) and one line on each error it raises.\n- README: add `power` to the list of functions, one line, in the same style as `multiply` and `divide`.\n- No changelog entry: releases list their PRs.\n\nWorked examples a reader can check by hand:\n\n| Call | Result | Why |\n|---|---|---|\n| power(2, 10) | 1024 | whole numbers stay ints |\n| power(10, -3) | 0.001 | a negative exponent is one over the power |\n| power(2.5, 2) | 6.25 | a float base gives a float |\n| power(4, 0.5) | 2.0 | a fractional exponent on a positive base is a root |\n| power(-3, 2) | 9 | a negative base with an even whole exponent is positive |\n| power(-3, 3) | -27 | and with an odd one, negative |\n| power(-27, 1/3) | ValueError | a negative base with a non-whole exponent would be complex |\n| power(0, 0) | 1 | Python's convention, kept |\n| power(0, -2) | ZeroDivisionError | zero has no negative power |\n| power(\"2\", 3) | TypeError | text is not turned into a number |\n| power([2], 3) | TypeError | neither are lists |\n\n## Rollout\n- One PR to ticoteam/pipeline-sandbox with calc.py, test_calc.py and the README line.\n- Reviewed twice (Review 1 and Review 2), then the pre-release page, then merged by the queue and released.\n- Validate after release: name the release, import `power` from it and run examples 1, 2 and 7 above.\n\n## Further reading\n- Python's documentation on the power operator, on `pow` with three arguments, and on `math.pow`, which the alternatives\n  above compare. The calculator's own README lists the functions it has and the style each follows.\n- The divide, multiply and modulo specs, which settled the error style this spec reuses, and their review pages.\n- The pipeline's goal, \"Discerning, high-quality specs that ship\", and the active bet on small, well-tested additions.\n\n## Open questions\n- Does calc.py already define `power`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Zero to a negative power raises `ZeroDivisionError` (default, matches Python). Owner: human:chris, by the OK.\n- Negative base with a non-whole exponent raises `ValueError` instead of returning a complex number (default, keeps the library real-number arithmetic). Owner: human:chris, by the OK; say so if you want something else.\n- Is `True`/`False` accepted as a number? Owner: human:chris, by the OK. Default: yes (bool is an int in Python); not tested.\n- Is float rounding left as Python's? Owner: human:chris, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Huge exponents (`power(10, 10**9)`) can hang or overflow. Accepted for now; cheapest check: a note in the docstring.\n\n## Change log\n- 2026-11-11: first version.\n- 2026-11-11: design notes, test plan, docs and worked examples added for the Builder.\n",
+    "work_version": 0
+   },
+   "expected": "met",
+   "trap": null
+  },
+  {
+   "id": "long-spec-trap-no-done",
+   "domain": "dev",
+   "requirement": {
+    "name": "Spec page",
+    "rubric": "States the goal, the scope (what is in and what is out), and what done looks like as acceptance criteria someone can check. Only these three count: a page with all three meets it however long it is and whatever else it holds."
+   },
+   "work": {
+    "title": "Add a power function to the calculator",
+    "spec": "Add a power function to the calculator: power(a, b) returns a raised to b. Follow the style of the existing functions, with tests.",
+    "work_version": 2,
+    "goal": "Discerning, high-quality specs that ship",
+    "context": {
+     "task": "bd85ed6c-e0ef-4aec-aee7-cc136eeafc02"
+    }
+   },
+   "attachment": {
+    "kind": "page",
+    "name": "file-682e6072a064b08326b89531_v1.md",
+    "text": "# power(a, b): Spec, 2026-11-11\n\nTask requested by human:chris. Owner: Product Owner. Repository: ticoteam/pipeline-sandbox (calc.py, test_calc.py).\n\n## Problem\nDevelopers using acme-calc have no `power(a, b)` function in calc.py. They write `a ** b` themselves, and get no clear error for bad input, and Python quietly returns a complex number for some inputs. Chris asked for `power(a, b)` (a raised to b), in the style of the existing functions, with tests.\nSource: task request, 2026-11-11. No usage data or customer evidence exists; this is a request, not a measured failure.\n\n## Background\nThe calculator started as four functions (add, subtract, multiply, divide) and has grown one small, well-tested function\nat a time. Each addition so far followed the same pattern: one public function, a type check that raises a clear\nTypeError, the edge cases Python gets surprising on handled explicitly, and tests beside it. Power is the first function\nwhere Python's own operator can return a type the library has never returned (a complex number), which is why this spec\nspends most of its words on what happens at the edges rather than on the happy path.\n\n## Alternatives considered\n- Wrap `math.pow`. Rejected: it turns every result into a float, which would make power(2, 3) return 8.0 where every\n  other function in the library keeps ints as ints.\n- Wrap the built-in `pow` with three arguments for modular power. Rejected: modular arithmetic is out of scope for a\n  plain calculator and nobody asked for it.\n- Return `None` on bad input instead of raising. Rejected: the library raises on bad input everywhere else, and a None\n  that travels on into later arithmetic fails far from where the mistake was made.\n- Allow complex results behind a flag. Rejected for now: no one has asked for complex numbers, and a flag is easy to add\n  later and hard to take away.\n- Accept numeric strings like \"2\". Rejected: no other function does, and quiet conversion hides mistakes.\n\n## Notes from earlier specs\n- The divide spec settled that a zero divisor raises ZeroDivisionError with a message, and power follows it for zero to\n  a negative exponent, since that is a division by zero in disguise.\n- The multiply spec settled the TypeError message shape. Reviewers checked the message text, so the tests here check it\n  too, by the argument's name and the type's name rather than the exact sentence.\n- The modulo spec left `bool` accepted as a number by default. Power does the same, so the library stays consistent.\n\n## Who has it\nPython developers who use acme-calc's arithmetic helpers. Count: not measured (no usage export is connected).\n\n## Evidence\n- Request from human:chris, 2026-11-11 (the only source).\n- Fits the active bet \"small, well-tested additions win more users than big features\". Plain arithmetic, so inside \"We won't\" (no scientific or symbolic math, no GUI, no paid tier). Integer and decimal powers only; no roots, logs or complex numbers.\n- Same shape as the multiply and divide specs: non-numeric input raises a clear TypeError.\n\n## Appetite\nSmall batch, at most 1 team-day for one engineer (set by the Product Owner, 2026-11-11, for Chris to confirm at OK). If it needs more, stop and ask.\n\n## Scope\n- A `power(a, b)` function in calc.py, with tests.\n\n## Non-goals\n- No other new functions (no `sqrt`, `root`, `exp`, `log`, `modulo`, etc.).\n- No complex-number results, no modular power (`pow(a, b, m)`).\n- No input conversion: strings are not turned into numbers.\n- No returning `None`, infinity or NaN as an error signal.\n- No change to existing functions, no new dependency, no GUI, no paid tier, no scientific or symbolic math.\n\n## Design notes\n- Put `power` after `divide` in calc.py, with the same shape: check the types first, then the edge cases, then compute.\n- Use Python's `**` for the result. Do not use `math.pow`: it always returns a float, and `power(2, 3)` must stay the int 8.\n- Check \"non-whole\" with `float(b).is_integer()`, so `power(-8, 2.0)` is allowed (it is 64.0) and `power(-8, 0.5)` raises.\n- `bool` passes the number check because it is an int; that is the default answer to the open question below.\n- Messages follow the existing pattern: `<function>() argument '<name>' must ...`.\n\n## Rollout\n- One PR to ticoteam/pipeline-sandbox with calc.py, test_calc.py and the README line.\n- Reviewed twice (Review 1 and Review 2), then the pre-release page, then merged by the queue and released.\n- Validate after release.\n\n## Further reading\n- Python's documentation on the power operator, on `pow` with three arguments, and on `math.pow`, which the alternatives\n  above compare. The calculator's own README lists the functions it has and the style each follows.\n- The divide, multiply and modulo specs, which settled the error style this spec reuses, and their review pages.\n- The pipeline's goal, \"Discerning, high-quality specs that ship\", and the active bet on small, well-tested additions.\n\n## Discussion so far\n- Builder, 10:02: is `power` meant to replace the `**` people write today, or sit beside it? Product Owner: beside it;\n  nobody has to change their code, and the README will say when to prefer it (clear errors on bad input).\n- Reviewer 1, 10:15: the divide spec took two rounds because the zero case was found late. Product Owner: noted; the\n  edge cases are listed under Design notes and Open questions so they are settled before the build, not during review.\n- Builder, 10:21: how big may an exponent be before we refuse it? Product Owner: we do not refuse any size for now; the\n  risk is listed below and a docstring note covers it. If a user hits it we will set a limit then, with numbers.\n- Reviewer 2, 10:40: should the function accept Decimal and Fraction? Product Owner: not in this change. They are\n  numbers, but nothing else in the library takes them, and adding them here would make power the odd one out.\n- Builder, 10:55: is there a style guide for the docstring? Product Owner: follow divide's: one line on what it does,\n  the arguments, the errors it raises, and two short examples.\n- Release Owner, 11:05: anything that needs a note in the release? Product Owner: no; the release lists its PRs, and\n  this one adds a function without changing any other.\n\n## Open questions\n- Does calc.py already define `power`? Owner: Builder checks at start; if it exists, stop and tell human:chris.\n- Zero to a negative power raises `ZeroDivisionError` (default, matches Python). Owner: human:chris, by the OK.\n- Negative base with a non-whole exponent raises `ValueError` instead of returning a complex number (default, keeps the library real-number arithmetic). Owner: human:chris, by the OK; say so if you want something else.\n- Is `True`/`False` accepted as a number? Owner: human:chris, by the OK. Default: yes (bool is an int in Python); not tested.\n- Is float rounding left as Python's? Owner: human:chris, by the OK. Default: yes.\n\n## Risks\n- Low value if nobody uses it. Cheapest check: look at usage and issues after release.\n- Possible duplicate of an existing function. Cheapest check: grep calc.py.\n- Huge exponents (`power(10, 10**9)`) can hang or overflow. Accepted for now; cheapest check: a note in the docstring.\n\n## Change log\n- 2026-11-11: first version.\n- 2026-11-11: design notes, test plan, docs and worked examples added for the Builder.\n",
+    "work_version": 0
+   },
+   "expected": "not_met",
+   "trap": "no_done_long"
   }
  ]
 }

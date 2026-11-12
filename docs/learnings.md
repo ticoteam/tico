@@ -32,7 +32,13 @@ keeps the copy; in the bot's own checkout its next memory commit does. The move 
 pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
 that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
-A stateless bot keeps no memory at all: Counsel, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
+Several checkouts and turns of one bot write the same repository, so its commits often land behind what another
+pushed. The runner rebases them onto the remote and pushes again; where both sides added lines to the same spot of
+a `memory/` note (`memory/state.md` aside), it keeps both sides' lines (git's union merge,
+`safegit::MERGE_ATTRIBUTES`) instead of stopping. Only a conflict it cannot settle that way, in AGENT.md say, leaves
+the commits unpushed, and the health check files it once for BotOps (`push_stuck`, docs/health-monitor.md).
+
+A stateless bot keeps no memory at all: The Rules Owner, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
 says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
 or `state.md`, its memory folders are not committed for it, and Learn skips it. Each task is judged from
 its own text (see [sessions](sessions.md)).
@@ -153,7 +159,7 @@ reached, even partway through, the night sends nothing, shows "Skipped", and the
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 15 items each,
-highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
+highest first. The same 15-item limit applies across pending runs when Update sends its request. Recipients are the active bots other than BotOps, the Assistant and the Strategy Owner,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 
@@ -197,7 +203,7 @@ under Settings > General > Privacy. It starts off and cannot be enabled on a pla
 install or Tico Gateway connection is required, and fetching also needs the install's Gateway key. Demo and rehearsal
 installs send nothing. This consent is separate from the anonymous usage count.
 
-At most once every 24 hours, Suggest posts `snapshot_version: 1`, active bot counts (total and by BotOps, Goal Manager,
+At most once every 24 hours, Suggest posts `snapshot_version: 1`, active bot counts (total and by BotOps, Strategy Owner,
 Engineering Lead and Finance template), the open task count and enabled custom automation count to the Gateway's
 `/v1/suggestions`. Spend is never sent: when a company monthly usage pool cap is set, its spend and cap are read only by the
 local condition check at delivery.

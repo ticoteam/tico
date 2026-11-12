@@ -266,7 +266,7 @@ fn validate_and_tag(
         .run
         .ok_or("Dispatch not visible yet; inspect Actions and resume with --run")?;
     verify_run(state, candidate, id, false)?;
-    // Release Manager runs this in the background; the durable record resumes the same run after interruption.
+    // The Release Owner runs this in the background; the durable record resumes the same run after interruption.
     loop {
         let status = Command::new("gh")
             .args([
@@ -373,7 +373,7 @@ fn file_writer_task(
     let writer = options
         .get("writer")
         .map(String::as_str)
-        .unwrap_or("docs-writer");
+        .unwrap_or("technical-writer");
     let range = format!("{}..{}", state.previous, state.version);
     let body = format!(
         "{version} is published. Its release notes are on its release-approval issue (label release-approval), built \

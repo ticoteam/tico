@@ -94,8 +94,9 @@ def test_me_follows_is_whether_a_message_naming_nobody_reaches_you(api):
     assert delivery(api, say(api, thread["id"], "Budget is out")["id"], "human:ben")["reason"] == "follower"
 
 
-# ----------------------------------------------------------------------------- the unsolicited cap (19)
-def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(api, monkeypatch):
+def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(
+    api, monkeypatch, inside_one_half_hour
+):
     monkeypatch.setattr(H, "UNSOLICITED_PER_DAY", 1)
     thread = new_thread(api, audience="company")
     first = bot_post(api, "bot:ops", thread["id"], "One for @ben")
@@ -104,6 +105,9 @@ def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told
     assert delivery(api, second["id"], "human:ben") is None
     assert {"rule": "unsolicited_cap", "actor": "human:ben"} in second["warnings"]
     assert second["body"] == "Two for @ben"  # the message itself stays in the thread
+
+
+# ----------------------------------------------------------------------------- the unsolicited cap (19)
 
 
 def test_each_person_on_a_post_is_classified_on_their_own(api):
@@ -140,10 +144,10 @@ def on_live(api, bot, thread_id):
 
 
 def test_a_message_naming_nobody_reaches_only_the_live_followers(api):
-    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:coo"))
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo", "bot:assistant"))
     # Bots in a chat follow it at mentions: a message naming nobody wakes none of them, and nothing asks a model.
     quiet = say(api, thread["id"], "Who can look at the budget?")
-    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:coo"))
+    assert all(delivery(api, quiet["id"], b) is None for b in ("bot:ops", "bot:cpo", "bot:assistant"))
     on_live(api, "bot:cpo", thread["id"])
     message = say(api, thread["id"], "Anyone?")
     row = delivery(api, message["id"], "bot:cpo")
@@ -578,7 +582,7 @@ def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_desti
 
 
 def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
-    from clients import hubcli, hubtools, remotecli
+    from clients import cli_spec, hubcli, hubtools
 
     calls = []
 
@@ -594,8 +598,9 @@ def test_retention_is_set_from_the_cli_and_the_tool(monkeypatch):
 
     parser = hubcli.build_parser() if hasattr(hubcli, "build_parser") else hubcli.parser()
     calls.clear()
-    remotecli.via_tool(Api(), parser.parse_args(["thread", "update", "t1", "--keep-days", "14"]))
-    remotecli.via_tool(Api(), parser.parse_args(["thread", "update", "t1", "--keep-forever"]))
+    for line in (["thread", "update", "t1", "--keep-days", "14"], ["thread", "update", "t1", "--keep-forever"]):
+        args = parser.parse_args(line)
+        cli_spec.of(args).call(Api(), args)
     assert [body for _, body in calls] == [{"retention_days": 14}, {"retention_days": None}]
 
 
@@ -640,7 +645,7 @@ def capped_thread(api, monkeypatch, rounds=4, limit=2):
     monkeypatch.setattr(rules, "bot_to_bot_decision", lambda *a, **k: None)
     monkeypatch.setattr(rules, "judge", lambda *a, **k: None)
     thread = new_thread(api, audience="company")
-    posted = [bot_post(api, "bot:coo", thread["id"], f"@ops round {n}") for n in range(rounds)]
+    posted = [bot_post(api, "bot:assistant", thread["id"], f"@ops round {n}") for n in range(rounds)]
     assert [delivery(api, m["id"], "bot:ops")["state"] for m in posted[limit:]] == ["capped"] * (rounds - limit)
     return thread, posted
 

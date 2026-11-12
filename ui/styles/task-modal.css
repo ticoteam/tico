@@ -118,5 +118,6 @@
 .task-edit-meta:empty { display: none; }
 [data-task-edit-body] { position: relative; }
 [data-task-body-edit] { float: right; font-size: 12px; }
+@media (max-width:760px){button.linkish[data-task-body-edit]{min-width:40px;min-height:40px}}
 textarea[data-task-field="body"] { width: 100%; min-height: 140px; resize: vertical; font: inherit; }
 [data-task-edit-current] { margin: 0 24px 12px; white-space: pre-wrap; overflow-wrap: anywhere; }

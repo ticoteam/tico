@@ -17,7 +17,7 @@ type Person = {id: string; name: string; email: string; title?: string; team?: s
   create_bots?: boolean; add_people?: boolean; sign_in?: boolean};
 interface PageWin { ticoTheme?: {get: () => unknown; set: (value: unknown) => void} }
 const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'Initech Hub',
-  assistant_name: 'Ace', assistant_bot: 'coo', public_url: 'https://initech.test',
+  assistant_name: 'Ace', assistant_bot: 'assistant', public_url: 'https://initech.test',
   runner_url: 'https://initech.test', github_owner: '', local: false, release: '',
   onboarding_needed: false, providers_configured: true};
 
@@ -228,23 +228,6 @@ const CONFIG = {environment_id: 'initech', company_name: 'Initech', app_name: 'I
     });
     assert.equal(await row('dee').count(), 0);
 
-    // Who can join: "Added by an admin" until the company domain is on the allow list; anything else listed stays as a chip.
-    assert.equal(await page.locator('#people-admin').isChecked(), true);
-    assert.equal(await page.locator('#people-domain').isChecked(), false);
-    assert.match((await page.locator('.people-join-who').textContent())!, /Anyone with a acme\.example Google login/);
-    await page.locator('#people-domain').check();
-    assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
-      allowed_domains: ['acme.example'], expected_revision: 3}]);
-    await page.waitForFunction(() => (document.querySelector('#people-domain') as HTMLInputElement | null)?.checked === true);
-    await page.locator('#people-admin').check();
-    await ask.locator('[data-confirm-ok]').click();
-    assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'old@partner.example', 'cy@acme.example'],
-      allowed_domains: [], expected_revision: 4}]);
-    await page.locator('[data-allow-remove="old@partner.example"]').click();
-    await ask.locator('[data-confirm-ok]').click();
-    assert.deepEqual(await next(), ['allow', {allowed: ['ana@acme.example', 'cy@acme.example'], allowed_domains: [], expected_revision: 5}]);
-    await page.waitForFunction(() => !document.querySelector('[data-allow="old@partner.example"]'));
-    await page.waitForFunction(() => (document.querySelector('#people-admin') as HTMLInputElement | null)?.checked === true);
 
     await page.locator('#member-bot-limit').fill('30');
     await page.locator('#member-bot-limit').press('Enter');

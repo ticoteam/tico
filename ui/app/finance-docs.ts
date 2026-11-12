@@ -4,7 +4,7 @@
    searched and filtered by status; a bill's rail shows its lines, files, payments and approvals, and only the decisions
    the viewer may take: approve, schedule, mark paid, void. The bills email address sits in the bar, copyable.
    Receivables: invoices the same way; the rail marks one paid or writes it off (and sends a draft). Neither draws the
-   route's open total: no totals row. Bookkeeper chases late invoices; the page shows no chase history.
+   route's open total: no totals row. Finance Owner chases late invoices; the page shows no chase history.
    Every decision is a dry run first: one the rules send for approval says to whom, and a second press sends it.
    The owner or an admin sets or clears the bills address from the bar (PUT /api/v2/finance/bills-address).
    Reads: GET /api/v2/finance/bills[/{id}], /finance/invoices[/{id}], /finance/contacts, and for the forms the lines

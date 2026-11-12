@@ -55,7 +55,7 @@ from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
 from .run_diagnostics import HANDED_BACK, RESTART_TEXT, clean_stop_reported
-from . import company_pause, lifecycle
+from . import company_pause, lifecycle, start_holds
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
 from . import bot_settings as BS
@@ -771,6 +771,18 @@ def last_stop(c, bot, status):
             ),
         }
     if attempt and not attempt["started_at"] and attempt["state"] == "failed":
+        if str(attempt["final_text"] or "").endswith(start_holds.BOTOPS_HAS_IT):
+            # Handed back for the same reason start_holds.SAME times: BotOps has it, so it is no person's to fix.
+            return {
+                "kind": "never_started",
+                "tone": "soft",
+                "needs_person": False,
+                "action": None,
+                "at": at,
+                "attempt_id": attempt["id"],
+                "reason": f"Its computer handed this run back {start_holds.SAME} times for the same reason.",
+                "text": attempt["final_text"],
+            }
         # PRE_START_TRIES lapses: the reason names the computer and what to do about it (expire()).
         return {
             "kind": "never_started",
@@ -1060,6 +1072,48 @@ def run_limit_minutes(c, attempt_id):
     return None
 
 
+def harness_died(c, attempt_id):
+    """How the run's harness process ended under it ('Process exited (exit code 0)', killed, crashed or out of memory),
+    as its computer reported (a `process_exit` event, runner-rs execute.rs), else None. Never a Stop, a restart or clean
+    stop of the computer, or a time limit: those keep their own rules. As in diagnostics, the newest terminal cause wins."""
+    row = c.execute("SELECT state,stop_requested_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] not in ('interrupted', 'failed') or row['stop_requested_at']:
+        return None
+    if restart_reported(c, attempt_id):
+        return None
+    for event in c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? "
+        "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50",
+        (attempt_id,),
+    ):
+        p = json.loads(event['payload'])
+        if p.get('end_reason'):
+            return None
+        if p.get('runner_error'):
+            continue
+        if p.get('process_exit') and isinstance(p.get('exit_code'), int):
+            code = p['exit_code']
+            if p.get('oom_killed') is True:
+                return 'it ran out of memory'
+            return f'its process stopped (signal {-code})' if code < 0 else f'its process exited (code {code})'
+    return None
+
+
+def harness_deaths(c, job):
+    """Count consecutive started attempts of this job, including folded inputs, whose harness died, up to 2."""
+    deaths = 0
+    for row in c.execute(
+        "SELECT id FROM attempts WHERE started_at IS NOT NULL AND (job_id=? OR id IN "
+        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?)) "
+        "ORDER BY started_at DESC,created_at DESC,rowid DESC LIMIT 2",
+        (job['id'], job['message_id']),
+    ):
+        if harness_died(c, row['id']) is None:
+            break
+        deaths += 1
+    return deaths
+
+
 def run_limit_cuts(c, job):
     """Count consecutive started attempts of this job, including folded inputs, up to the hold cap."""
     cuts = 0
@@ -1137,6 +1191,8 @@ def retry_facts(c, job, started, finished):
     # A run its own time limit cut was not cut by the update, whenever it ended.
     update = None if timeout else cut_by_update(c, job['attempt_id'])
     restart = restart_reported(c, job['attempt_id'])
+    # Its harness process died under it (killed or crashed): not the bot's choice, so it resumes once (auto_reconcile).
+    died = None if timeout or update else harness_died(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     computer = (
         c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (attempt['runner_id'],)).fetchone()
@@ -1189,6 +1245,8 @@ def retry_facts(c, job, started, finished):
         'lease_lost': lease_lost,
         'timeout': timeout,
         'limit_cuts': run_limit_cuts(c, job) if timeout else 0,
+        'died': died,
+        'deaths': harness_deaths(c, job) if died else 0,
         'outside': outside,
         'ok_kinds': sorted({str(subject).split(':', 1)[0] for subject in used}),
         # Explicit restart/time-limit policy holds only named irreversible effects or used OKs. A silent
@@ -2265,8 +2323,12 @@ def _github_app(c):
 
 def bot_repository(c, settings, bot, rows=None, app=None):
     """`owner/name` of a bot's GitHub repository, resolved the way the token route resolves it, or "".
-    The runner clones and publishes this one (runner-rs/src/fetchrepo.rs). `rows(slug)` (its
-    bot_config row with config and repo) and `app` ((the github_app row,)) when read already."""
+    `rows(slug)` (its bot_config row with config and repo) and `app` ((the github_app row,)) when read already."""
+    return _repository_of(c, settings, bot, rows, app)[0]
+
+
+def _repository_of(c, settings, bot, rows=None, app=None):
+    """(bot_repository, the bot whose repository it is: a branch's original)."""
     from .github_app import repo_of
     from .shared_bots import _json, declared, source_of
 
@@ -2278,7 +2340,18 @@ def bot_repository(c, settings, bot, rows=None, app=None):
     bot = source_of(config) or bot
     config = rows(bot) if rows is not None else c.execute("SELECT repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
     app = app[0] if app is not None else _github_app(c)
-    return repo_of(config["repo"] if config else "", (app["org"] if app else "") or settings.github_owner) or ""
+    return repo_of(config["repo"] if config else "", (app["org"] if app else "") or settings.github_owner) or "", bot
+
+
+def runner_repository(c, settings, bot, rows=None, app=None, homes=None):
+    """The repository a bot's computer clones the bot from and publishes its history to (runner-rs/src/fetchrepo.rs):
+    bot_repository, or "" when Tico does not use it (repositories.home): the App is installed on chosen repositories
+    and not this one, or another company made it. The bot then works from its checkout on that computer, and
+    nothing is fetched from or pushed to GitHub for it."""
+    from .repositories import Homes
+
+    repository, owner = _repository_of(c, settings, bot, rows, app)
+    return "" if repository and (homes or Homes(c)).why(owner, repository) else repository
 
 
 def _reported(c, runner_id, bot):
@@ -2303,6 +2376,11 @@ def stranded(c, settings, bot, source_id, target_id):
     target = "a new cloud machine" if target_id is None else _reported(c, target_id, bot)[0]
     repository = bot_repository(c, settings, bot) or "its repository"
     label = (H.bot(c, bot) or {}).get("slug", bot)
+    if repository != "its repository" and not runner_repository(c, settings, bot):
+        return (
+            f"{label}'s history exists only on {source}: Tico does not back it up to GitHub, so {target} could not "
+            f"fetch it and the bot would stop running. It stays on {source}"
+        )
     return (
         f"{label}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
         f"it and the bot would stop running. Create it as an empty private repository on GitHub "
@@ -3752,6 +3830,9 @@ class Execution:
         load([row["bot"] for row in rows])
         load(sorted({source_of(_json(r["config"])) for r in configs.values()} - {""} - set(configs)))
         app, creators = (_github_app(c),), {}
+        from .repositories import Homes
+
+        homes = Homes(c)
         for row in rows:
             takes = runner['accepts_member_bots'] and self.auth.member_bot(
                 c, row['bot'], configs.get(row['bot']), creators
@@ -3769,7 +3850,7 @@ class Execution:
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,
-                    'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
+                    'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app, homes),
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
                     **model_subscriptions.assignment_fields(c, runner, config),
@@ -4211,11 +4292,14 @@ class Execution:
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
         such runs within PRE_START_WINDOW_HOURS the job fails instead, with a reason that names the computer, told
-        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts."""
-        state, reason = "queued", ""
+        to the person who asked. Hub cuts and planned pauses do not count; the window survives server restarts.
+        A computer that hands the job back start_holds.SAME times in a row for the same reason fails it at once, and
+        BotOps gets it (start_holds.file): no wait clears that."""
+        state, reason, botops = "queued", "", False
         tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
-        if tries >= PRE_START_TRIES:
+        stuck = start_holds.stuck(c, row) if event == "attempt.returned" else ""
+        if tries >= PRE_START_TRIES or stuck:
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
             label = (computer["label"] if computer else None) or "its Computer"
             name = (
@@ -4230,6 +4314,9 @@ class Execution:
                 else "check that Computer"
             )
             reason = f"Your {name} couldn't start on {label}; {remedy}"
+            botops = bool(stuck) and bool(start_holds.file(c, row, stuck, label))
+            if botops:
+                reason = f"Your {name} couldn't start on {label}: {stuck}. {start_holds.BOTOPS_HAS_IT}"
             state = "failed"
             c.execute("UPDATE attempts SET state='failed',final_text=? WHERE id=?", (reason, row["id"]))
             job = c.execute(
@@ -4262,7 +4349,7 @@ class Execution:
             settle_status(
                 c,
                 row["bot_id"],
-                "crashed" if state == "failed" else "idle",
+                "crashed" if state == "failed" and not botops else "idle",
                 reason if state == "failed" else "Last run didn't start; it is back in the queue",
                 claimed=row["created_at"],
                 stop=row["id"],
@@ -5054,7 +5141,7 @@ class Execution:
         # (backend/run_backoff.py). An older runner ignores it, fails the same way, and the next run starts anew.
         if run_backoff.take_compact(c, row["bot_id"], conv["id"], aid):
             config = {**config, "compact_first": True}
-        # A stateless bot (Counsel): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
+        # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
         # A runner without threads_v1 keys every bot-keyed turn on the bot's one provider thread (`session: bot`), so a
@@ -5106,6 +5193,7 @@ class Execution:
             else None
         )
         routine = None
+        github_repository = None
         if task:
             # The routine this task came from, so the bot knows the text is a standing
             # instruction and not a person's ask. What it says is already the task body.
@@ -5134,6 +5222,10 @@ class Execution:
             from .task_relations import for_prompt
 
             task = {**task, "relations": for_prompt(c, task["id"], lambda other: bool(other) and readable(other))}
+            from .stage_inputs import repository
+
+            # The one repository the task's work is in, for the turn's `gh` (GH_REPO, runner-rs/src/env.rs).
+            github_repository = repository(c, task["id"], lambda other: readable(H.task(c, other)))
             from .worktrees import recovery_prompt
 
             if recovery_notes := recovery_prompt(c, task, row['bot_id']):
@@ -5353,6 +5445,7 @@ class Execution:
                 "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")} if msg else msg),
                 "conversation": conversation,
                 "task": wire_task,
+                **({"github_repository": github_repository} if github_repository else {}),
                 **({"continue_thread": continue_thread} if continue_thread else {}),
                 **({"source_continuation": source} if source else {}),
                 # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
@@ -5371,7 +5464,7 @@ class Execution:
                 # place "updates": the recent updates that person may read and open, read now as them
                 # (backend/updates_chat.py). None for every other turn.
                 "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
-                # The owner's earlier Strategy Bot chat is a session of its own (backend/rooms.py).
+                # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
                 "config": rooms.session_config(conv, row["bot_id"], config),
                 # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                 # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
@@ -6005,7 +6098,11 @@ class Execution:
                 (row["bot_id"], runtime, model, thread_id, who.runner_id, H.now()),
             )
         msg = c.execute("SELECT message_id FROM jobs WHERE id=?", (row["job_id"],)).fetchone()[0]
-        H.task_session_started(c, row["bot_id"], row["lane"], msg, thread_id, runtime)
+        # The task's session names the harness that really runs the turn: one the claim moved to the Gateway while
+        # the bot's subscription is not signed in (models_preset.main_config) runs on the Gateway's, not the bot's own.
+        handed_model = (gateway_connection.handed(c, row["id"]) or {}).get("model")
+        harness = models_preset.GATEWAY_RUNTIME if gateway_connection.is_tico(handed_model) else runtime
+        H.task_session_started(c, row["bot_id"], row["lane"], msg, thread_id, harness)
         return msg
 
     @staticmethod
@@ -6371,7 +6468,7 @@ class Execution:
         row = self.attempt(c, who, aid, active=False)
         from . import counsel
 
-        revoked = row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid)
+        revoked = row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid)
         seq = row["last_seq"]
         from .login_waits import stored
 
@@ -6603,7 +6700,7 @@ class Execution:
         row = self.attempt(c, who, aid, final=True)
         from . import counsel
 
-        if row["bot_id"] == H.COUNSEL and counsel.revoked_page_run(c, aid):
+        if row["bot_id"] == H.RULES_OWNER and counsel.revoked_page_run(c, aid):
             body = body.model_copy(update={"text": counsel.REMOVED_PAGE})
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
@@ -6933,6 +7030,14 @@ class Execution:
                         **({"check": check["runtime"]} if check else {}),
                         # A held reply's marker: its capture is never taken again (attempt_capture).
                         **({"held_reply": True} if held else {}),
+                        # The claim ran it on the Gateway, not the runtime the bot is set to, because that runtime
+                        # is not signed in on its computer (models_preset.on_gateway): the runner made no hop of its
+                        # own, so this is what tells Runs and Health that it ran on something else.
+                        **(
+                            {"waiting_for_sign_in": unsigned}
+                            if (unsigned := gateway_connection.handed(c, aid).get("waiting_for_sign_in"))
+                            else {}
+                        ),
                     }
                 ),
                 aid,
@@ -7266,7 +7371,7 @@ class Execution:
         automations.turn_done(c, row, body.outcome, body.text)  # an automation that started this turn is charged it
         from . import counsel
 
-        # Counsel's completed turn on a document's read task finishes that task.
+        # The Rules Owner's completed turn on a document's read task finishes that task.
         counsel.turn_done(c, row, "stopped" if stopped else body.outcome, work_task_id(msg, conv), body.text)
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
@@ -7928,6 +8033,12 @@ class Execution:
                 )
                 if named:
                     reason += f' It recorded {named}; check this outside action before resuming.'
+            elif facts['died'] and facts['deaths'] >= 2:
+                stopped = 'twice'
+                reason = (
+                    f"The run was cut off twice in a row ({facts['died']}). Check what is already done before "
+                    "running it again."
+                )
             elif facts['restart'] and (facts['outside'] or facts['consumed']):
                 stopped = 'changed'
                 named = ', '.join(
@@ -8051,6 +8162,38 @@ class Execution:
         ).fetchone()
         result = self._decide(c, row, body.run_id, body.decision, note, who.actor, deferred=bool(busy))
         return result
+
+    def run_now_held(self, c, who, task):
+        """Run now on a bot's task whose run stopped partway and waits for a choice: pressing it is the choice. The
+        operator or BotOps who pressed it runs that run again, accepting it may repeat what it already did, so the task's
+        work is not left fenced behind it (unfenced_sql) while Run now answers that a run is already waiting. A choice a
+        person already saved stands. How many runs it resumed; a Problem that says who decides when the caller may not."""
+        bot = H.actor_id(task['owner_id'])
+        rows = c.execute(
+            "SELECT j.*, a.started_at, a.finished_at FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id LEFT JOIN attempts a ON a.id=j.attempt_id "
+            f"WHERE j.bot_id=? AND j.state='uncertain' AND j.attempt_id IS NOT NULL AND {H.MESSAGE_TASK_SQL}=? "
+            "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
+            "AND r.actor<>?) ORDER BY j.created_at",
+            (bot, task['id'], H.KEEPER),
+        ).fetchall()
+        if not rows:
+            return 0
+        if not self.reviewer(c, who, bot):
+            raise Problem(
+                "held", "Its last run stopped partway. Its operator or BotOps decides whether to run it again.", 409
+            )
+        by = owner_name(c, who.actor) or who.actor
+        for row in rows:
+            facts = retry_facts(c, row, row['started_at'], row['finished_at'])
+            busy = c.execute(
+                "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') AND lane="
+                "coalesce((SELECT lane FROM attempts WHERE id=?),'main')",
+                (bot, row['attempt_id']),
+            ).fetchone()
+            note = self._cut_off_note(row, facts, by=by)
+            self._decide(c, row, row['attempt_id'], 'resume', note, who.actor, deferred=bool(busy), cause='run_now')
+        return len(rows)
 
     def _finish_recovery_review(self, c, bot):
         """The review owns saving choices, not waiting for their lanes to become idle."""
@@ -8311,6 +8454,11 @@ class Execution:
         merge, publish, send or payment requires review. Its note gives the interruption time and asks it to check
         existing effects first. Lost leases without that report retain the conservative rule.
 
+        A run whose harness process died under it (killed, crashed or out of memory: harness_died) was not cut off by
+        the bot's choice: it resumes at once, once, whatever it used, with a note that asks it to check what is already
+        done (branch, PR, comments) and names any outside action or used OK. A second cut-off in a row is held for its
+        operator or BotOps. Run now on its task resumes it too, as the operator's or BotOps's choice (run_now_held).
+
         A run a quarantine stopped is judged the same way (quarantine_stops.requeues): it resumes once the quarantine
         lifts, unless a used OK, a fallback's unknown work or a named outside action holds it. Its note says it
         was stopped by a quarantine and asks it to check what it already did first. A run the quarantine held before
@@ -8450,6 +8598,7 @@ class Execution:
                     and not facts['restart']
                     and not facts['timeout']
                     and not facts['update']
+                    and not facts['died']
                     and not (safe and started <= 1)
                 ):
                     continue  # the usual wait: a person may look first
@@ -8555,6 +8704,22 @@ class Execution:
                         )
                     )
                     continue
+                if facts['died'] and facts['deaths'] <= 1:
+                    # Its harness process died under the turn (killed or crashed), not by the bot's choice: it runs again
+                    # once, at once, told to check what is already done. A second cut-off in a row is held below.
+                    decided.append(
+                        self._decide(
+                            c,
+                            row,
+                            row['attempt_id'],
+                            'resume',
+                            self._cut_off_note(row, facts),
+                            H.KEEPER,
+                            action='job.auto_reconcile',
+                            cause='died',
+                        )
+                    )
+                    continue
                 # A try resumed after a held run was left unreviewed is not judged as "stopped twice": if it is held
                 # again it waits out HELD_REVIEW_HOURS like any held run, then ends quietly (_held_choice).
                 resumed_held = self._held_resumed(c, row)
@@ -8583,7 +8748,7 @@ class Execution:
                         c, row['bot_id'], 'idle', 'Resuming is held after a second lost lease; waiting for the computer'
                     )
                     continue
-                if started > 1 and not facts['timeout'] and not resumed_held:
+                if started > 1 and not facts['timeout'] and not facts['died'] and not resumed_held:
                     # Stopped twice the same way: not bad luck. Let it go and hand the cause to BotOps.
                     note = (
                         "Dismissed automatically: this request stopped partway twice, so it is not retried "
@@ -8625,10 +8790,13 @@ class Execution:
                         )
                     )
                     continue
-                if not safe or limit_cap or resumed_held:
+                died_twice = bool(facts['died'])  # a first cut-off resumed above
+                if not safe or limit_cap or resumed_held or died_twice:
                     why = (
                         'cut by the run time limit twice in a row'
                         if limit_cap
+                        else 'cut off twice in a row: its harness process stopped'
+                        if died_twice
                         else 'Review required before repeating possible effects.'
                     )
                     if held_expired:
@@ -8692,7 +8860,7 @@ class Execution:
                                 named or acted,
                                 again=bool(held),
                                 reason=('was ' + why + (f"; recorded {', '.join(named)}" if named else ''))
-                                if limit_cap
+                                if limit_cap or died_twice
                                 else None,
                             )
                         else:
@@ -8826,6 +8994,27 @@ class Execution:
                 "effect before doing it again."
                 if named
                 else "No used OK or named irreversible outside action was recorded."
+            )
+        )
+
+    @staticmethod
+    def _cut_off_note(row, facts, by=None):
+        """The note a run cut off under the bot gets when it runs again: when and how, and to check what is already done
+        before acting again, naming any outside action or used OK. `by`: the person who ran it again."""
+        named = [
+            *facts['outside'],
+            *(['used OK (' + ', '.join(facts['ok_kinds']) + ')'] if facts['consumed'] else []),
+        ]
+        at = (row['finished_at'] or H.now())[11:16]
+        how = f": {facts['died']}" if facts.get('died') else ''
+        return (
+            f"Your last turn was cut off at {at} UTC{how}. "
+            + (f"{by} pressed Run now to run it again. " if by else '')
+            + "Check what is already done (branch, PR, comments) before acting again, then continue. "
+            + (
+                f"Before it stopped, it recorded {', '.join(named)}: verify whether that already took effect first."
+                if named
+                else "No used OK or named outside action was recorded."
             )
         )
 

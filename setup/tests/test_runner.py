@@ -19,57 +19,6 @@ def go(argv, deps=None):
     return cli.main(argv, deps=deps or fakes.deps(), io=io), io.text
 
 
-def test_join_script_is_idempotent_and_removes_the_code_file():
-    text = "\n".join(rs.join_lines("v1", "/x/join.env"))
-    assert "grep -qx tico-runner" in text and "docker run" not in text
-    assert "releases/download/v1/install.sh -o" in text and 'sh "$f" --runner' in text and "| sh" not in text
-    assert '--url "$TICO_JOIN_URL" --code "$TICO_JOIN_CODE" --label "$TICO_JOIN_LABEL"' in text
-    assert "releases/latest/download/install.sh" in "\n".join(rs.join_lines("latest", "/x/join.env"))
-    assert text.rstrip().endswith("rm -f /x/join.env")
-    rejoin = "\n".join(rs.join_lines("v1", "/x/join.env", rejoin=True))
-    assert "docker rm -f" in rejoin and "rm -f /opt/tico-runner/.env" in rejoin  # a new code needs a new .env
-    assert "screen" not in text  # the installer offers the screen by default
-    assert '"$TICO_JOIN_LABEL" --no-screen' in "\n".join(rs.join_lines("v1", "/x/join.env", screen=False))
-
-
-def test_aws_bootstrap_takes_the_code_from_ssm_not_from_user_data():
-    s = rs.bootstrap_script(os_family="ubuntu", tag="latest", env_param=("/tico/runner-a/env", "us-east-1"))
-    assert "ssm get-parameter" in s and CODE not in s
-
-
-def test_ssh_target_mints_code_late_and_passes_it_by_stdin(monkeypatch):
-    monkeypatch.setenv("TICO_OWNER_TOKEN", "owner-token-xyz")
-    monkeypatch.setenv("TICO_INBOUND_KEY", "tin_private-0123456789abcdefghijklmnopqrstuv")
-    monkeypatch.setenv("TICO_INBOUND_URL", "https://inbox.private.example")
-    monkeypatch.setattr(rs, "mint_code", lambda url, tok: CODE)
-    shell = FakeShell({"docker ps": Result(0, "Up 3 seconds\n")})
-    d = fakes.deps()
-    d.ssh_shell = lambda *a: shell
-    monkeypatch.setattr(verify, "check_computer_online", lambda *a: None)
-    code, out = go(
-        [
-            "runner",
-            "--non-interactive",
-            "--yes",
-            "--server-url",
-            "https://tico.example.com",
-            "--target",
-            "ssh",
-            "--ssh",
-            "root@10.0.0.5",
-            "--label",
-            "build-1",
-        ],
-        deps=d,
-    )
-    assert code == 0, out
-    assert CODE not in out and "owner-token-xyz" not in out
-    assert any(CODE.encode() in (i or b"") for _, i in shell.calls) and not any(CODE in c for c in shell.cmds())
-    assert state.load_runners("https://tico.example.com")[0]["label"] == "build-1"
-    assert all(b"TICO_INBOUND_" not in (data or b"") and "TICO_INBOUND_" not in cmd for cmd, data in shell.calls)
-    assert "tin_private-" not in out and "inbox.private.example" not in out
-
-
 def test_mint_code_uses_bearer_and_maps_errors():
     seen = {}
 

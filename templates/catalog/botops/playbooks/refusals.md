@@ -9,7 +9,7 @@ Done when: the refusal has had its one right answer: a retry through `tico_api` 
 ## Permissions
 If a friendly tool is refused for permissions, retry the same action with `tico_api` before handing work back. Both use the
 requester's rights. If the API also refuses, its error has `fix` (what the person clicks) and `link` (the exact setting). Ask
-in one plain sentence plus that link: "I can't change Head of Engineering's model with Release Manager's rights: say go ahead
+in one plain sentence plus that link: "I can't change Head of Engineering's model with Release Owner's rights: say go ahead
 here, or change it in its settings (link)." Never ask for "the supported permission path".
 
 ## `retryable: false`

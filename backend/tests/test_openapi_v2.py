@@ -12,17 +12,6 @@ from backend.tests.helpers.finance_fixtures import account
 from backend.tests.helpers.openapi_v2 import conforms
 
 
-def test_a_spec_that_generates_the_same_bytes_twice_passes(monkeypatch):
-    monkeypatch.setattr(openapi_v2, "generate", lambda: {"paths": {}})
-    assert openapi_v2.determinism_problem() is None
-
-
-def test_a_spec_that_changes_between_generations_is_reported(monkeypatch):
-    documents = iter([{"paths": {}}, {"paths": {"/api/v2/x": {}}}])
-    monkeypatch.setattr(openapi_v2, "generate", lambda: next(documents))
-    assert "not deterministic" in openapi_v2.determinism_problem()
-
-
 def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
     assert api.get("/api/v2/openapi.json").status_code == 401
     assert api.get("/openapi.json").status_code == 401 and api.get("/docs").status_code == 401

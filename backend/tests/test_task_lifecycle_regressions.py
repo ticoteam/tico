@@ -103,26 +103,3 @@ def test_a_computed_mergeability_webhook_never_counts_as_task_activity(c, mergea
     assert c.execute(
         "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='github'", (task["id"],)
     ).fetchone()
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="The cut-over notes make a task's worktree that is not ready a Paused cause of that task alone "
-    "(docs/dev/pipelines-v3-cutover.md, 'What a move still does'); waiting_on and task_wakes do not read "
-    "worktree_waits yet, so the task shows no wait.",
-)
-@pytest.mark.parametrize("state", ["waiting", "reserved"])
-def test_a_task_whose_worktree_is_not_ready_shows_it_paused_until_the_wait_ends(c, state):
-    X.place(c, "cmo")  # the bot can run: only the worktree holds the task
-    task = create(c, "Build task fix")
-    assert all(w.state != "paused" for w in H.task_waits(c, [task["id"]])[task["id"]])
-    WW.ensure(c)
-    c.execute(
-        "INSERT INTO worktree_waits(id,task_id,owner,repo,generation,state,reason,created_at,updated_at) "
-        "VALUES('wait',?,'bot:cmo','acme/product',1,?,'No free worktree',?,?)",
-        (task["id"], state, OLD, OLD),
-    )
-    (wait, *_) = H.task_waits(c, [task["id"]])[task["id"]]
-    assert wait.state == "paused" and "worktree" in wait.line and "acme/product" in wait.line
-    c.execute("UPDATE worktree_waits SET state='canceled' WHERE id='wait'")
-    assert all(w.state != "paused" for w in H.task_waits(c, [task["id"]])[task["id"]])

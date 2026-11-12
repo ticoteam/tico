@@ -21,7 +21,8 @@ from .store import H, Problem
 
 # range: (seconds, buckets). 5m is 10 of 30s, 1h 12 of 5 min, 24h 24 of an hour, 7d 28 of 6 hours.
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
-KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event", "due", "system")
+KINDS = ("message", "task_received", "schedule", "webhook", "event", "due", "system")
+LISTENING = "listening"  # a listening has its own page: the overview leaves it out unless `ids` names it
 STATUSES = {
     "done": ("ok", "empty", "skipped"),
     "ok": ("ok", "empty", "skipped"),
@@ -194,6 +195,7 @@ def _pick(rows, trigger="", owner="", ids=""):
         (r, f)
         for r, f in rows
         if (not kinds or kind_of(f) in kinds)
+        and (kind_of(f) != LISTENING or r["id"] in wanted)
         and (not owner or r["owner_id"] == owner)
         and (not wanted or r["id"] in wanted)
     ]
@@ -225,7 +227,7 @@ def started_by(payload, trigger_ref="", kind=""):
         data = w.get("data") if isinstance(w.get("data"), dict) else {}
         words = [str(w.get("name") or "Webhook"), str(w.get("type") or data.get("type") or data.get("event") or "")]
     elif li:
-        words = [str(li.get("source") or "Listening"), str(li.get("url") or li.get("author") or "")]
+        words = ["Listening", f"{li.get('count') or 0} sent"]
     elif e:
         words = [_words(e.get("name")), str(e.get("subject") or "")]
     elif d:
@@ -571,7 +573,7 @@ def stats(c, who, rng="1h", settings=None):
     """Per automation `who` may see that ran in the range: runs, failed, cost and its buckets oldest first; the
     totals the same way. An automation with no run in the range is left out."""
     now, since, width, n = window(rng)
-    rows = visible(c, who, settings)
+    rows = [(r, f) for r, f in visible(c, who, settings) if kind_of(f) != LISTENING]
     seen = {r["id"] for r, _ in rows}
     jobs = {key: r["id"] for r, f in rows if (key := system_key(f))}
     per = {}

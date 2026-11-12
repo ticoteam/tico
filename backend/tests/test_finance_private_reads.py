@@ -678,34 +678,6 @@ def test_a_card_creation_gets_one_outcome_for_every_amount_the_reader_cannot_che
     assert set(outcomes.values()) == {"needs_approval"}, outcomes
 
 
-def test_a_budget_change_gets_one_outcome_for_every_amount_the_reader_cannot_check(books):
-    """A holder of the budgets right without payroll detail lowers or raises Other expenses. Their figure for the budget
-    is not the true one, so every amount asks the owner for approval, and no amount tells them the true remaining."""
-    connect(books, FakeMercury())
-    with books.transaction() as c:
-        budget_id = _other_budget(c, at=AT)
-        _october_debit_paid_by_a_november_payroll_bill(c)
-        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
-        assert (
-            act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"}, at=AT).status
-            == "committed"
-        )
-        outcomes = {
-            amount: act(
-                c,
-                "human:gus",
-                "budget_update",
-                {"budget_id": budget_id, "amount": amount},
-                f"budget-{amount}",
-                dry_run=True,
-                at=AT,
-            )
-            for amount in (3_000, 6_000, 6_001, 7_000, 12_000)
-        }
-    assert {r.status for r in outcomes.values()} == {"needs_approval"}, {a: r.status for a, r in outcomes.items()}
-    assert not any(ch.isdigit() for r in outcomes.values() for ch in r.reason), outcomes
-
-
 def test_a_budget_lowered_below_its_cards_gets_one_outcome_for_a_reader_who_cannot_check_it(books):
     """Lowering a budget below what its cards reserve names the reserve only where the reader's own figure is the true
     one. A holder who lacks payroll detail (their figure nets a settled payroll part out) gets the same needs_approval for

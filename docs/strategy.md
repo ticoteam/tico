@@ -4,7 +4,7 @@
 market and the numbers, and makes the org chart and the goals follow from them. The page has one fixed shape: a
 summary every bot reads on every run, three to five **bets**, where the team plays in its market, its competitors,
 related news, and its sections. The owner writes and
-publishes it; the [Strategy Bot](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
+publishes it; the [Strategy Owner](strategy-bot.md) proposes; the [Librarian](librarian.md) keeps the evidence under it current.
 **Market** is a tab of the section (`#/strategy/market`; `#/market` redirects there), unchanged in what it does.
 
 **The Market page.** The Market tab is one page that reads top to bottom. Under the market's name are three tiles:
@@ -19,21 +19,21 @@ spend. Then five questions, each with a one-line answer the Librarian writes wit
 - **Who are we up against?** The players in the segments with what they sell, their revenue and share where known, and
   the briefing's last word on each. A row opens the player's note.
 - **How does it reach buyers?** The value chain, with spend or revenue on each node where known.
-- **What are buyers saying?** Listening's posts a day and the newest posts, for those who can read them. Owners and
-  admins see **Settings** for where posts go.
+- **What are buyers saying?** The items Listening sent: how many a day, and the newest. Sources, rules and rate
+  limits are set under [Listening](listening.md), not here.
 
 **Open map** opens the graph and its notes (`#/strategy/market/map`); a note link opens the map at that note. The old
 view addresses (`#/strategy/market/briefing`, `/spend`, `/buyers`, `/growth`, `/value-chain`, `/listening`) open the page
-at their question, and `/players` opens the map. How the market is defined, cut into segments and sized is in
+at their question (`/listening` opens Listening), and `/players` opens the map. How the market is defined, cut into segments and sized is in
 [Librarian](librarian.md#market-spend).
 
 Three activities make one loop:
 
 | Activity | Who | What it produces |
 |---|---|---|
-| Craft the strategy | the owner, with the Strategy Bot proposing | the Strategy page: summary, bets, sections |
+| Craft the strategy | the owner, with the Strategy Owner proposing | the Strategy page: summary, bets, sections |
 | Craft the market | the Librarian | the market graph and pages under the Market tab |
-| Keep it honest | the Strategy Bot | a task to decide when a bet's wrong-if trips |
+| Keep it honest | the Strategy Owner | a task to decide when a bet's wrong-if trips |
 
 Results close the loop: a goal links to a bet, and the bet's health is the colour of its KPI-backed goals and nothing
 else. A goal opens to the reason it exists: "bet 2, which cites this market entity and is wrong if churn passes 4%".
@@ -58,7 +58,7 @@ removes a thing.
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
-  summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Bot or `tico strategy draft
+  summary instead. Setup no longer drafts one; one written earlier, or by the Strategy Owner or `tico strategy draft
   --vision`, is kept and published as before.
 - **Bets.** Three to five recommended, at most seven active. The page shows each bet's statement, edited in place,
   with its goals and health. **+ Bet** adds one, active while fewer than seven are (else proposed); × retires one
@@ -85,7 +85,7 @@ removes a thing.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
-- **Related news.** What Listening found: the newest posts routed to a destination the reader reads, and the posts
+- **Related news.** What Listening found: the newest items it sent, and the posts
   setup filed as market insights (`about` "Listening: hot" and so on; the owner's only), hot first, then the newest,
   eight at most, each linking out.
 - **Seven sections**, markdown, in this order, in the owner's words:
@@ -93,7 +93,7 @@ removes a thing.
   2. **What we sell, and for how much** (`sell`): the product and the pricing model, and the price that would break if
      doubled or halved.
   3. **How we know they want it** (`proof`): evidence, not belief. Who uses it, how often, who comes back, what they
-     say, each with its source. The Strategy Bot keeps it current ([below](#what-the-strategy-bot-does-with-it)).
+     say, each with its source. The Strategy Owner keeps it current ([below](#what-the-strategy-bot-does-with-it)).
   4. **Why now** (`now`): what changed recently that makes this possible or needed now.
   5. **What we know that others don't** (`know`): the thing the team understands about the business that the obvious
      competitors miss, and why this team. This is where "how we win" lives, and it is the heart of the page.
@@ -142,13 +142,13 @@ may add to the draft one at a time; nothing is published or written by itself. T
 Blue Ocean, Scenarios, Seven Powers, Good Strategy, Startup idea check, Pre-mortem and Positioning for the strategy, and Where to Play and
 Five Forces for the market. They are in [Lenses](lenses.md).
 
-The Strategy Bot's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
+The Strategy Owner's setup questions are the **Default** guide, in the style of the YC application and a16z's go-to-market
 writing. Twelve questions: what you make; how badly customers need it and what they use today; the wedge you enter
 through; how you know they want it; why now; why this team; what you understand that others don't; who you fear and
 what stops a bigger company copying you; how you make money, and the price that breaks; where the next hundred
 customers come from; the bet most people would call wrong; what you won't do, and the request you turned down. Each is
 asked as a claim to confirm or strike. It is "in the style of", not theirs. The other guides
-became lenses; `tico strategy guides` and `GET /api/v2/strategy/guides` are deprecated and list the Default guide only.
+became lenses; `GET /api/v2/strategy/guides` is deprecated and lists the Default guide only.
 
 ## Who may do what
 
@@ -156,7 +156,7 @@ became lenses; `tico strategy guides` and `GET /api/v2/strategy/guides` are depr
 |---|---|---|---|
 | The owner | the draft and every version | yes, on the page or with `tico strategy draft` and `tico strategy bet` | yes, with a note |
 | Any human on the team | the published versions | no | no |
-| The Strategy Bot | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
+| The Strategy Owner | the published versions | no: it proposes, at every level, with one `strategy_draft` proposal the owner confirms | never |
 | Every other bot, and an external agent over MCP | the published versions (`tico strategy show`, `tico strategy summary`) | no | never |
 
 **The draft is the owner's.** `GET /strategy` returns `draft` only to the owner (`may_edit`); everyone else, every
@@ -166,15 +166,15 @@ bot included, sees the published version. A bot never sees an unpublished "What 
 If you see **Changed elsewhere, reloaded**, review the refreshed draft and reapply your edit.
 A failed bet move also reloads the list; check the order before trying again.
 
-The Strategy Bot proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
+The Strategy Owner proposes at every level, Passive included (in chat when asked). A `strategy_draft` proposal is partial:
 any of the summary, the vision, sections and bets. Confirming it writes those into the draft as the owner; nothing is
 published. Publishing is the one click that tells the whole team something changed, so it stays a person's. The
-owner's level choice for the Strategy Bot is on [Your Strategy Bot](strategy-bot.md#the-three-levels).
+owner's level choice for the Strategy Owner is on [Your Strategy Owner](strategy-bot.md#the-three-levels).
 
-## What the Strategy Bot does with it
+## What the Strategy Owner does with it
 
-Strategy is the Strategy Bot's first job ([Your Strategy Bot](strategy-bot.md#strategy)). Its playbooks are the product
-(`templates/catalog/goal-manager/playbooks/`):
+Strategy is the Strategy Owner's first job ([Your Strategy Owner](strategy-bot.md#strategy)). Its playbooks are the product
+(`templates/catalog/strategy-owner/playbooks/`):
 
 - **Draft the strategy** (`draft-the-strategy.md`): a task "Draft the strategy", or the owner asking in chat. It reads
   the market pages, the setup answers, the goals and KPIs, and turns the default guide's questions into **claims to
@@ -195,7 +195,7 @@ Strategy is the Strategy Bot's first job ([Your Strategy Bot](strategy-bot.md#st
 
 The Librarian reads the strategy too: "Set up the market map" takes the team's website from `tico strategy show` when
 its task has none, and when an insight contradicts an active bet the daily curate routine says so in its report and
-sends the Strategy Bot a note, so it can propose the entity as one of the bet's `cites`. The Librarian never writes the
+sends the Strategy Owner a note, so it can propose the entity as one of the bet's `cites`. The Librarian never writes the
 strategy ([Librarian](librarian.md#setting-up-the-market)). The optional Strategy Analyst template reads the bets from
 `tico strategy show` and plans each quarter against them; it keeps no strategy notes of its own.
 
@@ -216,7 +216,7 @@ Setup starts with **What are you building** and **Your bets** ([Onboarding](onbo
 3. **Org.** Recruit proposes groups and bots from the bets and names the bet each serves.
 4. Computer, agent and review as before. The screen after Create says **Strategy: a draft. Publish your strategy**
    (a link here) until a version is published, which ticks Getting started's `strategy` step; a published version
-   is when the Strategy Bot suggests goals per bet. With a website, Create files the Librarian's market task.
+   is when the Strategy Owner suggests goals per bet. With a website, Create files the Librarian's market task.
 
 The wizard saves the website as `names.website` and the one line as `answers.building`
 ([Onboarding](onboarding.md#the-answers)), and `POST /api/v2/strategy/draft-from {url?, text?}` (owner only) starts
@@ -277,15 +277,15 @@ from it. Then:
 
 The server watches each active bet's wrong-if: a KPI reading crossing its threshold (from the KPI status pass), a
 change to a cited market entity or page (from market events), or a sentence bet's check-by date passing. When one
-trips, once per bet per version, it files a task for the Strategy Bot, "Bet N: may be wrong", with the evidence.
+trips, once per bet per version, it files a task for the Strategy Owner, "Bet N: may be wrong", with the evidence.
 
-The Strategy Bot's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `tico market show <id>`, and the
+The Strategy Owner's `bet-tripped.md` playbook reads the bet, the evidence, the readings or `tico market show <id>`, and the
 goals linked to the bet, and writes **one proposal** for the owner to decide: a `strategy_draft` that retires the bet,
 rewrites it, or keeps it with a new wrong-if, with its pick and why in a few lines. It never edits goals. This
-runs at every level: at Passive the server still files the task, and the Strategy Bot only writes the proposal.
+runs at every level: at Passive the server still files the task, and the Strategy Owner only writes the proposal.
 
 The Librarian's [weekly briefing](market-briefing.md) feeds the same check from the other side: when it touches an active
-bet, the Strategy Bot weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
+bet, the Strategy Owner weighs that bet and, only when it is no longer right, files one proposal marked as from the briefing. The
 [page monitors](market-watch.md) turn a competitor's changed pricing page into an insight; a bet trips on it only once the
 Librarian applies it to the entity.
 
@@ -312,7 +312,6 @@ tico strategy bet add --statement S [--why W] [--rules-out R] [--wrong-if-kpi ID
     --wrong-if-threshold N | --wrong-if-thesis MARKET_ID | --wrong-if-text TEXT] [--check-by DATE] [--cite MARKET_ID ...]
     [--status proposed|active] [--rank N]
 tico strategy bet update <id> [the same flags]      tico strategy bet retire <id>      (owner only)
-tico strategy guides                     deprecated; the Default guide only
 tico lens list|run|show|runs            see Lenses (lenses.md)
 tico goal create ... --bet <id>          tico goal update <id> --bet <id>
 ```
@@ -344,5 +343,5 @@ rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `sou
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a `history_events` row (`subject_type` `strategy`), as the market's are.
 
-Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [Librarian](librarian.md),
+Related: [Growth](growth.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Owner](strategy-bot.md), [Librarian](librarian.md),
 [Routines](routines.md), [Agent context](agent-context.md).

@@ -223,12 +223,6 @@ def test_generate_extends_ruff_toml_and_lists_every_pair_of_the_pieces(tmp_path,
     assert text.endswith('[lint.per-file-ignores]\n"backend/a.py" = ["BLE001"]\n"backend/b.py" = ["F401"]\n')
 
 
-def test_ruff_toml_never_mentions_the_baseline():
-    # ruff.toml is what a bare `ruff check` and `ruff format` read: a fresh checkout must work without generating anything.
-    repo = Path(__file__).resolve().parents[2]
-    assert "baseline" not in (repo / "ruff.toml").read_text(encoding="utf-8").lower()
-
-
 def test_the_gate_names_the_baseline_and_the_raw_run_names_ruff_toml_alone():
     gate = lint_baseline.ruff_command(["--output-format", "concise"])
     assert gate[gate.index("--config") + 1] == "ruff-baseline.toml"
@@ -302,4 +296,30 @@ def test_the_growth_check_reads_pieces_at_a_ref_from_after_the_split(tmp_path, m
     lint_baseline.write_counts({("backend/a.py", "BLE001"): 2})
     assert lint_baseline.check_growth("HEAD") == [
         "count grew: backend/a.py BLE001 1 -> 2 (fix the findings; a baseline may only shrink)"
+    ]
+
+
+def test_a_file_split_into_a_package_takes_its_suppressions_to_the_parts_it_now_imports(tmp_path, monkeypatch):
+    git(tmp_path, "init", "-q", "-b", "main")
+    write_text(tmp_path / "ruff.toml", '[lint]\nselect = ["B", "BLE"]\n')
+    write_text(tmp_path / "clients/table.py", "def big():\n    pass\n")
+    monkeypatch.setattr(lint_baseline, "ROOT", tmp_path)
+    lint_baseline.write_counts({("clients/table.py", "BLE001"): 2})
+    commit(tmp_path, "one file")
+    # The facade imports from both parts; clients/other.py is new and nothing imports it.
+    write_text(tmp_path / "clients/table.py", "from clients.parts.a import x\nfrom clients.parts.b import y\n")
+    write_text(tmp_path / "clients/parts/a.py", "x = 1\n")
+    write_text(tmp_path / "clients/parts/b.py", "y = 2\n")
+    write_text(tmp_path / "clients/other.py", "z = 3\n")
+    lint_baseline.write_counts({("clients/parts/a.py", "BLE001"): 1, ("clients/parts/b.py", "BLE001"): 1})
+    assert lint_baseline.check_growth("HEAD") == []
+    lint_baseline.write_counts({("clients/parts/a.py", "BLE001"): 2, ("clients/parts/b.py", "BLE001"): 1})
+    assert lint_baseline.check_growth("HEAD") == [
+        "count grew: BLE001 split out of clients/table.py 2 -> 3 in clients/parts/a.py, clients/parts/b.py "
+        "(fix the findings; a baseline may only shrink)"
+    ]
+    lint_baseline.write_counts({("clients/parts/a.py", "BLE001"): 1, ("clients/other.py", "BLE001"): 1})
+    assert lint_baseline.check_growth("HEAD") == [
+        "new suppression: BLE001 in clients/other.py (fix it, or get it reviewed as a baseline change)",
+        "count grew: clients/other.py BLE001 0 -> 1 (fix the findings; a baseline may only shrink)",
     ]

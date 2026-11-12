@@ -102,7 +102,7 @@ CONTENT = {
         {
             "key": "business",
             "rank": 1,
-            "goal": "bot:sales-lead",
+            "goal": "bot:growth-manager",
             "version": 2,
             "statement": "Business installs are the margin; homes are the volume and the brand.",
             "why": "One storefront or facade job is worth many home kits, and business sites renew their scene license every "
@@ -128,7 +128,7 @@ CONTENT = {
             "check_days": 210,
         },
     ],
-    # The Strategy Bot's proposal after the briefing: a bet the team had not written down yet. Ana has accepted it into
+    # The Strategy Owner's proposal after the briefing: a bet the team had not written down yet. Ana has accepted it into
     # the draft.
     "proposal": {
         "statement": "Public bids from towns and HOAs are a motion of their own, with a survey and a fixed date.",
@@ -176,7 +176,7 @@ CONTENT = {
         "## What it means for our bets\n\n"
         "- **Calibration that works first try.** The support tickets point here. The second-visit tickets are how "
         "we will know whether the bet holds.\n"
-        "- **Business installs.** The two towns are the first public bids this season. The Strategy Bot proposed "
+        "- **Business installs.** The two towns are the first public bids this season. The Strategy Owner proposed "
         "a bet for them, for Ana to decide.\n"
         "- **Marketplace and retail.** Glimmerco's price cut is on the marketplace, so the price gap there is the "
         "risk. The bet says only our store sells the subscription, and that still holds.\n\n"
@@ -539,7 +539,7 @@ def _briefing(b):
 
 
 def _proposal(b):
-    """The Strategy Bot's proposal: a new bet, from this week's briefing, in the proposed status. Ana has already said
+    """The Strategy Owner's proposal: a new bet, from this week's briefing, in the proposed status. Ana has already said
     yes, through the same decide call her card makes, so the bet sits in the strategy draft as proposed and nothing
     waits on Goals; nothing is published."""
     spec = CONTENT["proposal"]

@@ -9,10 +9,10 @@
 // messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of
 // the assistant bot, shown live like any bot's reply (with files, /v2/uploads/assistant/messages). Proposals are
 // Confirm / Cancel cards (ui/assistant.ts). The page is the same for everyone, the owner
-// included: the owner's earlier chat with the Strategy Bot, from before it became a helper, stays readable under
+// included: the owner's earlier chat with the Strategy Owner, from before it became a helper, stays readable under
 // "Earlier chats" (GET /v2/assistant `earlier`), above the Assistant thread with its own older messages.
 // "What it has learned" at the top opens ui/app/learned.ts.
-// GET /v2/assistant: your own Assistant room with its messages, and the earlier chat with the Strategy Bot, when there is one.
+// GET /v2/assistant: your own Assistant room with its messages, and the earlier chat with the Strategy Owner, when there is one.
 interface AssistantEarlier { room_id?: string; name?: string }
 // The composer pill of the Assistant page (ui/app/pill.ts makePill), with the fields this page adds to it.
 type AssistantPill = Omit<ReturnType<typeof makePill>, 'el' | 'files'> & { el: HTMLElement; files: File[]; outbox?: AssistantOut[]; sending?: boolean };
@@ -131,7 +131,7 @@ function assistantRestore(P: AssistantPill, outs: AssistantOut[]) {
   pillChips(P); pillButtons(P); chatDraftSave(P);
 }
 
-// "Earlier chats": the owner's earlier chat with the Strategy Bot, by its name, read-only, newest page first and older
+// "Earlier chats": the owner's earlier chat with the Strategy Owner, by its name, read-only, newest page first and older
 // pages on request. Loaded when opened; nothing is sent from here.
 function assistantEarlier(earlier: AssistantEarlier | null | undefined, load: number) {
   const box = $('#asst-earlier');
@@ -140,7 +140,7 @@ function assistantEarlier(earlier: AssistantEarlier | null | undefined, load: nu
   box.hidden = !roomId;
   if (box.hidden || !earlier || !roomId) return;
   const list = box.querySelector('.asst-earlier-list');
-  box.querySelector('summary').textContent = 'Earlier chats with ' + (earlier.name || 'Strategy Bot');
+  box.querySelector('summary').textContent = 'Earlier chats with ' + (earlier.name || 'Strategy Owner');
   let before: string | null | undefined = null, busy = false;
   const line = (m: EarlierMessage) => {
     const mine = m.sender_id === 'human:' + (S.me?.id || '');

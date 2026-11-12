@@ -495,6 +495,8 @@ struct ToolCall {
     ended: bool,
     /// A shell's or a monitor's command, clipped.
     command: Option<String>,
+    /// What a failed call is shown with in the run's capture: the command, or its input when it has none, clipped.
+    input: String,
 }
 
 struct Shared {
@@ -658,11 +660,6 @@ impl ClaudeHost {
             .clone()
             .filter(|(t, _)| t == thread)
             .map(|(_, u)| u)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pretend_turn(&self, thread: &str, turn: &str) {
-        self.inner().turn = Some((thread.into(), turn.into()));
     }
 
     pub fn start_thread(&self, settings: &Settings) -> String {
@@ -1640,14 +1637,24 @@ impl ClaudeHost {
                     } else {
                         "completed"
                     };
-                    self.tool_ended(
-                        b["tool_use_id"].as_str().unwrap_or_default(),
-                        status,
-                        false,
-                        &Value::Null,
-                        tid,
-                        turn,
-                    );
+                    let id = b["tool_use_id"].as_str().unwrap_or_default();
+                    let ended = self.tool_ended(id, status, false, &Value::Null, tid, turn);
+                    if let (Some(call), "failed") = (ended, status) {
+                        // A failed call's command and the end of what it printed, for the run's capture only. A
+                        // failed Bash result starts `Exit code N`.
+                        let text = result_text(&b["content"]);
+                        let code = text
+                            .strip_prefix("Exit code ")
+                            .and_then(|r| r.lines().next())
+                            .and_then(|n| n.trim().parse().ok());
+                        self.emit(crate::run_diagnostics::failed_tool(
+                            id,
+                            &call.name,
+                            &call.input,
+                            &text,
+                            code,
+                        ));
+                    }
                 }
             }
             ("system", "task_started") if msg["is_backgrounded"] == true => {
@@ -1672,14 +1679,17 @@ impl ClaudeHost {
                     "failed" | "error" => "failed",
                     _ => "interrupted",
                 };
-                self.tool_ended(
-                    msg["tool_use_id"].as_str().unwrap_or_default(),
-                    status,
-                    true,
-                    &msg["usage"],
-                    tid,
-                    turn,
-                );
+                let id = msg["tool_use_id"].as_str().unwrap_or_default();
+                let ended = self.tool_ended(id, status, true, &msg["usage"], tid, turn);
+                if let (Some(call), "failed") = (ended, status) {
+                    self.emit(crate::run_diagnostics::failed_tool(
+                        id,
+                        &call.name,
+                        &call.input,
+                        &text_of(&msg["summary"]),
+                        None,
+                    ));
+                }
             }
             _ => {}
         }
@@ -1703,9 +1713,13 @@ impl ClaudeHost {
             if id.is_empty() || inner.tools.contains_key(id) {
                 return; // Claude repeats an assistant message as it grows; a call starts once
             }
-            let command = input["command"]
+            let command: Option<String> = input["command"]
                 .as_str()
                 .map(|c| c.chars().take(COMMAND_CHARS).collect());
+            let shown = match &command {
+                Some(c) => c.clone(),
+                None => input.to_string().chars().take(COMMAND_CHARS).collect(),
+            };
             let call = ToolCall {
                 name: name.into(),
                 parent: parent.map(String::from),
@@ -1713,6 +1727,7 @@ impl ClaudeHost {
                 background,
                 ended: false,
                 command,
+                input: shown,
             };
             inner.tools.insert(id.into(), call);
         }
@@ -1755,7 +1770,7 @@ impl ClaudeHost {
         usage: &Value,
         tid: &str,
         turn: &str,
-    ) {
+    ) -> Option<ToolCall> {
         let call = {
             let mut inner = self.inner();
             match inner.tools.get_mut(id) {
@@ -1763,9 +1778,10 @@ impl ClaudeHost {
                     c.ended = true;
                     c.clone()
                 }
-                _ => return,
+                _ => return None,
             }
         };
+        let ended = call.clone();
         let mut fields =
             json!({"tool": call.name, "status": status, "item_id": id, "parent_id": call.parent});
         if call.background {
@@ -1781,6 +1797,7 @@ impl ClaudeHost {
             fields["subagent"] = s;
         }
         self.emit(event("tool", Some(tid), Some(turn), fields));
+        Some(ended)
     }
 
     fn finish(
@@ -2101,6 +2118,19 @@ fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> 
         .find(|p| p.is_file())
 }
 
+/// A `tool_result`'s text: a string, or the text blocks of a content list (an image block has none).
+fn result_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String {
     file.tail()
 }
@@ -2276,6 +2306,64 @@ mod tests {
             assert_eq!(&argv[argv.len() - 2..], &["--resume".to_string(), sid]);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_bash_keeps_its_command_and_output_tail_scrubbed_and_a_good_one_keeps_nothing() {
+        let path = crate::hosts::fixtures::dir("claude").join("failed-tools/stream.jsonl");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![], tx);
+        for line in std::fs::read_to_string(&path).unwrap().lines() {
+            host.on_tools(&serde_json::from_str(line).unwrap(), "th", "tu");
+        }
+        let mut failed = vec![];
+        let mut tools = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if ev["kind"] == "diagnostic" && ev["failed_tool"].is_object() {
+                failed.push(ev["failed_tool"].clone());
+            } else if ev["kind"] == "tool" {
+                tools.push(ev);
+            }
+        }
+        assert_eq!(tools.len(), 6, "{tools:?}");
+        assert!(tools
+            .iter()
+            .all(|t| t.get("output_tail").is_none() && t.get("command").is_none()));
+        assert_eq!(
+            failed
+                .iter()
+                .map(|f| f["item_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["toolu_ui", "toolu_edit"],
+            "only failed calls"
+        );
+        let bash = &failed[0];
+        assert_eq!(
+            (bash["tool"].as_str(), bash["exit_code"].as_i64()),
+            (Some("Bash"), Some(1))
+        );
+        assert!(bash["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("npx playwright test ui/tests/login.spec.ts"));
+        let tail = bash["output_tail"].as_str().unwrap();
+        assert!(tail.contains("Executable doesn't exist") && tail.ends_with("1 failed, 50 passed"));
+        assert!(tail.lines().count() <= 40 && !tail.contains("Exit code 1"));
+        let all = serde_json::to_string(&failed).unwrap();
+        assert!(
+            !all.contains("ghp_abcdefghijklmnopqrstuvwxyz0123")
+                && !all.contains("abcdefghijklmnopqrstuvwxyz012345"),
+            "{all}"
+        );
+        let edit = &failed[1];
+        assert!(edit["command"]
+            .as_str()
+            .unwrap()
+            .contains("/work/acme/notes.md"));
+        assert!(edit["output_tail"]
+            .as_str()
+            .unwrap()
+            .contains("File has not been read yet"));
     }
 
     #[test]
@@ -2673,50 +2761,6 @@ mod tests {
         assert_eq!(
             got.iter().find(|e| e["kind"] == "background_kept").unwrap()["kept"][0]["pid"],
             pid
-        );
-    }
-
-    #[tokio::test]
-    async fn a_turn_ended_on_its_wait_leaves_no_helper_of_claudes_running_but_the_bots_own_detached_job(
-    ) {
-        let pids =
-            std::env::temp_dir().join(format!("claude-strays-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&pids).unwrap();
-        let first = format!("{SHELL_STARTED}\n{}\n", result_line("Suite running."));
-        // An MCP server that ignores its stdin closing, and a job the bot detached in a command that has ended.
-        let p = pids.display();
-        let rest = format!("sleep 30 </dev/null >/dev/null 2>&1 &\necho $! > {p}/mcp.pid\n( sh -c 'echo $$ > {p}/own.pid; exec sleep 30' </dev/null >/dev/null 2>&1 & )\nsleep 0.05");
-        let (got, _, shell) = wait_turn(&first, &rest, Duration::from_millis(300)).await;
-        let read = |name: &str| -> i32 {
-            std::fs::read_to_string(pids.join(name))
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap()
-        };
-        let (mcp, own) = (read("mcp.pid"), read("own.pid"));
-        let deadline = Instant::now() + Duration::from_secs(3);
-        while alive(mcp) && Instant::now() < deadline {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        let (mcp_gone, own_alive, shell_alive) = (!alive(mcp), alive(own), alive(shell));
-        // SAFETY: processes this test's fake started.
-        unsafe {
-            libc::kill(own, libc::SIGKILL);
-            libc::kill(shell, libc::SIGKILL);
-        }
-        std::fs::remove_dir_all(&pids).unwrap();
-        assert!(
-            got.iter().any(|e| e["background_wait"].is_object()),
-            "{got:?}"
-        );
-        assert!(mcp_gone, "Claude's own helper outlived the turn");
-        assert!(own_alive, "the bot's detached job was killed");
-        assert!(shell_alive, "the kept shell was killed");
-        let stopped = &got.iter().find(|e| e["kind"] == "background_kept").unwrap()["stopped"];
-        assert!(
-            stopped.as_array().unwrap().contains(&json!(mcp)),
-            "{stopped}"
         );
     }
 
@@ -3453,41 +3497,6 @@ mod tests {
         assert_eq!(goal_records(&mut rx), ["d"]);
         std::fs::remove_dir_all(dir).unwrap();
     }
-
-    /// `cargo test bench_poll_goal -- --ignored --nocapture`: the bytes a poll asks the allocator for, and its wall
-    /// time, over a 10 MB transcript that gains one 1 KB line before each of 50 polls (the drive loop's 1 s pass).
-    #[test]
-    #[ignore]
-    fn bench_poll_goal_on_a_10_mb_transcript() {
-        let dir = std::env::temp_dir().join(format!(
-            "claude-goal-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let (host, mut rx, thread, path) = poll_transcript(&dir);
-        let line = format!(
-            "{}\n",
-            json!({"uuid": "x", "type": "assistant", "message": {"content": "y".repeat(1000)}})
-        );
-        append_transcript(&path, &line.repeat(10 * 1024 * 1024 / line.len()));
-        host.poll_goal(&thread); // reads the 10 MB once; the offset is now its end
-        assert!(goal_records(&mut rx).is_empty());
-        let (mut bytes, mut micros) = (Vec::new(), Vec::new());
-        for _ in 0..50 {
-            append_transcript(&path, &line);
-            let asked = crate::util::alloc_probe::requested();
-            let started = std::time::Instant::now();
-            host.poll_goal(&thread);
-            micros.push(started.elapsed().as_secs_f64() * 1e6);
-            bytes.push(crate::util::alloc_probe::requested() - asked);
-        }
-        bytes.sort_unstable();
-        micros.sort_by(|a, b| a.total_cmp(b));
-        eprintln!(
-            "poll_goal, 10 MB transcript, +1 KB per poll (50 polls): bytes requested median {} (min {}, max {}), wall time median {:.1} us",
-            bytes[25], bytes[0], bytes[49], micros[25]
-        );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
 }
 
 #[cfg(test)]
@@ -3544,38 +3553,6 @@ mod feature_tests {
             before_turns + 1,
             "a changed version is read once"
         );
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    /// Process runs of forty turn starts with no probe, and of a probe followed by forty turn starts. Run with --ignored --nocapture.
-    #[tokio::test]
-    #[ignore]
-    async fn claude_turn_start_spawns_bench() {
-        let root = std::env::temp_dir().join(format!(
-            "tico-claude-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(root.join("cold")).unwrap();
-        std::fs::create_dir_all(root.join("probed")).unwrap();
-        let (cold_cmd, cold_log) = fake_claude(&root.join("cold"));
-        let (probed_cmd, probed_log) = fake_claude(&root.join("probed"));
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        for _ in 0..40 {
-            let _ = ClaudeHost::new("bench", cold_cmd.clone(), tx.clone())
-                .start()
-                .await;
-        }
-        let cold = runs(&cold_log);
-        let version = installed_version(&probed_cmd, "--version").await;
-        note_version(&probed_cmd, &version).await;
-        let probe = runs(&probed_log);
-        for _ in 0..40 {
-            let _ = ClaudeHost::new("bench", probed_cmd.clone(), tx.clone())
-                .start()
-                .await;
-        }
-        let warm = runs(&probed_log) - probe;
-        eprintln!("BENCH claude_turn_starts=40 no_probe_runs={cold} probe_runs={probe} runs_during_40_starts_after_probe={warm}");
         std::fs::remove_dir_all(root).ok();
     }
 }

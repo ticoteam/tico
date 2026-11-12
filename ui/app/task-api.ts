@@ -27,11 +27,16 @@ interface TaskStageV3 { id: string; name: string; kind: 'work' | 'done' | 'close
 interface PipelineReqRec {
   id?: string;
   kind: string;
+  /** An item's source and condition (kind `item`, e.g. github and pr_merged); null on every other kind. */
+  source?: string | null;
+  condition?: string | null;
   settings: Record<string, unknown>;
   can_push_past: boolean;
   who_oks: 'none' | 'people_only' | 'people_with_exceptions';
   person_id: string | null;
   line: string;
+  /** An answer's choices, when it is a choice; null on every other requirement. */
+  choices?: string[] | null;
 }
 interface PipelineStageRec {
   id?: string;
@@ -39,6 +44,8 @@ interface PipelineStageRec {
   purpose: string;
   owner: string | null;
   by_hand: boolean;
+  /** On a by-hand stage: a person's request moves on by itself when the next stage has room. */
+  requests_move_on: boolean;
   task_limit: number | null;
   expected_minutes: number | null;
   expected_bots_only: boolean;

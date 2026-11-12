@@ -1,6 +1,6 @@
 # The assistant. Installed with every environment and named by the team at setup.
 template: assistant
-slug: coo
+slug: assistant
 name: "{{assistant_name}}"
 required: true
 bootstrap: true

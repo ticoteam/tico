@@ -39,6 +39,36 @@ def _requirement(case):
     return {"id": f"req-{case['id']}", "name": req["name"], "rubric": req["rubric"], "pipeline_id": None}
 
 
+def _page_job(case):
+    """A page case (attachment kind "page"): the requirement and attachment the server's Jev step builds for a page
+    (backend/page_verdicts.py `job_of`), from the case's page text as the Markdown bytes Tico holds. The work's `goal` is
+    the pipeline's goal, its `context` what the page is judged against (task_pages.judged_against: the task, the
+    linked PRs' heads for a review at the newest commit, the release for a Validate page), and its repo, PR and author
+    the one PR the task links."""
+    from backend import page_verdicts as V
+
+    w, att = case["work"], case["attachment"]
+    data = (att.get("text") or "").encode()
+    text, cut = P.text_of_bytes("text/markdown", data, len(data))
+    task = {
+        "title": w.get("title") or "",
+        "body": w.get("spec") or "",
+        "version": int(w["work_version"]),
+        "pipeline": {"goal": w.get("goal") or ""},
+        "pipeline_id": None,
+    }
+    page = {"file_id": f"file-{case['id']}", "version": 1, "digest": hashlib.sha256(data).hexdigest()}
+    judged = {"rubric": case["requirement"]["rubric"], "context": w.get("context") or {}}
+    link = None
+    if w.get("repo") and w.get("pr"):  # the one PR the task links, as its task_links row holds it
+        link = {
+            "repo": w["repo"],
+            "number": w["pr"],
+            "detail": json.dumps({"author_login": w["author"]}) if w.get("author") else None,
+        }
+    return V.job_of(_requirement(case), task, page, text, cut, judged, link)
+
+
 # The source a production attachment row carries (requirement_attachments.source) for each case kind.
 SOURCES = {"check": "check_run", "receipt": "receipt", "image": "blob"}
 
@@ -88,9 +118,17 @@ def _attachment(case):
     }
 
 
+def _job(case):
+    """(requirement, attachment) as the server asks Jev for this case: a page case through the page step's own builder,
+    any other through the attachment read."""
+    if (case.get("attachment") or {}).get("kind") == "page":
+        return _page_job(case)
+    return _requirement(case), _attachment(case)
+
+
 def state_for(case):
     """The state the judge is sent for a case: the server's `_state` over the case's attachment."""
-    return P._state(_requirement(case), _attachment(case))
+    return P._state(*_job(case))
 
 
 def _decide(name, key, url):
@@ -138,7 +176,7 @@ def judge_once(engine, case):
             raise
 
     with closing(sqlite3.connect(":memory:")) as c:  # judge_once takes a connection; the judge reads nothing from it
-        result = P.judge_once(c, _requirement(case), _attachment(case), engine=ask)
+        result = P.judge_once(c, *_job(case), engine=ask)
     if failed:
         raise J.JudgeError(failed[0], "the model call failed")
     return float(result["p"]), float(result["cost_usd"]), int(result["latency_ms"])

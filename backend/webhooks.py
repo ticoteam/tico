@@ -2,7 +2,7 @@
 
 An endpoint belongs to a person (`created_by`), who sees through it what they could see in Tico: `publish` builds one
 message per distinct owner, and a task they cannot read produces nothing for them. A bot cannot make an endpoint. It
-asks, a person approves, and the person owns what is made (`requested_by` names the bot). The Strategy Bot sends
+asks, a person approves, and the person owns what is made (`requested_by` names the bot). The Strategy Owner sends
 nothing.
 
 `publish` runs in the caller's write transaction and only inserts: one `webhook_events` row for the event and one
@@ -318,7 +318,7 @@ def publish(c, type, subject, data, actor, *, only=None, revision=None):
     journal while any endpoint exists (paused ones too, for "Send missed"), and every enabled endpoint subscribed to
     `type` gets a message built through its owner's read view, at most MAX_PER_EVENT of them. With
     `only` (an endpoint id) it sends to that one and raises Refused when it cannot: the endpoint is missing, paused
-    or deleted, the sender is the Strategy Bot or a bot whose send switch is off, or the endpoint's owner may not read
+    or deleted, the sender is the Strategy Owner or a bot whose send switch is off, or the endpoint's owner may not read
     the subject. `revision` makes the event id repeatable, so a retried write queues nothing twice."""
     if only is not None:
         return _publish_only(c, str(type), str(subject), data or {}, actor, only, revision)
@@ -368,7 +368,7 @@ def _publish_only(c, type_, subject, data, actor, only, revision):
     if not hook["enabled"]:
         raise Refused("That endpoint is paused")
     if _is_strategy_bot(actor):
-        raise Refused("The Strategy Bot does not send webhooks")
+        raise Refused("The Strategy Owner does not send webhooks")
     if H.is_bot(actor):
         from .email_sending import sends_on_own
 
@@ -605,7 +605,7 @@ def may_manage(who, hook=None):
 
 def may_send(c, who, hook, name):
     """Who may send a custom event to an endpoint: a person who manages it; a bot only with its send switch on, and
-    only to an endpoint that listens for that name; never the Strategy Bot."""
+    only to an endpoint that listens for that name; never the Strategy Owner."""
     if is_person(who):
         may_manage(who, hook)
         return

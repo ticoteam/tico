@@ -56,16 +56,19 @@ BUILDER, WRITER, REVIEWER, MANAGER = "bot:builder", "bot:writer", "bot:reviewer"
 BOTS = (BUILDER, WRITER, REVIEWER, MANAGER)
 # A software company's world (World(seed, software=True)) also has the bots the Product and Engineering presets name,
 # each found by its template (backend/pipeline_seats.py): the Builder is the Builder above.
-PM, EM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:em", "bot:rev1", "bot:rev2", "bot:rm"
+# PM is the Product Owner; PPM and EM are the Product Manager and the Engineering Manager.
+PM, REVIEWER_1, REVIEWER_2, RELEASE = "bot:pm", "bot:rev1", "bot:rev2", "bot:rm"
+PPM, EM = "bot:product-manager", "bot:engineering-manager"
 ROLE_TEMPLATES = {
-    PM: "product-manager",
+    PM: "segment-product-owner",
+    PPM: "product-manager",
     EM: "engineering-manager",
     BUILDER: "builder",
-    REVIEWER_1: "pr-reviewer",
-    REVIEWER_2: "pr-reviewer",
+    REVIEWER_1: "reviewer",
+    REVIEWER_2: "reviewer",
     RELEASE: "release-owner",
 }
-SOFTWARE_BOTS = (PM, EM, REVIEWER_1, REVIEWER_2, RELEASE)
+SOFTWARE_BOTS = (PM, PPM, EM, REVIEWER_1, REVIEWER_2, RELEASE)
 # Who owns each bot on the org chart: the person a paused bot's row goes to.
 BOT_OWNERS = {
     "builder": "ben",
@@ -73,7 +76,8 @@ BOT_OWNERS = {
     "reviewer": "ana",
     "manager": "ana",
     "pm": "ana",
-    "em": "ben",
+    "product-manager": "ana",
+    "engineering-manager": "ben",
     "rev1": "ben",
     "rev2": "ben",
     "rm": "ana",
@@ -165,6 +169,18 @@ class RigConnection(sqlite3.Connection):
         return super().executescript(sql)
 
 
+def settle_stopped(c: sqlite3.Connection) -> int:
+    """Tico's own recovery of a run that stopped with nothing done (execution.auto_reconcile: a run that used no tool
+    and no OK is safe to repeat, and is settled on the next sweep). The rig's bots do nothing in a run that crashes, so
+    its job is settled before each never-stuck pass instead of being held for a person (task_wakes.RUN_HELD); settled
+    as left, so the ladder wakes the bot again ("cut off"). A run held for a check (`job.held`) waits for its review,
+    as on a hub. Returns how many it settled."""
+    return c.execute(
+        "UPDATE jobs SET state='canceled' WHERE state='uncertain' AND NOT EXISTS (SELECT 1 FROM events e "
+        "WHERE e.action='job.held' AND e.target=jobs.attempt_id)"
+    ).rowcount
+
+
 def ts(at: dt.datetime) -> str:
     return at.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
@@ -243,8 +259,8 @@ def _people() -> dict[str, Any]:
 
 def _fill(c: sqlite3.Connection, software: bool = False) -> None:
     """People, four bots on one computer, General managed by the Manager bot, and the Work pipeline. A software company
-    also has the role bots, each with its template, a finished setup, and the presets the end of setup makes
-    (`ensure_presets`): Product and Engineering."""
+    also has the role bots, each with its template, a finished setup, the presets the end of setup makes
+    (`ensure_presets`): Product and Engineering, and its GitHub App installed."""
     from backend import bot_settings as BS
     from backend import pipeline_settings as PS
     from backend import task_engine as E
@@ -280,6 +296,9 @@ def _fill(c: sqlite3.Connection, software: bool = False) -> None:
 
         O.Onboarding._store(c, {**O.load(c), "completed": H.now()}, "human:ana")
         PS.ensure_presets(c)
+        from backend.tests.helpers import engine as X
+
+        X.github_installed(c)
 
 
 def template(software: bool = False) -> Path:

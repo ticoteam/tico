@@ -29,7 +29,7 @@ def test_counsel_edit_then_narrow_scrubs_history_comments_results_and_sse(api):
     org(api)
     counsel_on(api)
     fid, _ = promoted(api)
-    edit(api, fid, {"people": ["cara"], "bots": [H.COUNSEL]})
+    edit(api, fid, {"people": ["cara"], "bots": [H.RULES_OWNER]})
     tid = post(api, "rules/read", {"file_id": fid, "source_id": source(api)}, token="cara-test")["task_id"]
     task = get(api, "tasks/" + tid, token="cara-test")["task"]
     original = task["body"]
@@ -256,9 +256,9 @@ def test_assistant_page_links_use_the_shared_recognizer_on_all_transports(api):
             assert_placeholder(delivered, "A page you can't open", fid)
     assert_placeholder(get(api, "messages/" + message["id"], token="cara-test"), "A page you can't open", fid)
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
-    attempt = claim(api, machine, "coo")
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
+    attempt = claim(api, machine, "assistant")
     assert_placeholder(attempt["message"], "A page you can't open", fid)
     assert_placeholder(attempt["history"], "A page you can't open", fid)
 

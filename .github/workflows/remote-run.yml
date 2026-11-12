@@ -40,8 +40,9 @@ permissions:
 
 jobs:
   run:
-    # Spot: an interruption reruns the job automatically, and a test run can always be repeated.
-    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
+    # Spot: an interruption reruns the job automatically, and a test run can always be repeated. The family list gives
+    # Spot more pools: with none, a 16-vCPU VM came almost only from c8i-flex/c8id, and ~1 in 4 was reclaimed (Nov 11).
+    runs-on: ${{ vars.TICO_CI_HOSTED == 'true' && 'ubuntu-24.04' || format('runs-on={0}/runner={1}cpu-linux-x64/family=m8+c8+r8+m7+c7+r7/volume=80gb:gp3:125mbs:3000iops/extras=s3-cache', github.run_id, inputs.cpus) }}
     timeout-minutes: 75
     env:
       ID: ${{ inputs.id }}

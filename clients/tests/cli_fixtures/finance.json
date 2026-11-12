@@ -1,0 +1,657 @@
+[
+ {
+  "argv": [
+   "finance",
+   "report",
+   "budget_vs_actual"
+  ],
+  "tools": [
+   [
+    "tico_finance_report",
+    {
+     "kind": "budget_vs_actual",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/reports/budget_vs_actual",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "budget_update",
+   "--payload",
+   "{\"budget_id\":\"1\",\"amount\":400000,\"effective_from\":\"YYYY-MM-DD\"}",
+   "--operation-id",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_finance_act",
+    {
+     "kind": "budget_update",
+     "operation_id": "1",
+     "payload": {
+      "amount": 400000,
+      "budget_id": "1",
+      "effective_from": "YYYY-MM-DD"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "finance/actions",
+    {
+     "kind": "budget_update",
+     "payload": {
+      "budget_id": "1",
+      "amount": 400000,
+      "effective_from": "YYYY-MM-DD"
+     },
+     "dry_run": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "help"
+  ],
+  "tools": [
+   [
+    "tico_finance_act",
+    {
+     "kind": "help",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/action-kinds",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "1",
+   "--payload",
+   "1",
+   "--operation-id",
+   "1"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico finance act: error: argument --payload: --payload must be a JSON object",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "finance",
+   "search",
+   "--kind",
+   "invoice"
+  ],
+  "tools": [
+   [
+    "tico_finance_search",
+    {
+     "kind": "invoice",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/search?kind=invoice",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "metric",
+   "runway_months"
+  ],
+  "tools": [
+   [
+    "tico_finance_metric",
+    {
+     "name": "runway_months",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/metrics/runway_months",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "report",
+   "close",
+   "--month",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_finance_report",
+    {
+     "kind": "close",
+     "month": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/close/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "inbox"
+  ],
+  "tools": [
+   [
+    "tico_finance_inbox",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/inbox",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "bill_create",
+   "--payload",
+   "{\"vendor_id\":\"1\",\"number\":\"1\",\"bill_date\":\"1\",\"due_date\":\"1\",\"origin\":\"email\",\"attachments\":[\"1\"],\"lines\":[{\"description\":\"1\",\"amount\":45000,\"account_id\":\"1\"}]}",
+   "--operation-id",
+   "bill-entry:1"
+  ],
+  "tools": [
+   [
+    "tico_finance_act",
+    {
+     "kind": "bill_create",
+     "operation_id": "bill-entry:1",
+     "payload": {
+      "attachments": [
+       "1"
+      ],
+      "bill_date": "1",
+      "due_date": "1",
+      "lines": [
+       {
+        "account_id": "1",
+        "amount": 45000,
+        "description": "1"
+       }
+      ],
+      "number": "1",
+      "origin": "email",
+      "vendor_id": "1"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "finance/actions",
+    {
+     "kind": "bill_create",
+     "payload": {
+      "vendor_id": "1",
+      "number": "1",
+      "bill_date": "1",
+      "due_date": "1",
+      "origin": "email",
+      "attachments": [
+       "1"
+      ],
+      "lines": [
+       {
+        "description": "1",
+        "amount": 45000,
+        "account_id": "1"
+       }
+      ]
+     },
+     "dry_run": false
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "payment_create"
+  ],
+  "tools": [
+   [
+    "tico_finance_act",
+    {
+     "kind": "payment_create",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [],
+  "stdout": "{\n  \"error\": \"validation\",\n  \"detail\": \"Send an operation_id: it is the action's key, so a retry never acts twice\",\n  \"retryable\": false,\n  \"operation_id\": null\n}\n",
+  "stderr": "",
+  "exit": 2
+ },
+ {
+  "argv": [
+   "finance",
+   "action",
+   "1"
+  ],
+  "tools": [
+   [
+    "tico_finance_action",
+    {
+     "action_id": "1",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/actions/1",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "help",
+   "--payload",
+   "{\"kind\":\"attach\"}"
+  ],
+  "tools": [
+   [
+    "tico_finance_act",
+    {
+     "kind": "help",
+     "operation_id": null,
+     "payload": {
+      "kind": "attach"
+     }
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/action-kinds?kind=attach",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "search"
+  ],
+  "tools": [
+   [
+    "tico_finance_search",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/search",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "search",
+   "--kind",
+   "entry",
+   "--q",
+   "from:bank",
+   "--status",
+   "status-1",
+   "--contact-id",
+   "contact-id-1",
+   "--vendor",
+   "vendor-1",
+   "--account-id",
+   "account-id-1",
+   "--money-account-id",
+   "money-account-id-1",
+   "--start",
+   "start-1",
+   "--end",
+   "end-1",
+   "--cursor",
+   "cursor-1",
+   "--aging",
+   "current",
+   "--contact-kind",
+   "vendor",
+   "--rule-kind",
+   "gate",
+   "--active",
+   "active-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_finance_search",
+    {
+     "account_id": "account-id-1",
+     "active": false,
+     "aging": "current",
+     "contact_id": "contact-id-1",
+     "contact_kind": "vendor",
+     "cursor": "cursor-1",
+     "end": "end-1",
+     "kind": "entry",
+     "limit": 5,
+     "money_account_id": "money-account-id-1",
+     "operation_id": null,
+     "q": "from:bank",
+     "rule_kind": "gate",
+     "start": "start-1",
+     "status": "status-1",
+     "vendor": "vendor-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/search?kind=entry&q=from%3Abank&status=status-1&contact_id=contact-id-1&vendor=vendor-1&account_id=account-id-1&money_account_id=money-account-id-1&start=start-1&end=end-1&aging=current&contact_kind=vendor&rule_kind=gate&cursor=cursor-1&limit=5&active=false",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "report",
+   "pnl",
+   "--start",
+   "start-1",
+   "--end",
+   "end-1",
+   "--year",
+   "5",
+   "--period",
+   "day",
+   "--basis",
+   "cash",
+   "--compare",
+   "prior",
+   "--top-n",
+   "5",
+   "--by",
+   "department",
+   "--month",
+   "2026-10"
+  ],
+  "tools": [
+   [
+    "tico_finance_report",
+    {
+     "basis": "cash",
+     "by": "department",
+     "compare": "prior",
+     "end": "end-1",
+     "kind": "pnl",
+     "month": "2026-10",
+     "operation_id": null,
+     "period": "day",
+     "start": "start-1",
+     "top_n": 5,
+     "year": 5
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/reports/pnl?start=start-1&end=end-1&period=day&basis=cash&compare=prior&top_n=5&by=department",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "metric",
+   "cash",
+   "--budget-id",
+   "budget-id-1",
+   "--start",
+   "start-1",
+   "--end",
+   "end-1",
+   "--account-id",
+   "account-id-1",
+   "--team",
+   "team-1",
+   "--teammate",
+   "teammate-1",
+   "--days",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_finance_metric",
+    {
+     "account_id": "account-id-1",
+     "budget_id": "budget-id-1",
+     "days": 5,
+     "end": "end-1",
+     "name": "cash",
+     "operation_id": null,
+     "start": "start-1",
+     "team": "team-1",
+     "teammate": "teammate-1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/metrics/cash?budget_id=budget-id-1&start=start-1&end=end-1&account_id=account-id-1&team=team-1&teammate=teammate-1&days=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "brief"
+  ],
+  "tools": [
+   [
+    "tico_finance_brief",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/brief",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "inbox",
+   "--kind",
+   "uncategorized",
+   "--cursor",
+   "cursor-1",
+   "--limit",
+   "5"
+  ],
+  "tools": [
+   [
+    "tico_finance_inbox",
+    {
+     "cursor": "cursor-1",
+     "kind": "uncategorized",
+     "limit": 5,
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/inbox?kind=uncategorized&cursor=cursor-1&limit=5",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "search",
+   "--kind",
+   "contact",
+   "--active",
+   "true"
+  ],
+  "tools": [
+   [
+    "tico_finance_search",
+    {
+     "active": true,
+     "kind": "contact",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "finance/search?kind=contact&active=true",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "finance",
+   "act",
+   "categorize",
+   "--payload",
+   "not json"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico finance act: error: argument --payload: --payload is not JSON (Expecting value: line 1 column 1 (char 0))",
+  "exit": 64
+ }
+]

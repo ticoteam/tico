@@ -52,7 +52,7 @@ def register(app, auth, mutate, onboarding, report_mutate, settings, settings_ad
 
     @app.get("/api/v2/org-models")
     def org_models(request: Request):
-        """Published Tico starter org charts, the only chart models the Strategy Bot uses for re-org recommendations."""
+        """Published Tico starter org charts, the only chart models the Strategy Owner uses for re-org recommendations."""
         from . import org_models as published_models
 
         auth.domain(request.state.identity)

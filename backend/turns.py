@@ -153,6 +153,7 @@ HUB_PHRASES = {
     "task close": "Closing a task",
     "task done": "Finishing a task",
     "task move": "Moving a task",
+    "task release": "Asking for a release",
     "task reassign": "Handing a task over",
     "task list": "Listing tasks",
     "task show": "Reading a task",

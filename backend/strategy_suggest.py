@@ -1,8 +1,8 @@
-"""What the Strategy Bot suggests at level 2 (docs/goals-and-kpis.md, "Your Strategy Bot"; spec: Head of Product,
-Strategy Bot).
+"""What the Strategy Owner suggests at level 2 (docs/goals-and-kpis.md, "Your Strategy Owner"; spec: Head of Product,
+Strategy Owner).
 
 At level 2 ("Suggests actions") a goal that goes red or stalls gets a recovery proposal instead of only a question: a
-`goal_proposals` row of kind `recovery` with the evidence, up to four options and the Strategy Bot's pick. Each option
+`goal_proposals` row of kind `recovery` with the evidence, up to four options and the Strategy Owner's pick. Each option
 is a short list of bot-task changes:
 
 - `create`: a new task for a bot, on the goal;
@@ -11,17 +11,17 @@ is a short list of bot-task changes:
   hear the call once, on their task.
 
 Nothing changes until the person who decides the goal approves one option on Goals > Needs you. Approving applies
-exactly that option's changes, as the Strategy Bot, and never more than the person approving may do themselves: a
+exactly that option's changes, as the Strategy Owner, and never more than the person approving may do themselves: a
 reorder of someone else's queue needs a person who may move any task. A change that can't be made (a bot paused, a task
 finished since, a refusal) is never dropped: it comes back as a new proposal that says why in plain words, for the
 person to approve again or reject.
 
-The Strategy Bot only proposes here: a task for a person, spending, publishing and any change to a goal stay the
-person's at every level, and a recovery names bot tasks only. Only the Strategy Bot proposes a recovery, only at level 2
+The Strategy Owner only proposes here: a task for a person, spending, publishing and any change to a goal stay the
+person's at every level, and a recovery names bot tasks only. Only the Strategy Owner proposes a recovery, only at level 2
 or 3 with the switch on; lowering the level to 1 withdraws the ones still waiting.
 
-`streak` counts the owner's recovery approvals in a row that kept the Strategy Bot's pick unchanged. After 10, the
-Monday note may offer level 3 once (`offer_due`, `offer_made`), never more often than every 30 days; the Strategy Bot
+`streak` counts the owner's recovery approvals in a row that kept the Strategy Owner's pick unchanged. After 10, the
+Monday note may offer level 3 once (`offer_due`, `offer_made`), never more often than every 30 days; the Strategy Owner
 never raises its own level (backend/goal_routes.py refuses it)."""
 
 from datetime import timedelta
@@ -35,12 +35,12 @@ MAX_OPTIONS = 4
 MAX_ACTIONS = 6
 STREAK_FOR_OFFER = 10
 OFFER_EVERY_DAYS = 30
-WITHDRAWN = "Withdrawn: the Strategy Bot was set to Passive, where it suggests no task changes"
+WITHDRAWN = "Withdrawn: the Strategy Owner was set to Passive, where it suggests no task changes"
 STRATEGY_BOT = "bot:" + strategy_bot.SLUG
 
 
 def suggests(c):
-    """Whether this install's Strategy Bot suggests actions: level 2 or 3."""
+    """Whether this install's Strategy Owner suggests actions: level 2 or 3."""
     return strategy_bot.level(c) >= 2
 
 
@@ -55,7 +55,7 @@ def _bot(c, value):
 
 
 def _live_bot_task(c, task_id):
-    """A task a recovery may move: live, owned by a bot, and one the Strategy Bot may read."""
+    """A task a recovery may move: live, owned by a bot, and one the Strategy Owner may read."""
     row = H.task(c, str(task_id or ""))
     if not row or row["status"] not in H.ACTIVE_STATUSES or not H.is_bot(row["owner_id"]):
         return None
@@ -100,7 +100,7 @@ def _action_error(c, action):
     if do == "create":
         owner = str(action.get("owner") or "").strip()
         if H.is_human(owner) or (H.resolve_actor(c, owner) or "").startswith("human:"):
-            return "a task for a person stays the person's to make; the Strategy Bot proposes tasks for bots only"
+            return "a task for a person stays the person's to make; the Strategy Owner proposes tasks for bots only"
         actor = _bot(c, owner)
         if not actor:
             return f"no bot {owner or '(none named)'} to give the task to"
@@ -211,7 +211,7 @@ def _may_move(c, approver):
 
 def _blocked(c, action, approver):
     """Why this action can't be made now, in plain words, or None. Checked before trying, so a predictable refusal
-    never counts against the Strategy Bot."""
+    never counts against the Strategy Owner."""
     note = offline(c, action)
     if note:
         return note
@@ -266,7 +266,7 @@ def _apply(c, action, goal_id, approver, proposal_id):
 
 
 def apply(c, approver, proposal, option):
-    """Make the chosen option's changes as the Strategy Bot. Each change on its own: one that can't be made is skipped
+    """Make the chosen option's changes as the Strategy Owner. Each change on its own: one that can't be made is skipped
     with its reason, the rest go ahead. Returns {done: [...], left: [{action, why}]}."""
     done, left = [], []
     for action in proposal["payload"]["options"][option]["actions"]:
@@ -345,7 +345,7 @@ def withdraw(c):
 
 # ----------------------------------------------------------------------------- the level 3 offer
 def streak(c):
-    """How many of its recovery suggestions in a row the owner approved with the Strategy Bot's pick unchanged, newest
+    """How many of its recovery suggestions in a row the owner approved with the Strategy Owner's pick unchanged, newest
     first. A rejection or another option ends it; a withdrawn one is no decision and is passed over."""
     n = 0
     for row in H._rows(
@@ -383,7 +383,7 @@ def offer_view(c):
 
 
 def offer_made(c, actor):
-    """The Strategy Bot records that its Monday note offered level 3. Refused unless the offer is due, so it is made
+    """The Strategy Owner records that its Monday note offered level 3. Refused unless the offer is due, so it is made
     once and never more often than every 30 days."""
     if not offer_view(c)["due"]:
         raise H.Refused(

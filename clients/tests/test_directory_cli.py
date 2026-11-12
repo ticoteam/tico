@@ -1,5 +1,6 @@
-"""`tico directory` as a bot runs it: each command's argv becomes the request its route takes (path, query or body), and `--text`
-prints a short answer without changing what is asked. The routes themselves are in backend/tests/test_directory_tools.py.
+"""`tico contacts` as a bot runs it: each command's argv becomes the request its route takes (path, query or body), and `--text`
+prints a short answer without changing what is asked. The routes themselves are in backend/tests/test_directory_tools.py (Contacts was
+the Directory; the files keep their names).
 """
 
 import pytest
@@ -38,25 +39,25 @@ def run(argv):
 @pytest.mark.parametrize(
     "argv, call",
     [
-        (["directory", "self"], ("GET", "entities/self", {}, None)),
-        (["directory", "types"], ("GET", "entities/types", {}, None)),
-        (["directory", "describe", "person"], ("GET", "entities/types/person", {}, None)),
+        (["contacts", "self"], ("GET", "entities/self", {}, None)),
+        (["contacts", "types"], ("GET", "entities/types", {}, None)),
+        (["contacts", "describe", "person"], ("GET", "entities/types/person", {}, None)),
         (
-            ["directory", "find", "organization", "--name", "acme", "--link", "customer_of", "--limit", "5"],
+            ["contacts", "find", "organization", "--name", "acme", "--link", "customer_of", "--limit", "5"],
             ("GET", "entities/find/organization", {"name": "acme", "link": "customer_of", "limit": 5}, None),
         ),
-        (["directory", "get", "jane@example.test"], ("GET", "entities/card", {"ref": "jane@example.test"}, None)),
+        (["contacts", "get", "jane@example.test"], ("GET", "entities/card", {"ref": "jane@example.test"}, None)),
         (
-            ["directory", "rules", "acme.example", "--as", "librarian", "--action", "email"],
+            ["contacts", "rules", "acme.example", "--as", "librarian", "--action", "email"],
             ("GET", "entities/rules", {"ref": "acme.example", "as_bot": "librarian", "action": "email"}, None),
         ),
         (
-            ["directory", "history", "jane@example.test", "--attribute", "title", "--limit", "10"],
+            ["contacts", "history", "jane@example.test", "--attribute", "title", "--limit", "10"],
             ("GET", "entities/history", {"ref": "jane@example.test", "attribute": "title", "limit": 10}, None),
         ),
         (
             [
-                "directory",
+                "contacts",
                 "upsert",
                 "person",
                 "--match",
@@ -80,7 +81,7 @@ def run(argv):
         ),
         (
             [
-                "directory",
+                "contacts",
                 "upsert",
                 "person",
                 "--match",
@@ -103,7 +104,7 @@ def run(argv):
             ),
         ),
         (
-            ["directory", "link", "organization/acme", "customer_of", "company/self", "--from", "2025-03-01"],
+            ["contacts", "link", "organization/acme", "customer_of", "company/self", "--from", "2025-03-01"],
             (
                 "POST",
                 "entities/links",
@@ -116,22 +117,22 @@ def run(argv):
                 },
             ),
         ),
-        (["directory", "unlink", "lnk_1"], ("POST", "entities/unlink", None, {"link_id": "lnk_1"})),
+        (["contacts", "unlink", "lnk_1"], ("POST", "entities/unlink", None, {"link_id": "lnk_1"})),
         (
-            ["directory", "merge", "organization/acme", "organization/acme-old"],
+            ["contacts", "merge", "organization/acme", "organization/acme-old"],
             ("POST", "entities/merge", None, {"keep": "organization/acme", "drop": "organization/acme-old"}),
         ),
         (
-            ["directory", "unmerge", "organization/acme-old"],
+            ["contacts", "unmerge", "organization/acme-old"],
             ("POST", "entities/unmerge", None, {"drop": "organization/acme-old"}),
         ),
         (
-            ["directory", "note", "jane@example.test", "Prefers phone", "--audience", "me"],
+            ["contacts", "note", "jane@example.test", "Prefers phone", "--audience", "me"],
             ("POST", "entities/notes", None, {"ref": "jane@example.test", "body": "Prefers phone", "audience": "me"}),
         ),
         (
             [
-                "directory",
+                "contacts",
                 "attribute",
                 "add",
                 "organization",
@@ -161,7 +162,7 @@ def run(argv):
             ),
         ),
         (
-            ["directory", "type", "add", "vendor", "--name", "Vendor", "--description", "A company we buy from"],
+            ["contacts", "type", "add", "vendor", "--name", "Vendor", "--description", "A company we buy from"],
             (
                 "POST",
                 "entities/types",
@@ -171,7 +172,7 @@ def run(argv):
         ),
         (
             [
-                "directory",
+                "contacts",
                 "link-type",
                 "add",
                 "advises",
@@ -198,7 +199,7 @@ def run(argv):
         ),
     ],
 )
-def test_each_directory_command_sends_its_route_its_query_and_its_body(recorder, argv, call):
+def test_each_contacts_command_sends_its_route_its_query_and_its_body(recorder, argv, call):
     run(argv)
     method, path, query, body = call
     assert len(recorder.calls) == 1
@@ -225,7 +226,7 @@ def test_text_is_for_the_terminal_and_the_tool_is_asked_the_same_question(record
         "refs": [],
         "notes": [{"audience": "me", "author_key": "human:ana", "body": "Prefers phone"}],
     }
-    run(["directory", "get", "jane@example.test", "--text"])
+    run(["contacts", "get", "jane@example.test", "--text"])
     assert recorder.calls[0][2] == {"ref": "jane@example.test"}  # the same question as without --text
 
 
@@ -240,7 +241,7 @@ def test_text_prints_a_card_and_a_list_and_says_when_a_reference_is_ambiguous():
         "refs": [],
         "notes": [],
     }
-    text = remotecli.directory_text("directory get", card)
+    text = remotecli.contacts_text("contacts get", card)
     assert text.splitlines()[0] == "Jane Ortiz (person) person/jane-ortiz"
     assert "  title: CFO (from hub, 2026-11-07)" in text
     assert "  works_at: Acme Lights (organization)" in text
@@ -249,7 +250,7 @@ def test_text_prints_a_card_and_a_list_and_says_when_a_reference_is_ambiguous():
         "rows": [{"id": "organization/acme", "name": "Acme", "status": "active", "links_to_us": ["customer_of"]}],
         "next": "abc",
     }
-    assert remotecli.directory_text("directory find", listing).splitlines() == [
+    assert remotecli.contacts_text("contacts find", listing).splitlines() == [
         "organization/acme  Acme  active  [customer_of]",
         "more: --after abc",
     ]
@@ -259,5 +260,19 @@ def test_text_prints_a_card_and_a_list_and_says_when_a_reference_is_ambiguous():
         "ref": "shared.example",
         "matches": [{"id": "a", "name": "A", "status": "active"}, {"id": "b", "name": "B", "status": "active"}],
     }
-    text = remotecli.directory_text("directory get", ambiguous)
+    text = remotecli.contacts_text("contacts get", ambiguous)
     assert text.startswith("shared.example matches 2 entities; name one by id:")
+
+
+def test_tico_contacts_runs_and_the_old_directory_command_is_unknown(recorder, capsys):
+    """Directory was renamed Contacts with no alias: `tico contacts` runs, `tico directory` is an unknown command."""
+    run(["contacts", "types"])
+    assert recorder.calls == [("GET", "entities/types", {}, None)]
+    with pytest.raises(SystemExit) as refused:
+        hubcli.parser().parse_args(["directory", "types"])
+    assert refused.value.code == 2
+    assert "invalid choice: 'directory'" in capsys.readouterr().err
+    from clients import hubtools
+
+    names = {t["name"] for t in hubtools.TOOLS}
+    assert "tico_contacts_find" in names and not any(n.startswith("tico_directory") for n in names)

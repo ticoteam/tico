@@ -22,7 +22,7 @@
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <meta name="theme-color" content="#131413">
 <link rel="preload" href="/vendor/fonts/inter-variable.woff2?v=d27c9cfb920f" as="font" type="font/woff2" crossorigin>
-<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=7a828c2a2f46" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/vendor/fonts/material-symbols-outlined.woff2?v=fd4298b84033" as="font" type="font/woff2" crossorigin>
 <script src="/tico/ui/theme.ts"></script>
 <meta name="apple-mobile-web-app-capable" content="yes">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
@@ -79,6 +79,7 @@
 <link rel="stylesheet" href="/tico/ui/styles/chat-goal.css">
 <link rel="stylesheet" href="/tico/ui/styles/goals.css">
 <link rel="stylesheet" href="/tico/ui/styles/automations.css">
+<link rel="stylesheet" href="/tico/ui/styles/listening.css">
 <link rel="stylesheet" href="/tico/ui/styles/strategy.css">
 <link rel="stylesheet" href="/tico/ui/styles/lenses.css">
 <link rel="stylesheet" href="/tico/ui/styles/tasks.css">
@@ -162,6 +163,7 @@
       <a class="nav-link" href="#/finance" data-nav="finance" id="nav-finance"><span class="nav-icon" aria-hidden="true">account_balance_wallet</span>Finance</a>
       <a class="nav-link" href="#/growth" data-nav="growth"><span class="nav-icon" aria-hidden="true">rocket_launch</span>Growth</a>
       <a class="nav-link" href="#/automations" data-nav="automations"><span class="nav-icon" aria-hidden="true">bolt</span>Automations</a>
+      <a class="nav-link" href="#/listening" data-nav="listening"><span class="nav-icon" aria-hidden="true">travel_explore</span>Listening</a>
       <a class="nav-link" href="#/rules" data-nav="rules"><span class="nav-icon" aria-hidden="true">gavel</span>Rules</a>
     </div>
     <div class="nav-row rd-lib-row"><a class="nav-link rd-lib-head" href="#/docs" data-nav="library"><span class="nav-icon" aria-hidden="true">local_library</span>Library</a><button class="rd-lib-toggle" type="button" aria-label="Library pages" aria-controls="rd-lib" aria-expanded="true"><span class="section-chev" aria-hidden="true">›</span></button></div>
@@ -179,7 +181,7 @@
           <span>Team</span><span class="section-chev" aria-hidden="true">›</span>
         </button>
         <button class="org-history" id="org-add-group" type="button" title="Add to team" aria-label="Add to team" aria-haspopup="menu" aria-expanded="false" aria-controls="team-add-menu" hidden><span class="org-plus" aria-hidden="true">+</span></button>
-        <a class="org-history" id="org-directory-link" href="#/library/directory" data-nav="directory" title="Directory" aria-label="Directory"><span class="nav-icon" aria-hidden="true">contact_page</span></a>
+        <a class="org-history" id="org-contacts-link" href="#/library/contacts" data-nav="contacts" title="Contacts" aria-label="Contacts"><span class="nav-icon" aria-hidden="true">contact_page</span></a>
         <button class="org-history" id="org-mine" type="button" aria-pressed="false" title="Only bots I can read or write" aria-label="Only bots I can read or write"><span class="nav-icon" aria-hidden="true">person</span></button>
         <button class="org-history" id="org-history" type="button" aria-pressed="false" title="Most recently viewed first" aria-label="Sort teammates by most recently viewed"><span class="nav-icon" aria-hidden="true">history</span></button>
       </div>
@@ -535,8 +537,6 @@
 
 <script src="/tico/ui/app/settings-webhooks-state.ts"></script>
 
-<script src="/tico/ui/app/settings-listening.ts"></script>
-
 <script src="/tico/ui/app/vault.ts"></script>
 
 <script src="/tico/ui/app/settings-devices.ts"></script>
@@ -597,6 +597,8 @@
 
 <script src="/tico/ui/app/subscriptions.ts"></script>
 
+<script src="/tico/ui/app/plan-signin.ts"></script>
+
 <script src="/tico/ui/app/computer-detail.ts"></script>
 
 <script src="/tico/ui/app/refresh.ts"></script>
@@ -636,6 +638,8 @@
 <script src="/tico/ui/app/automations-runs.ts"></script>
 
 <script src="/tico/ui/app/automations-overview.ts"></script>
+
+<script src="/tico/ui/app/listening.ts"></script>
 
 <script src="/tico/ui/app/automations-maintenance.ts"></script>
 

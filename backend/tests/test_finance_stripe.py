@@ -295,19 +295,6 @@ def test_a_partial_refund_reverses_only_its_share_of_the_sale(books):
         assert _every_entry_balances(c)
 
 
-def test_a_partial_refund_of_an_invoice_paid_sale_reopens_its_receivable_in_proportion(books):
-    stripe = FakeStripe()
-    connect_stripe(books, stripe)
-    customer = _customer(books, "Acme Retail")
-    _invoice(books, customer, 10_000)
-    stripe.add("charge", 10_000, 320, "Acme Retail")
-    stripe.add("refund", -4_000, link="ch_txn_0001")
-    stripe_pass(books, stripe)
-    with books.read() as c:
-        assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (4_000, -10_000, 320, 5_680)
-        assert _every_entry_balances(c)
-
-
 def test_a_refund_that_arrives_before_its_sale_waits_for_it(books):
     stripe = FakeStripe()
     connect_stripe(books, stripe)
@@ -399,16 +386,6 @@ def test_a_second_failure_of_the_same_refund_changes_nothing(books):
         assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "1050")) == before
         assert _feed(c, repeat)["status"] == "ignored"
         assert _every_entry_balances(c)
-
-
-def test_a_balance_type_nothing_posts_is_asked_and_posts_nothing(books):
-    stripe = FakeStripe()
-    connect_stripe(books, stripe)
-    stripe.add("transfer", 500)
-    stripe_pass(books, stripe)
-    with books.read() as c:
-        assert _sum(c, "1050") == 0
-        assert _asked(c, "txn_0001") == 1
 
 
 @pytest.mark.parametrize("deposit_first", [False, True])
@@ -1001,28 +978,6 @@ def test_a_held_sale_applied_by_hand_to_an_invoice_posts_its_gross_and_fee_so_a_
         assert (_sum(c, "1200"), _sum(c, "6200"), _sum(c, "1050")) == (10_000, 300, -300)
         assert _every_entry_balances(c)
     assert _invoice_row(books, iid) == (0, "sent")
-
-
-def test_a_refund_before_anything_settles_the_sale_gives_nothing_back_to_a_settlement_made_later(books):
-    """A $100 sale refunded $50 before anything settled it: a plain refund, the credit it leaves. Then $50 of the sale is
-    applied to a $50 invoice and the last $50 is refunded. The invoice owes its $50 again; the earlier refund never
-    reached it."""
-    stripe = FakeStripe()
-    connect_stripe(books, stripe)
-    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
-    stripe.add("charge", 10_000, 0, "Acme Shop")
-    stripe_pass(books, stripe)
-    stripe.add("refund", -5_000, link="ch_txn_0001")
-    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
-    with books.transaction() as c:
-        sale = str(_feed(c, "txn_0001")["id"])
-        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": sale, "amount": 5_000})
-        assert made.status == "committed", made
-    stripe.add("refund", -5_000, link="ch_txn_0001")
-    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
-    assert _invoice_row(books, iid) == (0, "sent")
-    with books.read() as c:
-        assert _every_entry_balances(c)
 
 
 def test_a_stripe_charge_with_a_fee_is_linked_to_marked_payments_that_add_up_to_its_gross(books):

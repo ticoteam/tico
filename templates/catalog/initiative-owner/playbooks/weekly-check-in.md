@@ -29,7 +29,7 @@ its statement, what it rules out, its wrong-if text and check-by date, and any c
   the line counts, with its period.
 - **A market entity.** `tico market show <id>` and `tico market delta` for what changed, with its source.
 - **A sentence.** Is the check-by date past? If not, the line reads "not yet checkable". If it is, say what the record shows.
-- `tico proposal list`: a pending `strategy_draft` about this bet means the Strategy Bot already raised it. Say so and
+- `tico proposal list`: a pending `strategy_draft` about this bet means the Strategy Owner already raised it. Say so and
   link it; do not raise a second one.
 
 ## 3. Read progress against the plan
@@ -52,12 +52,12 @@ owner in one question on this task.
 ## 6. Looks wrong: route it
 
 Do not write a strategy proposal, and do not file a task for the owner. If the wrong-if has tripped, the server has already
-filed the trip task to the Strategy Bot, which puts the decision to the owner. Only when the evidence points against the
-bet and nothing has formally tripped, tell the Strategy Bot, which owns bet proposals:
+filed the trip task to the Strategy Owner, which puts the decision to the owner. Only when the evidence points against the
+bet and nothing has formally tripped, tell the Strategy Owner, which owns bet proposals:
 
-    tico message send goal-manager "Bet <id>: looks wrong. <evidence in one line, with its date>" --needs-action
+    tico message send strategy-owner "Bet <id>: looks wrong. <evidence in one line, with its date>" --needs-action
 
-The Strategy Bot puts the decision to the owner. Keep, rewrite and retire are the owner's to choose.
+The Strategy Owner puts the decision to the owner. Keep, rewrite and retire are the owner's to choose.
 
 ## 7. Write, publish, close
 

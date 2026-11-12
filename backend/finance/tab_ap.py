@@ -559,7 +559,7 @@ def contacts(
 
 
 def bills_email(c: sqlite3.Connection) -> str | None:
-    """The address vendors send bills to (Bookkeeper reads that mailbox), or None while there is none."""
+    """The address vendors send bills to (Finance Owner reads that mailbox), or None while there is none."""
     value = SL.setting(c, BILLS_EMAIL_KEY)
     return value if isinstance(value, str) and value else None
 

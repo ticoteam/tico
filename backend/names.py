@@ -6,7 +6,8 @@ instead of them:
 
 - an object with an `owner_id`, `requester_id`, `sender_id`, `recipient_id` or `actor` id gets `owner_name` and so on;
 - a read (GET) answer that is an object gets `actors`: {id: name} for every id it names (and for the `who`, `asked_by`
-  and `by` of a task's waits and requirements, LISTED_KEYS), one lookup for the whole page;
+  and `by` of a task's waits and requirements and a pipeline's `manager_id`, LISTED_KEYS), one lookup for the whole
+  page;
 - for a person, a notice the hub wrote for bots to read ("New task from bot:x: ...") is shown with names
   (the original is kept in `body_raw`). Bots and other callers get the text as written.
 
@@ -33,8 +34,9 @@ ACTOR_KEYS = (
     "proposed_by",
 )
 # Keys whose actor ids go into `actors` only, with no `_name` beside them: a task's waits and requirements name who
-# they wait on (`who`), who asked (`asked_by`) and who answered (`by`), and `tico task show` prints those names.
-LISTED_KEYS = ("who", "asked_by", "by")
+# they wait on (`who`), who asked (`asked_by`) and who answered (`by`), and `tico task show` prints those names; a
+# pipeline names its manager (`manager_id`), who may hold no stage of it.
+LISTED_KEYS = ("who", "asked_by", "by", "manager_id")
 ID = re.compile(r"\b(human|bot):([A-Za-z0-9._-]*[A-Za-z0-9_])")
 # Tico support in a session a person opened (backend/support_access.py): no roster row, always this name.
 SUPPORT_ACTOR, SUPPORT_NAME = "human:tico-support", "Tico support"

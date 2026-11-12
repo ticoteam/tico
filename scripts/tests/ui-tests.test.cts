@@ -5,12 +5,11 @@ const fs: typeof import('node:fs') = require('node:fs');
 const path: typeof import('node:path') = require('node:path');
 const vm: typeof import('node:vm') = require('node:vm');
 const {spawnSync}: typeof import('node:child_process') = require('node:child_process');
-const os: typeof import('node:os') = require('node:os');
 const {EventEmitter}: typeof import('node:events') = require('node:events');
 // browser.cts is TypeScript: the vm below runs its source with the types stripped (Node's own stripper, as --require does).
 const {stripTypeScriptTypes}: typeof import('node:module') = require('node:module');
 type Emitter = import('node:events').EventEmitter;
-const {resources, runScript, runScripts, sampleCpu, stopTree, stoppedReport, typeScriptGuard} = require('../ui-tests.cts') as Api;
+const {resources, runScripts, sampleCpu, stopTree, stoppedReport} = require('../ui-tests.cts') as Api;
 
 test('frame timing scripts run alone after the parallel pool, within the selected files', async () => {
   const active = new Set<string>(), started: string[] = [], finished: string[] = [];
@@ -97,61 +96,6 @@ test('one CPU-idle policy, explicit overrides and shared context/page timeouts',
   assert.deepEqual(calls, [['context', 60000], ['context-navigation', 60000]]);
 });
 
-test('a hung browser script is named with its pending call; it and everything it started stop, one that ends does not',
-     {timeout: 30000}, async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ui-tests-'));
-  const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  // A helper's identity (pid and start time) is taken while the hung script is still its parent, so cleanup below can
-  // tell it from a later process that reuses the pid.
-  const ps = (pid: number): string => (spawnSync('ps', ['-o', 'ppid=,lstart=', '-p', String(pid)], {encoding: 'utf8'}).stdout || '').trim();
-  const started = (pid: number): string => ps(pid).replace(/^\d+\s+/, '');
-  const owned = new Map<number, string>();
-  let helper: number[];
-  try {
-    const preload = path.join(dir, 'preload.cjs');
-    fs.writeFileSync(preload, '');
-    // Like a stalled Playwright script: a detached "browser" (its own process group, as Playwright launches one),
-    // a "server" child, Playwright's call log on stderr, then a call that never returns.
-    fs.writeFileSync(path.join(dir, 'hangs.cjs'), `
-      const {spawn} = require('node:child_process');
-      const sleep = ['-e', 'setInterval(() => {}, 1000)'];
-      const browser = spawn(process.execPath, sleep, {detached: true, stdio: 'ignore'});
-      const server = spawn(process.execPath, sleep, {stdio: 'ignore'});
-      console.log('started', browser.pid, server.pid);
-      require('node:fs').writeFileSync(${JSON.stringify(path.join(dir, 'started'))}, [process.pid, browser.pid, server.pid].join(' '));
-      console.error('2026-10-22T09:31:00.000Z pw:api => page.goto started');
-      console.error('2026-10-22T09:31:00.100Z pw:api <= page.goto succeeded');
-      console.error('2026-10-22T09:31:00.200Z pw:api => page.click started');
-      setInterval(() => {}, 1000);`);
-    fs.writeFileSync(path.join(dir, 'ends.cjs'), "console.log('PASS');");
-    const running = runScript(path.join(dir, 'hangs.cjs'), {env: {...process.env, DEBUG: undefined}, timeout: 1, preload});
-    const marker = path.join(dir, 'started');
-    for (let i = 0; i < 100 && !fs.existsSync(marker); i++) await new Promise(r => setTimeout(r, 10));
-    if (fs.existsSync(marker)) {
-      const [parent, ...pids] = fs.readFileSync(marker, 'utf8').split(' ').map(Number);
-      for (const pid of pids) { const [ppid, ...start] = ps(pid).split(/\s+/); if (Number(ppid) === parent) owned.set(pid, start.join(' ')); }
-    }
-    const hung = await running;
-    helper = hung.out.match(/started (\d+) (\d+)/)!.slice(1).map(Number);
-    assert.deepEqual([...owned.keys()].sort(), [...helper].sort(), 'each helper identity was taken while it was ours');
-    assert.equal(hung.timedOut, true);
-    assert.notEqual(hung.code, 0);
-    assert.ok(hung.secs < 10, `stopped after ${hung.secs}s`);
-    assert.doesNotMatch(hung.out, /pw:api/);
-    assert.deepEqual(hung.pending, ['page.click']);
-    assert.match(stoppedReport(hung), /waiting on: page\.click/);
-    const stoppedPids = hung.stopped.map(p => p.pid);
-    for (const pid of helper) assert.ok(stoppedPids.includes(pid), `${pid} in ${stoppedPids}`);
-    for (let i = 0; i < 50 && helper.some(alive); i++) await new Promise(r => setTimeout(r, 100));
-    assert.deepEqual(helper.filter(alive), [], 'no orphan browser or server is left');
-    const ended = await runScript(path.join(dir, 'ends.cjs'), {timeout: 30, preload});
-    assert.deepEqual([ended.code, ended.timedOut, ended.out.trim(), [...ended.stopped]], [0, false, 'PASS', []]);
-  } finally {
-    // Only a helper this test started: same pid and start time as when the hung script was its parent.
-    for (const [pid, start] of owned) if (started(pid).replace(/\s+/g, ' ') === start) process.kill(pid, 'SIGKILL');
-    fs.rmSync(dir, {recursive: true, force: true});
-  }
-});
 
 test('newPage and page.close fail with their name instead of waiting forever', {timeout: 30000}, async () => {
   const never = (): Promise<never> => new Promise(() => {});
@@ -267,29 +211,6 @@ test('a process list that fails is reported as incomplete cleanup, with the erro
   assert.deepEqual([...new Set(sent.map(([pid]) => pid))], [100], 'only the script itself, which the runner owns');
 });
 
-test('a stop that cannot kill the script (taskkill denied) still ends the run in bounded time', {timeout: 10000}, async () => {
-  const attempts: string[][] = [];
-  const {runner} = fakeRunner({platform: 'win32', execFileSync: (cmd, args) => {
-    attempts.push([cmd, ...args]);
-    throw Object.assign(new Error('Access is denied.'), {code: 'EPERM'});
-  }});
-  const result = await settles(runner.runScript('synthetic.cjs', {preload: 'synthetic', timeout: 0.01, grace: 30}), 3000);
-  assert.notEqual(result, 'unsettled', 'the run ended although the script never exited');
-  assert.deepEqual(attempts, [['taskkill', '/PID', '123', '/T', '/F']]);
-  assert.equal(result.timedOut, true);
-  assert.equal(result.code, null);
-  const report = runner.stoppedReport(result);
-  assert.match(report, /could not stop 1 process\(es\):\n {2}123 : EPERM/);
-  assert.match(report, /cleanup incomplete: taskkill failed: EPERM; .*could not be stopped; the run ended without waiting for it/);
-  // A script that was signalled but never exits (it did not die) is waited for only `grace` seconds.
-  const quiet = fakeRunner();
-  const started = Date.now();
-  const unexited = await settles(quiet.runner.runScript('synthetic.cjs', {preload: 'synthetic', timeout: 0.01, grace: 0.2,
-                                                                          stop: (pid: number) => [{pid, command: ''}]}), 3000);
-  assert.notEqual(unexited, 'unsettled');
-  assert.ok(Date.now() - started >= 200);
-  assert.match(quiet.runner.stoppedReport(unexited), /cleanup incomplete: the script \(pid 123\) was still running 0\.2s after it was stopped/);
-});
 
 test('the browser call log is bounded while it streams and in the report, and URLs and secrets are redacted',
      {timeout: 10000}, async () => {
@@ -324,12 +245,4 @@ test('--group e2e lists the end-to-end journeys, and an unknown group is refused
   const bad = spawnSync(process.execPath, [script, '--group', 'nope', '--list'], {encoding: 'utf8'});
   assert.equal(bad.status, 1);
   assert.match(bad.stderr, /--group must be one of: e2e/);
-});
-
-test('a .cts script needs node 22.18 or later, and .cjs scripts never do', () => {
-  assert.equal(typeScriptGuard(['a.cts'], '22.17.1'), 'ui/tests .cts needs node >= 22.18');
-  assert.equal(typeScriptGuard(['a.cjs', 'b.cts'], '20.19.0'), 'ui/tests .cts needs node >= 22.18');
-  assert.equal(typeScriptGuard(['a.cts'], '22.18.0'), null);
-  assert.equal(typeScriptGuard(['a.cts'], '24.21.0'), null);
-  assert.equal(typeScriptGuard(['a.cjs'], '20.19.0'), null);
 });

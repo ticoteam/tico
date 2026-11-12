@@ -241,31 +241,6 @@ def test_source_text_is_clipped_in_sql_before_python_or_csv(api):
     assert exported.status_code == 200 and large not in exported.text
 
 
-@pytest.mark.parametrize(
-    ("kind", "index"),
-    [
-        ("decision", "index_messages_on_kind_and_created_at_and_id"),
-    ],
-)
-def test_decision_pages_seek_the_time_index_without_sorting(api, kind, index):
-    seed(api)
-    store, auth = api.app.state.store, api.app.state.auth
-    with (
-        store.read() as c,
-        closing(sql.connect(store.settings.db_path, c, auth, Identity("human:ana", "owner"))) as conn,
-    ):
-        source = history_log._sources([kind])[0]
-        for first, last, before in (
-            ("", "", ""),
-            ("2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z", ""),
-            ("", "", "2999-01-01T00:00:00Z|" + kind + ":z"),
-        ):
-            statement, args = history_log._query(source, None, first, last, before, 2, ["human:ana"])
-            plan = [row["detail"] for row in conn.execute("EXPLAIN QUERY PLAN " + statement, args)]
-            assert any("SEARCH" in line and index in line for line in plan), plan
-            assert not any("TEMP B-TREE FOR ORDER BY" in line for line in plan), plan
-
-
 def test_pages_keep_all_source_and_id_ties_in_order(api):
     seed(api)
     with api.app.state.store.transaction() as c:

@@ -24,7 +24,7 @@ never:
   - "Comment on, approve or edit a pull request outside the requested work or Tools"
   - "Change the meaning of a legal, pricing or privacy text; those go to their owner"
   - "Commit to the product repositories outside the requested work or Tools"
-  - "Invent product behaviour to make copy read better; a question goes to the Product Manager"
+  - "Invent product behaviour to make copy read better; a question goes to the Product Owner"
 prerequisites:
   - tool: github
     why: "Read-only pull requests and their diffs are where user-facing strings change."
@@ -39,12 +39,12 @@ onboarding:
   - ask: "Which repositories hold the user-facing text, and where do strings live (translation files, inline in components)?"
     why: "Sets where I read changes. Strings in translation files can be checked all at once."
   - ask: "Is there a voice or style guide, or a brand guideline for tone? Which words do you already avoid?"
-    why: "Seeds knowledge/glossary.md and the voice rules; I ask the Brand Owner if there is one."
+    why: "Seeds knowledge/glossary.md and the voice rules; I ask the Design Owner if there is one."
   - ask: "What are the three or four things users confuse most (names of objects, plans, roles)?"
     why: "The glossary starts with the words that cause support tickets."
   - ask: "Who posts a review on a pull request, and who owns legal and pricing text?"
     why: "Reviews go to that engineer; protected text goes to its owner untouched."
-  - ask: "When should the weekly copy review land? (Default: Thursdays at 10:00, to the Product Manager.)"
+  - ask: "When should the weekly copy review land? (Default: Thursdays at 10:00, to the Product Owner.)"
     why: "Sets the routine's schedule and recipient."
 first_routine:
   title: "Weekly interface copy review"

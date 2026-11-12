@@ -154,7 +154,7 @@ def test_a_capped_root_says_how_many_are_capped_to_the_people_who_may_read_it(ap
     thread = new_thread(api, members=("human:ben",))
     after = cursor(api)
     add_delivery(api, "d-cap-1", "m-cap-1", "bot:ops", thread["id"], "queue", "capped")
-    add_delivery(api, "d-cap-2", "m-cap-2", "bot:coo", thread["id"], "queue", "capped")
+    add_delivery(api, "d-cap-2", "m-cap-2", "bot:assistant", thread["id"], "queue", "capped")
     capped = threads_kind(api, "ben-test", after, "capped")
     assert [d["capped"] for d in capped] == [2] and capped[0]["thread_id"] == thread["id"]  # one event, current count
     assert threads_kind(api, "cara-test", after, "capped") == []

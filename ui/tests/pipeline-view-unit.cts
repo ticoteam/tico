@@ -7,7 +7,8 @@
 //   no factory under Other with no count;
 // - the editor names what someone else changed when its save is refused as out of date;
 // - the editor offers every kind, a page's and In a release's settings, and a stage's On enter, and saves them as the
-//   record stores them.
+//   record stores them; an answer's name follows its title until edited, and its type keeps only its own fields;
+// - a task's row for a stage's answer is its title, and once met its value.
 // Run: node ui/tests/pipeline-view-unit.cts
 'use strict';
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -31,15 +32,17 @@ const ctx = vm.createContext({
   ageShort: () => '2h',
   skelRows: () => '<i class="skel"></i>',
   errorMessage: (_e: unknown, fallback: string) => fallback,
+  TL_ICON: {plus: '+'},
+  taskOwnerOptions: () => '',
 });
-for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts']) {
+for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
 }
 const plain = <T,>(x: T): T => JSON.parse(JSON.stringify(x));   // out of the vm's realm, for deepEqual
 
 const req = (kind: string) => ({kind, settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''});
 const stage = (id: string, name: string, extra: Record<string, unknown> = {}) => ({id, name, purpose: '', owner: null, by_hand: false,
-  task_limit: null, expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req('owner_done')], ...extra});
+  requests_move_on: false, task_limit: null, expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req('owner_done')], ...extra});
 const rec = (extra: Record<string, unknown> = {}) => ({id: 'product', name: 'Product', goal: 'Specs that ship', prefix: 'P',
   manager_id: 'bot:pm', owner_id: 'human:ana', private: false, factory_id: 'f-product', preset: null, settings_version: 3,
   retired_at: null, stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 2}), stage('dev', 'In development')],
@@ -142,17 +145,18 @@ const factories = (async () => {
 {
   const state = {id: 'product', pipelines: [{id: 'product', name: 'Product'}, {id: 'engineering', name: 'Engineering'}],
     draft: rec({stages: [stage('spec', 'Spec', {requirements: [{...req('page'), who_oks: 'people_with_exceptions'}]}),
-      stage('release', 'Release', {requirements: [req('in_release')]})]})};
-  const kinds = ctx.peReqHTML(state.draft.stages[0]!.requirements[0]!, 0, 0);
+      stage('release', 'Release', {requirements: [{...req('item'), source: 'github', condition: 'in_release'}]})]})};
+  const kinds = ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0);
   assert.doesNotMatch(kinds, /later|disabled>/, 'every kind may be picked');
   assert.match(kinds, /<option value="in_release">In a release<\/option>/);
   assert.match(kinds, /<span>Jev checks<\/span>/);
   assert.match(kinds, /<span>Then OK from<\/span><select[^>]*><option value="">Nobody<\/option>/, 'a page needs no person');
   assert.match(kinds, /data-pe-rs="at_head"[^>]*> Newest commit only/);
   assert.match(kinds, /data-pe-rs="with_release"[^>]*> With its release/);
-  const release = ctx.peReqHTML(state.draft.stages[1]!.requirements[0]!, 1, 0);
+  const release = ctx.peReqHTML(state, state.draft.stages[1]!.requirements[0]!, 1, 0);
   assert.match(release, /data-pe-rf="release_repo"/);
-  assert.match(release, /data-pe-rs="prereleases"[^>]*> Pre-releases count/);
+  assert.match(release, /data-pe-rf="release_with"[^>]*placeholder="workflow:release.yml or tag"/);
+  assert.match(release, /data-pe-rs="prereleases"[^>]* checked> Pre-releases count/, 'omission renders the enabled default');
   assert.match(release, /data-pe-rf="can_push_past"[^>]*disabled/, 'In a release is never pushed past');
 
   const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '', checked = false) =>
@@ -160,20 +164,90 @@ const factories = (async () => {
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', true));
   ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_repo'}, ' ticoteam/tico '));
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRf: 'release_with'}, ' workflow:release.yml '));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {at_head: true});
-  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings), {prereleases: true, release_repo: 'ticoteam/tico'});
+  assert.deepEqual(plain(state.draft.stages[1]!.requirements[0]!.settings),
+    {prereleases: true, release_repo: 'ticoteam/tico', release_with: 'workflow:release.yml'});
   ctx.peInput(state, field('HTMLInputElement', {peSi: '0', peRi: '0', peRs: 'at_head'}, 'on', false));
   assert.deepEqual(plain(state.draft.stages[0]!.requirements[0]!.settings), {}, 'a switch off is not saved');
+  ctx.peInput(state, field('HTMLInputElement', {peSi: '1', peRi: '0', peRs: 'prereleases'}, 'on', false));
+  const saved = plain(ctx.peOut(state.draft));
+  assert.equal(saved.stages[1]!.requirements[0]!.settings.prereleases, false, 'an opt-out is explicit in the save payload');
+  assert.doesNotMatch(ctx.peReqHTML({...state, draft: saved}, saved.stages[1]!.requirements[0]!, 1, 0),
+    /data-pe-rs="prereleases"[^>]* checked/, 'the saved opt-out renders off');
 
   const onEnter = ctx.peOnEnterOptions(state, state.draft.stages[0]!);
-  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="queue_prs">Queue PRs<\/option>/,
+  assert.match(onEnter, /<option value="" selected>Nothing<\/option><option value="file_into:engineering">File into Engineering<\/option><option value="act:github.queue">Queue PRs<\/option>/,
     'a stage files into another pipeline, not its own');
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'on_enter'}, 'file_into:engineering'));
   assert.deepEqual(plain(state.draft.stages[0]!.on_enter), {file_into: 'engineering'});
   assert.match(ctx.peOnEnterOptions(state, state.draft.stages[0]!), /value="file_into:engineering" selected/);
-  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'queue_prs'));
-  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {queue_prs: true});
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, 'act:github.queue'));
+  assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {act: 'github.queue'});
   ctx.peInput(state, field('HTMLSelectElement', {peSi: '1', peSf: 'on_enter'}, ''));
   assert.deepEqual(plain(state.draft.stages[1]!.on_enter), {});
+
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'pr_merged'));
+  const merged = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  assert.deepEqual([merged['kind'], merged['source'], merged['condition']], ['item', 'github', 'pr_merged'],
+    'a GitHub condition is saved as an item of source github');
+  assert.match(ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0), /<option value="pr_merged" selected>/);
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peRi: '0', peRf: 'kind'}, 'owner_done'));
+  const done = plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  assert.deepEqual([done['kind'], done['source'], done['condition']], ['owner_done', null, null]);
+
+  // A by-hand stage alone offers whether a person's request moves on by itself; leaving by hand off clears it.
+  const ideas = stage('ideas', 'Ideas', {by_hand: true});
+  state.draft.stages.unshift(ideas);
+  (state as Record<string, unknown>)['open'] = new WeakSet();
+  assert.match(ctx.peStageHTML(state, ideas, 0, 3), /data-pe-sf="requests_move_on"[^>]*> A person's request moves on/);
+  assert.doesNotMatch(ctx.peStageHTML(state, state.draft.stages[1]!, 1, 3), /requests_move_on/);
+  ctx.peInput(state, Object.assign(field('HTMLInputElement', {peSi: '0', peSf: 'requests_move_on'}, 'on', true), {type: 'checkbox'}));
+  assert.equal(state.draft.stages[0]!['requests_move_on'], true);
+  ctx.peInput(state, field('HTMLSelectElement', {peSi: '0', peSf: 'by_hand'}, '0'));
+  assert.equal(state.draft.stages[0]!['requests_move_on'], false, 'only a by-hand stage keeps it');
+}
+// ---- the editor: a stage's answer
+{
+  const state = {id: 'product', pipelines: [], reqOpen: new WeakSet(), draft: rec({stages: [stage('spec', 'Spec', {requirements: [req('owner_done')]})]})};
+  const field = (kind: 'HTMLInputElement' | 'HTMLSelectElement', data: Record<string, string>, value = '') =>
+    Object.assign(Object.create(ctx[kind].prototype), {dataset: {peSi: '0', peRi: '0', ...data}, value, type: 'text', closest: () => null});
+  const r = () => plain(state.draft.stages[0]!.requirements[0]!) as Record<string, unknown>;
+  const html = () => ctx.peReqHTML(state, state.draft.stages[0]!.requirements[0]!, 0, 0) as string;
+  assert.match(html(), /<optgroup label="Responses"><option value="owner_done" selected>Owner says done<\/option><option value="ok">OK from someone<\/option><option value="answer">Answer<\/option><\/optgroup><optgroup label="Links"><option value="linked_done">/);
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
+  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'kind'}, 'answer'));
+  assert.deepEqual([r()['kind'], r()['settings'], r()['who_oks'], r()['choices']], ['answer', {type: 'text', name: 'confidence'}, 'none', null]);
+  assert.match(html(), /<span>Title<\/span>/);
+  assert.match(html(), /<span>From<\/span><select data-pe-rf="person_id"[^>]*><option value="">Task owner<\/option>/);
+  assert.match(html(), /data-pe-rf="answer_name"[^>]*value="confidence"/);
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence (0-100)'));
+  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'confidence_0_100', 'the name follows the title');
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'answer_name'}, 'conf'));
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'line'}, 'Confidence'));
+  assert.equal((r()['settings'] as Record<string, unknown>)['name'], 'conf', 'a name edited by hand stays');
+  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'number'));
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'min'}, '0'));
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'max'}, '100'));
+  ctx.peInput(state, field('HTMLInputElement', {peRf: 'question'}, 'How sure are you?'));
+  assert.deepEqual(r()['settings'], {type: 'number', name: 'conf', min: 0, max: 100, question: 'How sure are you?'});
+  assert.match(html(), /<span>Min<\/span><input type="number"[^>]*value="0">/);
+  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'choice'));
+  assert.deepEqual([r()['settings'], r()['choices']], [{type: 'choice', name: 'conf', question: 'How sure are you?'}, []], 'a choice has no bounds');
+  assert.match(html(), /data-pe-yes-no/);
+  ctx.peInput(state, field('HTMLSelectElement', {peRf: 'answer_type'}, 'text'));
+  assert.equal(r()['choices'], null, 'text has no choices');
+}
+// ---- a task's row for a stage's answer
+{
+  const typed = {name: 'confidence', type: 'number', min: 0, max: 100, question: 'How sure are you?'};
+  const row = (extra: Record<string, unknown>) => ctx.taskReqRowHTML({requirement_id: 'r1', kind: 'answer', line: 'Confidence', met: false,
+    standing: 'How sure are you?', who: 'bot:builder', asked_by: null, choices: null, typed, shows: [], answer: null, may: [], ...extra}) as string;
+  const open = row({});
+  assert.match(open, /<span class="task-req-name">Confidence<\/span>/, 'the title only');
+  assert.doesNotMatch(open, /How sure|task-req-val/);
+  const met = row({met: true, who: null, standing: '80', answer: {id: 'a1', at: '', by: 'bot:builder', note: null, value: '80'}});
+  assert.match(met, /<span class="task-req-name">Confidence<\/span>/);
+  assert.match(met, /<span class="task-req-val">80<\/span>/, 'once met, its value');
 }
 factories.then(() => console.log('pipeline-view-unit: ok'), error => { console.error(error); process.exitCode = 1; });

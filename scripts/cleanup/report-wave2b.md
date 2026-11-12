@@ -1014,7 +1014,7 @@ a key literal equal to a scoped name outside a function that touches its table.
 - `clients/hubtools.py:6862` `next`: `return _as_person(api).get("rules/due", **_present({"next": args.get("next"), "status": args.get("status"),`
 - `clients/remotecli.py:340` `at`: `"task-manager schedule": {"preset": getattr(args, "preset", None), "at": getattr(args, "at", None)},`
 - `clients/remotecli.py:598` `at`: `return post(f"tasks/{args.id}/later", {"after": args.after, "at": args.at,`
-- `clients/tests/test_hubcli.py:355` `next`: `self.assertIn("hub support send --approval ap-1", out["next"])`
+- `clients/tests/test_hubcli.py:355` `next`: `self.assertIn("hub support send --ok ap-1", out["next"])`
 - `connectors/browser.py:158` `at`: `f.write(json.dumps(dict(at=datetime.now().isoformat(timespec="seconds"), employee=slug, kind=kind,`
 - `connectors/slack.py:397` `ts`: `f"--thread {msgs[-1].get('thread_ts') or msgs[-1].get('ts')} --text '...'")`
 - `connectors/slack.py:403` `ts`: `out.append(f"- {m.get('time','')} {who} - ts {m.get('ts','')}")`
@@ -2301,7 +2301,7 @@ a bare word key in a dict literal none of whose other keys is a column of a tabl
 - `clients/hubtools.py:728` `until`: `return api.post(f"tasks/{args['id']}/snooze", {"until": args["until"], "note": args.get("note")}, key=_key(args))`
 - `clients/hubtools.py:2736` `since`: `{"since": _s("ISO date or time"), "source": _s("x, reddit, linkedin, ...")})`
 - `clients/hubtools.py:3283` `since`: `"since": _s("Only messages sent after this time (ISO 8601)")}, required=("conversation",))`
-- `clients/hubtools.py:5189` `next`: `"next": "A person must approve it in Needs you. Then send it: hub support send --approval "`
+- `clients/hubtools.py:5189` `next`: `"next": "A person must approve it in Needs you. Then send it: hub support send --ok "`
 - `clients/hubtools.py:6095` `at`: `"count": len(made), "index": index, "refs": names, "at": when}`
 - `clients/hubtools.py:6183` `until`: `"until": _s("With later: an ISO date-time")},`
 - `clients/hubtools.py:6614` `next`: `"next": "page on with next_cursor"}]`

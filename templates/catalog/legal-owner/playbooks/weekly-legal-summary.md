@@ -17,7 +17,7 @@ named a decision for the owner, check whether it was made; say so in the first s
 `tico task list` and any new task that is legal in kind (a
 contract, an NDA, a notice, a privacy or employment question). Add each new one to `knowledge/requests.md`
 with its kind, urgency (a date or "none"), risk in one line and proposed owner. Close rows whose task is done. Record each open request's Legal pipeline stage in its row; anything at Rules check is
-waiting on the Rules Owner (`tico-counsel`), so name it in the summary.
+waiting on the Rules Owner (`rules-owner`), so name it in the summary.
 
 ## 3. Read the legal team
 
@@ -37,7 +37,7 @@ one line, the date, the options as the record states them, and the lawyer to cal
 ## 5. Routing and role proposals
 
 For each request with no owner: the owner from the team lines in `AGENT.md`, with the reason. Create tasks for requested follow-through with your Tools. If one kind of request recurred with no bot to take it (three or more in four weeks), add a role
-proposal as `AGENT.md` "Proposing a new role" describes: a note to the Corporate Team Manager on its task, never acted on here.
+proposal as `AGENT.md` "Proposing a new role" describes: a note to the Corporate Manager on its task, never acted on here.
 
 ## 6. Write and hand over
 

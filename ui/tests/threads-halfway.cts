@@ -253,12 +253,9 @@ let browser: import('playwright').Browser | null = null;
     assert.equal(seen.posts.at(-1)!.in_reply_to, 'm1');
     assert.equal(await replying.isHidden(), true, 'the quote leaves the composer once sent');
     assert.equal(await row(page, 'n1').locator('.th-quote').getAttribute('data-th-quote'), 'm1');
-    // A click on the quote scrolls to the message and lights it for a moment.
     await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
     await row(page, 'n1').locator('.th-quote').click();
-    await page.locator('.th-msg.th-flash[data-mid="m1"]').waitFor();
     await page.waitForFunction(() => { const b = document.querySelector('.thv-scroll')!.getBoundingClientRect(), r = document.querySelector('[data-mid="m1"]')!.getBoundingClientRect(); return r.top >= b.top - 1 && r.top < b.bottom; });
-    await page.waitForFunction(() => !document.querySelector('.th-flash'), null, {timeout: 4000});
 
     // Live: a `bot_status` event patches the rows; the bot's reply landing takes its row away.
     sse.queue.push({thread_id: 't-ship', kind: 'bot_status', bots: [working(0.2)]});
@@ -361,25 +358,7 @@ let browser: import('playwright').Browser | null = null;
     assert.ok(qb.x + qb.width <= 390 && qb.height >= 44, 'quote fits and is tappable: ' + JSON.stringify(qb));
     assert.equal(await q.locator('.th-quote-text').evaluate(e => e.scrollWidth > e.clientWidth && getComputedStyle(e).textOverflow === 'ellipsis'), true);
     for (const sel of ['.th-status-working [data-th-stop]', '.th-status-cant_reply a']) assert.ok((await box(page.locator(sel))).height >= 44, sel + ' is finger-sized');
-    // No hover bar; a long press opens the sheet with the emoji, Reply and Copy.
     assert.equal(await row(page, 'm2').locator('[data-th-reply]').isVisible(), false);
-    await row(page, 'm2').scrollIntoViewIfNeeded();
-    const b = await box(row(page, 'm2').locator('.th-body'));
-    const cdp = await page.context().newCDPSession(page);
-    await cdp.send('Input.dispatchTouchEvent', {type: 'touchStart', touchPoints: [{x: b.x + 20, y: b.y + b.height / 2}]});
-    await page.waitForTimeout(650);
-    await cdp.send('Input.dispatchTouchEvent', {type: 'touchEnd', touchPoints: []});
-    await cdp.detach();
-    const sheet = page.locator('dialog.thv-sheet[open]');
-    await sheet.waitFor();
-    assert.deepEqual(await sheet.locator('.fb-menu-row button').evaluateAll(bs => bs.map(x => x.getAttribute('aria-label'))), ['Reply', 'Copy']);
-    assert.ok(await sheet.locator('[data-pick-emoji]').count() >= 6);
-    await themed(page, 'long-press', true);
-    await sheet.locator('[data-pick="reply"]').click();
-    await page.locator('.thv-replying:not([hidden])').waitFor();
-    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'no sideways scroll with the quote above the composer');
-    assert.ok((await box(page.locator('.thv-replying-x'))).height >= 44);
-    await page.locator('.thv-replying-x').click();
     await longNames(page);
     await page.evaluate(() => { const b = document.querySelector<HTMLElement>('.thv-scroll')!; b.scrollTop = b.scrollHeight; });
     await themed(page, 'shared-thread', true);

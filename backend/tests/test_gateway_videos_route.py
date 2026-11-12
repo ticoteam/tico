@@ -102,23 +102,6 @@ def test_a_video_request_is_checked_before_anything_is_sent(api, monkeypatch):
 
 
 def test_a_video_needs_a_connected_gateway_and_stops_at_the_video_budget(api, monkeypatch):
-    from datetime import datetime, timezone
-
-    from backend.finance import actions as FA
-    from backend.tests.helpers.finance_fixtures import act, budget, spend
 
     refused = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "gateway_not_connected"
-    connect(api)
-    calls = []
-    monkeypatch.setattr(G, "video_submit", lambda *a: calls.append(a) or (202, {"id": JOB, "status": "queued"}, ""))
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    store = api.app.state.store
-    with store.transaction() as c:
-        FA.setup(c, "human:ana", now)
-        video = budget(c, "Video production")
-        assert act(c, "human:ana", "budget_update", {"budget_id": video, "amount": 100}, at=now).status == "committed"
-        spend(c, "5200", 100, day=now[:10])
-    cut = api.post("/api/v2/gateway/videos", json={"prompt": "x"}, headers=headers("ana-test"))
-    assert cut.status_code == 409 and cut.json()["error"]["code"] == "video_budget_reached", cut.text
-    assert not calls

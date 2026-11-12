@@ -570,8 +570,8 @@ class Auth:
         reference). Any other turn of the assistant bot (a Slack route, a meeting delivery, a routine) stays the bot's
         own.
 
-        Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Bot turn, even one queued
-        in the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
+        Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Owner turn, even one queued
+        in the owner's earlier Strategy Owner chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
         # Only a live lease: a token kept from a finished turn means nothing (validate_identity says the
         # same for the plain bot identity; this repeats it where the token turns into a person).
         room_key = rooms.ASSISTANT_ROOM if attempt["bot_id"] == self.settings.assistant_bot else None
@@ -777,20 +777,20 @@ class Auth:
     FULL = {"see": True, "read": True, "write": True}
 
     def system_bot(self, slug):
-        """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Bot, the Health Monitor, the Task
-        Manager, the Bookkeeper, Counsel, the Brand Owner, the Updates Owner, the Automations Owner): they act for the whole company, so only the company owner changes them. Admins
+        """The built-in bots (the Assistant, BotOps, the Librarian, the Strategy Owner, the Health Monitor, the General
+        Manager, the Finance Owner, the Rules Owner, the Design Owner, the Updates Owner, the Automations Owner): they act for the whole company, so only the company owner changes them. Admins
         manage every other bot."""
         return slug in (
             self.settings.assistant_bot,
             "assistant",
             "botops",
             "librarian",
-            "goal-manager",
+            "strategy-owner",
             "health-monitor",
-            "task-manager",
-            "bookkeeper",
-            H.COUNSEL,
-            H.BRAND_OWNER,
+            "general-manager",
+            "finance-owner",
+            H.RULES_OWNER,
+            H.DESIGN_OWNER,
             "updates-owner",
             "automations-owner",
         )

@@ -1,0 +1,32 @@
+name: site-reliability-engineer                     # the slug: it matches the repository bot-site-reliability-engineer and the label owner:site-reliability-engineer
+display_name: "Site Reliability Engineer"
+labels: [owner:site-reliability-engineer]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
+# (Start setup, go-live). `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+routines:
+  - id: weekly-incident-review
+    title: Weekly incident review
+    cron: "0 10 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-incident-review.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value; declaring access here does not create it. Changing access is an
+# owner decision, so the bot files a task for the owner rather than editing this file.
+tools: []
+# Optional, uncomment when the owner connects it. It may never carry write or send.
+#   - service: slack
+#     identity: the team workspace
+#     can: [read]
+#     channels: [incidents]
+#     dms: false
+#     env: SLACK_BOT_TOKEN
+#     note: "reads one incident channel to build the timeline; never posts, never reads DMs"

@@ -19,9 +19,9 @@ request is one possible answer, not the problem. If you cannot state the problem
 
 ## 2. Gather the evidence
 
-- Customer Insights Analyst: is it a theme, how many items, which severity (`feedback-analyst` reports).
-- Product Operations Manager: how many accounts asked for it (`product-ops` ledger).
-- UX Researcher: any snapshots or opportunities that match (`product-researcher` digest).
+- Customer Insights Analyst: is it a theme, how many items, which severity (`customer-insights-analyst` reports).
+- Product Operations Manager: how many accounts asked for it (`product-operations-manager` ledger).
+- UX Researcher: any snapshots or opportunities that match (`ux-researcher` digest).
 - Product Analyst: how many users touch the area today (ask with a task if no report covers it).
 - `tico goal list --all`: which goal it would move, if any.
 
@@ -37,5 +37,5 @@ Score = reach × impact × confidence ÷ effort. Show all four numbers and every
 
 On the task, in five lines: the problem, the score and its weakest input, the goal it serves (or "no
 goal: park"), a recommendation (build, research first, park) and the owner of the next step:
-`product-researcher` to raise confidence, `product-manager` for a spec. Ask only for missing facts with `tico task ask <id> --to <person> "<question>" --version N`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `tico task create --owner <slug> --parent <id>` and log it in
+`ux-researcher` to raise confidence, `segment-product-owner` for a spec. Ask only for missing facts with `tico task ask <id> --to <person> "<question>" --version N`, as in `skills/ask-with-recommended-answers/SKILL.md`. Route requested next steps with `tico task create --owner <slug> --parent <id>` and log it in
 `knowledge/decision-log.md`.

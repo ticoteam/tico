@@ -329,7 +329,7 @@ const build = (() => {
 
 // ---- automations-assistant-routine
 const assistantRoutine = (() => {
-  const ASSISTANT = 'bot:coo';
+  const ASSISTANT = 'bot:assistant';
   return async ({hub, browser, phone, tag}: PassContext) => {
     // The sweep's title comes from the catalog (a template refresh renames it), so the test finds it by its owner.
     const dana = await open(browser, hub, 'dana', {phone, hash: '#/automations'});

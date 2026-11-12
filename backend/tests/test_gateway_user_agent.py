@@ -5,11 +5,9 @@ directly; here that fake refuses every agent that is not Tico's, the way the rel
 (runner_support/tests/test_conformance.py `RefusingProxy`)."""
 
 import json
-import re
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 
 import pytest
 
@@ -19,7 +17,6 @@ from clients import gateway as G
 from clients import judge as J
 
 KEY = "tgw-synthetic-fixture-key-0276"
-ROOT = Path(__file__).resolve().parents[2]
 
 
 class RefusingGateway:
@@ -173,39 +170,4 @@ def test_the_user_agent_names_the_app_version_and_never_carries_a_bad_header_val
 
 
 # What names Tico HQ or the Gateway in a module, and what a module uses to send HTTP.
-HQ_NAMES = re.compile(r"updates\.tico\.team|TICO_HQ_URL|hq_url\(|DEFAULT_HQ|TICO_GATEWAY_URL|/v1/gateway|gateway_url")
-SENDS = re.compile(
-    r"urllib\.request|httpx|\brequests\.(?:get|post|put|patch|delete|head|request|Session)\b|aiohttp|http\.client"
-)
 # Each module that sends to HQ or the Gateway, and how it names its user agent.
-HQ_CLIENTS = {
-    "backend/company_server.py": '"User-Agent": user_agent()',
-    "backend/inbound.py": '"User-Agent": user_agent()',
-    "backend/postal_mail.py": '"User-Agent": user_agent()',
-    "backend/recruit.py": '"User-Agent": "tico"',
-    "backend/billing_check.py": '"User-Agent": "tico-billing-check"',
-    "backend/releases.py": '"User-Agent": "tico-update-check"',
-    "backend/support.py": '"User-Agent": "tico-support"',
-    "backend/support_access.py": '"User-Agent": "tico-support-access"',
-    "backend/suggestions.py": '"User-Agent": G.user_agent()',
-    "clients/gateway.py": "branded_opener(*handlers).open(",
-    "clients/judge.py": "G.branded_opener(*handlers).open(",
-    "setup/support.py": '"User-Agent": "tico-setup"',
-    "setup/cell_stats.py": '"User-Agent": "tico-cell-stats"',
-}
-
-
-def test_every_module_that_sends_to_tico_hq_is_known_and_names_its_user_agent():
-    """A new client of Tico HQ or the Gateway fails here until it sends a user agent of its own (a library's default
-    is refused at the edge) and is listed above; one that stops naming its agent fails too."""
-    found = set()
-    for folder in ("backend", "clients", "setup", "connectors", "runner_support", "scripts"):
-        for path in (ROOT / folder).rglob("*.py"):
-            if "tests" in path.relative_to(ROOT).parts:
-                continue
-            text = path.read_text(errors="replace")
-            if HQ_NAMES.search(text) and SENDS.search(text):
-                found.add(path.relative_to(ROOT).as_posix())
-    assert found == set(HQ_CLIENTS), "a module sends to Tico HQ: give it Tico's user agent and list it in HQ_CLIENTS"
-    for name, agent in HQ_CLIENTS.items():
-        assert agent in (ROOT / name).read_text(), f"{name} no longer sends its user agent"

@@ -16,7 +16,6 @@ html.nav-lib-shut .rd-lib-toggle:not(.rd-co-toggle) .section-chev,html.nav-co-sh
 .rd-lib-toggle:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 .rd-lib-toggle .section-chev{margin:0}
 .rd-lib-toggle[aria-expanded="false"] .section-chev{transform:none}
-html.in-setup .rd-lib{display:none}
 @media (max-width:760px){.rd-lib-toggle{width:40px;height:40px}}
 .rd-lib .nav-link{padding-left:calc(10px + 20px + var(--s2));color:var(--muted)}
 .rd-lib .nav-link .nav-icon{display:none}

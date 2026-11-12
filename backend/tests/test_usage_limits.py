@@ -1,8 +1,12 @@
 """Spend limits (backend/usage_limits.py, docs/usage.md): a bot over a limit takes no new job and a run already going
 finishes, the 80% notice comes once, raising the limit resumes the bot, and who may set one."""
 
+import pytest
+
 from backend.tests.helpers.api import as_member, assign, claim, get, headers, post, ready, runner  # noqa: F401
 from backend.tests.helpers.usage_limits import finish, fleet, groups, paused, put, start
+
+pytestmark = pytest.mark.usefixtures("inside_one_half_hour")
 
 
 def test_a_bot_over_its_limit_takes_no_new_job_a_running_turn_finishes_and_raising_it_resumes(api):

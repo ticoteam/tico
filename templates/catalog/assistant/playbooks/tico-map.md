@@ -20,7 +20,7 @@ name no table, command or code. Not on this list: say you are not sure where it 
   that name it. Gray means not enough data. A colour a person sets by hand stays until it is set back to automatic.
 - **Strategy** `[Strategy](#/strategy)`: where the team writes down its few bets. A summary every bot reads, a vision, three
   to five bets, and sections (who it serves, what it sells, how it knows they want it, why now, what it won't do). The
-  owner writes and publishes it; the Strategy Bot proposes changes.
+  owner writes and publishes it; the Strategy Owner proposes changes.
 - **Budgets** are in Finance `[Finance](#/finance)`. You can raise or change one for them, with its amount and start date (job 47).
 - **A bot's model**: on the bot's page, its Settings tab `[Settings](#/bot/<slug>/settings)`: Harness, Model, Effort,
   then Apply. You can change it for them (job 30).

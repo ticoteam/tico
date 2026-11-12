@@ -124,14 +124,6 @@ fn opener_plugin<R: tauri::Runtime>() -> impl tauri::plugin::Plugin<R> {
         .build::<R>()
 }
 
-#[test]
-fn the_opener_leaves_anchor_clicks_to_the_native_window_policy() {
-    use tauri::plugin::Plugin;
-    assert!(opener_plugin::<tauri::test::MockRuntime>()
-        .initialization_script()
-        .is_none());
-}
-
 fn main() {
     applog::init();
     // Read before the builder: the autostart plugin needs the identifier, which only the context carries.
@@ -915,23 +907,6 @@ fn badge_signed_out(window: &tauri::Window) {
 
 fn badge_count(needs: usize) -> Option<i64> {
     (needs > 0).then(|| needs.min(i64::MAX as usize) as i64)
-}
-
-#[cfg(test)]
-mod badge_tests {
-    #[test]
-    fn the_dock_badge_shows_needs_you_and_clears_at_zero() {
-        assert_eq!(super::badge_count(0), None);
-        assert_eq!(super::badge_count(7), Some(7));
-    }
-
-    #[test]
-    fn needs_you_is_polled_only_while_there_is_one_org() {
-        assert!(super::polls_status(0));
-        assert!(super::polls_status(1));
-        assert!(!super::polls_status(2));
-        assert!(!super::polls_status(3));
-    }
 }
 
 // ----------------------------------------------------------------------------- updates

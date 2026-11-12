@@ -107,7 +107,7 @@ async function settingsRecruitFlow(seed: RecruitSeed = {}) {
     }
     const terms=new Set(draft.brief.toLowerCase().match(/[a-z]{3,}/g)||[]);
     const score=(c: RecruitCard)=>(draft.template&&c.template===draft.template?100:0)+(c.required?-100:0)+(c.summary||'').toLowerCase().split(/\W+/).filter(w=>terms.has(w)).length;
-    const candidates=cards.filter(c=>c.template!=='inbox'&&!c.required).slice().sort((a,b)=>score(b)-score(a)).slice(0,6);
+    const candidates=cards.filter(c=>c.template!=='inbox-manager'&&!c.required).slice().sort((a,b)=>score(b)-score(a)).slice(0,6);
     status.textContent='';
     results.innerHTML=candidates.map(c=>`<article class="cat-card"><h3>${esc(c.name)}</h3><p class="cat-summary">${esc(c.summary||'')}</p>${c.owns?.length?`<p class="muted">Owns: ${esc(c.owns.join('; '))}</p>`:''}<button class="primary" type="button" data-recruit-create="${esc(c.slug)}">Choose & create ${esc(c.name)}</button></article>`).join('');
     results.querySelectorAll<HTMLButtonElement>('[data-recruit-create]').forEach(b=>b.onclick=async()=>{

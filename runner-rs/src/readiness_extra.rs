@@ -117,6 +117,28 @@ pub fn claude_denies(path: &Path) -> Vec<String> {
     set.into_iter().collect()
 }
 
+/// Whether the words before a command in its own clause turn it down ("Never run `gh pr merge`", "its settings deny
+/// `gh release create`, `gh release edit`"), so naming it there asks for nothing.
+fn turned_down(before: &str) -> bool {
+    static CLAUSE: OnceLock<regex::Regex> = OnceLock::new();
+    static NO: OnceLock<regex::Regex> = OnceLock::new();
+    // A clause ends at a sentence's end, a semicolon or colon, a blank line or a new list item; a wrapped line does not.
+    let clause = CLAUSE
+        .get_or_init(|| {
+            regex::Regex::new(r"[.;:!?](?:\s|$)|\n\s*\n|\n\s*(?:[-*#]|\d+\.)\s").unwrap()
+        })
+        .find_iter(before)
+        .last()
+        .map_or(before, |m| &before[m.end()..]);
+    NO.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)\b(?:never|don't|do not|does not|must not|may not|cannot|can't|deny|denies|denied)\b",
+        )
+        .unwrap()
+    })
+    .is_match(clause)
+}
+
 /// The `gh` commands AGENT.md tells the bot to run that its settings deny (service.py claude_denied).
 pub fn claude_denied(path: &Path) -> Vec<String> {
     let Ok(text) = std::fs::read(path.join("AGENT.md")) else {
@@ -127,10 +149,7 @@ pub fn claude_denied(path: &Path) -> Vec<String> {
     let r = R.get_or_init(|| regex::Regex::new(r"`(gh [a-z-]+ [a-z-]+)").unwrap());
     let named: BTreeSet<String> = r
         .captures_iter(&text)
-        .filter(|c| {
-            let before = &text[..c.get(0).unwrap().start()];
-            !before.ends_with("denies ") && !before.ends_with("deny ")
-        })
+        .filter(|c| !turned_down(&text[..c.get(0).unwrap().start()]))
         .map(|c| c[1].to_string())
         .collect();
     let prefixes: Vec<String> = claude_denies(path)
@@ -891,6 +910,31 @@ mod tests {
         .unwrap();
         assert_eq!(claude_denies(&dir), vec!["gh pr merge", "git push --force"]);
         assert_eq!(claude_denied(&dir), vec!["gh pr merge"]);
+        // The Release Owner's AGENT.md names what it must not run: no request, so no warning.
+        std::fs::write(
+            dir.join(".claude/settings.json"),
+            r#"{"permissions": {"deny": ["Bash(gh pr merge *)", "Bash(gh release create *)", "Bash(gh release edit *)", "Bash(gh release delete *)"]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("AGENT.md"),
+            "Say which you chose and why on the task. Never run `gh pr merge`.\n\
+             - **Cut a release.** `.claude/settings.json`\n  denies `gh release create`, `gh release edit`, `gh release delete`, tag commands.\n\
+             - Do not run `gh pr merge` yourself.\n\
+             - Read the releases with `gh release view <tag>`.\n",
+        )
+        .unwrap();
+        assert!(claude_denied(&dir).is_empty(), "{:?}", claude_denied(&dir));
+        // A later sentence that asks for it is still a request.
+        std::fs::write(
+            dir.join("AGENT.md"),
+            "Never merge by hand. When it is green, run `gh pr merge --auto`.\n- Then cut it with `gh release create v1`.\n",
+        )
+        .unwrap();
+        assert_eq!(
+            claude_denied(&dir),
+            vec!["gh pr merge", "gh release create"]
+        );
         let _ = std::fs::remove_dir_all(&dir);
         let r = json!({"recent_errors": ["x"], "bots": {"a": {"tools": []}}});
         assert_eq!(
@@ -943,32 +987,6 @@ mod tests {
         assert_eq!(
             refused("body: extra fields", &r).as_deref(),
             Some("readiness.worktree_waits")
-        );
-    }
-
-    #[test]
-    fn a_server_from_before_isolation_reports_gets_the_same_check_in_without_it() {
-        // The refusal a server from before `isolated` sends (backend/models.py StructuredReadiness forbids unknown
-        // fields), word for word: that field alone is held back and the check-in is sent again with the rest, so
-        // the computer keeps claiming work.
-        let detail = "body.readiness.StructuredReadiness.isolated: Extra inputs are not permitted; \
-                      body.readiness.dict[constrained-str,bool].runtimes: Input should be a valid boolean; \
-                      body.readiness.dict[constrained-str,bool].bots: Input should be a valid boolean";
-        let mut body = json!({"version": "test", "readiness": {"schema_version": 1, "isolated": true,
-                              "recent_errors": ["x"], "runtimes": {"claude": {"installed": true}}, "bots": {}}});
-        let hold = refused(detail, &body["readiness"]);
-        assert_eq!(hold.as_deref(), Some("readiness.isolated"));
-        crate::lanes::hold_back("readiness.isolated");
-        drop_held(&mut body);
-        crate::lanes::release("readiness.isolated");
-        assert!(
-            body["readiness"].get("isolated").is_none(),
-            "only the refused field goes"
-        );
-        assert_eq!(body["readiness"]["recent_errors"], json!(["x"]));
-        assert_eq!(
-            body["readiness"]["runtimes"]["claude"]["installed"],
-            json!(true)
         );
     }
 

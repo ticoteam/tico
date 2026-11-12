@@ -578,9 +578,7 @@ def register(
         return mutate(
             request,
             body,
-            lambda c: run_diagnostics.keep_stderr(
-                c, execution.attempt(c, request.state.identity, aid, active=False), body.tail
-            ),
+            lambda c: run_diagnostics.keep(c, execution.attempt(c, request.state.identity, aid, active=False), body),
         )
 
     @app.get("/api/v2/attempts/{aid}/capture")

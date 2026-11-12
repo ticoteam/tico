@@ -1,7 +1,7 @@
 """The company at the top of Goals and each goal's Why (backend/company.py): only the owner writes the Vision and the
-Description, everyone reads them, and every change is kept with who and when. The Strategy Bot proposes a goal's Why; a
-person accepts it, edits it or writes their own. No bot writes either, the Strategy Bot included, and no admin writes
-the company (spec: Head of Product, Strategy Bot, tests 1, 2 and 4; v3 10.11)."""
+Description, everyone reads them, and every change is kept with who and when. The Strategy Owner proposes a goal's Why; a
+person accepts it, edits it or writes their own. No bot writes either, the Strategy Owner included, and no admin writes
+the company (spec: Head of Product, Strategy Owner, tests 1, 2 and 4; v3 10.11)."""
 
 from backend import goal_asks as GA
 from backend.auth import Identity
@@ -9,7 +9,7 @@ from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.goal_asks import raise_level
 from backend.tests.helpers.company import bot, propose_why, with_strategy_bot
 
-STRATEGY_BOT = "bot:goal-manager"
+STRATEGY_BOT = "bot:strategy-owner"
 
 
 def goal(api, goal_id):
@@ -59,7 +59,7 @@ def test_the_owner_writes_it_a_member_reads_it_and_the_history_says_who_and_when
 
 
 def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(api):
-    """The API refuses a Vision or Description edit and a Why accept or write from any bot; the Strategy Bot
+    """The API refuses a Vision or Description edit and a Why accept or write from any bot; the Strategy Owner
     proposes."""
     strategy_token = with_strategy_bot(api)
     ops = bot(api, "ops")
@@ -67,7 +67,7 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
     # refused, and proposed to the owner
     post(api, "company", {"vision": "Bots rule."}, token=strategy_token, expected=409)
     # Not the Assistant acting for the owner either, even on a card she confirmed (which gets past the Assistant's own
-    # gate in backend/app.py): only her own click here. The Strategy Bot's proposal is the one way words reach it.
+    # gate in backend/app.py): only her own click here. The Strategy Owner's proposal is the one way words reach it.
     api.app.state.store.settings.test_identities["ana-via"] = Identity(
         "human:ana", "owner", "ana@acme.example", via="assistant", confirmed=True
     )
@@ -96,7 +96,7 @@ def test_no_bot_writes_the_company_or_accepts_a_why_the_strategy_bot_included(ap
 
 
 def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
-    """Spec test 4: a goal with no Why is not tied to the vision; the Strategy Bot proposes one, the owner accepts it as
+    """Spec test 4: a goal with no Why is not tied to the vision; the Strategy Owner proposes one, the owner accepts it as
     it is or edited, or writes their own. One open Why per goal, and none of them is a Needs you item of its own. At
     Passive (where the owner asked for them in chat) they wait on their goals and nobody is asked; above it they are one
     bundled item."""
@@ -106,7 +106,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     c = post(api, "goals", {"title": "Hire a support lead", "owner": "cara"})["goal"]["id"]
     assert goal(api, a)["why"] == "" and goal(api, a)["why_by_id"] is None  # "Not tied to the vision"
     seen = propose_why(api, a, "More rentals is the vision's first step.", strategy_token)
-    # The owner has the first line on screen; the Strategy Bot replaces it before they click. Accept on what they saw
+    # The owner has the first line on screen; the Strategy Owner replaces it before they click. Accept on what they saw
     # never confirms the newer words: it is refused, nothing is written, and the newer line waits for them.
     first = propose_why(api, a, "More landlords on Tico is the vision.", strategy_token)
     assert first["id"] != seen["id"] and first["payload"] == {"why": "More landlords on Tico is the vision."}
@@ -120,7 +120,7 @@ def test_the_strategy_bot_proposes_a_why_and_the_owner_accepts_or_edits_it(api):
     assert [
         p["may_decide"] for p in get(api, "goals/tree", token="cara-test")["proposals"] if p["kind"] == "goal_why"
     ] == [False]
-    # Never one Needs you item (or Strategy Bot task) per goal: the Strategy Bot bundles them (Dev 220), and only above
+    # Never one Needs you item (or Strategy Owner task) per goal: the Strategy Owner bundles them (Dev 220), and only above
     # Passive.
     assert not [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
     with api.app.state.store.transaction() as conn:

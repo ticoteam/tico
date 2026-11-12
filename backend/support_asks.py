@@ -6,8 +6,10 @@ how many Getting started steps are done, whether a computer is online, whether a
 bot is ready and how many bots wait in Needs setup. It carries no names (each step has a fixed label), only what
 Getting started already shows them.
 
-"How is Tico working for you?" is asked after the install's first bot result, and again 7 and 30 days after it
-(`feedback_due()`), once per person per moment, and skippable. Anyone but the owner who joined after that first
+"How is Tico working for you?" is asked once the company has used Tico: a day after the first result on a task a person
+asked for (`_first_use()`), never before the first-run setup is complete, and again 7 and 30 days after that result
+(`feedback_due()`), once per person per moment, and skippable. A new company's bots finish turns of their own within
+minutes (going live, routines); those say nothing about how Tico is working for anyone, so they do not count. Anyone but the owner who joined after that first
 result is asked 7 and 30 days after their own first action. An answer goes as a `feedback` request through the same route as any
 other (backend/support.py), with only the words they wrote; a skip sends nothing. The question is never asked while support is
 off, and never of a bot, a token or the Assistant.
@@ -15,20 +17,21 @@ off, and never of a bot, a token or the Assistant.
 
 import json
 
-from . import census, getting_started
+from . import getting_started
 from .statuses import PARKED_SQL
 from .store import H, encode
 
 PREFERENCE = "support.feedback"
 QUESTION = "How is Tico working for you?"
-# (moment, days after the first bot result)
-MOMENTS = (("first_result", 0), ("day_7", 7), ("day_30", 30))
+# (moment, days after the first result on a person's task)
+MOMENTS = (("first_result", 1), ("day_7", 7), ("day_30", 30))
 SPACING_DAYS = 3  # a later moment waits this long after the person last answered or skipped one
 # Fixed labels: Getting started's own labels can name a bot ("Set up Payroll").
 STEPS = {
     "signed_in": "signing in",
     "computer": "a computer online",
     "model": "a model signed in",
+    "subscription": "a Claude or ChatGPT subscription",
     "github": "GitHub",
     "botops": "BotOps active",
     "first_bot": "a first bot",
@@ -103,6 +106,23 @@ def _joined(c, actor):
     return JOINED[path, actor]
 
 
+def _first_use(c, settings):
+    """When a bot the company added first completed a turn on a task a person asked for, or "" before one has, and ""
+    while the first-run setup is not complete. Read in the order the attempts were made, like census.first_result."""
+    from . import onboarding
+
+    if not onboarding.load(c)["completed"]:
+        return ""
+    skip = sorted(getting_started.built_in(settings))
+    row = c.execute(
+        "SELECT a.finished_at FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.state='completed' "
+        "AND a.finished_at IS NOT NULL AND a.bot_id NOT IN (%s) AND t.requester_id LIKE 'human:%%' LIMIT 1"
+        % ",".join("?" * len(skip)),
+        skip,
+    ).fetchone()
+    return row[0] if row else ""
+
+
 def feedback_due(c, settings, who):
     """The moment to ask this person about now ({moment, question}), or None. Only the latest moment reached is
     asked: a person away for a month is asked once, not three times."""
@@ -110,7 +130,7 @@ def feedback_due(c, settings, who):
 
     if not _asked(who) or off_reason(settings):
         return None
-    first = census.first_result(c, settings)
+    first = _first_use(c, settings)
     if not first:
         return None
     # The owner was there from the start. Someone who joined later is asked from their own first action, and not

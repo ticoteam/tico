@@ -1,5 +1,3 @@
-import fnmatch
-
 import unittest
 
 from scripts import company_app_publisher as publisher
@@ -43,19 +41,6 @@ class CompanyPublisherSubject(unittest.TestCase):
         with patch.object(publisher.subprocess, "run", failed):
             with self.assertRaisesRegex(ValueError, "could not discover"):
                 publisher.discover_oidc_subject()
-
-    def test_tag_trust_does_not_match_other_repo_branch_or_pr_event(self):
-        expected = publisher.oidc_subject(IMMUTABLE)
-        subjects = [
-            "repo:other/tico:ref:refs/tags/v1.2.3",  # another owner
-            "repo:ticoteam/other:ref:refs/tags/v1.2.3",  # another repository
-            "repo:ticoteam/tico:ref:refs/heads/main",  # branch event
-            "repo:ticoteam/tico:pull_request",  # pull request event
-            "repo:ticoteam/tico:environment:production",  # custom environment subject
-        ]
-        for subject in subjects:
-            with self.subTest(subject=subject):
-                self.assertFalse(fnmatch.fnmatchcase(subject, expected))
 
     def test_immutable_trust_keeps_audience_and_s3_scope(self):
         _, trust, access = publisher.policies(

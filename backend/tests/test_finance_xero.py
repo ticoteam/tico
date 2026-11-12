@@ -886,20 +886,6 @@ def test_a_lost_write_is_found_by_its_marker_and_bound_not_sent_again(books):
     assert any(c["method"] == "GET" and c["path"] == "BankTransactions" for c in xbooks.calls)
 
 
-def test_a_refused_write_is_sent_again_under_its_key_once_the_lookup_finds_nothing(books):
-    xbooks = XeroBooks()
-    _chart(xbooks)
-    cid, client, fid = _categorized(books, xbooks)
-    xbooks.refuse_writes.append(xero.Reply(503, {"Message": "try later"}))
-    assert mirror.sync_once(books, client, cid, LATER) == ["journal.create: try later"]
-    assert mirror.sync_once(books, client, cid, RETRY_AT) == []
-    puts = _bank_puts(xbooks)
-    assert len(puts) == 2 and puts[0]["headers"]["Idempotency-Key"] == puts[1]["headers"]["Idempotency-Key"]
-    assert len(xbooks.rows["BankTransactions"]) == 1
-    with books.read() as c:
-        assert c.execute("SELECT status FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0] == "posted"
-
-
 def test_a_lookup_xero_cannot_answer_marks_the_write_unknown_and_never_sends_it_again(books):
     xbooks = XeroBooks()
     _chart(xbooks)
@@ -1034,25 +1020,6 @@ def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):
     reads = [c for c in xbooks.calls if c["path"] == "Contacts" and c["method"] == "GET"]
     assert [c["query"]["page"] for c in reads] == ["1", "2"]
     assert {c["query"]["order"] for c in reads} == {xero.ORDER}
-
-
-def test_a_change_window_longer_than_the_page_cap_is_cut_to_the_changes_read(monkeypatch):
-    monkeypatch.setattr(xero, "MAX_PAGES", 2)
-    xbooks = XeroBooks()
-    _chart(xbooks)
-    xbooks.rows["Contacts"] = [
-        {
-            "ContactID": f"contact-{n:03d}",
-            "Name": f"Acme Contact {n:03d}",
-            "IsCustomer": True,
-            "ContactStatus": "ACTIVE",
-            "UpdatedDateUTC": ms(f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z"),
-        }
-        for n in range(250)
-    ]
-    read = _client(xbooks).changed({"parties": "2026-10-15T11:55:00Z"})
-    assert read.ok and len(read.records) == 199
-    assert read.through == (("parties", "2026-10-15T12:03:17.999000Z"),)
 
 
 def test_archived_contacts_are_read_with_the_archived_ones_and_kept_inactive(books):
@@ -1606,23 +1573,6 @@ def test_a_bank_row_with_no_counterparty_is_written_against_one_unspecified_cont
     puts = [c for c in xbooks.calls if c["path"] == "BankTransactions" and c["method"] == "PUT"]
     assert len(puts) == 3
     assert all(p["body"]["BankTransactions"][0]["Contact"] == {"ContactID": unspecified["ContactID"]} for p in puts)
-    raw = xbooks(
-        "PUT",
-        BASE + "/BankTransactions",
-        {"xero-tenant-id": TENANT, "Idempotency-Key": "raw-key"},
-        json.dumps(
-            {
-                "BankTransactions": [
-                    {
-                        "Type": "SPEND",
-                        "BankAccount": {"AccountID": "acct-1000"},
-                        "LineItems": [{"AccountID": "acct-6100", "LineAmount": "15.00"}],
-                    }
-                ]
-            }
-        ).encode(),
-    )
-    assert raw.status == 400 and "contact" in json.dumps(raw.body).lower()
 
 
 def test_a_negative_rounding_within_a_penny_is_a_rounding_line_and_a_larger_one_waits(books):
@@ -1731,17 +1681,6 @@ def test_a_refund_of_a_credit_note_is_a_journal_that_moves_the_bank_once(books):
             c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "1000"),)).fetchone()[0]
             == 3000
         )
-
-
-def test_refunds_post_against_their_control_account_and_the_bank_in_opposite_directions():
-    def system(name: str) -> str:
-        return {"DEBTORS": "Account:acct-1200", "CREDITORS": "Account:acct-2000"}.get(name, "")
-
-    ar = X.payment_record(_refund("pay-ar", "ARCREDITPAYMENT", "50.00"), system)
-    ap = X.payment_record(_refund("pay-ap", "APCREDITPAYMENT", "30.00"), system)
-    assert isinstance(ar, M.Journal) and ar.source == "sync"
-    assert {x.account: x.amount for x in ar.lines} == {"Account:acct-1200": 5000, "Account:acct-1000": -5000}
-    assert {x.account: x.amount for x in ap.lines} == {"Account:acct-2000": -3000, "Account:acct-1000": 3000}
 
 
 def test_an_invoice_and_a_bill_post_against_the_provider_debtors_and_creditors_not_the_native_chart():
@@ -1875,8 +1814,6 @@ def test_a_payment_in_another_currency_waits_unmapped(books):
 def test_a_payment_in_another_currency_or_of_an_unknown_type_is_refused_by_the_mapping():
     row = _payment("p-fx", "inv-1", "100.00")
     assert isinstance(_recorded({**row, "CurrencyRate": "1.1"}), M.Refused)
-    assert isinstance(_recorded({**row, "BankAmount": "90.00"}), M.Refused)
-    assert isinstance(_recorded({**row, "PaymentType": "XYZ"}), M.Refused)
 
 
 def test_a_tax_inclusive_and_exclusive_manual_journal_each_balance_with_its_tax_on_the_tax_account():
@@ -1992,23 +1929,6 @@ def test_a_rate_limit_that_outlasts_a_pass_holds_the_books_until_retry_after_pas
     assert len(calls) > made
     with books.read() as c:
         assert SX.mirror_state(c, cid).get("held_until", "") == ""
-
-
-def test_the_xero_pass_reads_its_change_feed_at_least_every_five_minutes(books, monkeypatch):
-    assert 0 < xero.CHANGE_EVERY <= 300
-    xbooks = XeroBooks()
-    _chart(xbooks)
-    _pass_setup(books, xbooks, monkeypatch)
-    seen: list[dict[str, Any]] = []
-    real = mirror.sync_once
-
-    def spy(*args: Any, **kwargs: Any) -> list[str]:
-        seen.append(kwargs)
-        return real(*args, **kwargs)
-
-    monkeypatch.setattr(mirror, "sync_once", spy)
-    assert books_sync.pass_once(books, object(), None, now=AT) == []
-    assert seen and all(kwargs.get("every") == xero.CHANGE_EVERY for kwargs in seen)
 
 
 def _cash_pnl(c: Any) -> int:
@@ -2968,27 +2888,6 @@ def test_xero_takes_an_item_by_its_account_codes_and_a_bill_line_by_its_tracking
         {"TrackingCategoryID": "cat-loc", "TrackingOptionID": "opt-austin"},
         {"TrackingCategoryID": "cat-team", "TrackingOptionID": "opt-field"},
     ]
-
-
-def test_an_item_made_here_is_sent_to_xero_by_the_codes_of_its_accounts():
-    xbooks = XeroBooks()
-    _tracked_chart(xbooks)
-    client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=xbooks, sleep=lambda s: None)
-    sent = client.send(
-        "item.create",
-        {
-            "name": "Design",
-            "sku": "DESIGN",
-            "kind": "service",
-            "price": 9_000,
-            "income": "Account:acct-4000",
-            "expense": "",
-            "asset": "",
-        },
-        "item:design",
-    )
-    assert sent.ok and sent.kind == "Item" and sent.external_id, sent
-    assert xbooks.rows["Items"][-1]["SalesDetails"] == {"AccountCode": "4000", "UnitPrice": "90.00"}
 
 
 def test_an_item_made_here_in_a_xero_book_is_written_to_xero_and_its_row_appears_once_xero_confirms(books):

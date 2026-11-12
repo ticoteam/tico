@@ -18,15 +18,29 @@ readiness can wake the machine for a fresh report too; stale samples and memory 
 Health ages the next job that can run past those last-boot holds, so old task waits do not age newly queued work.
 Work that can run but has waited over 15 minutes for the machine to start is a Health problem.
 
+A machine started for work that then did not run there is not started for that same work again (**Started, but its
+work did not run there**). On the shared machine that holds only for the work that was waiting at that start: another
+bot's work that can run later, or new work, starts it again. **Run now** on a task whose run is already waiting starts
+it again too.
+
 ## Shared or own
 
 A bot in cloud mode is either on the company's **shared** cloud machine or on its **own**. Light bots (marketing,
 ops, most roles) share one machine per company, so a company pays for one machine and its starts, not one per bot.
-Heavy bots get their own: a bot made from the `video-producer` template, or a Builder (made from the `builder` template, a copy of one, or named "Builder", "Builder 2" or "Builder (...)"), starts on its own machine; every other bot starts on the shared one, the rest of Engineering included
+Heavy bots get their own: a bot made from the `video-owner` template, or a Builder (made from the `builder` template, a copy of one, or named "Builder", "Builder 2" or "Builder (...)"), starts on its own machine; every other bot starts on the shared one, the rest of Engineering included
 (leads, reviewers and QA run short turns). That default is read once, when the
 bot first gets a cloud machine row; after that a person switches it in the bot editor ("Shared cloud machine" / "Own
 cloud machine" under Computer).
 
+- A bot set to its own machine that has no computer yet when it goes live (a new company's Builder) goes on the shared
+  machine first: its own is made for work, and it has none before it is live. It stays on the shared machine until a
+  person switches it to its own.
+- Before a bot's cloud machine enrolls (a new company's first minutes), the bot waits for it rather than for a person:
+  its task says "<bot> is waiting for Shared cloud machine to start" with a link to Settings > Computers, which lists
+  the machine with its state (Being made, Starting, Stopped, Out of credit, or the problem). It asks nobody until the
+  machine failed (Replace machine) or the company is out of credit (Add credit). A go-live meanwhile answers 202 and
+  finishes once the machine is up and has the bot's repository, like `waiting_for_repository`; one on a failed machine
+  is refused `cloud_computer_failed`, and out of credit `out_of_credit`.
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
   bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
@@ -47,11 +61,16 @@ cloud machine" under Computer).
 - A bot's own machine pauses by the same rule, with its own Pause after (`pause_minutes` on `POST /api/v2/bots/{bot}/cloud-machine`).
 - A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
   signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
-  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for
-  that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
+  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or working sign-in of its
+  own for that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
   prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
   Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
   changes and the bot keeps its current message and its Gateway path.
+- A plan added, connected or reconnected after the bots were placed goes on each cloud machine's computer that needs it
+  (the computer Connect signed it in on first, then the shared machine's, then the others), by the same rules: a computer
+  with a plan for that tool, a working sign-in of its own (one missing, failed or refused does not count), or a run in
+  progress keeps what it has. On a self-hosted company with one computer, that computer gets it; with several, the
+  person gives it under Settings > Computers (Connect's computer still gets it).
 - When a person picks a cloud machine for a bot and the move is refused, the change is not saved. The server answers 409 with
   `repository_unpublished`. That happens when the bot's history exists only on its current computer, GitHub does not have it,
   and the new machine has no copy. If no cloud machine exists yet, the refusal comes before one is made, so nothing is billed.
@@ -228,7 +247,9 @@ an older base updates on its first heartbeat. Refreshing the base per release on
 A stopped machine whose runner is behind the server's release is started once to update. That wake waits a fixed
 0-10 minutes per runner and release after the server first ran the release (`update_due`: a hash of the runner id and
 release, from `releases.history`), so a release on a shared host does not start every company's machines at once
-against boat's start limits. Work, watchers and Always on never wait. No stop (idle, paused, drained, last bot gone)
+against boat's start limits. Work, watchers and Always on never wait. A machine whose update to
+this release failed is started once more, six hours after it failed (its runner tries again only while it runs), and is
+on Health until it is on the server's release. No stop (idle, paused, drained, last bot gone)
 lands while the runner reports a fresh `updating`, except out of credit (HQ stops those itself, so a paused machine
 of a frozen company stops at once too) and a person's delete.
 

@@ -13,8 +13,10 @@ yes or no in a minute.
 - First line: the pull request link and the head commit.
 - What changed, for the person who asked: what they can now do or see, in two or three sentences.
 - How it was checked: the tests added, the commands run and their results, and what was not checked.
+- The checks at the head commit: passing, with the link.
 - What it looks like: a screenshot, a short recording or the command output, where there is anything to see.
-- What the reviewers found and what you did about each finding, one line each.
+- What Reviewer 1 and Reviewer 2 found, and what you did about each finding, one line each. Both Review pages and your
+  Fixes 1 note are under "From earlier stages" in `tico task show`.
 - Anything the person should decide: a risk, a follow-up, a path that needs a named person.
 
 ## 2. Publish and attach
@@ -29,5 +31,8 @@ yes or no in a minute.
 - **Jev sent it back:** the reasons are in `tico task show`. Fix the page (or the change), publish again and attach the
   new version.
 - **The person sent it back:** their notes are on the task. Fix what they asked, push, publish the page again and attach
-  it.
+  it. A commit pushed here was not reviewed by Reviewer 1 or 2: say so on the page, with the new head. Tico says it on
+  the person's ask too.
+- **Jev is unsure, or you want the person's OK:** attach the new version; Tico asks the person. Never ask your own OK
+  of this page, or a yes/no that shows it ("OK to merge?"): Tico refuses it, and an answer to it passes nothing.
 - **New commits after the OK:** the page is for one head. Publish a new version for the new head and attach it.

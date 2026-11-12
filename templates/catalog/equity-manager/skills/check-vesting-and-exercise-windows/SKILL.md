@@ -30,4 +30,4 @@ Grant G-09: 4,800 options, start 2024-03-01, 48 months, 12-month cliff, monthly 
 - Events reached: the cliff on 2025-03-01 (12 months, 1,200), then 19 monthly events of 100 from 2025-04-01 to 2026-10-01 (1,900). Vested: 3,100, which is 4,800 x 31 / 48.
 - G-09, next 90 days (to 2027-01-03): 100 options on 2026-11-01, 2026-12-01 and 2027-01-01. Total 300.
 - Leaver: the holder of G-10 (4,800 options, same schedule) left 2026-09-15. Vesting stops there: 30 months, 3,000 options, vested. No November to January tranche vests on G-10.
-- G-10 exercise window: the plan allows 90 days, so the last day to exercise is 2026-12-14. Separately, the ISO statutory limit is three months after leaving, which is 2026-12-15 (IRC §422(a)(2)). Counsel confirms whether G-10 is an ISO and which date governs.
+- G-10 exercise window: the plan allows 90 days, so the last day to exercise is 2026-12-14. Separately, the ISO statutory limit is three months after leaving, which is 2026-12-15 (IRC §422(a)(2)). The Rules Owner confirms whether G-10 is an ISO and which date governs.

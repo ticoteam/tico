@@ -1,0 +1,42 @@
+name: inbox-manager                     # the slug: it matches the repository bot-<id>-inbox and the label owner:<slug>
+display_name: "Inbox Manager"
+labels: [owner:inbox-manager]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
+gateway:
+  level: low
+
+# The first routine is declared but not armed (`enabled: false`). The bot arms it with
+# `tico automation update <id> --enable` when Setup starts; setup-done allows normal work.
+# `tico bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# A second or third pass a day is a routine the bot adds after a week of a brief the human reads.
+routines:
+  - id: morning-mail-brief
+    title: Morning mail brief
+    cron: "30 7 * * 1-5"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/morning-mail-brief.md
+    labels: [priority:p2]
+    enabled: false
+
+# What this bot may touch. Not listed is not allowed. `env:` names the variable a credential
+# arrives in, never the value. Store a Credential in Tico and grant it to this bot;
+# the runner delivers it during a run. Declaring access here does not create a grant. BotOps replaces {{mailbox}} from
+# the Mailbox: line in the reviewed instructions. Only the assigned mailbox is read, through the grant this bot gets
+# as its person's message bot (Tools); another mailbox is that mailbox's person's to share.
+tools:
+  - service: gmail
+    identity: "{{mailbox}}"
+    can: [read, draft]          # `send` is added when the human lets it send; Tico's sending policy decides each send
+    env: GOOGLE_SA_KEY
+    note: "reads and drafts on its assigned mailbox; never sends. Filing (labels, archive) stays off until the human turns it on"
+  - service: google-calendar
+    identity: "{{mailbox}}"
+    can: [read]
+    env: GOOGLE_SA_KEY
+    note: "reads the assigned calendar so a draft never offers a time that is taken"

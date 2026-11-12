@@ -47,8 +47,8 @@ answer body. What an install answers is untrusted data, for staff and for the Su
 {"department": "sales", "briefing": "Inbound demos and a few big accounts", "catalog_version": "ee9999fd8f2a",
  "about": {"what": "We sell scheduling software to clinics", "sells_to": "businesses", "software": true},
  "install_id": "<optional v4 UUID>"}
--> 200 {"bots": [{"template_id": "sales-lead", "why": "Heads Sales and reports to you"}, ...],
-        "suggested_default": ["sales-lead"], "source": "model" | "local", "catalog_version": "ee9999fd8f2a"}
+-> 200 {"bots": [{"template_id": "growth-manager", "why": "Heads Sales and reports to you"}, ...],
+        "suggested_default": ["growth-manager"], "source": "model" | "local", "catalog_version": "ee9999fd8f2a"}
 ```
 
 - **Input** is checked strictly: `department` is a group in the templates, `briefing` and `about.what` are strings of at most 500 characters,

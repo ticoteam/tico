@@ -73,7 +73,7 @@ def seed(api, rows):
     server = Server(api)
     with api.app.state.store.transaction() as c:
         c.execute(
-            "DELETE FROM assignments WHERE bot IN ('coo','ops','cpo','product-design','finance','inbox','doc-updater')"
+            "DELETE FROM assignments WHERE bot IN ('assistant','ops','cpo','product-design','finance','inbox','doc-updater')"
         )
     live.seed(server, TOKENS["owner"], rows)
 

@@ -7,14 +7,14 @@ from backend.tests.helpers.task_privacy_reads import traced
 
 def test_fleet_snapshot_reports_active_attempt_from_batched_live_map(api):
     as_member(api, "ben@acme.example")
-    post(api, "tasks", {"title": "Fleet active check", "body": "Run it", "owner": "coo"}, "ben-test")
+    post(api, "tasks", {"title": "Fleet active check", "body": "Run it", "owner": "assistant"}, "ben-test")
     machine = runner(api)
-    assign(api, machine, "coo")
-    ready(api, machine, ["coo"])
+    assign(api, machine, "assistant")
+    ready(api, machine, ["assistant"])
     attempt = claim(api, machine)
     assert attempt
     fleet, statements = traced(api, lambda: get(api, "tico/fleet", attempt["token"]))
-    coo = next(bot for bot in fleet["bots"] if bot["slug"] == "coo")
+    coo = next(bot for bot in fleet["bots"] if bot["slug"] == "assistant")
     assert coo["active_runs"] >= 1
     assert coo["active_run"]["id"] == attempt["id"]
     # The same four fields as before the batch, which also reads each attempt's bot and created.

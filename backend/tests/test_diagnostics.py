@@ -10,10 +10,19 @@ from backend.tests.helpers.onboarding import as_person, environment, signed_in  
 from backend.tests.helpers.support import hq, file  # noqa: F401  (the fake HQ, autouse)
 
 
+@pytest.fixture(autouse=True)
+def own_server_log():
+    """The log ring is one per process. A server's holds only its own hub's lines; a test worker's held every earlier
+    test's warnings, other companies' bot names included (a Slack test's "routes to coo"), so which tests ran before on
+    the worker decided a bundle's content."""
+    D.RING.lines.clear()
+    D.RING.previous, D.RING.count = None, 0
+
+
 def redactor():
     return D.Redactor(
         ["acme.example"],
-        [("coo", ["Morgan the assistant"]), ("botops", ["BotOps"])],
+        [("assistant", ["Morgan the assistant"]), ("botops", ["BotOps"])],
         [("morgan", ["Morgan Reed", "morgan@acme.example"]), ("riley", ["Riley Quinn", "riley@acme.example"])],
     )
 
@@ -42,10 +51,10 @@ def test_the_redactor_leaves_what_is_not_a_secret(raw):
 def test_names_become_labels_that_are_the_same_all_through_a_bundle():
     r = redactor()
     out = r.text(
-        "Morgan Reed (morgan@acme.example, morgan) asked bot:coo; BotOps and botops; Riley Quinn later; morgan again"
+        "Morgan Reed (morgan@acme.example, morgan) asked bot:assistant; BotOps and botops; Riley Quinn later; morgan again"
     )
-    assert out == "person-1 (person-1, person-1) asked bot-2; bot-1 and bot-1; person-2 later; person-1 again"
-    assert r.label("BOTOPS") == "bot-1" and r.label("Zed") is None
+    assert out == "person-1 (person-1, person-1) asked bot-1; bot-2 and bot-2; person-2 later; person-1 again"
+    assert r.label("BOTOPS") == "bot-2" and r.label("Zed") is None
     # Whole words only, and every string, however nested, goes through it.
     assert r.text("coordinator") == "coordinator"
     assert r.clean({"a": ["riley failed", {"b": "Morgan Reed"}], "n": 3, "ok": True, "x": None}) == {
@@ -92,10 +101,10 @@ def seed(api):
     owner = signed_in()
     api.post(
         "/api/v2/tasks",
-        json={"title": "CONTENT-task-title", "body": "CONTENT-task-body", "owner": "coo"},
+        json={"title": "CONTENT-task-title", "body": "CONTENT-task-body", "owner": "assistant"},
         headers=owner,
     )
-    api.post("/api/v2/chat/coo", json={"body": "CONTENT-chat-message"}, headers=owner)
+    api.post("/api/v2/chat/assistant", json={"body": "CONTENT-chat-message"}, headers=owner)
     api.post("/api/v2/docs", json={"title": "CONTENT-doc-title", "body": "CONTENT-doc-body"}, headers=owner)
     logging.getLogger("tico.test").warning(
         "Sync for riley@acme.example failed from 203.0.113.9 with sk-abcdEFGH1234567890xyz"
@@ -138,10 +147,11 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
         "Atlas",
         "morgan",
         "riley",
-        "coo",
+        "assistant",
         "botops",
     ):
-        assert name not in text.replace("[company-domain]", ""), name
+        # The features block names the Assistant feature (`"assistant": false`), which is not the bot's slug.
+        assert name not in text.replace("[company-domain]", "").replace('"assistant":', ""), name
     assert bundle["versions"]["tico"] and bundle["counts"]["people"] == 3 and bundle["counts"]["bots"] >= 2
     assert bundle["database"]["migration"] >= 11 and set(bundle["features"]) <= set(D.FEATURES)
     assert all(set(x) == {"name", "status"} for x in bundle["health"]) and bundle["health"]
@@ -149,6 +159,29 @@ def test_the_bundle_holds_only_allowlisted_facts_and_never_content(environment, 
 
 
 # ------------------------------------------------------------------ the preview is what is sent
+def test_the_bundle_lists_failed_setup_steps_with_labels_and_no_secret(environment, hq):
+    api = environment()
+    secret = "ghs_PLANTEDsecret0123456789abcdef"
+    refused = api.get("/api/v2/github/app/callback", params={"code": secret, "state": secret}, headers=signed_in())
+    assert refused.status_code == 400
+    answer, bundle = bundle_of(api)
+    walk(bundle, D.ALLOWED)
+    (item,) = bundle["failures"]
+    assert item["event"] == "setup.failed" and item["category"] == "github_state" and item["status"] == 400
+    assert item["step"] == "GET /api/v2/github/app/callback" and item["ref"] == refused.json()["error"]["ref"]
+    assert item["who"].startswith("person-") and secret not in answer["text"]
+    # A bot refused on a bot's route: both are labels, as in the rest of the bundle, never a slug (a slug is a name).
+    with api.app.state.store.transaction() as c:
+        step = "POST /api/v2/bots/{bot}/github-repos"
+        other = next(b["slug"] for b in D.H.bots(c) if b["slug"] != "botops")
+        detail = {"category": "forbidden", "step": step, "status": 403, "bot": other, "ref": "sf-00000000"}
+        D.H.event(c, "bot:botops", "setup.failed", step, detail)
+    answer, bundle = bundle_of(api)
+    item = bundle["failures"][0]
+    assert item["who"].startswith("bot-") and item["bot"].startswith("bot-") and item["who"] != item["bot"]
+    assert "botops" not in answer["text"] and other not in answer["text"].replace('"%s":' % other, "")
+
+
 def test_what_the_preview_showed_is_exactly_what_hq_gets(environment, hq):
     api = environment()
     seed(api)

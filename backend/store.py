@@ -192,7 +192,8 @@ CREATE TABLE IF NOT EXISTS attempts(
         AND state IS NOT NULL AND lease_until IS NOT NULL)));
 CREATE TABLE IF NOT EXISTS attempt_diagnostics(
  attempt_id TEXT PRIMARY KEY REFERENCES attempts(id), heartbeat_at TEXT, last_event_at TEXT, last_event TEXT,
- end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT);
+ end_reason TEXT, ended_at TEXT, stalled_at TEXT, stderr_tail TEXT, stderr_at TEXT,
+ failed_tools TEXT, failed_tools_at TEXT);
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stderr ON attempt_diagnostics(stderr_at) WHERE stderr_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS attempt_diagnostics_stalled ON attempt_diagnostics(stalled_at) WHERE stalled_at IS NOT NULL;
 -- Bound history reads by time before evaluating their visibility gates.
@@ -671,7 +672,6 @@ EVENT_NOISE_ACTIONS = (
     "job.suppress",
     "bot.drain",
     "operator.deployment-undrain",
-    "listen.judgment",
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
@@ -1191,6 +1191,10 @@ def _close_idle(conns):
             pass
 
 
+# Secrets an answer shows once: never kept with the idempotency record, so a replay answers without them.
+SHOWN_ONCE = ("requester_token", "push_addresses", "push_address")
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -1391,9 +1395,9 @@ class Store:
             from . import cards as _cards
 
             c.executescript(_cards.SCHEMA)
-            from . import task_manager as _task_manager
+            from . import general_manager as _general_manager
 
-            c.executescript(_task_manager.SCHEMA)
+            c.executescript(_general_manager.SCHEMA)
             from . import bookkeeper as _bookkeeper
 
             c.executescript(_bookkeeper.SCHEMA)
@@ -1422,10 +1426,6 @@ class Store:
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
-            # Destinations saved in Settings > Listening (backend/listening.py).
-            from . import listening as _listening
-
-            _listening.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -1537,10 +1537,10 @@ class Store:
                         if (
                             conversation["kind"] == "chat"
                             and not conversation["task_id"]
-                            and "bot:coo" in participants
+                            and "bot:assistant" in participants
                             and len(humans) == 1
                         ):
-                            scope, owner, room = "personal", humans[0], "coo"
+                            scope, owner, room = "personal", humans[0], "assistant"
                         c.execute(
                             "UPDATE conversations SET scope=?,owner_id=?,room_key=? WHERE id=?",
                             (scope, owner, room, conversation["id"]),
@@ -1601,7 +1601,13 @@ class Store:
                             c.execute("UPDATE bots SET effort='high' WHERE slug=?", (row["bot"],))
                         mode = str(
                             config.get("thread_mode")
-                            or ("personal" if row["bot"] == "coo" else "shared" if row["bot"] == "cpo" else "personal")
+                            or (
+                                "personal"
+                                if row["bot"] == "assistant"
+                                else "shared"
+                                if row["bot"] == "cpo"
+                                else "personal"
+                            )
                         )
                         BS.write(c, row["bot"], config)
                         c.execute(
@@ -2127,7 +2133,7 @@ class Store:
                 from .org_rule_check import ensure as ensure_org_rule_check
 
                 ensure_org_rule_check(c)
-                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                # The Rules Owner's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
                 from .counsel import ensure as ensure_rule_reads
 
                 ensure_rule_reads(c)
@@ -2337,12 +2343,12 @@ class Store:
                 from . import groups as Groups
 
                 Groups.migrate(c, self.settings)
-                # The Goal Manager becomes the Strategy Bot on every install, once (backend/strategy_bot.py).
+                # The Goal Manager becomes the Strategy Owner on every install, once (backend/strategy_bot.py).
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
 
                 StrategyBot.migrate(c)
-                # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
+                # Cards waiting in the owner's earlier Strategy Owner chat move to their Assistant room
                 # (backend/assistant.py: one Assistant for everyone). Idempotent.
                 from . import assistant as Assistant
 
@@ -2618,7 +2624,7 @@ class Store:
                 operator = seed_operator(slug, team, people, owner)
                 mode = str(
                     entry.get("thread_mode")
-                    or ("personal" if slug == "coo" else "shared" if slug == "cpo" else "personal")
+                    or ("personal" if slug == "assistant" else "shared" if slug == "cpo" else "personal")
                 )
                 c.execute(
                     "INSERT INTO bot_config(bot,team,owner_id,description,reports_to,repo,"
@@ -2773,7 +2779,7 @@ class Store:
                 }
             if not is_poll(operation, result):
                 cached = (
-                    {k: v for k, v in result.items() if k != 'requester_token'} if isinstance(result, dict) else result
+                    {k: v for k, v in result.items() if k not in SHOWN_ONCE} if isinstance(result, dict) else result
                 )
                 c.execute(
                     "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",

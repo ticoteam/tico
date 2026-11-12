@@ -11,6 +11,7 @@ from backend.tests.helpers.google_workspace_authz import workspace_key  # noqa: 
 from backend.tests.helpers.mail_live import SHARED, assistant_token, live, no_cached_tokens  # noqa: F401
 from backend.tests.helpers.mcp import call
 from clients import hubcli, hubtools, remotecli
+from clients.commands import mail
 
 
 @pytest.fixture
@@ -149,5 +150,5 @@ def test_long_undo_output_points_to_json_with_all_ids():
         "ids": ids,
         "undo": {"action": "unarchive", "ids": ids},
     }
-    assert "--json" in remotecli.email_text(result, "archive")
-    assert len(remotecli.email_text(result, "archive")) < 200
+    assert "--json" in mail.email_text(result, "archive")
+    assert len(mail.email_text(result, "archive")) < 200

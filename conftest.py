@@ -51,7 +51,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--api-database-snapshots",
         action="store_true",
-        help="Reuse a worker-local schema snapshot for the shared API fixture",
+        help="Reuse a worker-local schema snapshot for the shared API fixture (on in pytest.ini)",
     )
     parser.addoption(
         "--fresh-api-databases",
@@ -133,6 +133,9 @@ def pytest_configure(config):
     spec.loader.exec_module(heavy_slot)
     heavy_slot.reexec()
     _unix_socket_bind_outside_tmp_path(config)
+    from backend.tests import app_build
+
+    app_build.install()  # every app after a worker's first builds in half the time
     if hasattr(config, "workerinput") or config.option.pyargs:
         return  # --pyargs names modules, not paths
     # The page serves the UI's TypeScript as its compiled JavaScript: compiled here once when this checkout can
@@ -156,12 +159,26 @@ def pytest_xdist_auto_num_workers(config):
     """`-n auto` (pytest.ini): the cores left over, 1 to 8. Several bots run the suite at once on one team box, and
     eight workers each had five suites at a load of 54 on eight cores, next to the hub. Linux counts the load average
     against the cores this process may use; macOS's load average stays high when idle, so a Mac takes its cores.
-    PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
+    A CI VM (CI is set: a remote run, a PR or release job) runs this suite alone: one worker per vCPU, uncapped. The
+    cap and the load left a 16-vCPU remote run 8 workers and half its CPU idle (49 minutes for the suite); more workers
+    than vCPUs measured slower. PYTEST_XDIST_AUTO_NUM_WORKERS still sets the number, and an explicit -n N still wins."""
     if os.environ.get("PYTEST_XDIST_AUTO_NUM_WORKERS"):
         return int(os.environ["PYTEST_XDIST_AUTO_NUM_WORKERS"])
     cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else (os.cpu_count() or 1)
+    if os.environ.get("CI"):
+        return cores
     free = cores - os.getloadavg()[0] if sys.platform.startswith("linux") else cores
     return max(1, min(PYTEST_WORKERS_MAX, int(free)))
+
+
+def pytest_xdist_make_scheduler(config, log):
+    """`--dist load` (xdist's default) with a module's tests kept on one worker when they share a module fixture, and
+    the slowest work handed out first (backend/tests/worker_schedule.py). Any other --dist keeps xdist's own."""
+    if config.getoption("dist") != "load":
+        return None
+    from backend.tests.worker_schedule import SharedFixtureScheduling
+
+    return SharedFixtureScheduling(config, log)
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -237,6 +254,19 @@ def company(tmp_path, api_database):
     store.close()
 
 
+@pytest.fixture
+def inside_one_half_hour():
+    """Spend windows and daily caps are real half hours, days, weeks and months, each read from the real clock where
+    it is used. A test that spends and then reads its window must do both inside one: this starts it clear of the
+    next edge (every longer window ends on a half hour), waiting out the few seconds before one."""
+    import time
+    from datetime import datetime, timezone
+
+    left = 1800 - datetime.now(timezone.utc).timestamp() % 1800
+    if left < 20:
+        time.sleep(left + 0.05)
+
+
 @pytest.fixture(scope="session")
 def api_database(tmp_path_factory, request):
     """One initialized, fictional database per worker and invocation; never a cache across code changes.
@@ -283,3 +313,29 @@ def api_database(tmp_path_factory, request):
             source.backup(target)
     snapshot.with_suffix(".building").replace(snapshot)
     return snapshot
+
+
+@pytest.fixture(scope="session")
+def app_snapshots(tmp_path_factory, request):
+    """This worker's kept app databases (backend/tests/app_snapshots.py): ({fingerprint: path or None}, their folder),
+    or None when --fresh-api-databases or no --api-database-snapshots."""
+    if request.config.getoption("--fresh-api-databases") or not request.config.getoption("--api-database-snapshots"):
+        return None
+    return {}, tmp_path_factory.mktemp("app-snapshots")
+
+
+@pytest.fixture(autouse=True)
+def apps_start_from_snapshot(request, monkeypatch, app_snapshots):
+    """An app a test builds on a new database file starts from a copy of the same app's database built earlier in this
+    worker, as the `api` fixture's start from its schema snapshot (backend/tests/app_snapshots.py): the helper fixtures
+    (tasks_board, onboarding, github_app and others) each migrated an empty file, most of a 3.4 s median test. A test
+    that must migrate an empty file through create_app takes @pytest.mark.fresh_database."""
+    if app_snapshots is None or request.node.get_closest_marker("fresh_database"):
+        return
+    import backend.app
+    from backend.tests.app_snapshots import snapshot_store
+
+    kept, folder = app_snapshots
+    monkeypatch.setattr(
+        backend.app, "Store", snapshot_store(backend.app.Store, kept, folder, monkeypatch, (backend.app, "Store"))
+    )

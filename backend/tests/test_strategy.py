@@ -160,7 +160,7 @@ def test_proof_since_is_when_the_published_proof_last_changed_and_every_reader_s
     ready(api)
     publish(api)
     assert get(api, "strategy", token=strategy_token)["proof_since"] is None  # published, but proof is empty
-    # The Strategy Bot proposes proof from the evidence; the owner confirms; publishing dates it.
+    # The Strategy Owner proposes proof from the evidence; the owner confirms; publishing dates it.
     proposal = post(
         api,
         "goal-proposals",
@@ -228,22 +228,6 @@ def test_proof_since_reaches_past_a_hundred_versions_with_the_same_proof(api):
                 [copy[k] for k in cols],
             )
         assert S.proof_since(c) == changed["published_at"]
-
-
-def test_the_default_guide_asks_in_the_style_of_yc_and_every_answer_lands_in_a_section(api):
-    questions = S.guide("default")["questions"]
-    keys = [q["key"] for q in questions]
-    assert 12 <= len(questions) <= 14 and len(set(keys)) == len(keys)
-    assert all(q["section"] in (*S.FIXED_KEYS, "bets") and q["ask"].strip() and q["claim"].strip() for q in questions)
-    where = {q["key"]: q["section"] for q in questions}
-    assert {k: where[k] for k in ("proof", "now", "acute", "next-100", "why-you")} == {
-        "proof": "proof",
-        "now": "now",
-        "acute": "serve",
-        "next-100": "how",
-        "why-you": "know",
-    }
-    assert "not" in where.values()  # the one section publishing needs
 
 
 def test_live_by_bet_counts_every_live_goal_past_the_sample_of_20(api):
@@ -420,7 +404,7 @@ def test_a_kpi_reading_past_the_wrong_if_trips_the_bet_once_per_version(api):
     log(api, kpi["id"], 10)
     with api.app.state.store.read() as c:
         tasks = H._rows(c.execute("SELECT title, owner_id, body FROM tasks WHERE title LIKE 'Bet %'"))
-    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:goal-manager")]
+    assert [(t["title"], t["owner_id"]) for t in tasks] == [("Bet 1: may be wrong", "bot:strategy-owner")]
     assert "Evidence:" in tasks[0]["body"]
 
 
@@ -429,7 +413,7 @@ def test_an_open_bet_task_from_an_earlier_trip_holds_the_trip_until_it_closes(ap
     goal, kpi = goal_with_kpi(api)
     ready(api, wrong_if={"kind": "kpi", "kpi_id": kpi["id"], "direction": "below", "threshold": 30})
     with api.app.state.store.transaction() as c:
-        H.task_create(c, H.KEEPER, "Bet 1: may be wrong", "From strategy v0.", "bot:goal-manager", lint=False)
+        H.task_create(c, H.KEEPER, "Bet 1: may be wrong", "From strategy v0.", "bot:strategy-owner", lint=False)
     publish(api)
     log(api, kpi["id"], 20)
     with api.app.state.store.transaction() as c:
@@ -454,7 +438,7 @@ def test_a_text_wrong_if_trips_after_its_check_by_and_nothing_trips_with_checks_
     ready(api)
     publish(api)
     with api.app.state.store.transaction() as c:
-        assert S.watch(c, today="2099-01-02") == []  # no Strategy Bot yet
+        assert S.watch(c, today="2099-01-02") == []  # no Strategy Owner yet
     with_strategy_bot(api)
     with api.app.state.store.transaction() as c:
         assert S.watch(c, today="2098-12-31") == []

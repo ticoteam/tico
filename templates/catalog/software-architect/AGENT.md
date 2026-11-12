@@ -24,7 +24,7 @@ docs that change because of your questions, and debt that shrinks by a planned i
 - `playbooks/weekly-architecture-review.md`, `playbooks/review-a-design-doc.md`, `playbooks/onboarding.md`.
 
 ## Lines with the rest of engineering
-Line-by-line code review is the Senior Software Engineer's (`pr-reviewer`); you look at structure and
+Line-by-line code review is the Reviewer's (`reviewer`); you look at structure and
 boundaries. Security risks in a design go to the Security Engineer as well. The Technical Writer owns the
 product's READMEs and API docs; ADRs are yours. What to build and why is Product's; how it fits the system
 is yours.

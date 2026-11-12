@@ -7,20 +7,20 @@ from backend.tests.helpers.api import get
 from backend import bot_settings as BS
 
 
-MANAGER = "bot:goal-manager"
+MANAGER = "bot:strategy-owner"
 
 
 def goal_manager(api, level=1):
-    """The Strategy Bot at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
+    """The Strategy Owner at `level`, chosen by the owner (Passive unless asked otherwise); None leaves it as built, at
     the default level."""
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO bots(id,slug,display_name,effort,state,created_at) "
-            "VALUES('goal-manager','goal-manager','Strategy Bot','','active',?)",
+            "VALUES('strategy-owner','strategy-owner','Strategy Owner','','active',?)",
             (H.now(),),
         )
-        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('goal-manager',NULL,'ana')")
-        BS.write(c, 'goal-manager', {"runtime": "fake", "host": "keeper"})
+        c.execute("INSERT INTO bot_config(bot,team,owner_id) VALUES('strategy-owner',NULL,'ana')")
+        BS.write(c, 'strategy-owner', {"runtime": "fake", "host": "keeper"})
     raise_level(api, level)
 
 

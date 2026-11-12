@@ -9,14 +9,14 @@
     - match: '^automation list'
       out:
         automations:
-          - {id: auto_morning_1, name: "Morning message", owner: "bot:coo", trigger: {type: schedule, cron: "0 8 * * *", tz: "America/Los_Angeles"}, enabled: true}
+          - {id: auto_morning_1, name: "Morning message", owner: "bot:assistant", trigger: {type: schedule, cron: "0 8 * * *", tz: "America/Los_Angeles"}, enabled: true}
         next: null
     - match: '^automation show auto_morning_1'
       out:
         automation:
           id: auto_morning_1
           name: "Morning message"
-          owner: "bot:coo"
+          owner: "bot:assistant"
           trigger: {type: schedule, cron: "0 8 * * *", tz: "America/Los_Angeles"}
           enabled: true
     - match: '^automation update auto_morning_1'
@@ -155,4 +155,4 @@
   reply: |
     Says the Strategy page, [Strategy](#/strategy), is where the team writes down its few bets: a summary the bots read, a
     vision, three to five bets, and its sections (who it serves, what it sells, how it knows, why now, and so on). The owner
-    writes and publishes it; the Strategy Bot proposes changes. It is short, and it does not publish or change a draft.
+    writes and publishes it; the Strategy Owner proposes changes. It is short, and it does not publish or change a draft.

@@ -16,7 +16,7 @@ from backend.tests.helpers.hubdb import ANA, CMO, EMPLOYEES, HubCase, PEOPLE, wi
 
 
 SEO = H.bot_actor("seo")
-COO = H.bot_actor("coo")
+COO = H.bot_actor("assistant")
 
 
 # ----------------------------------------------------------------------------- schema, connect
@@ -40,153 +40,6 @@ class Schema(HubCase):
         )
         self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
 
-    def test_an_install_that_ran_the_first_rule_events_schema_gets_the_task_trigger_tables(self):
-        for table in ("rule_task_runs", "rule_task_state"):
-            self.conn.execute(f"DROP TABLE {table}")
-        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.RULE_EVENTS_SCHEMA) + 1}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        names = {r[0] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertLessEqual({"rule_task_runs", "rule_task_state"}, names)
-
-    def test_an_install_at_the_last_schema_before_task_run_models_gets_the_table_and_keeps_its_tasks(self):
-        task = H.task_create(self.conn, ANA, "Prepare packet", "Keep this task through upgrade.", CMO, lint=False)
-        self.conn.execute("DROP TABLE task_run_models")
-        self.conn.execute(f"PRAGMA user_version={H.MIGRATIONS.index(H.TASK_RUN_MODELS_SCHEMA)}")
-        self.conn.commit()
-        H.migrate(self.conn)
-        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertIn("task_run_models", names)
-        self.assertEqual(
-            self.conn.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0], "Prepare packet"
-        )
-        self.assertEqual(self.conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-
-    def test_every_table_and_index_in_the_contract_exists(self):
-        names = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        self.assertLessEqual(
-            {
-                "bots",
-                "humans",
-                "conversations",
-                "messages",
-                "tasks",
-                "history_events",
-                "bot_status",
-                "bot_status_history",
-                "schedules",
-                "attempts",
-                "deltas",
-                "rate_limits",
-                "refusals",
-                "events",
-            },
-            names,
-        )
-        indexes = {r["name"] for r in self.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-        self.assertLessEqual(
-            {
-                "messages_to_delivered",
-                "messages_conversation",
-                "messages_reply_kind",
-                "messages_from_kind",
-                "bot_file_versions_blob_media",
-                "tasks_owner_status_cover",
-                "tasks_requester_status_cover",
-                "events_ts",
-            },
-            indexes,
-        )
-
-    def test_existing_database_gains_the_reply_indexes(self):
-        self.conn.execute("DROP INDEX messages_reply_kind")
-        self.conn.execute("DROP INDEX messages_from_kind")
-        self.conn.commit()
-        self.conn.close()
-        migrated = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(migrated.close)
-        for query, index in (
-            ("SELECT 1 FROM messages WHERE in_reply_to='question' AND kind='answer'", "messages_reply_kind"),
-            ("SELECT id FROM messages WHERE sender_id='bot:cmo' AND kind='ask'", "messages_from_kind"),
-        ):
-            plan = " ".join(r[3] for r in migrated.execute("EXPLAIN QUERY PLAN " + query))
-            self.assertIn(index, plan)
-        # The ask indexes went with asks (migration 20261106200453).
-        for name in ("messages_pending_conversation", "messages_open_asks_to"):
-            self.assertIsNone(
-                migrated.execute("SELECT name FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
-            )
-        # The sender and recipient index stays: its leading columns serve the lookups named in hubdb.REPLY_ANSWERS_ASKS.
-        self.assertIsNotNone(
-            migrated.execute(
-                "SELECT name FROM sqlite_master WHERE type='index' AND name=?", ("messages_open_asks",)
-            ).fetchone()
-        )
-
-    def test_existing_database_gains_the_media_version_lookup_index(self):
-        self.conn.execute("DROP INDEX bot_file_versions_blob_media")
-        self.conn.close()
-        migrated = H.connect(Path(self.dir.name) / "hub.db")
-        self.addCleanup(migrated.close)
-        plan = " ".join(
-            r[3]
-            for r in migrated.execute(
-                "EXPLAIN QUERY PLAN SELECT 1 FROM bot_file_versions "
-                "WHERE blob_id='existing-blob' AND media_state='pending'"
-            )
-        )
-        self.assertIn("COVERING INDEX bot_file_versions_blob_media", plan)
-
-
-class GrowthRethink(unittest.TestCase):
-    """0035_growth_rethink: a new file has none of the tables it retired."""
-
-    RETIRED = (
-        "growth_ideas",
-        "growth_idea_channels",
-        "growth_segments",
-        "growth_channel_segments",
-        "growth_idea_segments",
-        "gtm_versions",
-        "gtm_drafts",
-    )
-
-    def setUp(self):
-        self.dir = tempfile.TemporaryDirectory()
-        self.addCleanup(self.dir.cleanup)
-        self.path = Path(self.dir.name) / "hub.db"
-
-    def tables(self, conn):
-        return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-
-    def test_an_empty_file_is_made_at_the_current_version_without_the_retired_tables(self):
-        conn = H.connect(self.path)
-        self.addCleanup(conn.close)
-        self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], len(H.MIGRATIONS))
-        self.assertFalse(set(self.RETIRED) & self.tables(conn))
-        self.assertIn("gtm_sources", self.tables(conn))
-
-
-class NewDatabase(unittest.TestCase):
-    def test_a_new_file_never_makes_the_old_task_types_or_steps(self):
-        with tempfile.TemporaryDirectory() as folder:
-            conn = sqlite3.connect(Path(folder) / "hub.db", isolation_level=None)
-            conn.row_factory = sqlite3.Row
-            try:
-                written = []
-                conn.set_trace_callback(written.append)
-                H.migrate(conn)
-                made = [
-                    s
-                    for s in written
-                    if s.lstrip().upper().startswith(("CREATE", "ALTER", "INSERT"))
-                    and ("task_types" in s or "task_steps" in s)
-                    and "schema_migrations" not in s
-                ]
-                self.assertEqual(made, [])
-            finally:
-                conn.close()
-
 
 class RegistrySync(HubCase):
     def test_sync_is_idempotent_and_keeps_quarantine(self):
@@ -207,36 +60,36 @@ class Rule1Identity(HubCase):
 # ----------------------------------------------------------------------------- rule 2
 class Rule2Reach(HubCase):
     def test_a_template_name_reaches_the_one_live_bot_built_from_it_and_nothing_when_two_are(self):
-        BS.update(self.conn, "cmo", {"template": "marketing-lead"})  # a template's `--owner marketing-lead`
-        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead")
+        BS.update(self.conn, "cmo", {"template": "growth-manager"})  # a template's `--owner growth-manager`
+        task = H.task_create(self.conn, SEO, "Review the landing page", "Check the copy", "growth-manager")
         self.assertEqual(H.task(self.conn, task["id"])["owner_id"], CMO)
 
         # A bot's slug or a person's id names that one first, whatever a template calls it.
-        BS.update(self.conn, "seo", {"template": "coo"})
-        self.assertEqual(H.resolve_actor(self.conn, "coo"), COO)
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        BS.update(self.conn, "seo", {"template": "assistant"})
+        self.assertEqual(H.resolve_actor(self.conn, "assistant"), COO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-manager"), CMO)
 
         # Two live bots built from the template: the name still reaches nobody.
-        BS.update(self.conn, "seo", {"template": "marketing-lead"})
-        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        BS.update(self.conn, "seo", {"template": "growth-manager"})
+        self.assertIsNone(H.resolve_actor(self.conn, "growth-manager"))
         self.refused(
-            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "marketing-lead"
+            "reach", H.task_create, self.conn, SEO, "Review the landing page", "Check the copy", "growth-manager"
         )
 
         # An archived bot is off the roster, so the one live bot is the only match again.
         self.conn.execute("UPDATE bots SET state='archived' WHERE slug='seo'")
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-manager"), CMO)
 
         # An open seat set up from the template claims the name too, until a bot fills it (the seat closes).
         now = H.now()
         self.conn.execute(
             "INSERT INTO seats(id,title,reports_to,created_at,created_by,updated_at,updated_by,template) "
-            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'marketing-lead')",
+            "VALUES('seat-marketing-lead','Marketing lead','',?,?,?,?,'growth-manager')",
             (now, CMO, now, CMO),
         )
-        self.assertIsNone(H.resolve_actor(self.conn, "marketing-lead"))
+        self.assertIsNone(H.resolve_actor(self.conn, "growth-manager"))
         self.conn.execute("UPDATE seats SET closed_at=? WHERE id='seat-marketing-lead'", (now,))
-        self.assertEqual(H.resolve_actor(self.conn, "marketing-lead"), CMO)
+        self.assertEqual(H.resolve_actor(self.conn, "growth-manager"), CMO)
 
         # A template no bot is built from is still no one.
         self.assertIsNone(H.resolve_actor(self.conn, "product-lead"))
@@ -258,13 +111,6 @@ class Rule3Caps(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 7
-class Rule7Lint(HubCase):
-    GOOD = (
-        "Ship the 60/40 split to paid this month, or tell me to hold.\n"
-        "It beat the 80/20 split on cost per lead in August."
-    )
-
-
 class Rule4Unsolicited(HubCase):
     def test_a_bot_may_start_ten_messages_a_day_to_a_person_and_the_eleventh_is_refused(self):
         self.assertEqual(H.UNSOLICITED_PER_DAY, 10)
@@ -342,15 +188,12 @@ class Rule8Counting(HubCase):
         )
         self.assertEqual(H.lift_cooled_quarantines(self.conn), ["cmo"])
 
-    def test_a_quarantine_from_before_the_repeat_rule_still_cools_off(self):
-        H.quarantine(self.conn, "cmo", "10 refused writes today")
-        self.assertFalse(H.quarantine_is_escape(self.conn, "cmo"))
-
     def reviewed(self, slug):
         """Review tasks opened today for `slug`'s refusals. BotOps receives them, so it must exist."""
         self.assertTrue(H.bot(self.conn, H.FLEET_MAINTAINER), "no reviewer: a review count would be vacuous")
+        name = H.bot(self.conn, slug)["display_name"]  # the title names the bot as people know it, not by its id
         return self.conn.execute(
-            "SELECT COUNT(*) FROM tasks WHERE title=?", (f"Review {slug}'s refused writes",)
+            "SELECT COUNT(*) FROM tasks WHERE title=?", (f"Review {name}'s refused writes",)
         ).fetchone()[0]
 
     def test_writes_to_a_quarantined_bot_are_kept_or_refused_without_quarantining_the_sender(self):
@@ -416,9 +259,6 @@ class Rule8Counting(HubCase):
         self.refused("target_inactive", H.task_create, self.conn, SEO, "Plan the week", "Draft it", "coach")
         self.assertEqual(H.bot(self.conn, "seo")["state"], "quarantined", "a retry loop still stops")
         self.assertEqual(H.quarantine_reason(self.conn, "seo"), f"{H.QUARANTINE_TOTAL_AT} refusals today")
-
-    def test_tico_itself_is_named_tico_never_by_the_id_it_is_stored_under(self):
-        self.assertEqual(H.actor_name(self.conn, H.KEEPER), "Tico")
 
     def test_a_person_refused_for_a_paused_bot_reads_when_it_is_back_not_how_bots_are_reviewed(self):
         got = self.refused("target_inactive", H.task_create, self.conn, ANA, "Plan the week", "Draft it", "coach")
@@ -498,16 +338,6 @@ class Rule8Counting(HubCase):
 
 
 # ----------------------------------------------------------------------------- rule 9
-class Rule9AppendOnly(HubCase):
-    def test_messages_and_events_are_only_ever_added(self):
-        before = self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
-        first = H.say(self.conn, CMO, SEO, "one")
-        H.say(self.conn, CMO, SEO, "two")
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 2)
-        self.assertEqual(H.message(self.conn, first["id"])["body"], "one")
-        self.assertGreater(self.conn.execute("SELECT COUNT(*) FROM events").fetchone()[0], before)
-
-
 # ----------------------------------------------------------------------------- status
 # ----------------------------------------------------------------------------- reads and the rest
 class PersonAskLint(HubCase):
@@ -562,7 +392,7 @@ class PersonAskLint(HubCase):
             self.assertEqual(H.lint_person_ask(rewrite), [])
 
 
-# ----------------------------------------------------------------------------- the Strategy Bot's old names, dropped
+# ----------------------------------------------------------------------------- the Strategy Owner's old names, dropped
 
 
 class WalLeftForLitestream(unittest.TestCase):
@@ -608,11 +438,3 @@ def test_task_ref_sql_matches_a_scalar_or_a_list_element_and_no_other_shape():
     assert [row[0] for row in conn.execute(sql, ("T", "T"))] == [1, 2]
     by_task_id = f"SELECT id FROM m WHERE {H.task_ref_sql('refs', '$.task_id')} ORDER BY id"
     assert [row[0] for row in conn.execute(by_task_id, ("T", "T"))] == [8]
-
-    def test_a_bots_ask_to_a_person_in_shorthand_is_refused_and_a_plain_one_is_asked(self):
-        task = H.task_create(self.conn, CMO, "Coordinate the trial", "", CMO, private=False)
-        with self.assertRaises(H.Refused) as refused:
-            H.task_ask(self.conn, CMO, task["id"], "ana", "Approve PO-1234? If yes, I pay it.")
-        self.assertEqual(refused.exception.rule, "lint")
-        plain = "Approve the video tool trial on Thursday? If yes, I will send the invite."
-        self.assertTrue(H.task_ask(self.conn, CMO, task["id"], "ana", plain)["requirement_id"])

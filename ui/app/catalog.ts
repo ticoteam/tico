@@ -59,7 +59,7 @@ function catalogPerson(state: CatalogState, card: CatalogCard): CatalogPerson | 
 }
 function catalogInstructions(state: CatalogState, card: CatalogCard): string {
   let text = catalogText(state, card);
-  if (card.template !== 'inbox') return text;
+  if (card.template !== 'inbox-manager') return text;
   const person = catalogPerson(state, card);
   if (!person?.email) return text;
   const line = `Mailbox: ${person.email}`;
@@ -67,7 +67,7 @@ function catalogInstructions(state: CatalogState, card: CatalogCard): string {
   return `${text.replace(/\s*$/, '')}\n\n${line}\n`;
 }
 function catalogMissingMailbox(state: CatalogState): boolean {
-  return state.cards.some(card => card.template === 'inbox' && state.picked.has(card.slug)
+  return state.cards.some(card => card.template === 'inbox-manager' && state.picked.has(card.slug)
     && !catalogPerson(state, card));
 }
 function catalogSelection(state: CatalogState): Record<string, {template: string | undefined; display_name: string; instructions: string}> {
@@ -82,7 +82,7 @@ function catalogSelection(state: CatalogState): Record<string, {template: string
 function catalogCardHTML(state: CatalogState, card: CatalogCard, note?: string): string {
   const slug = card.slug, picked = state.picked.has(slug), locked = catalogLocked(state, card);
   const meta = [card.runtime, card.model, card.reasoning_effort].filter(Boolean).join(' · ');
-  const people = card.template === 'inbox' ? catalogPeople() : [];
+  const people = card.template === 'inbox-manager' ? catalogPeople() : [];
   const chosen = state.edits[slug]?.person || '';
   const mailbox = people.length ? `<label class="cat-mailbox">Whose mailbox
       <select data-cat-mailbox="${esc(slug)}" aria-label="Human whose inbox this bot reads">

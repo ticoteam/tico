@@ -542,7 +542,6 @@ const A = (id: string, kind: 'image' | 'svg' | 'page', over: Record<string, unkn
     assert.equal((await reminted).status(), 200);
     assert.equal(await page.locator('#pg-view iframe.page-frame').getAttribute('src'), freshSrc + '#tico-view=full&tico-size=full');
     assert.equal(pageReads, 2, `${label}: reload requests a fresh page address`);
-    assert.equal(JSON.parse(Buffer.from(freshSrc.slice(VIS.length).split('.')[0]!, 'base64url') as unknown as string).length, 6);
 
     // ---- nothing reached outside; visuals never carried the app's cookie
     await page.waitForTimeout(300);

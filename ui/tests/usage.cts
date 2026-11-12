@@ -19,7 +19,7 @@ const ROWS = [
   {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), low_estimate_runs: 2, share: 0.05, limit: limit(null, null)},
   {bot: 'support', name: 'Support', department: 'Revenue', ...figures(12, 900000, 2100000, 60000, 6.1, 1.5), share: 0.8, limit: limit(5, 50, 122, 'daily')},
   {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null), share: 0, limit: limit(null, 20, 85)},
-  {bot: 'coo', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
+  {bot: 'assistant', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
 ];
 // The team's limits: a default, a team cap with the old hour window, a capped group, one bot with limits of its own.
 const LIMITS = {default: {daily_usd: 20, monthly_usd: null, count_subscription: false}, may_edit_default: true,
@@ -145,8 +145,8 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.match(await support.locator('.use-runs').innerText(), /12 runs/);
     assert.match(await support.locator('.use-tok').innerText(), /3\.06M tokens/);
     assert.match(await support.locator('.use-cost').innerText(), /^\$7\.60$/);
-    assert.equal((await page.locator('.use-row[data-bot=coo] .use-cost').innerText()).trim(), '$2.20');
-    assert.equal(await page.locator('.use-row[data-bot=coo] .use-est').getAttribute('title'), 'All on subscriptions');
+    assert.equal((await page.locator('.use-row[data-bot=assistant] .use-cost').innerText()).trim(), '$2.20');
+    assert.equal(await page.locator('.use-row[data-bot=assistant] .use-est').getAttribute('title'), 'All on subscriptions');
     // Runs on a model that charges more for long prompts, without each request's tokens, may read low.
     assert.match(await page.locator('.use-row[data-bot=sales] .use-cost').innerText(), /\$0\.40\s*estimate, may be low/);
     assert.match(await page.locator('.use-total').innerText(), /Estimate, may be low: 2 runs on a model that charges more for long prompts/);

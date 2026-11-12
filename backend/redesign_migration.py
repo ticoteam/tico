@@ -30,7 +30,6 @@ log = logging.getLogger("tico.redesign_migration")
 CUTOVER = "redesign_cutover"  # registry_metadata: {state: running|done, migration, at, ...}
 WAKES_PREFIX = "auto_wakes_"  # custom "What wakes" automations: rules.py reads its rows from these
 GUARD = {"turns_per_hour": 300, "turns_per_day": 2500}  # CONTRACT §1 run guard defaults
-STRATEGY_NAME = "Strategy Bot"
 DEFAULT_PROMPT = (
     "Read this message for {name}. Archive what needs nothing, label what belongs somewhere, draft a "
     "reply where one is wanted, and leave the rest for {name}."
@@ -543,7 +542,7 @@ def _bots(c, done):
     row = H.bot(c, strategy_bot.SLUG)
     if row and ("bot", "bot:" + strategy_bot.SLUG) not in done:
         current = (row.get("display_name") or "").strip()
-        default = current in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)
+        default = current in ("", strategy_bot.NAME, *strategy_bot.OLD_NAMES)
         flags = (
             []
             if default
@@ -551,7 +550,7 @@ def _bots(c, done):
                 _flag(
                     "bot:" + strategy_bot.SLUG,
                     "custom_name",
-                    f"Someone named it {current}; it keeps that name and becomes the Strategy bot",
+                    f"Someone named it {current}; it keeps that name and becomes the Strategy Owner",
                 )
             ]
         )
@@ -562,7 +561,7 @@ def _bots(c, done):
                 "title": current or strategy_bot.NAME,
                 "becomes": {
                     "slug": strategy_bot.SLUG,
-                    "display_name": STRATEGY_NAME if default else current,
+                    "display_name": strategy_bot.NAME if default else current,
                     "role": "the strategy bot",
                 },
                 "flags": flags,
@@ -809,7 +808,7 @@ def _convert_one(c, who, mid, obj, group_done):
         return aid
     if kind == "rename":
         if args["rename"]:
-            strategy_bot._rename(c, who.actor, STRATEGY_NAME)
+            strategy_bot._rename(c, who.actor, strategy_bot.NAME)
         _mark(c, "bot", obj["id"], mid, None)
         return None
     if kind == "limit":
@@ -1874,7 +1873,7 @@ def pending(c):
             if "display_name" in _columns(c, "bots")
             else ""
         )
-        add("bot", int(name in ("", strategy_bot.NAME, STRATEGY_NAME, *strategy_bot.OLD_NAMES)))
+        add("bot", int(name in ("", strategy_bot.NAME, *strategy_bot.OLD_NAMES)))
     return found
 
 

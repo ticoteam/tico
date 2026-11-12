@@ -8,6 +8,7 @@ JSON. None of them writes a task's status, stage or owner: the engine does. A re
 """
 
 import json
+import logging
 from collections.abc import Callable
 from datetime import datetime, time, timezone
 from typing import Any
@@ -19,6 +20,7 @@ from . import ask_ingest as _ask_ingest
 from . import models as M
 from . import org_rule_check as _org_rule_check
 from . import reach as _reach
+from . import setup_live as _setup_live
 from . import strategy_merge as _strategy_merge
 from . import task_asks as _task_asks
 from . import task_caps as _task_caps
@@ -31,6 +33,7 @@ H: Any = _H
 ask_ingest: Any = _ask_ingest
 org_rule_check: Any = _org_rule_check
 reach: Any = _reach
+setup_live: Any = _setup_live
 strategy_merge: Any = _strategy_merge
 task_asks: Any = _task_asks
 task_caps: Any = _task_caps
@@ -233,7 +236,16 @@ def register(
             org_rule_check.replayer(operation, audience=audience)(replay)
 
     # ------------------------------------------------------------------ where it is
+    def setup_finished(c: Any, who: Any, task_id: str) -> None:
+        """A seat bot's "Set up" task is done once the bot is live, and its template's routines are on by then: go-live
+        turned them on, and one made active another way (its Settings switch) gets them here, once."""
+        bot = setup_live.require_live(c, task_id)
+        onboarding = getattr(app.state, "onboarding", None)
+        if bot and onboarding:
+            onboarding.arm_routines(c, who, bot)
+
     def done_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        setup_finished(c, who, task_id)
         note, version = carry(c, who, task_id, gate, body.note or "", body.version)
         H.task_done(c, who.actor, task_id, note, version, mover=mover(c, who) or None)
 
@@ -246,6 +258,8 @@ def register(
         return checked(request, tid, body, "task_done")
 
     def move_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        if str(body.to).strip().lower() == "done":
+            setup_finished(c, who, task_id)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         H.task_move(c, who.actor, task_id, body.to, why, version, mover=mover(c, who) or None)
 
@@ -322,6 +336,7 @@ def register(
 
     # ------------------------------------------------------------------ set aside, hand back
     def snooze_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:
+        setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live, not after it
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         until = parse_until(body.until)
         done = H.task_snooze(c, who.actor, task_id, why, until, version, mover=mover(c, who) or None)
@@ -434,7 +449,7 @@ def register(
             own_click=task_asks.own_click(who),
             page_version=body.page_version,
         )
-        # An answer on the Strategy Bot's merged item goes to each original it stands for.
+        # An answer on the Strategy Owner's merged item goes to each original it stands for.
         strategy_merge.on_answer(c, who.actor, task_id, body.value)
         return {"answer_id": done.get("answer_id")}
 
@@ -635,12 +650,45 @@ def register(
     @app.post("/api/v2/tasks/{tid}/queue")
     def task_queue(request: Request, tid: str, body: M.TaskQueue):
         """Queue again: after GitHub took a PR out of the merge queue (or refused it), put it back at its newest
-        commit (backend/merge_queue.py `requeue`). The stage owner, the pipeline's manager or any person."""
+        commit (backend/item_sources/github.py `requeue`). The stage owner, the pipeline's manager or any person."""
 
         def call(c: Any, who: Any, task_id: str) -> Any:
+            from .item_sources import github as GS
+
             owed = H.task_requeue(c, who.actor, task_id, body.version)
-            return {"queued": [{"repo": e["repo"], "number": e["number"], "head": e["head_sha"]} for e in owed]}
+            prs = [(GS.split_key(e["item_key"]), e["pinned"]) for e in owed]
+            return {"queued": [{"repo": repo, "number": number, "head": head} for (repo, number), head in prs]}
 
         return work(request, tid, body, call)
+
+    @app.post("/api/v2/tasks/{tid}/release")
+    def task_release(request: Request, tid: str, body: M.TaskRelease):
+        """Cut the release the task waits for in its Release stage, the way In a release names (`release_with`): Tico
+        runs the release workflow or creates the tag through its GitHub App (backend/item_sources/github_release.py).
+        The stage owner, the pipeline's manager or any person; a bot only once a person signed off before release."""
+
+        def call(c: Any, who: Any, task_id: str) -> Any:
+            owed = H.task_release(c, who.actor, task_id, body.tag, body.version)
+            return {"asked": [{"repo": e["item_key"], "how": e["pinned"].rpartition("#")[0]} for e in owed]}
+
+        read_releases_first(request, tid)
+        return work(request, tid, body, call)
+
+    def read_releases_first(request: Request, tid: str) -> None:
+        """Read the releases the task waits on from GitHub before the write, with no transaction held: the repo may
+        have published one with the merge since Tico last read them, and then the answer names it instead of asking
+        for another (item_sources/github.py `read_releases_now`). Anything that fails here leaves the call as it was."""
+        service = getattr(request.app.state, "github_app", None)
+        try:
+            if service is None or service.row() is None:
+                return
+            with store.read() as c:
+                task_id = auth.resolve_task(c, request.state.identity, tid)
+            from .github import AppGitHub
+            from .item_sources import github as GS
+
+            GS.read_releases_now(store, AppGitHub(service), task_id)
+        except Exception:  # noqa: BLE001 - the write below answers as it would have
+            logging.getLogger("tico.github").info("No releases read before the release of %s", tid, exc_info=True)
 
     replays()

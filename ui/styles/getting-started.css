@@ -56,6 +56,4 @@
 .gs-tour-count{margin:0 0 2px;font-size:var(--t-sm)}
 .gs-tour-text{margin:6px 0 var(--s3)}
 .gs-tour-actions{display:flex;justify-content:flex-end;gap:var(--s2)}
-.onb{max-width:840px}
-.onb-head{margin-bottom:var(--s4)}
-.onb-brand{margin-bottom:var(--s3)}
+

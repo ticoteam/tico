@@ -952,8 +952,9 @@ def _hosted(api, runner, bot, report):
 
 
 def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment):
-    """A bot that may open pull requests but whose Claude Code settings deny `gh pr create` stops at that step; a bot
-    that only reads keeps its denies, and the deny on its own repository is not counted."""
+    """A bot that may push but whose Claude Code settings deny `git push` stops at that step; a bot that only reads
+    keeps its denies, and the deny on its own repository is not counted. Its `gh` denies are not named here: write
+    access does not say its work opens pull requests or issues (its AGENT.md does: "Claude Code permissions")."""
     api = environment()
     runner = enrolled(api)
     add_bot(api, "monitor")
@@ -968,7 +969,7 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
     check = health_of(api)[1]["harness_denies"]
     assert check["status"] == "warn" and check["label"] == "Harness permissions"
     assert "monitor may write to acme/app" in check["summary"]
-    assert "gh pr create, gh issue create, gh issue comment, git push" in check["summary"]
+    assert "deny git push." in check["summary"] and "gh " not in check["summary"]
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
     assert "harness_denies" not in health_of(api, as_person(api, "sam"))[1]
@@ -991,7 +992,8 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
         },
     )
     assert "harness_denies" not in health_of(api)[1]
-    # Denying merge and review to a bot that opens pull requests is a policy, not a leftover.
+    # Denying `gh` writes to a bot that may push is its job's policy, not a leftover: a Release Owner given write to
+    # push fixes denies opening and commenting on pull requests, because Tico queues and merges them itself.
     _hosted(
         api,
         runner,
@@ -1000,7 +1002,9 @@ def test_a_harness_deny_on_a_github_write_the_access_allows_is_named(environment
             "ready": True,
             "runtime": "claude",
             "tools": [tool],
-            "warnings": ["Claude Code settings deny: gh pr merge, gh pr review, gh release create"],
+            "warnings": [
+                "Claude Code settings deny: gh pr comment, gh pr create, gh pr edit, gh pr merge, gh pr review"
+            ],
         },
     )
     assert "harness_denies" not in health_of(api)[1]
@@ -1021,7 +1025,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         )
         BS.write(c, 'reviewer', {'repo_access_mode': 'all'})
     read = {"service": "github", "identity": "acme/docs", "can": ["read"], "scope": {"repo": "acme/docs"}}
-    deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review"
+    deny = "Claude Code settings deny: gh pr comment, gh pr create, gh pr review, git push"
     _hosted(api, runner, "reviewer", {"ready": True, "runtime": "claude", "warnings": [deny], "tools": [read]})
     from backend.bot_tools import listing
 
@@ -1034,7 +1038,7 @@ def test_a_read_only_reviewer_given_every_repository_keeps_its_denies(environmen
         BS.write(c, 'reviewer', {'repo_access_mode': 'chosen'})
         c.execute("INSERT INTO bot_repo_access VALUES('reviewer','acme/product','write')")
     summary = health_of(api)[1]["harness_denies"]["summary"]
-    assert "reviewer may write to acme/product" in summary and "gh pr create, gh pr comment" in summary
+    assert "reviewer may write to acme/product" in summary and "deny git push." in summary
 
 
 def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, monkeypatch):
@@ -1107,96 +1111,30 @@ def test_harness_denies_answers_each_bot_as_a_bot_by_bot_pass_does(environment, 
         assert harness_denies(c, settings) == batched
 
 
-def _listened(api, *, routed_days_ago, saved_days_ago, judged=None):
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-            "VALUES('i1','reddit','1','https://example.com/1','a post','h1',?)",
-            (H.shift(H.now(), days=-routed_days_ago - 1),),
-        )
-        c.execute(
-            "INSERT INTO intake_items(id,destination,item_id,judgment_id,created_at) VALUES('in1','leads','i1','j1',?)",
-            (H.shift(H.now(), days=-routed_days_ago),),
-        )
-        c.execute(
-            "INSERT INTO listen_items(id,source,native_id,url,content,content_hash,first_seen_at) "
-            "VALUES('i2','reddit','2','https://example.com/2','a later post','h2',?)",
-            (H.shift(H.now(), days=-saved_days_ago),),
-        )
-        if judged:
-            c.execute(
-                "INSERT INTO listen_judgments(id,item_id,question_set,scores,judged_at) VALUES('j1','i1',?,'{}',?)",
-                (judged, H.shift(H.now(), days=-routed_days_ago)),
-            )
-
-
-def test_listening_health_names_a_lost_registry_a_quiet_source_a_missing_question_set_and_hides_custom_questions(
-    environment, monkeypatch
-):
-    """One install, each listening finding in turn, the listen rows cleared between them."""
-    import json
-    from backend import listening
+def test_listening_health_names_a_source_whose_read_was_blocked(environment):
+    from backend import automation_flow as F
+    from backend import automations
+    from backend import listening as L
+    from backend.tests.helpers.listening import NOTE, SEARCH
 
     api = environment()
-    settings = api.app.state.store.settings
-
-    def fresh():
-        monkeypatch.setattr(listening, "_warning_revisions", listening.OrderedDict())
-        with api.app.state.store.transaction() as c:
-            for table in ("listen_judgments", "intake_items", "listen_items"):
-                c.execute(f"DELETE FROM {table}")
-
-    # A server move that leaves listening.yaml behind keeps saving posts and sends them nowhere, silently.
-    fresh()
-    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
-    assert "listening" not in health_of(api)[1]  # never routed: nothing was lost
-    _listened(api, routed_days_ago=14, saved_days_ago=2)
-    check = health_of(api)[1]["listening"]
-    assert check["status"] == "bad"
-    assert "listening.yaml is missing from the company registry" in check["summary"]
-    assert "1 post saved since went to no inbox" in check["summary"]
-    (settings.registry_dir / "listening.yaml").write_text("destinations: {}\n")
-    check = health_of(api)[1]["listening"]  # emptied on purpose is possible: a warning, not bad
-    assert check["status"] == "warn" and "has no valid destinations" in check["summary"]
-
-    fresh()  # a source that stopped saving posts is not flagged
-    (settings.registry_dir / "listening.yaml").unlink(missing_ok=True)
-    _listened(api, routed_days_ago=60, saved_days_ago=40)
     assert "listening" not in health_of(api)[1]
+    limits = [{"count": 5, "per": "day"}]
+    trigger = {"type": "listening", "sources": [SEARCH], "rules": [], "limits": limits, "at": "08:00", "tz": "UTC"}
 
-    fresh()  # scoring with the shipped questions after its own went missing
-    (settings.registry_dir / "listening.yaml").write_text(
-        "destinations:\n  leads: {category: lead, threshold: 0.75, receiver: bot:ana}\n"
-    )
-    shipped = listening.question_set(settings)
-    _listened(api, routed_days_ago=3, saved_days_ago=1, judged=f"listening-item@{shipped['version'] + 4}")
-    check = health_of(api)[1]["listening"]
-    assert check["status"] == "warn" and f"({shipped['label']})" in check["summary"]
-    assert f"listening-item@{shipped['version'] + 4}" in check["summary"]
+    def read(status, error=""):
+        with api.app.state.store.transaction() as c:
+            found = c.execute("SELECT id FROM listening_sources WHERE automation_id='auto_heard'").fetchone()
+            L.save(c, L._source(c, found["id"]), status, [], error=error)
 
-    fresh()  # custom categories are checked without their question text
-    (settings.registry_dir / "listening.yaml").write_text("""
-destinations:
-  leads: {category: custom, threshold: 0.75, receiver: bot:ana, unless: {category: veto, threshold: 0.70}}
-""")
-    directory = settings.registry_dir / "questions"
-    directory.mkdir()
-    path = directory / "listening-item.json"
-    secret = "private-question-fixture-value"
-    qset = {
-        "id": "listening-item",
-        "version": 9,
-        "summary": secret,
-        "questions": {"custom": {"type": "choice", "instructions": secret, "criteria": {"yes": secret, "no": None}}},
-    }
-    path.write_text(json.dumps(qset))
-    listening.destinations(settings)
-    body, checks = health_of(api)
-    assert checks["listening"]["status"] == "warn"
-    assert secret not in json.dumps(body)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('sam','Sam','sam@example.com')")
-    assert "listening" not in health_of(api, as_person(api, "sam"))[1]
+        flow = {"name": "Standups", "owner": "person:" + automations.top_person(c), "trigger": trigger, "steps": [NOTE]}
+        automations._save(c, H.KEEPER, "auto_heard", F.check(flow), None)
+    read("blocked", "Sign in again")
+    check = health_of(api)[1]["listening"]
+    assert check["status"] == "warn" and "Sign in again" in check["summary"]
+    read("ok")
+    assert "listening" not in health_of(api)[1]
 
 
 def test_a_computer_on_the_python_runner_is_told_to_update_and_the_heartbeat_takes_the_engine(environment):
@@ -1844,7 +1782,7 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
     once the App is connected and installed."""
     api = environment()
     assert health_of(api)[1]["github"]["status"] == "info"
-    add_bot(api, H.COUNSEL)  # built in, added once a computer enrolls: not a bot the company made
+    add_bot(api, H.RULES_OWNER)  # built in, added once a computer enrolls: not a bot the company made
     assert health_of(api)[1]["github"]["status"] == "info"
     add_bot(api, "helper")
     check = health_of(api)[1]["github"]
@@ -1867,3 +1805,33 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
         )
         c.execute("UPDATE github_app SET installation_id=77")
     assert health_of(api)[1]["github"]["status"] == "ok"
+
+
+def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environment):
+    """Tico Team, Nov 11: Health warned that Reviewer 2's job had been queued 17 minutes when its task was snoozed. The
+    snooze holds it on purpose (task_wait) until it ends; on an awake computer, as on a sleeping cloud machine, that is
+    work waiting on purpose, never a stuck bot."""
+    api = environment()
+    runner = enrolled(api)
+    heartbeat(api, runner)
+    add_bot(api, "ops")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('ops',?,1,?,'t')",
+            (runner, H.now()),
+        )
+        claimable(c, runner, "ops")
+        owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
+        task = H.task_create(c, owner, "Wait for a decision", "", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops' AND state='queued'")
+        notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
+        H.task_snooze(c, owner, task["id"], "Approve the plan first.")
+        c.execute(
+            "UPDATE jobs SET state='queued', created_at=? WHERE message_id=?",
+            (H.shift(H.now(), minutes=-30), notice["id"]),
+        )
+        online = {r["id"] for r in health._online_runners(c)}
+        _, slow, stuck = health._waiting(c, online)
+        assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
+            ("ops", "task_wait", True)
+        ]

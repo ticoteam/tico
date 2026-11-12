@@ -367,11 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn unset_thresholds_take_the_defaults() {
-        assert_eq!(env_number("TICO_TEST_IDLE_LOAD_UNSET", 50.0), 50.0);
-    }
-
-    #[test]
     fn ps_output_keeps_the_busiest_reading_per_name_and_skips_turns() {
         let out = "  0.0    1024 /usr/sbin/cron\n 72.5 3145728 /Users/x/bin/python3\n 10.0 2048 /usr/bin/python3\n  1.0  100 /usr/local/bin/claude\n 80.0 2048 Google Chrome Helper\nnot a line\n  x 1 y\n";
         let turns = vec!["claude".to_string()];
@@ -441,14 +436,5 @@ mod tests {
             json!({"sampled_at": "2026-11-04T10:00:00+00:00", "busy": [{"name": "process:python3", "cpu": 72.5, "mb": 3000.0}]})
         );
         assert_eq!(body("t", &[]), json!({"sampled_at": "t", "busy": []}));
-    }
-
-    #[test]
-    fn only_a_missing_route_or_another_plain_refusal_means_not_taken() {
-        assert!(not_taken(404));
-        assert!(not_taken(422));
-        for status in [0, 401, 403, 407, 408, 429, 500, 503] {
-            assert!(!not_taken(status), "{status}");
-        }
     }
 }

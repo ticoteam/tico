@@ -1,7 +1,7 @@
 {
   "id": "reply-intent",
   "version": 1,
-  "owner": "sales",
+  "owner": "inbound-sales-owner",
   "summary": "One ambiguous inbound Close reply after deterministic opt-out, wrong-person, automated and positive keyword rules. Classify explicit intent without treating a polite acknowledgment as interest.",
   "state": ["channel", "reply"],
   "questions": {

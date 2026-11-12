@@ -1,6 +1,6 @@
 default_user: ana
 teams:
-  leadership: {root: coo}
+  leadership: {root: assistant}
 people:
   - {id: ana, name: Ana Rivera, email: ana@acme.example, title: Owner, team: leadership, primary_for: ["*"], bot: null, reports_to: null}
   - {id: ben, name: Ben Okafor, email: ben@acme.example, title: Engineer, team: leadership, bot: null, reports_to: ana}

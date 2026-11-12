@@ -6,7 +6,7 @@ from ..store import H, digest
 def seed(b):
     b.at(hours=2)
     task = b.tasks["paid-budget"]
-    pages = b.call("GET", "pages?bot=marketing-lead")["pages"]
+    pages = b.call("GET", "pages?bot=growth-manager")["pages"]
     b.call("PATCH", "pages/" + pages[0]["file_id"], {"audience": {"people": ["ana"]}})
     b.call("POST", "pins", {"place": "task:" + task, "item": "page:" + pages[0]["file_id"]})
     sent = b.call("POST", f"tasks/{task}/make-page", {"text": "Make a page for the holiday ad-budget review."})[
@@ -15,11 +15,11 @@ def seed(b):
 
     def lease(c):
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (sent["id"],)).fetchone()[0]
-        assignment = c.execute("SELECT runner_id,generation FROM assignments WHERE bot='coo'").fetchone()
+        assignment = c.execute("SELECT runner_id,generation FROM assignments WHERE bot='assistant'").fetchone()
         aid = H.new_id()
         c.execute(
             "INSERT INTO attempts(id,job_id,bot_id,runner_id,generation,token_hash,state,lease_until,created_at) "
-            "VALUES(?,?,'coo',?,?,?,'running',?,?)",
+            "VALUES(?,?,'assistant',?,?,?,'running',?,?)",
             (
                 aid,
                 job,

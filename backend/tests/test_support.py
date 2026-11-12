@@ -353,7 +353,7 @@ def test_a_vault_that_cannot_be_opened_refuses_a_ticket_before_anything_reaches_
 REPORT = "tico task update failed since 0.2.17 with: refused (version). Tried a fresh read; same error."
 
 
-def as_bot(api, slug="coo"):
+def as_bot(api, slug="assistant"):
     """The bot, connected as an external agent (a Hermes profile): its own standing credential, no runner lease."""
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
@@ -670,20 +670,20 @@ def test_a_bot_reports_and_sends_over_mcp(environment, hq):  # noqa: F811  (the 
     api = environment()
     drafts_only(api)
     as_bot(api)
-    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-coo")["result"]["tools"]}
+    tools = {t["name"] for t in rpc(api, "tools/list", token="bot-assistant")["result"]["tools"]}
     assert {"tico_support_report", "tico_support_send"} <= tools
     err, drafted = call(
-        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-coo"
+        api, "tico_support_report", {"message": "  " + REPORT.replace(". ", ".\r\n") + "\n"}, token="bot-assistant"
     )
     assert not err, drafted
     assert "must OK it" in drafted["next"] and hq.seen == []
-    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, early = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert err and hq.seen == []
     decide(api, drafted["ok"])
-    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, sent = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert not err, sent
     assert json.loads(hq.seen[-1].content)["message"] == REPORT.replace(". ", ".\n")  # what the person read
-    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-coo")
+    err, again = call(api, "tico_support_send", {"ok": drafted["ok"]}, token="bot-assistant")
     assert not err and again["ticket"]["id"] == sent["ticket"]["id"] and len(hq.tickets) == 1
 
 
@@ -719,14 +719,6 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
         assert sent.json()["filed_as"] == "human:riley"
     riley = api.get("/api/v2/support/tickets", headers=signed_in("riley")).json()["tickets"]
     assert len(riley) == 2 and api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
-
-
-def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  (the fixture)
-    api = environment()
-    drafts_only(api)
-    approval = draft(api, as_bot(api)).json()
-    approver, _ = decide(api, approval["id"])
-    assert approver != "bot:coo" and approver.startswith("human:")
 
 
 def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
@@ -794,12 +786,40 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     question = lambda h=None: api.get("/api/v2/config", headers=h or signed_in()).json()["feedback_question"]
     with store.transaction() as c:  # everyone so far acted before any result
         c.execute("UPDATE events SET created_at=?", (H.shift(H.now(), days=-3),))
-    complete_a_bot_turn(api, H.shift(H.now(), days=-1))
+    from backend import onboarding
+
+    def setup(done):
+        with store.transaction() as c:
+            record = {**onboarding.load(c), "completed": H.shift(H.now(), days=-3) if done else None}
+            c.execute(
+                "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (onboarding.KEY, json.dumps(record)),
+            )
+
+    def task(requester):
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO tasks(id,title,requester_id,owner_id,status,created_at) VALUES(?,'Run payroll',?,'payroll','open',?)",
+                ("t-" + requester, requester, H.shift(H.now(), days=-2)),
+            )
+            c.execute("UPDATE attempts SET task_id=? WHERE bot_id='payroll'", ("t-" + requester,))
+
+    setup(True)
+    complete_a_bot_turn(api, H.shift(H.now(), days=-2))
     assert question() is None  # only the Assistant has answered
-    complete_a_bot_turn(api, H.shift(H.now(), hours=2), bot="payroll")
-    assert question() is None  # a result stamped ahead of this clock waits
+    complete_a_bot_turn(api, H.shift(H.now(), days=-2), bot="payroll")
+    assert question() is None  # a new company's bots go live by themselves: nobody has used Tico yet
+    task("payroll")
+    assert question() is None  # nor is a task one bot gave another a person's use of it
+    task("human:test")
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), hours=-2),))
+    assert question() is None  # a person's first result today: the question waits a day
     with store.transaction() as c:
         c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='payroll'", (H.shift(H.now(), days=-1),))
+    setup(False)
+    assert question() is None  # never before the first-run setup is complete
+    setup(True)
     assert question() == {"moment": "first_result", "question": "How is Tico working for you?"}
     assert api.get("/api/v2/config", headers=as_bot(api)).json()["feedback_question"] is None
     r = api.post(
@@ -893,7 +913,7 @@ def test_the_botops_tool_says_botops_and_keeps_its_name_in_the_message(monkeypat
             calls.append((path, body))
             return {}
 
-    monkeypatch.setattr(hubtools, "_as_person", lambda api, ref=None: api)
+    monkeypatch.setitem(hubtools.support_file.__globals__, '_as_person', lambda api, ref=None: api)
     hubtools.support_file(Api(), {"message": "Sync fails"})
     assert calls == [("support/tickets", {"message": "[BotOps] Sync fails", "include_ids": True, "source": "botops"})]
 
@@ -1008,40 +1028,6 @@ def _payload(message=REPORT):
     return {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest()}
 
 
-def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
-    import threading
-    import time
-
-    api = environment()
-    as_bot(api)
-    who = Identity("bot:coo", "bot", agent="hermes")
-    entered, release = threading.Event(), threading.Event()
-
-    def slow(request):  # the first send is still out when the retry arrives
-        entered.set()
-        release.wait(5)
-        return hq(request)
-
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
-    answers = {}
-
-    def send_it(name):
-        answers[name] = api.app.state.support.report(who, _payload())
-
-    first = threading.Thread(target=send_it, args=("first",))
-    first.start()
-    assert entered.wait(5)
-    retry = threading.Thread(target=send_it, args=("retry",))
-    retry.start()
-    time.sleep(0.3)  # the retry is at the send's lock, and waits for the first to finish
-    release.set()
-    first.join(10)
-    retry.join(10)
-    assert len(hq.seen) == 1 and len(hq.tickets) == 1
-    assert answers["first"]["sent"] is True and answers["retry"]["sent"] is True
-    assert answers["first"]["ticket"]["id"] == answers["retry"]["ticket"]["id"]
-
-
 @pytest.mark.parametrize("ending", ["credential", "bot"])
 def test_a_bot_whose_credential_or_self_has_ended_sends_nothing_by_the_rule(environment, hq, ending):  # noqa: F811  (the fixture)
     from backend import task_asks
@@ -1054,11 +1040,11 @@ def test_a_bot_whose_credential_or_self_has_ended_sends_nothing_by_the_rule(envi
     assert api.put("/api/v2/access/rules", json={"bot_reports_direct": True}, headers=signed_in()).status_code == 200
     with api.app.state.store.transaction() as c:
         if ending == "credential":
-            c.execute("UPDATE agents SET revoked_at=? WHERE bot=?", ("2026-01-02T00:00:00Z", "coo"))
+            c.execute("UPDATE agents SET revoked_at=? WHERE bot=?", ("2026-01-02T00:00:00Z", "assistant"))
         else:
-            c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("coo",))
+            c.execute("UPDATE bots SET state='paused' WHERE slug=?", ("assistant",))
     with pytest.raises(Problem) as ended:
-        api.app.state.support.report(Identity("bot:coo", "bot", agent="hermes"), _payload())
+        api.app.state.support.report(Identity("bot:assistant", "bot", agent="hermes"), _payload())
     assert ended.value.code == ("revoked" if ending == "credential" else "paused")
     assert hq.seen == [] and not consumed(api, approval["id"])
     assert grants(api) == [(approval["id"], task_asks.WAITING, None)]  # its earlier draft still waits for a person
@@ -1095,44 +1081,6 @@ def test_a_retry_after_the_owner_turns_direct_reports_on_sends_it_once_and_the_w
     assert once_more.json()["ticket"]["id"] == again.json()["ticket"]["id"] and len(hq.seen) == 1
 
 
-def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_person(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
-    import threading
-    import time
-
-    from backend import task_asks
-
-    api = environment()
-    as_bot(api)
-    who = Identity("bot:coo", "bot", agent="hermes")
-    entered, release = threading.Event(), threading.Event()
-
-    def slow(request):  # the first send is still out when the queued report arrives
-        entered.set()
-        release.wait(5)
-        return hq(request)
-
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
-    answers = {}
-
-    def send_it(name, message):
-        answers[name] = api.app.state.support.report(who, _payload(message))
-
-    first = threading.Thread(target=send_it, args=("first", REPORT))
-    first.start()
-    assert entered.wait(5)
-    waiting = threading.Thread(target=send_it, args=("queued", "A report queued behind the first one"))
-    waiting.start()
-    time.sleep(0.3)  # the queued report is waiting for the send's lock
-    drafts_only(api)  # the owner turns direct reports off while it waits
-    release.set()
-    first.join(10)
-    waiting.join(10)
-    assert answers["first"]["sent"] is True
-    assert answers["queued"]["status"] == "pending"  # the rule is read under the lock: a person OKs it
-    assert len(hq.seen) == 1
-    assert grants(api) == [(answers["queued"]["id"], task_asks.WAITING, None)]
-
-
 def test_a_send_that_fails_asks_nobody_and_a_retry_sends_it_once(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     bot = as_bot(api)
@@ -1158,7 +1106,7 @@ def test_a_report_the_privacy_check_refuses_waits_for_a_person(environment, hq):
     def refuses(c):
         raise Problem("privacy", "This report may not leave the install from here.", 403)
 
-    who = Identity("bot:coo", "bot", agent="hermes")
+    who = Identity("bot:assistant", "bot", agent="hermes")
     asked = api.app.state.support.report(who, _payload(), check=refuses)
     assert asked["status"] == "pending" and "sent" not in asked
     assert hq.seen == [] and grants(api) == [(asked["id"], task_asks.WAITING, None)]

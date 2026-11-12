@@ -1,6 +1,6 @@
 // No Strategy line at the top of Goals (Strategy is a tab of its own), and each goal's Why line (ui/goals-kpis.ts
-// goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Bot's
-// proposal is accepted as it is or edited, and an Accept on a line the Strategy Bot has since replaced is refused and
+// goalWhyHtml). A goal with no Why says "Not tied to the vision"; the Strategy Owner's
+// proposal is accepted as it is or edited, and an Accept on a line the Strategy Owner has since replaced is refused and
 // shows
 // the new one. At level 2 a recovery in Needs you is approved one option at a time.
 // Fixtures only.
@@ -16,8 +16,8 @@ interface Goal {id: string; title: string; owner_id: string; parent_id: string |
 interface Proposal {id: string; kind: string; goal_id: string | null; kpi_id: null; status: string; reason: string; proposed_by: string; proposed_at: string; may_decide?: boolean; payload: {why?: string; [key: string]: unknown}}
 
 const bot = (name: string, display_name: string, org_parent: string, over?: Record<string, unknown>) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+const bots = [bot('assistant', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
+  bot('strategy-owner', 'Strategy Owner', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:strategy-owner', {reports_to: ''})];
 
 // What waits is one line on Goals; Review opens its cards in a sheet.
 async function review(page: Page) {
@@ -36,7 +36,7 @@ async function open(browser: Browser, {role = 'owner', strategy = null, needs = 
        why: 'More landlords find Tico on their own.'},
     ],
     proposals: [{id: 'p-why', kind: 'goal_why', goal_id: 'g-top', kpi_id: null, payload: {why: 'More rentals is the vision\'s first step.'},
-      reason: 'The vision is about landlords.', proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(), status: 'pending',
+      reason: 'The vision is about landlords.', proposed_by: 'bot:strategy-owner', proposed_at: new Date().toISOString(), status: 'pending',
       may_decide: role === 'owner'}],
   };
   await page.route('**/*', async (route: Route) => {
@@ -56,7 +56,7 @@ async function open(browser: Browser, {role = 'owner', strategy = null, needs = 
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals/tree') return json({goals: state.goals, owners: {}, other_kpis: [], proposals: state.proposals.filter(x => x.status === 'pending')});
     if (p === '/api/v2/goals/needs-you') return json({actor: 'human:ana', items: needs});
-    if (p === '/api/v2/bots/goal-manager/routines') return json({routines: []});
+    if (p === '/api/v2/bots/strategy-owner/routines') return json({routines: []});
     if (p === '/api/v2/strategy') return json({...(role === 'owner' ? {draft: {n: null, status: 'draft', summary: '', vision: '', sections: {}, bets: [], revision: 1}} : {}),
       current: strategy, bets: strategy?.bets || [], label: 'Bets', label_one: 'Bet', may_edit: role === 'owner', goals_by_bet: {}, health_by_bet: {}});
     const decide = p.match(/^\/api\/v2\/proposals\/([^/]+)\/decide$/);
@@ -83,7 +83,7 @@ async function open(browser: Browser, {role = 'owner', strategy = null, needs = 
   if (needs.length) await review(page);
   return {page, errors, posted, state, server};
 }
-// The Strategy Bot proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py
+// The Strategy Owner proposes a new line for a goal: a new proposal, and the one waiting is closed (backend/goals.py
 // propose).
 function replaceWhy(state: {proposals: Proposal[]}, goalId: string, why: string) {
   for (const p of state.proposals) if (p.goal_id === goalId && p.kind === 'goal_why' && p.status === 'pending') p.status = 'rejected';
@@ -107,7 +107,7 @@ const panelFor = async (page: Page, owner: string) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A member sees the Strategy Bot's proposal with no buttons.
+    // A member sees the Strategy Owner's proposal with no buttons.
     for (const role of ['admin', 'member']) {
       const {page, errors} = await open(browser, {role, strategy: {n: 3, summary: 'Every small landlord runs their rentals on Tico.', bets: []}});
       assert.equal(await page.locator('#goal-strategy').count(), 0);
@@ -126,7 +126,7 @@ const panelFor = async (page: Page, owner: string) => {
       const why = panel.locator('[data-why="g-top"]');
       assert.equal(await why.innerText(), 'Not tied to the vision', 'a note, not an error, and no Write button while a proposal waits');
       assert.equal(await why.locator('.err').count(), 0);
-      assert.match(await panel.locator('[data-why-prop="p-why"]').innerText(), /Strategy Bot proposes More rentals is the vision's first step\./);
+      assert.match(await panel.locator('[data-why-prop="p-why"]').innerText(), /Strategy Owner proposes More rentals is the vision's first step\./);
       assert.equal(await panel.locator('.kpi-props [data-proposal="p-why"]').count(), 0, 'shown once, as the Why line');
       // Edit, then accept as edited.
       await panel.locator('[data-why-prop="p-why"] [data-why-edit]').click();
@@ -162,7 +162,7 @@ const panelFor = async (page: Page, owner: string) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The owner reads one line; the Strategy Bot replaces it before they click. Accept on the first is refused (nothing
+    // The owner reads one line; the Strategy Owner replaces it before they click. Accept on the first is refused (nothing
     // is saved as them) and the panel shows the line now waiting, which they accept; an edit typed against the old
     // line keeps their words when it is refused.
     {
@@ -214,12 +214,12 @@ const panelFor = async (page: Page, owner: string) => {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Level 2 (spec test 8): the Strategy Bot's recovery for a red goal shows its evidence, each option in plain words
+    // Level 2 (spec test 8): the Strategy Owner's recovery for a red goal shows its evidence, each option in plain words
     // with
     // its pick marked and what can't happen now; Approve on an option sends exactly that option.
     {
       const recovery = {id: 'p-rec', kind: 'recovery', goal_id: 'g-cmo', kpi_id: null, status: 'pending', reason: 'Red two weeks running.',
-        proposed_by: 'bot:goal-manager', proposed_at: new Date().toISOString(),
+        proposed_by: 'bot:strategy-owner', proposed_at: new Date().toISOString(),
         payload: {evidence: 'Signups 40 against 120.', pick: 1, options: [{label: 'Pause the newsletter', actions: []}, {label: 'Push SEO first', actions: []}]}};
       const needs = [{kind: 'recovery', ref: 'p-rec', owner_id: 'human:ana', proposal: recovery, goal_id: 'g-cmo', goal_title: 'Double organic signups',
         task: {id: 't-rec'}, options: [

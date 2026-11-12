@@ -1,0 +1,255 @@
+[
+ {
+  "argv": [
+   "seat"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "nope"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico seat: error: argument sub: invalid choice: 'nope' (choose from list, create, update, close) Did you mean: tico seat close, tico seat update?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "list"
+  ],
+  "tools": [
+   [
+    "tico_seat_list",
+    {
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "seats",
+    null
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "seat",
+   "list",
+   "extra"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "tico seat list: error: unrecognized arguments: extra Did you mean: tico seat list, tico auth list?",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "create"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico seat create <title>\ntico seat create: error: the following arguments are required: title",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "create",
+   "Support lead"
+  ],
+  "tools": [
+   [
+    "tico_seat_create",
+    {
+     "operation_id": null,
+     "title": "Support lead"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "seats",
+    {
+     "title": "Support lead"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "seat",
+   "create",
+   "Support lead",
+   "--description",
+   "Answers customers",
+   "--reports-to",
+   "human:ana",
+   "--team",
+   "g1"
+  ],
+  "tools": [
+   [
+    "tico_seat_create",
+    {
+     "description": "Answers customers",
+     "operation_id": null,
+     "reports_to": "human:ana",
+     "team": "g1",
+     "title": "Support lead"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "seats",
+    {
+     "title": "Support lead",
+     "description": "Answers customers",
+     "reports_to": "human:ana",
+     "team": "g1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "seat",
+   "update"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico seat update <seat>\ntico seat update: error: the following arguments are required: seat",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "update",
+   "s1"
+  ],
+  "tools": [
+   [
+    "tico_seat_update",
+    {
+     "operation_id": null,
+     "seat": "s1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "seats/s1",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "seat",
+   "update",
+   "s1",
+   "--title",
+   "Support lead",
+   "--description",
+   "Answers customers",
+   "--reports-to",
+   "ana",
+   "--team",
+   "g1"
+  ],
+  "tools": [
+   [
+    "tico_seat_update",
+    {
+     "description": "Answers customers",
+     "operation_id": null,
+     "reports_to": "ana",
+     "seat": "s1",
+     "team": "g1",
+     "title": "Support lead"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "PATCH",
+    "seats/s1",
+    {
+     "title": "Support lead",
+     "description": "Answers customers",
+     "reports_to": "ana",
+     "team": "g1"
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "seat",
+   "close"
+  ],
+  "tools": [],
+  "http": [],
+  "stdout": "",
+  "stderr": "Example: tico seat close <seat>\ntico seat close: error: the following arguments are required: seat",
+  "exit": 64
+ },
+ {
+  "argv": [
+   "seat",
+   "close",
+   "s1"
+  ],
+  "tools": [
+   [
+    "tico_seat_close",
+    {
+     "operation_id": null,
+     "seat": "s1"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "POST",
+    "seats/s1/close",
+    {}
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ }
+]

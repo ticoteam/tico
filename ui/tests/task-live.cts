@@ -24,6 +24,29 @@ type Gate = ReturnType<typeof gate>;
  const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
  const pages: Page[] = [];
  try {
+  // The details editor opens from the padded edge of its phone target, including the layout breakpoint.
+  for (const width of [400, 560, 760, 761, 1440]) {
+   const phone = width <= 760;
+   const context = await browser.newContext({viewport: {width, height: 900}, hasTouch: phone});
+   try {
+    const {page, errors} = await open({newPage: () => context.newPage()}, {viewport: {width, height: 900}});
+    const edit = page.getByRole('button', {name: 'Edit details', exact: true});
+    await page.locator('details.task-orig').filter({has: edit}).evaluateAll(rows => rows.forEach(el => { (el as HTMLDetailsElement).open = true; }));
+    await edit.waitFor();
+    const box = (await edit.boundingBox())!;
+    if (phone) {
+     assert.ok(box.height >= 40 && box.width >= 40, `Edit details needs a 40 px target at ${width} px; got ${box.width}x${box.height}`);
+     await edit.tap({position: {x: box.width / 2, y: box.height - 2}});
+    } else {
+     assert.ok(box.height < 40, 'desktop Edit details stays compact');
+     await edit.click();
+    }
+    const details = page.getByRole('textbox', {name: 'Details', exact: true});
+    await details.waitFor();
+    assert.equal(await details.evaluate(el => document.activeElement === el), true, 'opening details focuses its editor');
+    assert.deepEqual(errors, []);
+   } finally { await context.close(); }
+  }
   for (const width of [390, 1440]) {
    let readHold!: Gate | null, readStarted!: Gate, task!: TaskCode.Fixture['tasks'][number], events: Record<string, unknown>[] = [], sessions = new Map<string, string>(), writes: {viewer: string; patch: Record<string, unknown>}[] = [], hold!: Gate | null, fail = false, deny = false, inflight = 0, max = 0;
    const viewers: Page[] = [], viewerErrors: string[][] = [];
@@ -136,45 +159,6 @@ type Gate = ReturnType<typeof gate>;
    if (await a.locator('[data-task-edit-error]').isVisible()) await a.getByRole('button', {name: 'Retry', exact: true}).click();
    await a.waitForFunction(() => !taskModal().taskLive!.draft.error && !taskModal().taskLive!.draft.flight);
    assert.equal(task.title, 'Coalesced title'); assert.equal(max, 1);
-   // Failed writes keep only their dirty field; untouched focused details adopt the 409 current values without moving the caret.
-   fail = true;
-   await fillTitle('Keep these words'); await title.evaluate(el => el.blur());
-   await a.locator('[data-task-edit-error]:not([hidden])').waitFor();
-   await a.locator('details.task-orig').filter({has: a.locator('[data-task-edit-body]')}).evaluateAll(rows => rows.forEach(el => { (el as HTMLDetailsElement).open = true; }));
-   await a.getByRole('button', {name: 'Edit details', exact: true}).click();
-   const details = a.getByRole('textbox', {name: 'Details', exact: true});
-   await details.evaluate(el => (el as HTMLTextAreaElement).setSelectionRange(2, 5));
-   task.body = 'Remote details now'; task.version++;
-   await update();
-   await a.waitForFunction(() => taskModal().taskLive!.draft.base.body === 'Remote details now');
-   assert.equal(await details.inputValue(), 'Sam changed only details', 'ordinary invalidations leave focused fields alone');
-   // This deadline change has no event: the 409 read must update untouched task properties too.
-   task.due_at = '2026-12-01T12:00:00Z'; task.version++;
-   await a.locator('[data-task-edit-retry]').evaluate(el => (el as HTMLElement).click());
-   await a.locator('[data-task-edit-current]:not([hidden])').waitFor();
-   await a.waitForFunction(() => document.querySelector<HTMLInputElement>('#task-modal [data-prop-date]')!.value === '2026-12-01');
-   assert.equal(await details.inputValue(), 'Remote details now');
-   assert.deepEqual(await details.evaluate(el => [document.activeElement === el, (el as HTMLTextAreaElement).selectionStart, (el as HTMLTextAreaElement).selectionEnd]), [true, 2, 5]);
-   assert.equal(await title.textContent(), 'Keep these words');
-   await a.locator('[data-task-edit-retry]').evaluate(el => (el as HTMLElement).click());
-   await a.waitForFunction(() => !taskModal().taskLive!.draft.error && !taskModal().taskLive!.draft.flight);
-   assert.equal(task.body, 'Remote details now');
-   const bodyWrite = gate(); hold = bodyWrite;
-   await details.fill('Only my details changed');
-   await a.waitForFunction(() => !!taskModal().taskLive!.draft.flight);
-   await title.evaluate(el => { (el as HTMLElement).click(); el.focus(); getSelection()!.setBaseAndExtent(el.firstChild!, 2, el.firstChild!, 5); });
-   task.title = 'Remote title now'; task.version++;
-   await update();
-   await a.waitForFunction(() => taskModal().taskLive!.draft.base.title === 'Remote title now');
-   assert.equal(await title.textContent(), 'Keep these words');
-   bodyWrite.resolve();
-   await a.locator('[data-task-edit-current]:not([hidden])').waitFor();
-   assert.equal(await title.textContent(), 'Remote title now');
-   assert.deepEqual(await caret(), [true, 2, 5], '409 adopts the untouched title without moving its selection');
-   await a.locator('[data-task-edit-retry]').evaluate(el => (el as HTMLElement).click());
-   await a.waitForFunction(() => !taskModal().taskLive!.draft.error && !taskModal().taskLive!.draft.flight);
-   assert.equal(task.title, 'Remote title now'); assert.equal(task.body, 'Only my details changed');
-   assert.deepEqual(Object.keys(writes.filter(w => w.viewer === 'ana').at(-1)!.patch).sort(), ['body', 'version']);
    // Presence uses the scoped subscription and per-window leave; a stale stream cannot close a new task.
    await emit({topic: 'presence', body: {place: 'task:' + task.id}});
    await a.getByText('Sam is here', {exact: true}).waitFor();

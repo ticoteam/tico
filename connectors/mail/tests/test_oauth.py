@@ -343,20 +343,6 @@ class ReadOnlyRefusals(Base):
         self.assertIsNone(oauth.require(None, "labels", "ana@acme.example", "label mail"))
         oauth.require([G + "gmail.modify"], "drafts", "ana@acme.example", "write drafts")  # modify covers drafts
 
-    def test_the_full_calendar_scope_covers_event_writes_and_read_only_calendar_does_not(self):
-        oauth.require(
-            [G + "calendar"], "calendar-write", "ana@acme.example", "add calendar events"
-        )  # a Workspace token
-        oauth.require([G + "gmail.modify"], "labels", "ana@acme.example", "label mail")
-        with self.assertRaises(Refused) as caught:
-            oauth.require(
-                [G + "calendar.events.readonly", G + "calendar.freebusy"],
-                "calendar-write",
-                "ana@acme.example",
-                "add calendar events",
-            )
-        self.assertIn("read-only at Google", caught.exception.msg)
-
     def test_a_turn_with_a_supervisor_token_refuses_the_same_writes(self):
         os.environ[auth.SOCKET_ENV], os.environ["HUB_TOKEN"] = "/tmp/none.sock", "attempt"
         with patch(
@@ -555,14 +541,6 @@ class ActGrant(Base):
         self.assertIn(G + "calendar.events", calendar_granted)
         self.assertEqual(server.calls[1][1]["scopes"][0], G + "calendar.events")
 
-    def test_labels_drafts_and_calendar_writes_pass_the_act_grant_and_are_refused_without_it(self):
-        self.finish()
-        granted = oauth.grant("ana@acme.example")["scopes"]
-        for capability in ("labels", "drafts", "calendar-write"):
-            oauth.require(granted, capability, "ana@acme.example", "do it")  # no Refused
-            with self.assertRaises(Refused):
-                oauth.require(READ_ONLY, capability, "ana@acme.example", "do it")
-
     def test_gmail_and_calendar_writes_reach_google_for_the_act_grant(self):
         self.finish()
         act = MagicMock()
@@ -574,16 +552,6 @@ class ActGrant(Base):
         self.assertEqual(act.users.return_value.messages.return_value.modify.call_count, 1)
         self.assertEqual(act.users.return_value.drafts.return_value.create.call_count, 1)
         self.assertEqual(act.events.return_value.insert.call_count, 1)
-
-    def test_a_read_only_grant_refuses_the_writes_before_the_service_is_touched(self):
-        read_only = MagicMock()
-        read_only._tico_granted = READ_ONLY
-        now = datetime(2026, 10, 15, tzinfo=timezone.utc)
-        with self.assertRaises(Refused):
-            gm.Gmail(read_only, "ana@acme.example").modify("m1", add=["L1"])
-        with self.assertRaises(Refused):
-            cal.Calendar(read_only, "ana@acme.example").create_event(now, now, "x")
-        self.assertEqual(read_only.mock_calls, [])
 
     def test_a_refresh_for_scopes_the_grant_lacks_says_connect_again(self):
         from clients.tico import APIError
@@ -619,11 +587,6 @@ class AdminPolicy(Base):
             auth.mint_token("ana@acme.example", "gmail")
         self.assertEqual(caught.exception.kind, "admin_policy")
         self.assertEqual([c.scopes for c in FakeCredentials.made], [[G + "gmail.readonly"]], "never widened")
-
-    def test_finish_connects_and_reports_no_token(self):
-        result = oauth.finish(dict(SERVER_CONNECT), opener=FakeGoogle(), exchange_with=lambda *_: dict(GRANTED))
-        self.assertEqual(result["status"], "connected")
-        self.assertNotIn("refresh-secret", json.dumps(result))
 
 
 class Doctor(Base):

@@ -14,7 +14,7 @@ it through Tico's MCP. Each task shows who added it: you, another human, or a bo
 
 **Where are the built-in bots?**
 **Assistant** and **BotOps** have no rail entry. **Tico Assistant**, at the bottom of the sidebar (⌘J), opens your private
-Assistant DM from any page except the Assistant page and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs BotOps. The Strategy Bot proposes **Strategy** and is at the top of **Goals**: its routines, its last
+Assistant DM from any page except the Assistant page and setup, even while the signed-out banner shows, and the Assistant hands BotOps what needs BotOps. The Strategy Owner proposes **Strategy** and is at the top of **Goals**: its routines, its last
 run and a box to ask it to change a goal. **Docs** and **Strategy**'s Market tab have **Ask the Librarian** on the right (a button on a
 phone). All four are managed in **Settings > Bots**; they stay out of the team chart and the goal owner list.
 
@@ -196,7 +196,7 @@ back into the same pop-up. See [Support](support.md).
 
 ## Updates
 
-Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). Counsel
+Every bot that can publish updates reports in once a day, and on Friday with a week in review (five slides). The Rules Owner
 speaks only on its own private tasks and is not asked for updates. People report in the same shape.
 An update is three plain bullets: what you did, what you do next, and what waits on someone, plus a `Blocked:` bullet for each blocker and a `Suggestion:` bullet for each suggestion the bot acted on. An update posted before this shape stays as it was written.
 
@@ -277,14 +277,14 @@ the same way with `GET` and `POST /api/v2/preferences/compose.send_way` (`{"valu
 `defer:<30m|1h|4h|24h|2d|7d|never>`). The CLI and API take the same words:
 
 ```bash
-tico chat send content "Skip the charts." --steer
+tico message send content "Skip the charts." --steer
 tico task comment <task-id> "Billing first." --defer 4h
 ```
 
 `POST /api/v2/chat/<bot>` and `POST /api/v2/tasks/<id>/comments` take `delivery` (`steer`,
 `queue` or `defer`) and `defer_for` (`<n>m`, `<n>h`, `<n>d` up to two years, or `never`;
-defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_chat_send`,
-`tico_message_send` and `tico_task_comment` take the same fields.
+defer only). The answer's `sent_as` (`delivery`, `until`) says how it went. The MCP tools `tico_message_send`
+and `tico_task_comment` take the same fields.
 
 A person's post in a bot's Home or a DM with a bot takes them too, as optional fields: `POST /api/v2/threads/<id>/messages`,
 `POST /api/v2/threads/dm` (with its first `body`) and `POST /api/v2/uploads/threads/<id>/messages` (form fields). A
@@ -322,8 +322,8 @@ The equivalent API calls are internal routes (subject to change); use your own r
 `Idempotency-Key` on writes:
 
 ```text
-POST /api/v2/notes                    {"to":"bot:content","text":"Use the revised tone guide.","defer_for":"4h"}
-GET  /api/v2/notes?to=bot:content&waiting=true
+POST /api/v2/notes                    {"to":"bot:content-owner","text":"Use the revised tone guide.","defer_for":"4h"}
+GET  /api/v2/notes?to=bot:content-owner&waiting=true
 POST /api/v2/notes/<note-id>/cancel    {}
 ```
 

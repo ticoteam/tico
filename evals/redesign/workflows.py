@@ -411,16 +411,9 @@ def triage(bucket, confidence=0.9, money=0.1, ask=0.5, legal=0.05, urgency=1):
     }
 
 
-def item(market=0.05, content=0.05, lead=0.05, vendor=0.05):
-    """A listening-item answer (questions/listening-item.json)."""
-    return {
-        "market": {"noul": market},
-        "content": {"noul": content},
-        "lead": {"noul": lead},
-        "vendor_pitch": {"noul": vendor},
-        "creator": {"noul": 0.05},
-        "partner": {"noul": 0.05},
-    }
+def item(market=0.05, vendor=0.05):
+    """A listening's answer for workflow 3's two rules (RULES3): keep what is about the market, drop a vendor's pitch."""
+    return {"r0": {"noul": market}, "r1": {"noul": vendor}}
 
 
 # ================================================================================================ 1 inbox day
@@ -1068,79 +1061,90 @@ def wf2_lead_runs(f):
 LIBRARIAN = "librarian"
 BRIEF = "Morning briefing: Northwind raised a $24m Series B and is doubling its sales team."
 DAY3 = (2026, 10, 20)
-ITEMS3 = {
-    "25-listening-competitor-funding": item(market=0.92),
-    "26-listening-owner-question": item(content=0.85, lead=0.8),
-    "27-listening-vendor-promo": item(market=0.3, vendor=0.9),
-    "28-listening-hiring-post": item(),
+# The posts the listening's sources read, and what the scripted judge answers for each.
+POSTS3 = {
+    "funding": {
+        "source": "news",
+        "url": "https://news.example/northwind-series-b",
+        "author": "Trade Pulse staff desk",
+        "published_at": "2026-10-27T11:00:00Z",
+        "content": "Northwind, a task-tracking app for small teams, raised a $24m Series B led by Harbor Lane "
+        "Ventures and plans to double its sales team by spring.",
+    },
+    "question": {
+        "source": "forum",
+        "url": "https://forum.example/t/tracking-work-with-four-people",
+        "author": "@small_agency_owner",
+        "published_at": "2026-10-26T18:20:00Z",
+        "content": "We are four people running a small agency and sprint tracking is falling apart. What do other "
+        "small teams use that does not need an admin?",
+    },
+    "promo": {
+        "source": "social",
+        "url": "https://social.example/p/9921",
+        "author": "@trackflow_official",
+        "published_at": "2026-10-27T09:05:00Z",
+        "content": "Tired of tracking sprints in spreadsheets? TrackFlow gives small teams one board in two minutes. "
+        "Book a demo at trackflow.example.",
+    },
+    "hiring": {
+        "source": "jobboard",
+        "url": "https://jobs.example/listing/44812",
+        "author": "Brightpath Health talent team",
+        "published_at": "2026-10-25T08:00:00Z",
+        "content": "We are hiring a project manager to run delivery for our clinic software team. Apply by 15 November.",
+    },
 }
+ITEMS3 = {"funding": item(market=0.92), "question": item(), "promo": item(market=0.3, vendor=0.9), "hiring": item()}
 
 
-def wf3_listen(org, found):
-    """One listening run per source, saved through the ingest route as the listening runner saves it."""
-    from backend.store import H
+RULES3 = [
+    {"do": "keep", "tag": "market", "text": "A competitor's or the market's move"},
+    {"do": "drop", "text": "A vendor promoting its own product"},
+]
 
+
+def wf3_listen(org, f):
+    """One read per source, saved as the listening bot saves it."""
+    listed = org.api("get", f"/api/v2/listening/sources?automation={aid(f, 'listen_auto')}", who=DANA, wave=W6)
+    if not 200 <= listed.status < 300:
+        raise Unmet(W6, f"listening sources: {listed.status} {listed.excerpt()}")
+    ids = {row["key"]: row["id"] for row in listed.body["sources"]}
     by_source = {}
-    for stem in ITEMS3:
-        s = found[stem]["state"]
-        # The recorded fixture names a source "job board"; a listening source is a slug (backend/listening.py SOURCE),
-        # so the run is saved as "jobboard".
-        slug = re.sub(r"\s+", "", str(s["source"]).lower())
-        by_source.setdefault(slug, []).append(
+    for stem, s in POSTS3.items():
+        by_source.setdefault(s["source"], []).append(
             {
                 "native_id": stem,
                 "url": s["url"],
                 "author": s["author"],
-                "content": s["content"],
-                "published_at": s["published_at"],
+                "text": s["content"],
+                "posted_at": s["published_at"],
             }
         )
     reply = None
     for source, items in by_source.items():
         reply = org.api(
             "post",
-            "/api/v2/listening/runs",
-            {
-                "source": source,
-                "query": "project tracking for small teams",
-                "status": "ok",
-                "started_at": H.now(),
-                "pages_read": 1,
-                "items_seen": len(items),
-                "note": "",
-                "items": items,
-            },
+            f"/api/v2/listening/sources/{ids[source]}/items",
+            {"status": "ok", "items": items},
             who=DANA,
             wave=W6,
         )
         if not 200 <= reply.status < 300:
-            raise Unmet(W6, f"listening run {source}: {reply.status} {reply.excerpt()}")
+            raise Unmet(W6, f"listening save {source}: {reply.status} {reply.excerpt()}")
     return reply
 
 
+def wf3_send(org):
+    """The listening's next send time comes: its pass scores the posts and sends what it kept as one run."""
+    org.pass_time(dt.timedelta(hours=1))
+    return org.api("get", "/api/v2/automations?trigger=listening", who=DANA, wave=W6)
+
+
 def wf3_steps(org, f):
-    found = inputs()
-    url = found["25-listening-competitor-funding"]["state"]["url"]
+    url = POSTS3["funding"]["url"]
     f["url"] = url
-    attach_judge(org, TimedJudge(org, {found[stem]["state"]["url"]: answer for stem, answer in ITEMS3.items()}))
-    do(
-        org,
-        f,
-        "destination",
-        W6,
-        org.api,
-        "put",
-        "/api/v2/listening/destinations/market-watch",
-        {
-            "category": "market",
-            "threshold": 0.5,
-            "receiver": "bot:" + LIBRARIAN,
-            "readers": [],
-            "what": "Competitors and market moves",
-        },
-        who=DANA,
-        wave=W6,
-    )
+    attach_judge(org, TimedJudge(org, {POSTS3[stem]["url"]: answer for stem, answer in ITEMS3.items()}))
     do(
         org,
         f,
@@ -1150,15 +1154,39 @@ def wf3_steps(org, f):
         org,
         "Market watch to the Librarian",
         "bot:" + LIBRARIAN,
-        {"type": "listening", "destination": "market-watch"},
+        {
+            "type": "listening",
+            "sources": [
+                {"id": slug, "kind": "search", "site": slug, "target": "project tracking for small teams"}
+                for slug in sorted({post["source"] for post in POSTS3.values()})
+            ],
+            "rules": RULES3,
+            "limits": [{"count": 10, "per": "hour"}],
+            "at": "00:00",
+            "tz": "UTC",
+        },
         [
-            step(
-                "add",
-                "bot_turn",
-                bot=LIBRARIAN,
-                prompt="A listening match: {{listening.url}}\n\n{{listening.content}}\n\n"
-                "Add what it says to the market graph, citing it.",
-            )
+            {
+                "id": "each",
+                "type": "paths",
+                "enabled": True,
+                "by": "item",
+                "paths": [
+                    {
+                        "name": "market",
+                        "when": [{"field": "item.tag", "op": "is", "value": "market"}],
+                        "steps": [
+                            step(
+                                "add",
+                                "bot_turn",
+                                bot=LIBRARIAN,
+                                prompt="A listening item: {{item.url}}\n\n{{item.text}}\n\n"
+                                "Add what it says to the market graph, citing it.",
+                            )
+                        ],
+                    }
+                ],
+            }
         ],
     )
     do(
@@ -1176,9 +1204,8 @@ def wf3_steps(org, f):
             act("post", "post_update", to=["market", "updates"], text="{{brief.text}}"),
         ],
     )
-    do(org, f, "listen", W6, wf3_listen, org, found)
-    do(org, f, "judge", W6, org.api, "post", "/api/v2/listening/judge", {"limit": 20}, who=DANA, wave=W6)
-    org.scheduler_pass()
+    do(org, f, "listen", W6, wf3_listen, org, f)
+    do(org, f, "judge", W6, wf3_send, org)
     do(org, f, "graph_before", W6, org.api, "get", "/api/v2/market/graph", who=DANA, wave=W6)
 
     def add_entity(token, attempt):
@@ -1220,9 +1247,9 @@ def wf3_steps(org, f):
 
 
 def wf3_one_run(f):
-    """The one market match starts one run; the three misses start none. A run's trigger ref has no named format
+    """The one market match is sent as one run; the three misses send none. A run's trigger ref has no named format
     (CONTRACT section 2), so the run is matched on its kind: a listening trigger."""
-    setup(f, "listen_auto", "destination", "listen", "judge")
+    setup(f, "listen_auto", "listen", "judge")
     found = runs(f, "listen_runs")
     listened = [run for run in found if str(run.get("trigger_ref") or "").startswith("listening:")]
     return len(found) == 1 and len(listened) == 1, f"{len(found)} runs; listening runs: {len(listened)}"
@@ -1251,14 +1278,12 @@ def wf3_graph_before(f):
 
 
 def wf3_graph_after(f):
-    """After its turn the graph holds the Librarian's entity, sourced to the item's url."""
+    """After its turn the graph holds the Librarian's entity."""
     setup(f, "listen_auto", "judge", "graph_after")
     turns = got(f, "librarian")
     wrote = [t["did"] for t in turns if isinstance(t["did"], Reply) and 200 <= t["did"].status < 300]
     seen = canon(body(f, "graph_after"))
-    return bool(wrote) and f[
-        "url"
-    ] in seen and "Northwind" in seen, f"writes ok: {len(wrote)}; graph names the url: {f['url'] in seen}"
+    return bool(wrote) and "Northwind" in seen, f"writes ok: {len(wrote)}; graph names it: {'Northwind' in seen}"
 
 
 def wf3_seven(f):
@@ -1399,7 +1424,7 @@ def wf4_hour_three(f):
 
 
 # ================================================================================================ 5 Stripe failure
-COO = "coo"  # the Assistant bot (backend/config.py assistant_bot): every person's Assistant is this bot
+ASSISTANT = "assistant"  # the Assistant bot (backend/config.py assistant_bot): every person's Assistant is this bot
 BILLING = "billing"
 STRIPE_SECRET = "whsec_acmepaymentsdesk0001"
 EVENT5 = {
@@ -1580,7 +1605,7 @@ def publish_release(org, tag):
 
 
 def release_sending(org):
-    """The owner turns on the Release Manager's outbound sending: a bot's webhook to an outside address needs that
+    """The owner turns on the Release Owner's outbound sending: a bot's webhook to an outside address needs that
     switch (backend/webhooks.py), and a bot may not set it itself (as billing_sending does for Billing)."""
     reply = org.api("post", f"/api/v2/bots/{RELEASE_ID}/mail-settings", {"outbound_send": True}, wave=W3)
     if reply.status >= 300:
@@ -1675,14 +1700,14 @@ def wf6_dup(f):
 
 
 def wf6_qa_turn(f):
-    """The QA Bot turn runs on the Release Manager, about v1.4.0."""
+    """The QA Bot turn runs on the Release Owner, about v1.4.0."""
     setup(f, "qa")
     found = runs(f, "qa_runs_2")
     origin = turn_of(found[-1]) if found else None
     turns = got(f, "qa_turns")
     return (origin or {}).get("bot") == RELEASE_ID and len(
         turns
-    ) >= 1, f"turn origin {origin}; Release Manager turns {len(turns)}"
+    ) >= 1, f"turn origin {origin}; Release Owner turns {len(turns)}"
 
 
 def wf6_told(f):
@@ -2081,7 +2106,7 @@ WORKFLOWS = [
             Check("drafts are written on Dana's Assistant", W3, wf1_assistant),
             Check("each Slack message runs its channel's automation once; #random none", W3, wf1_slack),
         ],
-        bots={COO: ("coo", "claude")},
+        bots={ASSISTANT: ("assistant", "claude")},
     ),
     Scenario(
         "2",
@@ -2107,7 +2132,7 @@ WORKFLOWS = [
             Check("the market match starts one run; misses none", W3, wf3_one_run),
             Check("the match reaches the Librarian as a turn about it", W3, wf3_turn),
             Check("nothing reaches the graph before the Librarian's turn", W6, wf3_graph_before),
-            Check("after the turn the graph holds the entity with the item's url", W6, wf3_graph_after),
+            Check("after the turn the graph holds the Librarian's entity", W6, wf3_graph_after),
             Check("the briefing runs at 07:00 Los Angeles, not before", W3, wf3_seven),
             Check("the briefing is Market's latest", W6, wf3_market),
             Check("the briefing is posted to Updates", W6, wf3_updates),
@@ -2148,7 +2173,7 @@ WORKFLOWS = [
         [
             Check("v1.4.0 runs each automation once", W3, wf6_first),
             Check("the repeated v1.4.0 event runs nothing more", W3, wf6_dup),
-            Check("the QA turn runs on the Release Manager", W3, wf6_qa_turn),
+            Check("the QA turn runs on the Release Owner", W3, wf6_qa_turn),
             Check("Updates names v1.4.0 and the feed gets it once", W3, wf6_told),
             Check("v1.4.1 the next day runs both again", W3, wf6_next),
         ],

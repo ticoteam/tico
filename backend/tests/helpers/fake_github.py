@@ -1,10 +1,12 @@
-"""A GitHub in memory that answers `task_facts.GitHub` (backend/task_facts.py), for unit tests and the fault rig.
+"""A GitHub in memory that answers `item_sources.github.GitHub` (backend/item_sources/github.py), for unit tests and the fault rig.
 
 It holds PRs, the checks on each commit, a linear main history per repo (a merge appends its commit) and the published
-releases. Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
+releases, and the releases asked for (`cuts`). Calls are recorded in `calls`. `fail_next(call, reason)` makes the next call of that name raise with the
 reason, as a GitHub error would. As on GitHub, enqueue refuses a draft and a PR the base branch's rules refuse
-(`rule`). The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late,
-repeated and reordered webhooks, and queue drops.
+(`rule`), and, on a repo whose ruleset requires Tico's `tico/merge-ok` check (`require_merge_ok`), a PR whose head has
+no successful one: what a bot's own `gh pr merge` meets. `group` makes a merge group and its `merge_group` webhook.
+The rig (evals/never_stuck/fake_github.py) builds its faults on top: lost, late, repeated and reordered webhooks, and
+queue drops.
 """
 
 import itertools
@@ -22,8 +24,17 @@ class FakeGitHub:
         self.history = {}  # repo -> [sha, ...], oldest first: what main contains
         self.published = {}  # repo -> [{tag, commit_sha, prerelease, published_at}], newest first
         self.calls = []
+        self.merge_ok_required = set()  # repos whose ruleset requires tico/merge-ok
+        self.merge_ok = {}  # (repo, sha) -> [(ok, summary)] Tico posted, oldest first; the newest one counts
+        self.checks_write = True  # the App has Checks: write; without it post_check posts nothing
+        self.groups = {}  # (repo, merge group head sha) -> [PR numbers], first in the queue first
+        self.cuts = []  # the releases asked for: (repo, kind, name, sha)
+        self.withheld = set()  # permissions Tico's App lacks here ("actions", "contents"): cut_release answers no
+        self.release_on_cut = None  # a tag: asking for a release publishes it at once, as a release workflow does
+        self.diffs = {}  # (repo, sha) -> what the PR changes at that commit (pr_diff); each commit its own unless set
         self._fail = {}
         self._shas = (f"{n:040x}" for n in itertools.count(1))
+        self._run_ids = itertools.count(1)  # check run ids only grow, as GitHub's do
 
     # ------------------------------------------------------------------ what a test does to it
     def sha(self):
@@ -53,12 +64,26 @@ class FakeGitHub:
             self._remove(pr, "A new commit was pushed")
         return pr["head_sha"]
 
+    def rebase(self, repo, number, head=None):
+        """A new commit on the PR that changes the same lines as the one before (a rebase, or a conflict fixed without
+        changing the PR's own lines): `pr_diff` gives both the same id."""
+        before = self.prs[(repo, number)]["head_sha"]
+        head = self.push(repo, number, head)
+        self.diffs[(repo, head)] = self.diffs.get((repo, before), f"diff-{before}")
+        return head
+
     def set_checks(self, repo, sha, *states, tico=False):
         """The checks on a commit, one per state given: pending, success or failure."""
         self.checks[(repo, sha)] = [
             {"name": f"check-{i}", "app": "tico" if tico else "ci", "state": s, "url": "", "tico": tico}
             for i, s in enumerate(states, 1)
         ]
+
+    def run(self, repo, sha, name, state, *, suite=1, app="ci"):
+        """One more check run on a commit, as GitHub lists them: `suite` is its check suite (one per workflow run), and
+        a run in a suite that already has that name is a re-run. Its id is newer than every run before it."""
+        row = {"name": name, "app": app, "state": state, "url": "", "tico": False, "suite": suite}
+        self.checks.setdefault((repo, sha), []).append({**row, "id": next(self._run_ids)})
 
     def close(self, repo, number):
         self.prs[(repo, number)]["state"] = "closed"
@@ -99,10 +124,39 @@ class FakeGitHub:
         `reason` until `rule(repo, number, None)` lifts it."""
         self.prs[(repo, number)]["rule"] = reason
 
+    def mergeable(self, repo, number, state):
+        """What GitHub says of merging the PR into its base branch: MERGEABLE, CONFLICTING or UNKNOWN (still working it
+        out). `enqueue` refuses a conflicting PR and raises while it is unknown."""
+        self.prs[(repo, number)]["mergeable"] = state
+
+    def require_merge_ok(self, repo):
+        """The repo's ruleset requires `tico/merge-ok` from the company's App."""
+        self.merge_ok_required.add(repo)
+
+    def merge_ok_on(self, repo, sha):
+        """The newest `tico/merge-ok` on a commit: True (success), False (failure), "neutral" or None (none posted)."""
+        posted = self.merge_ok.get((repo, sha))
+        return posted[-1][0] if posted else None
+
+    def group(self, repo, *numbers):
+        """GitHub builds a merge group of the PRs (first in the queue first) and asks for its checks: the
+        `merge_group` `checks_requested` webhook's payload."""
+        head = self.sha()
+        self.groups[(repo, head)] = list(numbers)
+        return {
+            "action": "checks_requested",
+            "merge_group": {
+                "head_sha": head,
+                "head_ref": f"refs/heads/gh-readonly-queue/main/pr-{numbers[-1]}-{head}",
+                "base_ref": "refs/heads/main",
+            },
+            "repository": {"full_name": repo},
+        }
+
     def fail_next(self, call, reason="GitHub is unavailable"):
         self._fail[call] = reason
 
-    # ------------------------------------------------------------------ task_facts.GitHub
+    # ------------------------------------------------------------------ item_sources.github.GitHub
     def _call(self, name, *args):
         self.calls.append((name, *args))
         reason = self._fail.pop(name, None)
@@ -116,7 +170,9 @@ class FakeGitHub:
 
     def read_checks(self, repo, sha):
         self._call("read_checks", repo, sha)
-        return [dict(c) for c in self.checks.get((repo, sha), [])]
+        from backend.item_sources import github as GS
+
+        return [dict(c) for c in GS.latest_checks(self.checks.get((repo, sha), []))]
 
     def read_releases(self, repo):
         self._call("read_releases", repo)
@@ -128,6 +184,10 @@ class FakeGitHub:
         if commit_sha not in line or release_sha not in line:
             return False
         return line.index(commit_sha) <= line.index(release_sha)
+
+    def pr_diff(self, repo, number, sha):
+        self._call("pr_diff", repo, number, sha)
+        return self.diffs.get((repo, sha), f"diff-{sha}")
 
     def ready(self, repo, number):
         self._call("ready", repo, number)
@@ -146,9 +206,36 @@ class FakeGitHub:
             return {"ok": False, "how": None, "reason": "Pull request is in draft state"}
         if pr.get("rule"):
             return {"ok": False, "how": None, "reason": pr["rule"]}
+        from backend.item_sources import github as GS
+
+        if pr.get("mergeable") == "CONFLICTING":
+            return {"ok": False, "how": None, "reason": GS.CONFLICTS}
+        if pr.get("mergeable") == "UNKNOWN":
+            raise GitHubError(GS.MERGEABLE_UNKNOWN)
+        if repo in self.merge_ok_required and not self.merge_ok_on(repo, head_sha):
+            return {"ok": False, "how": None, "reason": 'Required status check "tico/merge-ok" is expected.'}
         pr["queue_state"] = "queued" if self.queue else "auto_merge"
         pr.update(removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": pr["queue_state"], "reason": ""}
+
+    def cut_release(self, repo, kind, name, sha):
+        """Run the release workflow, or create the tag; with `release_on_cut` (or a tag) the release is published at
+        once. A permission in `withheld` is a not-ok answer with the reason Tico's App gives."""
+        from backend.item_sources import github_release as GR
+
+        self._call("cut_release", repo, kind, name, sha)
+        needed = "actions" if kind == "workflow" else "contents"
+        if needed in self.withheld:
+            return {
+                "ok": False,
+                "how": None,
+                "reason": GR.MISSING_ACTIONS if kind == "workflow" else GR.MISSING_CONTENTS,
+            }
+        self.cuts.append((repo, kind, name, sha))
+        tag = name if kind == "tag" else self.release_on_cut
+        if tag:
+            self.publish(repo, tag)
+        return {"ok": True, "how": f"{kind} {name}", "reason": ""}
 
     def dequeue(self, repo, number):
         self._call("dequeue", repo, number)
@@ -159,3 +246,15 @@ class FakeGitHub:
             return {"ok": True, "how": "absent", "reason": ""}
         pr.update(queue_state="none", removed_reason=None, failing_check=None, failing_check_url=None)
         return {"ok": True, "how": "dequeued", "reason": ""}
+
+    def post_check(self, repo, sha, ok, summary):
+        self._call("post_check", repo, sha, ok)
+        if not self.checks_write:
+            return False
+        self.merge_ok.setdefault((repo, sha), []).append(("neutral" if ok is None else bool(ok), summary))
+        return True
+
+    def merge_group_prs(self, repo, base_ref, head_sha):
+        self._call("merge_group_prs", repo, head_sha)
+        numbers = self.groups.get((repo, head_sha), [])
+        return [{"number": n, "head_sha": self.prs[(repo, n)]["head_sha"]} for n in numbers]

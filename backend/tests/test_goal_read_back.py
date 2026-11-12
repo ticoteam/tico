@@ -76,7 +76,7 @@ NEW_GOAL = {
 def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the_owner(api):
     strategy_bot(api)
     serves = goal(api, "Developers and small companies keep using Tico", owner="company")
-    r, attempt = turn(api, "coo", "ana-test", "Set a goal for Ops: get 100 companies to try Tico")
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops: get 100 companies to try Tico")
     # Only the owner's Assistant, in their own chat: not the owner's own click, not another bot.
     post(api, "goals/read-back", {"changes": [NEW_GOAL]}, expected=403)
     back = read_back(api, attempt, {**NEW_GOAL, "parent_id": serves["id"]})
@@ -87,7 +87,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert text.endswith("Reply yes to save exactly this; any other reply saves nothing.")
     # Tico wrote it, as the Assistant's reply in the owner's chat; the turn's closing text is not posted after it.
     said = room_messages(api)
-    assert (said[-1]["id"], said[-1]["sender_id"]) == (back["message_id"], "bot:coo")
+    assert (said[-1]["id"], said[-1]["sender_id"]) == (back["message_id"], "bot:assistant")
     # Before the yes, nothing saves, cited or not.
     first, measure = back["changes"][0]["steps"]
     assert save(api, attempt, first, expected=403)["error"]["code"] == "not_agreed"
@@ -122,7 +122,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert {k: detail["delegation"][k] for k in ("for", "cited", "assistant", "goal_read_back", "change", "words")} == {
         "for": "human:ana",
         "cited": turn_message(api, attempt),
-        "assistant": "bot:coo",
+        "assistant": "bot:assistant",
         "goal_read_back": back["message_id"],
         "change": 1,
         "words": "yes",
@@ -133,7 +133,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
 
 def test_any_reply_but_a_yes_saves_nothing(api):
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Set a goal for Ops")
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
     step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
     for words in ("yes but make it 50", "wait"):
         attempt = reply(api, r, attempt, words)
@@ -196,20 +196,22 @@ def test_the_owners_words_tico_reads_as_yes(api):
 
 def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Set a goal for Ops")
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
     back = read_back(api, attempt, NEW_GOAL)
     step = back["changes"][0]["steps"][0]
     # Anything the owner wrote after the read-back, even before a yes, takes it back.
     finish(api, r, attempt)
     with api.app.state.store.transaction() as c:
         room = H.conversation(c, get(api, "assistant")["room_id"])
-        H._write_message(c, "human:ana", "bot:coo", "hmm, the owner", room, "say", {"assistant": True}, None, None)
+        H._write_message(
+            c, "human:ana", "bot:assistant", "hmm, the owner", room, "say", {"assistant": True}, None, None
+        )
     assert say(api, "yes")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
     # A notice, or the Assistant's own message, between the read-back and the yes: the yes answers that, not the
     # list.
-    for who, kind in ((H.KEEPER, "notice"), ("bot:coo", "say")):
+    for who, kind in ((H.KEEPER, "notice"), ("bot:assistant", "say")):
         attempt = reply(api, r, attempt, "Again")
         step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
         finish(api, r, attempt)
@@ -225,13 +227,13 @@ def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
     step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
-        H._write_message(c, "human:ana", "bot:coo", "wait, no", room, "say", {"assistant": True}, None, None)
+        H._write_message(c, "human:ana", "bot:assistant", "wait, no", room, "say", {"assistant": True}, None, None)
     assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
 
 
 def window(api, minutes):
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Set a goal for Ops")
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
     asked_for = turn_message(api, attempt)
     back = read_back(api, attempt, NEW_GOAL)
     attempt = reply(api, r, attempt, "yes")
@@ -254,13 +256,13 @@ def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api
     strategy_bot(api)
     other = goal(api, "Keep the bots running")
     target = goal(api, "Launch the docs")
-    r, attempt = turn(api, "coo", "ana-test", "Rename the docs goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Rename the docs goal")
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": target["id"], "title": "Ship the docs"})
     step = back["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
     for changed in (
         {**step, "body": '{"title": "Ship the docs v2"}'},  # another value
-        {**step, "body": '{"title": "Ship the docs", "owner": "coo"}'},  # another field
+        {**step, "body": '{"title": "Ship the docs", "owner": "assistant"}'},  # another field
         {**step, "path": f"/api/v2/goals/{other['id']}"},  # another goal
         {**step, "path": f"/api/v2/goals/{target['id']}/why", "body": '{"why": "Ship the docs"}'},
     ):
@@ -277,7 +279,7 @@ def test_a_change_to_a_goal_reads_back_was_and_now_for_the_changed_fields_only(a
     strategy_bot(api)
     serves = goal(api, "Grow the company", owner="company")
     row = goal(api, "Launch the docs", parent_id=serves["id"])
-    r, attempt = turn(api, "coo", "ana-test", "Fix the docs goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Fix the docs goal")
     text = read_back(
         api,
         attempt,
@@ -338,7 +340,7 @@ def six_changes(api):
 
 def test_yes_to_1_and_3_of_six_saves_only_those_and_says_why_not_for_the_rest(api):
     a, b, c3, kpi, wording, changes = six_changes(api)
-    r, attempt = turn(api, "coo", "ana-test", "Go through my goals")
+    r, attempt = turn(api, "assistant", "ana-test", "Go through my goals")
     back = read_back(api, attempt, *changes)
     lines = back["text"].split("\n")
     assert lines[0] == "I'll save these 6 changes:" and lines[1].startswith("1. Change **Launch the docs**: title was")
@@ -373,7 +375,7 @@ def test_yes_to_1_and_3_of_six_saves_only_those_and_says_why_not_for_the_rest(ap
 
 def test_yes_to_all_settles_a_suggestion_and_its_card_leaves(api):
     a, b, c3, kpi, wording, changes = six_changes(api)
-    r, attempt = turn(api, "coo", "ana-test", "Go through the suggestions")
+    r, attempt = turn(api, "assistant", "ana-test", "Go through the suggestions")
     back = read_back(api, attempt, changes[3])
     attempt = reply(api, r, attempt, "go ahead")
     assert save(api, attempt, back["changes"][0]["steps"][0])["proposal"]["status"] == "confirmed"
@@ -382,7 +384,7 @@ def test_yes_to_all_settles_a_suggestion_and_its_card_leaves(api):
 
 def test_a_yes_takes_a_measure_off_its_goal_and_keeps_the_measure(api):
     a, b, c3, kpi, wording, changes = six_changes(api)
-    r, attempt = turn(api, "coo", "ana-test", "Drop uptime from the bots goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Drop uptime from the bots goal")
     back = read_back(api, attempt, changes[5])
     attempt = reply(api, r, attempt, "yes")
     step = back["changes"][0]["steps"][0]
@@ -399,7 +401,7 @@ def test_a_yes_takes_a_measure_off_its_goal_and_keeps_the_measure(api):
 
 def test_a_suggestion_someone_settled_after_the_read_back_saves_nothing_and_says_so(api):
     a, b, c3, kpi, wording, changes = six_changes(api)
-    r, attempt = turn(api, "coo", "ana-test", "Go through the suggestions")
+    r, attempt = turn(api, "assistant", "ana-test", "Go through the suggestions")
     back = read_back(api, attempt, changes[3])
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
@@ -412,7 +414,7 @@ def test_a_suggestion_someone_settled_after_the_read_back_saves_nothing_and_says
 def test_a_goal_someone_changed_after_the_read_back_saves_nothing_and_says_what_changed(api):
     strategy_bot(api)
     row = goal(api, "Launch the docs")
-    r, attempt = turn(api, "coo", "ana-test", "Rename the docs goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Rename the docs goal")
     back = read_back(
         api,
         attempt,
@@ -446,7 +448,7 @@ def test_a_goal_someone_changed_after_the_read_back_saves_nothing_and_says_what_
 def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_is_posted(api):
     strategy_bot(api)
     row = goal(api, "Launch the docs")
-    r, attempt = turn(api, "coo", "ana-test", "Make the docs goal green and log 40 pages")
+    r, attempt = turn(api, "assistant", "ana-test", "Make the docs goal green and log 40 pages")
     before = len(room_messages(api))
     for change, word in (
         ({"kind": "goal_update", "goal_id": row["id"], "status": "green"}, "colour"),
@@ -476,16 +478,6 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
     )
 
 
-def test_each_click_refusal_says_nothing_was_saved_and_where_the_change_is_made():
-    """A refused read-back saves nothing, so no refusal may say a change was left out."""
-    assert set(GR.CLICK) == {"colour", "status", "archive", "reading", "vision", "strategy", "recovery"}
-    for kind, sentence in GR.CLICK.items():
-        assert sentence.startswith("Nothing was saved: "), kind
-        assert "left it out" not in sentence, kind
-        assert sentence.count(".") == 1 and sentence.endswith("."), kind
-        assert any(place in sentence for place in ("Goals page", "KPI itself", "Strategy page", "its card")), kind
-
-
 def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     strategy_bot(api)
     from backend.tests.helpers.assistant import assistant_turn
@@ -499,7 +491,7 @@ def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
 
 def test_repeated_changes_are_refused_before_posting_a_draft(api):
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Set a goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal")
     before = room_messages(api)
     result = read_back(api, attempt, NEW_GOAL, dict(reversed(list(NEW_GOAL.items()))), expected=422)
     assert result['error']['code'] == 'validation'
@@ -534,7 +526,7 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
             return self.call('POST', path, body, key)
 
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", 'Set two goals')
+    r, attempt = turn(api, "assistant", "ana-test", 'Set two goals')
     monkeypatch.setattr(remotecli, 'Client', TurnClient)
     monkeypatch.setenv('HUB_API_URL', 'https://synthetic.invalid')
     changes = [
@@ -583,12 +575,12 @@ def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_canno
     kpi = post(api, f"goals/{hidden['id']}/kpis", {"name": "Private inbox measure"})["kpi"]
     suggestion = propose(api, "goal_kpi", {"kpi_id": kpi["id"]}, public["id"])
     strategy_bot(api)
-    as_bot(api, "goal-manager", "strategy-test")
-    # The Strategy Bot itself is refused the private bot's work; the owner's
+    as_bot(api, "strategy-owner", "strategy-test")
+    # The Strategy Owner itself is refused the private bot's work; the owner's
     # Assistant must preserve that boundary when it asks Tico for a read-back.
     get(api, "status?bot=inbox", "strategy-test", expected=404)
     get(api, "status?bot=ops", "strategy-test")
-    _, attempt = turn(api, "coo", "ana-test", "Go through suggestions")
+    _, attempt = turn(api, "assistant", "ana-test", "Go through suggestions")
     changes = [
         {"kind": "goal_update", "goal_id": hidden["id"], "title": "Changed"},
         {"kind": "measure_add", "goal_id": public["id"], "measure": {"kpi_id": kpi["id"]}},
@@ -599,7 +591,7 @@ def test_read_back_refuses_goals_measures_and_suggestions_the_strategy_bot_canno
     before = room_messages(api)
     for change in changes:
         refused = read_back(api, attempt, change, expected=403)
-        assert refused["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+        assert refused["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
         assert "Private inbox" not in str(refused)
         assert room_messages(api) == before
     assert get(api, "goals/" + hidden["id"])["goal"]["title"] == "Private inbox objective"
@@ -610,7 +602,7 @@ def test_a_yes_saves_a_goal_without_optional_measures_and_later_sync_does_not_na
     from backend import goal_asks as GA
 
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    r, attempt = turn(api, "assistant", "ana-test", "Publish the guide")
     back = read_back(api, attempt, {"kind": "goal_create", "title": "Publish the guide", "owner": "ops"})
     assert "warning" not in back["text"].lower()
     step = back["changes"][0]["steps"][0]
@@ -627,7 +619,7 @@ def test_unattended_strategy_bot_can_file_a_card_but_cannot_save_a_goal_or_targe
     from backend.tests.helpers.groups_leads import as_bot
 
     strategy_bot(api)
-    as_bot(api, "goal-manager", "strategy-test")
+    as_bot(api, "strategy-owner", "strategy-test")
     row = goal(api, "Publish the guide")
     kpi = post(api, f"goals/{row['id']}/kpis", {"name": "Guides read"})["kpi"]
     for path, body, status in (
@@ -657,14 +649,14 @@ def test_read_back_cannot_be_read_or_saved_after_strategy_bot_read_access_is_rev
     from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    r, attempt = turn(api, "assistant", "ana-test", "Publish the guide")
     row = goal(api, "Publish the guide")
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": row["id"], "title": "Publish guide today"})
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
         restrict(c, "ops", people=["ana"])
     denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
-    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    assert denied["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
     save(api, attempt, back["changes"][0]["steps"][0], expected=403)
     assert get(api, "goals/" + row["id"])["goal"]["title"] == "Publish the guide"
 
@@ -675,7 +667,7 @@ def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
     strategy_bot(api)
     parent = goal(api, "Financial parent", owner="finance")
     child = goal(api, "Publish the guide", parent_id=parent["id"])
-    _, attempt = turn(api, "coo", "ana-test", "Unlink the parent")
+    _, attempt = turn(api, "assistant", "ana-test", "Unlink the parent")
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": child["id"], "parent_id": ""})
     assert "Financial parent" in back["text"]
     # Someone moves the child; the old parent is now named only in the stored read-back.
@@ -683,14 +675,14 @@ def test_stored_read_back_keeps_access_checks_for_the_old_parent_it_named(api):
     with api.app.state.store.transaction() as c:
         restrict(c, "finance", people=["ana"])
     denied = get(api, "goals/read-back/" + back["message_id"], attempt["token"], expected=403)
-    assert denied["error"]["detail"] == "The Strategy Bot can't see that bot's goals."
+    assert denied["error"]["detail"] == "The Strategy Owner can't see that bot's goals."
 
 
 def test_unmeasured_flags_are_refused_without_saving_a_proposal(api):
     from backend.tests.helpers.groups_leads import as_bot
 
     strategy_bot(api)
-    as_bot(api, "goal-manager", "strategy-test")
+    as_bot(api, "strategy-owner", "strategy-test")
     row = goal(api, "Publish the guide")
     for token in ("ana-test", "strategy-test"):
         refused = post(
@@ -723,7 +715,7 @@ def test_legacy_read_backs_require_a_fresh_draft_before_read_or_save(api):
     strategy_bot(api)
     parent = goal(api, "Private old parent", owner="finance")
     child = goal(api, "Publish the guide", parent_id=parent["id"])
-    r, attempt = turn(api, "coo", "ana-test", "Unlink the parent")
+    r, attempt = turn(api, "assistant", "ana-test", "Unlink the parent")
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": child["id"], "parent_id": ""})
     attempt = reply(api, r, attempt, "yes")
     with api.app.state.store.transaction() as c:
@@ -758,7 +750,7 @@ def test_conflicts_do_not_name_a_bot_editor_in_stored_read_or_save(api, change_k
     strategy_bot(api)
     row = goal(api, "Publish the guide")
     suggestion = propose(api, "goal_wording", {"title": "Publish guide today"}, row["id"])
-    r, attempt = turn(api, "coo", "ana-test", "Update the guide goal")
+    r, attempt = turn(api, "assistant", "ana-test", "Update the guide goal")
     change = (
         {"kind": "goal_update", "goal_id": row["id"], "title": "Publish guide today"}
         if change_kind == "goal"
@@ -783,7 +775,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
     from backend.tests.helpers.api import restrict
 
     strategy_bot(api)
-    r, attempt = turn(api, "coo", "ana-test", "Publish the guide")
+    r, attempt = turn(api, "assistant", "ana-test", "Publish the guide")
     if edited == "created_owner":
         change = {"kind": "goal_create", "title": "Publish the guide", "owner": "ops", "why": "Public purpose"}
     else:
@@ -823,7 +815,7 @@ def test_revoked_read_back_access_is_checked_before_conflict_details(api, edited
     ):
         assert denied["error"] == {
             "code": "forbidden",
-            "detail": "The Strategy Bot can't see that bot's goals.",
+            "detail": "The Strategy Owner can't see that bot's goals.",
             "retryable": False,
         }
         assert "Private revised words" not in str(denied) and "inbox" not in str(denied)

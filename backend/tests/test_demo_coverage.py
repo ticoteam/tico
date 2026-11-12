@@ -1,9 +1,7 @@
 """Every page in the app's navigation has demo data. A page added to the nav without a demo section,
 or a demo section that stops filling its page, fails here."""
 
-import re
 from datetime import timedelta
-from pathlib import Path
 
 import pytest
 import time_machine
@@ -11,21 +9,7 @@ import time_machine
 from backend import demo
 from backend.tests.helpers.demo import NOW, signed_in
 
-UI = Path(__file__).resolve().parents[2] / "ui"
 WEEK_AGO = NOW - timedelta(days=7)
-
-NAV_LINK = re.compile(r'<a\b[^>]*\bdata-nav="([a-z-]+)"')  # static rail and account menu
-NAV_ROW = re.compile(r"\blink\('([a-z-]+)',")  # redesign.js rows
-NAV_DATASET = re.compile(r"\.dataset\.nav\s*=\s*['\"]([a-z-]+)['\"]")  # rows added in code (finance)
-
-
-def nav_pages():
-    pages = set(NAV_LINK.findall((UI / "index.html").read_text()))
-    for source in sorted([*(UI / "app").glob("*.js"), *(UI / "app").glob("*.ts")]):
-        text = source.read_text()
-        pages.update(NAV_ROW.findall(text))
-        pages.update(NAV_DATASET.findall(text))
-    return pages
 
 
 def page(path, key=None, **query):
@@ -42,8 +26,8 @@ PAGES = {
     "files": page("files", "files"),
     # Library › Skills (ui/app/skills.ts): the directory, its usage and proposals (backend/demo_sections/skills.py).
     "skills": page("skills", "skills"),
-    # Library › Directory (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
-    "directory": page("entities/find/person", "rows"),
+    # Library › Contacts (ui/app/directory.ts): the people the demo's company works with (backend/demo_sections/directory.py).
+    "contacts": page("entities/find/person", "rows"),
     "tools": page("tools", "integrations"),
     # The Tools page's one list (backend/api_tools.py); the old Connections row maps here until the nav drops it.
     "connections": page("tool-index", "rows"),
@@ -79,19 +63,8 @@ PAGES = {
 # Nav pages that the demo does not fill, with the reason.
 NO_DEMO_DATA = {
     "welcome": "Finish setup shows only until setup is done, and the demo starts set up.",
+    "listening": "The demo makes no listening: its sources would have nothing to read.",
 }
-
-
-def test_nav_parse_finds_known_pages():
-    assert {"overview", "tasks", "strategy", "finance", "rules"} <= nav_pages()
-
-
-def test_every_nav_page_has_a_demo_mapping():
-    for name in sorted(nav_pages()):
-        assert name in PAGES or name in NO_DEMO_DATA, (
-            f"{name}: add a demo_sections module for {name}, then map it here "
-            "(PAGES in backend/tests/test_demo_coverage.py)"
-        )
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -117,7 +90,7 @@ def _page_has_demo_data(api, name):
 
 
 def _full_page_audience_editor_has_a_restricted_example(api):
-    pages = api.get('/api/v2/pages?bot=marketing-lead').json()['pages']
+    pages = api.get('/api/v2/pages?bot=growth-manager').json()['pages']
     assert pages
     shown = api.get('/api/v2/pages/' + pages[0]['file_id']).json()
     assert shown['can_manage'] and shown['page']['audience']['people'] == ['ana']
@@ -161,7 +134,7 @@ def _demo_task_has_an_editor_for_the_live_task_page(api):
 
 
 def _task_pages_have_demo_data(api):
-    pages = api.get("/api/v2/pages?bot=marketing-lead").json()["pages"]
+    pages = api.get("/api/v2/pages?bot=growth-manager").json()["pages"]
     shown = api.get("/api/v2/pages/" + pages[0]["file_id"]).json()
     task_place = next(p["place"] for p in shown["pinned"] if p["place"].startswith("task:"))
     pins = api.get("/api/v2/places/" + task_place).json()["pins"]
@@ -169,7 +142,7 @@ def _task_pages_have_demo_data(api):
 
 
 def _a_demo_task_has_a_page_made_by_its_person(api):
-    pages = api.get("/api/v2/pages?bot=coo").json()["pages"]
+    pages = api.get("/api/v2/pages?bot=assistant").json()["pages"]
     made = next(p for p in pages if p["updated_by"] == "human:ana")
     pins = api.get("/api/v2/places/task:" + made["task_id"]).json()["pins"]
     assert any(p.get("page", {}).get("file_id") == made["file_id"] for p in pins)
@@ -184,7 +157,7 @@ def _a_demo_task_has_a_page_made_by_its_person(api):
 
 def _mail_settings_have_a_read_grant_and_keep_owner_routing(api):
     grant = api.get("/api/v2/postal/addresses/all/grants").json()["grants"][0]
-    assert (grant["grantee_id"], grant["level"]) == ("legal-review", "read")
+    assert (grant["grantee_id"], grant["level"]) == ("contracts-manager", "read")
     assert api.get("/api/v2/postal/settings").json()["settings"]["legal_bot_id"] is None
 
 

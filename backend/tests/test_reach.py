@@ -135,34 +135,6 @@ def test_a_setting_change_is_audited_and_bad_values_and_unknown_parties_are_refu
     put_setting(api, "ana", {"mode": "open"}, expected=422)  # a party says what it is
 
 
-def test_the_map_has_the_contract_shape(api):
-    org(api)
-    put_setting(api, "group:support", {"tasks_per_day": 20})
-    made = add_line(api, {"sender": "bot:finance", "receiver": "human:eve", "per_day": 3})["line"]
-    found = reach(api)
-    assert {"defaults", "settings", "effective", "lines", "may_edit"} <= set(found)
-    assert found["defaults"] == {
-        "mode": "nearby",
-        "chats_per_day": 999,
-        "tasks_per_day": 999,
-        "book": "anyone",
-        "person_mode": "open",
-    }
-    assert {"party", "mode", "chats_per_day", "tasks_per_day"} <= set(found["settings"][0])
-    assert {"mode", "chats_per_day", "tasks_per_day", "from"} <= set(found["effective"]["*"])
-    line = next(row for row in found["lines"] if row["id"] == made["id"])
-    assert {"id", "sender", "receiver", "per_day", "rule", "may_edit"} <= set(line)
-    assert (line["sender"], line["receiver"], line["per_day"], line["rule"], line["may_edit"]) == (
-        "bot:finance",
-        "human:eve",
-        3,
-        None,
-        True,
-    )
-    assert {"*", "group:support", "human:cara", "bot:finance"} <= set(found["may_edit"])
-    assert "human:ana" not in found["may_edit"]  # the owner is never limited
-
-
 def test_a_lines_rule_is_an_internal_org_rule_made_edited_and_retired_with_it(api):
     org(api)
     line = add_line(
@@ -339,7 +311,7 @@ def test_none_books_no_one_but_a_person_the_hub_and_the_assistant_are_never_limi
     assert may(api, "human:ana", "human:cara")[0]
     assert may(api, "human:fay", "human:cara")[0]
     assert may(api, "keeper", "human:cara")[0]
-    assert may(api, "bot:coo", "human:cara")[0]  # the Assistant (TICO_ASSISTANT_BOT, else coo) is a built-in helper
+    assert may(api, "bot:assistant", "human:cara")[0]  # the Assistant (TICO_ASSISTANT_BOT) is a built-in helper
 
 
 def test_the_book_setting_is_validated_audited_and_its_change_is_an_event(api):

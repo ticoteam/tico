@@ -2,8 +2,11 @@
 """How Jev judges a piece of evidence against a requirement: one attachment, one rubric, one model, one probability.
 
 `judge_once` is the seam. It asks a model for p, the probability the attachment meets the rubric, and the bands decide:
-p >= 0.8 is met, p <= 0.2 is not met, anything between is unsure. An unsure answer, a failed call, an unknown model and a
-call over the team's Decide cap are all unsure, and nothing unsure passes work.
+p >= 0.75 is met, p <= 0.2 is not met, anything between is unsure. Every verdict carries a reason: Jev answers a
+probability and no prose, so the reason is Tico's own words for the band and the rubric (`reason_for`). A call that
+did not give an answer (an error, a timeout, an answer that cannot be read, no model, the team's Decide cap) is not a
+verdict at all: it is `failed`, with what went wrong as its reason, and the caller retries it (page_verdicts). Nothing
+unsure or failed passes work.
 
 The judge model is Jev alone: Decide Low (`tico-decide-low`), by Chris's decision on Nov 9. No pipeline picks another
 model. Jev goes through judge.server_engine, so its spend counts against the team's Decide cap.
@@ -47,17 +50,29 @@ LOG = logging.getLogger("tico.pipeline_judges")
 MODELS: dict[str, str] = {"jev": "tico-decide-low"}
 DEFAULT_MODEL = "jev"
 QUESTION_SET = "pipeline-requirement"
-MET_AT, NOT_MET_AT = 0.8, 0.2
+# The bar: met at 0.75 or more, not met at 0.2 or less. It lives here and nowhere else (the eval imports it), and no
+# company or pipeline stores its own. Was 0.8 to Nov 11: at 0.75 the whole eval set had no false met, good pages unsure
+# went from 4 of 30 to 1 of 30, and the highest not-met case was 0.43 (Chris, Nov 11).
+MET_AT, NOT_MET_AT = 0.75, 0.2
 REASON_BYTES = 500
-TEXT_CHARS = 6000  # the most of an attachment's text the judge is sent; a longer text is cut and flagged truncated
-SPEC_CHARS = 6000  # the most of the task's description (its spec) the judge is sent; a longer one is cut and flagged
+# How much of the evidence's text and the task's spec Jev is sent. Jev reads 32k tokens of state (clients/judge.py
+# MAX_STATE_CHARS: 120,000 characters of JSON, about four a token), and the two share it with the rest of the state
+# (the rubric, the goal, the title, the commits and releases: a few thousand). 40,000 + 12,000 is under half of it, so
+# even dense text (three characters a token) fits with room, and a page a bot writes (5,000 to 15,000 characters) is
+# read whole. A longer text is cut and flagged truncated; `_state` cuts further if escaping would pass Jev's limit.
+# Was 6,000 each (Nov 7, never measured): a normal 6,500-character spec came back unsure (rc.5, Nov 11).
+TEXT_CHARS = 40_000
+SPEC_CHARS = 12_000
+STATE_CHARS = clients_judge.MAX_STATE_CHARS * 3 // 4  # the most JSON `_fit` lets through: a quarter of Jev's to spare
 NO_EVIDENCE = "No evidence is attached."
 # What a person sees as the reason when the judge was not shown all of the evidence (Fix L2-2).
 CANNOT_SEE = "Tico could not read all of this evidence, so a person decides."
+# What the owner is told when the text was too long for Jev: what to do, so it shortens it rather than attaching it again.
+TOO_LONG = "This {what} is too long for Jev to read: keep it under {chars:,} characters."
 # What a person sees when the judge said met on a spec it was shown only the start of: the rest may hold what is missing.
 SPEC_CUT = "The judge saw only the start of this work's spec, so a person decides."
 # The engine a test or a harness may set: (model, state, questions, label) -> {p, reason, provider, model, cost_usd,
-# latency_ms}. None, with no installed store, asks no one, so every answer is unsure until a caller sets one.
+# latency_ms}. None, with no installed store, asks no one, so every call fails until a caller sets one.
 ENGINE: "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None" = None
 # The store the server installed (install): judge_once asks the production engine on it when no engine is given.
 _installed_store: Any = None
@@ -69,12 +84,23 @@ def judge_model_of(conn: sqlite3.Connection, pipeline_id: str | None) -> str:
 
 
 def verdict_of(p: float) -> str:
-    """The band a probability falls in: met at 0.8 or more, not_met at 0.2 or less, unsure between."""
+    """The band a probability falls in: met at MET_AT (0.75) or more, not_met at NOT_MET_AT (0.2) or less, unsure between."""
     if p >= MET_AT:
         return "met"
     if p <= NOT_MET_AT:
         return "not_met"
     return "unsure"
+
+
+def reason_for(verdict: str, p: float, rubric: str) -> str:
+    """What a verdict says when the model gave no reason (Jev never does): the band, Jev's probability and the check it
+    was asked, so a person or the bot that wrote the page can see what was judged. Never empty."""
+    check = " ".join(str(rubric or "").split()) or "the requirement"
+    if verdict == "met":
+        return f"Jev found it meets the check (p {p:.2f}): {check}"
+    if verdict == "not_met":
+        return f"Jev found it does not meet the check (p {p:.2f}): {check}"
+    return f"Jev could not tell whether it meets the check (p {p:.2f}, between {NOT_MET_AT} and {MET_AT}): {check}"
 
 
 def _probability(value: object) -> float | None:
@@ -143,25 +169,51 @@ def _state(requirement: dict[str, Any], attachment: dict[str, Any]) -> dict[str,
     if attachment.get("context"):
         # What the page is judged against besides the rubric: the commits a review is for, the release it went out in.
         work["context"] = attachment["context"]
-    return {
-        "requirement": {
-            "name": requirement.get("name") or "",
-            "rubric": requirement.get("rubric") or "",
-            "goal": requirement.get("goal") or "",  # the pipeline's goal (D58)
-            # Present (true) only on a requirement that does not need evidence newer than the work's last change.
-            **({"older_evidence_ok": True} if attachment.get("older_evidence_ok") else {}),
-        },
-        "work": work,
-        "attachment": {
-            "work_version": int(attachment.get("work_version") or 0),
-            "source": attachment.get("source") or "",
-            "digest": attachment.get("digest") or "",
-            "url": attachment.get("url") or "",
-            "file_version": attachment.get("file_version") or 0,
-            "text": text,
-            "truncated": cut or bool(attachment.get("truncated")),
-        },
-    }
+    return _fit(
+        {
+            "requirement": {
+                "name": requirement.get("name") or "",
+                "rubric": requirement.get("rubric") or "",
+                "goal": requirement.get("goal") or "",  # the pipeline's goal (D58)
+                # Present (true) only on a requirement that does not need evidence newer than the work's last change.
+                **({"older_evidence_ok": True} if attachment.get("older_evidence_ok") else {}),
+            },
+            "work": work,
+            "attachment": {
+                "work_version": int(attachment.get("work_version") or 0),
+                "source": attachment.get("source") or "",
+                "digest": attachment.get("digest") or "",
+                "url": attachment.get("url") or "",
+                "file_version": attachment.get("file_version") or 0,
+                "text": text,
+                "truncated": cut or bool(attachment.get("truncated")),
+            },
+        }
+    )
+
+
+def _fit(state: dict[str, Any]) -> dict[str, Any]:
+    """`state`, cut to STATE_CHARS of JSON (three quarters of Jev's limit, clients/judge.py MAX_STATE_CHARS): text that
+    escapes long in JSON (quotes, new lines, letters outside ASCII, up to six characters each) can pass it under
+    TEXT_CHARS. The evidence's text is cut first, then the spec, each to the longest start that fits, and flagged."""
+
+    def size() -> int:
+        return len(json.dumps(state, default=str))
+
+    for part, key, flag in (("attachment", "text", "truncated"), ("work", "spec", "spec_truncated")):
+        whole = state[part].get(key)
+        if size() <= STATE_CHARS:
+            break
+        if not whole:
+            continue
+        low, high = 0, len(whole)  # the longest start of `whole` that fits: low fits (or is 0), high + 1 does not
+        while low < high:
+            mid = (low + high + 1) // 2
+            state[part][key] = whole[:mid]
+            low, high = (mid, high) if size() <= STATE_CHARS else (low, mid - 1)
+        state[part][key] = whole[:low]
+        state[part][flag] = True
+    return state
 
 
 def _questions() -> dict[str, Any]:
@@ -171,7 +223,7 @@ def _questions() -> dict[str, Any]:
 
 def _default_engine() -> "Callable[[str, dict[str, Any], dict[str, Any], str], dict[str, Any]] | None":
     """The engine a judge call uses when none is given: ENGINE when a test or harness set it, else the production engine on
-    the installed store, else None (every answer is unsure)."""
+    the installed store, else None (every call fails)."""
     if ENGINE is not None:
         return ENGINE
     return live_engine(_installed_store) if _installed_store is not None else None
@@ -226,12 +278,11 @@ def judge_once(
 ) -> dict[str, Any]:
     """Judge one attachment against one requirement's rubric with one model.
 
-    Returns {"verdict": "met" | "not_met" | "unsure", "p": float, "model", "cost_usd", "latency_ms", "provider",
-    "reason", "requirement_id", "attachment_id"}, and `failed: True` when the call itself failed. The model is Jev
-    (judge_model_of).
-    `engine` (or the module's ENGINE) makes the call; with neither, every answer is unsure. An attachment with no id is no
-    evidence: it is not met with p 0 and no model is asked. A failed call, an unreadable answer, or a call over the team's
-    Decide cap (checked when `settings` is given) is unsure with p 0.5, never a pass.
+    Returns {"verdict": "met" | "not_met" | "unsure" | "failed", "p": float | None, "model", "cost_usd", "latency_ms",
+    "provider", "reason", "requirement_id", "attachment_id"}; the reason is never empty. The model is Jev
+    (judge_model_of). `engine` (or the module's ENGINE) makes the call; with neither, the call fails. An attachment with
+    no id is no evidence: it is not met with p 0 and no model is asked. A failed call, an unreadable answer, or a call
+    over the team's Decide cap (checked when `settings` is given) is `failed` (and `failed: True`), p None, never a pass.
     The caller's `c` is a read; no write transaction is held during the model call."""
     chosen = judge_model_of(c, requirement.get("pipeline_id"))
     base = _base(requirement, attachment, chosen)
@@ -244,9 +295,10 @@ def judge_once(
 
 
 def _failed(base: dict[str, Any], why: str) -> dict[str, Any]:
-    """The call itself failed (no model, an error, an unreadable answer, over the Decide cap): unsure with p 0.5, never a
-    pass, and `failed` so a caller that retries (page_verdicts) can tell it from a model that was unsure."""
-    return {**base, "verdict": "unsure", "p": 0.5, "reason": why, "failed": True}
+    """The call itself failed (no model, an error, an unreadable answer, over the Decide cap): a judge failure, never a
+    verdict and never a pass, with what went wrong as its reason, so a caller retries it (page_verdicts) and a person who
+    sees it is told it was Jev that failed, not the page."""
+    return {**base, "verdict": "failed", "p": None, "reason": why or "The judge call failed", "failed": True}
 
 
 def judge_outside(
@@ -290,15 +342,22 @@ def _ask(
         result = ask(chosen, state, _questions(), QUESTION_SET)
     except JudgeError as exc:
         return _failed(base, judge.FAILED.get(J.error_code(exc), exc.detail))
+    except Exception as exc:  # noqa: BLE001 - any other error in the call is a judge failure, retried, never a verdict
+        LOG.warning("The judge call failed: %s", type(exc).__name__)
+        return _failed(base, "The judge call failed")
     p = _probability(result.get("p"))
     if p is None:
         return _failed(base, "The judge's answer could not be read")
     verdict = verdict_of(p)
-    reason = " ".join(str(result.get("reason") or "").split())[:REASON_BYTES]
+    said = " ".join(str(result.get("reason") or "").split())
+    reason = (said or reason_for(verdict, p, str(requirement.get("rubric") or requirement.get("name") or "")))[
+        :REASON_BYTES
+    ]
     if _cannot_see(attachment, state):
         # Enforced here, not only in the prompt: a model that says met on text it was not all shown is still unsure.
-        # The call was made and is paid for, so its cost and latency are kept.
-        verdict, p, reason = "unsure", 0.5, CANNOT_SEE
+        # The call was made and is paid for, so its cost and latency are kept. A text that was cut tells the owner how
+        # long it may be, so it is shortened rather than attached again.
+        verdict, p, reason = "unsure", 0.5, _cannot_see_why(attachment, state)
     elif verdict == "met" and state["work"].get("spec_truncated"):
         # The rubric may need the whole spec, and the judge saw only its start: its met is not trusted. A not met stands.
         verdict, p, reason = "unsure", 0.5, SPEC_CUT
@@ -312,6 +371,16 @@ def _ask(
         "latency_ms": int(result.get("latency_ms") or 0),
         "reason": reason,
     }
+
+
+def _cannot_see_why(attachment: dict[str, Any], state: dict[str, Any]) -> str:
+    """Why Jev could not see all of the evidence: too long (with the length Jev was shown, in thousands, as the most it
+    may be), or no text Tico can read."""
+    evidence = state["attachment"]
+    if evidence["text"] is None:
+        return CANNOT_SEE
+    what = "page" if str(attachment.get("source") or "").startswith("page:") else "evidence"
+    return TOO_LONG.format(what=what, chars=max(1000, len(evidence["text"]) // 1000 * 1000))
 
 
 def _cannot_see(attachment: dict[str, Any], state: dict[str, Any]) -> bool:

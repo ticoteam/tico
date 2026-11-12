@@ -1005,7 +1005,7 @@ P2_NOV = "start=2026-11-01&end=2026-11-30&period=month&basis=accrual"  # today's
 P2_DAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 P2_LIVE = f"LIVE {STAMP}"  # the unattributed fake row for this run (live refresh, then spec 7.5 hides it)
 # The teammates a manager (Ben) sees under §7.5: his own, Support's bot, and Ops (Ana, under Support). Not Cara's line.
-BEN_SEES = ["bot:support", "human:ana", "human:cara", "human:ben"]
+BEN_SEES = ["bot:support-owner", "human:ana", "human:cara", "human:ben"]
 
 
 def get_json(page: Page, base: str, path: str) -> tuple[int, object]:
@@ -1295,8 +1295,10 @@ def item6(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
         categorize(page, run, base, "OPS VENDOR", "Software", shots)
         categorize(page, run, base, P2_LIVE, "Software", shots)
         categorize(page, run, base, "Acme Customer", "Revenue", shots)
-        tag_row(page, run, base, "Mercury IO", "support", "bot:support")  # an internal transfer: no tag form (noted)
-        tag_row(page, run, base, "Acme Cloud", "support", "bot:support")
+        tag_row(
+            page, run, base, "Mercury IO", "support", "bot:support-owner"
+        )  # an internal transfer: no tag form (noted)
+        tag_row(page, run, base, "Acme Cloud", "support", "bot:support-owner")
         tag_row(page, run, base, "Mercury", "cara", "human:cara")
         tag_row(page, run, base, "OPS VENDOR", "Ana Rivera", "human:ana")  # "ana" alone also matches "Manager"
     go(page, base, "#/finance/transactions")
@@ -1348,7 +1350,7 @@ def item1(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     seen_names = sorted({str(r.get("counterparty")) for r in rows_of(tx)})
     leaked = [n for n in ("Mercury", "Acme Customer", P2_LIVE) if n in seen_names]
     run.check(
-        "1 Ben's transactions show no hidden rows (bot:inbox, revenue, unattributed)",
+        "1 Ben's transactions show no hidden rows (bot:inbox-manager, revenue, unattributed)",
         not leaked,
         f"Ben sees {seen_names}; leaked {leaked}",
     )
@@ -1413,7 +1415,7 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     )
     run.note(f"7 {width}: picker values as the owner (value = label)", " | ".join(dict.fromkeys(picks)))
     # The checkbox is visually hidden; pick the one in the tree that is showing (desktop: the side column, phone: the popover).
-    page.locator("[data-fin-pick='mate:bot:support']:visible").first.check(force=True)
+    page.locator("[data-fin-pick='mate:bot:support-owner']:visible").first.check(force=True)
     page.wait_for_timeout(1000)
     if width == "phone":
         # With the Filter popover still open, can a person tap a chip's remove (x)? Recorded, then the popover is closed.
@@ -1433,7 +1435,7 @@ def item7(page: Page, run: Run, base: str, fake: str, shots: str, width: str) ->
     run.check(
         f"7 {width}: picking Support adds a filter chip", any("support" in c.lower() for c in chips), " | ".join(chips)
     )
-    _, api = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_MONTH}&teammates=bot:support")
+    _, api = get_json(page, base, f"/api/v2/finance/pnl?view=expenses&{P2_MONTH}&teammates=bot:support-owner")
     want = (
         sorted(r["name"] for r in api.get("rows", []) if cents(r.get("total")) and r.get("code"))
         if isinstance(api, dict)
@@ -1654,7 +1656,7 @@ def late_invoice(page: Page, run: Run, base: str, shots: str) -> None:
     page.screenshot(path=os.path.join(shots, "item5-late-desktop.png"), full_page=True)
     reminders = page.locator("button", has_text=re.compile("remind", re.I)).count()
     run.check(
-        "5 no reminder control on Receivables (spec 12: reminders are the Bookkeeper's, not a page control)",
+        "5 no reminder control on Receivables (spec 12: reminders are the Finance Owner's, not a page control)",
         reminders == 0,
         f"{reminders} control(s)",
     )
