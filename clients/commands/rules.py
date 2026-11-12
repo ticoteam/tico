@@ -2,6 +2,8 @@
 
 Moved from clients/hubtools.py; clients/commands/__init__.py says how the table is put together."""
 
+import json
+
 from clients.tico import APIError
 
 from clients.cli_spec import Arg, Command, Group
@@ -50,12 +52,60 @@ RULE_WHERE = {
 }
 
 
+STAGE = "sr_"  # a stage rule's id starts with it (backend/stage_rules.py); an org rule's never does
+STAGE_FIELDS = {
+    "name": _s("Stage rule: its name"),
+    "pipeline": _s("Stage rule: the pipeline it is on (its id); left out or empty: the company, every pipeline"),
+    "stages": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Stage rule: the stage ids it is on; empty: the whole pipeline",
+    },
+    "event": {
+        "type": "string",
+        "enum": ["enters", "owner_changes", "bot_snoozes", "timer"],
+        "description": "Stage rule: When",
+    },
+    "timer": {
+        "type": "object",
+        "description": 'Stage rule: a timer\'s kind and hours, {"kind": "in_stage"|"quiet"|"waiting_person", "hours": N}',
+    },
+    "cond": {
+        "type": "object",
+        "description": "Stage rule: If, fixed conditions such as owner_team, label, requester_person, sent_back, "
+        "snooze_hours_over, turn",
+    },
+    "jev": _s("Stage rule: one question Jev answers (one Jev call per event); empty for none"),
+    "then": {
+        "type": "string",
+        "enum": ["block", "tell_manager", "tell_owner", "move_back"],
+        "description": "Stage rule: Then",
+    },
+    "reason": _s("Stage rule: what a Block or Tell says"),
+}
+STAGE_KEYS = tuple(STAGE_FIELDS)
+
+
+def _stage(args):
+    return str(args.get("id") or "").startswith(STAGE)
+
+
+def _stage_decide(api, args, action):
+    """Retire, accept or skip a stage rule, as the caller itself: a bot is refused, a person decides."""
+    body = _present({"revision": args.get("version"), "why": args.get("why")})
+    return api.post(f"stage-rules/{args['id']}/{action}", body, key=_key(args))
+
+
 @tool(
     "tico_rules_list",
     "The org rules in force, newest first, paged: internal (between teammates) and external "
-    "(what someone outside requires). mine=true reads your bot's rules, and its settings as sentences.",
+    "(what someone outside requires). mine=true reads your bot's rules, and its settings as sentences. kind=stage "
+    "lists stage rules: with pipeline (and stage), those that apply there, most specific first, each with its cost; "
+    "with mine, the ones you wrote or suggested.",
     {
-        "kind": {"type": "string", "enum": ["internal", "external"]},
+        "kind": {"type": "string", "enum": ["internal", "external", "stage"]},
+        "pipeline": _s("kind=stage: the pipeline's id"),
+        "stage": _s("kind=stage: a stage id of that pipeline"),
         "status": {"type": "string", "enum": ["suggested", "active", "retired", "any"]},
         "who": _s("A group, person or bot the rule's Who names"),
         "with": _s("A group, person or bot the rule's With names"),
@@ -67,6 +117,17 @@ RULE_WHERE = {
     },
 )
 def rules_list(api, args):
+    if args.get("kind") == "stage" or args.get("pipeline") or args.get("stage"):
+        query = _present(
+            {
+                "pipeline": args.get("pipeline"),
+                "stage": args.get("stage"),
+                "status": args.get("status"),
+                "mine": "true" if args.get("mine") else None,
+            }
+        )
+        # As the caller itself: `mine` is the caller's own rules and suggestions.
+        return api.get("stage-rules", **query)
     query = _present(
         {
             "kind": args.get("kind"),
@@ -87,21 +148,26 @@ def rules_list(api, args):
 
 @tool(
     "tico_rules_suggested",
-    "The org rule suggestions waiting for a person to accept or skip.",
+    "The org rule suggestions waiting for a person to accept or skip; stage_rules: the stage rules suggested.",
     {"cursor": _s("next_cursor from the last page"), "limit": {"type": "integer", "minimum": 1, "maximum": 100}},
 )
 def rules_suggested(api, args):
-    return _as_person(api).get("rules", status="suggested", cursor=args.get("cursor"), limit=args.get("limit"))
+    found = _as_person(api).get("rules", status="suggested", cursor=args.get("cursor"), limit=args.get("limit"))
+    if not args.get("cursor"):
+        found = {**found, "stage_rules": (api.get("stage-rules", status="suggested") or {}).get("items", [])}
+    return found
 
 
 @tool(
     "tico_rules_get",
     "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
-    "you can read that file.",
+    "you can read that file. A stage rule (an id starting sr_): On, When, If, Then and its cost.",
     {"id": _s("The rule's id")},
     required=("id",),
 )
 def rules_get(api, args):
+    if _stage(args):
+        return api.get(f"stage-rules/{args['id']}")
     return _as_person(api).get(f"rules/{args['id']}")
 
 
@@ -156,9 +222,10 @@ def rules_ask(api, args):
     "tico_rules_add",
     "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
     "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an Everyone rule. The "
-    "Assistant adds one as the person, citing their words (on_behalf_of).",
+    "Assistant adds one as the person, citing their words (on_behalf_of). kind=stage adds a stage rule: name, "
+    "pipeline, stages, event (When), cond and jev (If), then and reason; a bot's is a suggestion a person accepts.",
     {
-        "kind": {"type": "string", "enum": ["internal", "external"]},
+        "kind": {"type": "string", "enum": ["internal", "external", "stage"]},
         "text": _s("The rule in one sentence"),
         "description": _s("Optional, longer"),
         "who": _rule_scope(
@@ -187,11 +254,15 @@ def rules_ask(api, args):
         "where": RULE_WHERE,
         "reviewer": _s("A person who reviews outputs under it"),
         "on_behalf_of": ASKED,
+        **STAGE_FIELDS,
     },
-    required=("kind", "text"),
+    required=("kind",),
     writes=True,
 )
 def rules_add(api, args):
+    if args.get("kind") == "stage":
+        # As the caller itself: a bot's stage rule is a suggestion, never its requester's rule.
+        return api.post("stage-rules", _present({k: args.get(k) for k in STAGE_KEYS}), key=_key(args))
     body = _present(
         {
             k: args.get(k)
@@ -215,7 +286,8 @@ def rules_add(api, args):
 
 @tool(
     "tico_rules_edit",
-    "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
+    "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit. A stage rule (an id "
+    "starting sr_) takes its own fields, against its revision as `version`; a bot's change is a suggestion.",
     {
         "id": _s("The rule's id"),
         "version": RULE_VERSION,
@@ -227,11 +299,15 @@ def rules_add(api, args):
         "where": RULE_WHERE,
         "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
         "reviewer": _s("A reviewer"),
+        **STAGE_FIELDS,
     },
     required=("id", "version"),
     writes=True,
 )
 def rules_edit(api, args):
+    if _stage(args):
+        body = _present({"revision": args.get("version"), **{k: args.get(k) for k in STAGE_KEYS}})
+        return api.post(f"stage-rules/{args['id']}", body, key=_key(args))
     body = _present(
         {
             k: args.get(k)
@@ -249,6 +325,8 @@ def rules_edit(api, args):
     writes=True,
 )
 def rules_accept(api, args):
+    if _stage(args):
+        return _stage_decide(api, args, "accept")
     body = _present({"version": args.get("version"), "who": args.get("who")})
     return _as_person(api).post(f"rules/{args['id']}/accept", body, key=_key(args))
 
@@ -261,6 +339,8 @@ def rules_accept(api, args):
     writes=True,
 )
 def rules_skip(api, args):
+    if _stage(args):
+        return _stage_decide(api, args, "skip")
     return _as_person(api).post(f"rules/{args['id']}/skip", _present({"version": args.get("version")}), key=_key(args))
 
 
@@ -272,6 +352,8 @@ def rules_skip(api, args):
     writes=True,
 )
 def rules_retire(api, args):
+    if _stage(args):
+        return _stage_decide(api, args, "retire")
     return _as_person(api).post(
         f"rules/{args['id']}/retire", _present({"version": args.get("version")}), key=_key(args)
     )
@@ -461,6 +543,7 @@ CITE = (
     Arg("file_version", "--version", type=int, metavar="N", into="cite", part="version"),
 )
 FROM = Arg("source_id", "--from", metavar="SOURCE")
+STAGE_JSON = (Arg("timer", type=json.loads, metavar="JSON"), Arg("cond", "--if", type=json.loads, metavar="JSON"))
 DAY = "YYYY-MM-DD"
 
 CLI = (
@@ -471,8 +554,9 @@ CLI = (
     ),
     Command(
         "rules list",
-        "the rules in force; --mine: your bot's rules and its settings as sentences",
-        example="tico rules list --kind external --status active",
+        "the rules in force; --mine: your bot's rules and its settings as sentences; --kind stage: stage rules, "
+        "--pipeline and --stage for those that apply there",
+        example="tico rules list --kind stage --pipeline engineering --stage engineering-build",
     ),
     Command(
         "rules read",
@@ -497,14 +581,15 @@ CLI = (
     Command(
         "rules add",
         "add a rule: a bot's is a suggestion; only owners and admins add Everyone",
-        args=(Arg("kind", positional=False), Arg("text", positional=False), FROM, *WHO, *WITH, *CITE),
+        args=(Arg("kind", positional=False), Arg("text", positional=False), FROM, *WHO, *WITH, *CITE, *STAGE_JSON),
         convert=_add,
-        example="tico rules add --kind internal --text 'Reply to customers within a day' --who Support",
+        example="tico rules add --kind stage --name 'Owner on the team' --pipeline engineering --stages engineering-build "
+        "--event owner_changes --then block",
     ),
     Command(
         "rules edit",
         "change a rule, only the fields given, against the version you read",
-        args=(Arg("version", positional=False), FROM, *WHO, *WITH),
+        args=(Arg("version", positional=False), FROM, *WHO, *WITH, *STAGE_JSON),
         convert=_who_with,
         example="tico rules edit r1 --version 2 --text 'Reply within four hours'",
     ),

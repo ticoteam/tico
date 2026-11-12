@@ -5508,6 +5508,9 @@ def create_app(settings=None):
     thread_tasks.install(app, store, auth, create_task, settings.public_url or "")  # Make task from a message
     counsel.install(app, store, auth, mutate)  # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
+    from . import stage_rules_api
+
+    stage_rules_api.install(app, store, auth, mutate)  # stage rules: the Rules button, the Rules page's groups
     why_here.install(app, store, auth)  # GET /api/v2/origins/{ref}: why an item is on the list
     assistant_changes.install(app, store, auth, mutate, settings_admin)  # the Assistant's changes, and undoing one
     reach.install(app, store, auth, mutate)  # Rules › Internal: who reaches whom (docs/reach.md)
