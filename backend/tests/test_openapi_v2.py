@@ -53,7 +53,14 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
 def test_every_declared_schema_is_valid_json_schema():
     """Standard consumers read the served document as JSON Schema 2020-12, so internal shorthand such as
     items("s") must be expanded before it reaches the contract; the example answers below cannot see it."""
-    schemas = openapi_v2.generate()["components"]["schemas"]
+    document = openapi_v2.generate()
+    schemas = dict(document["components"]["schemas"])
+    for path, ops in document["paths"].items():  # inline request and response schemas too
+        for method, op in ops.items():
+            for where, body in [("request", op.get("requestBody") or {}), *op.get("responses", {}).items()]:
+                for kind, content in (body.get("content") or {}).items():
+                    if "schema" in content:
+                        schemas["%s %s %s %s" % (method, path, where, kind)] = content["schema"]
     invalid = {}
     for name, schema in schemas.items():
         try:
