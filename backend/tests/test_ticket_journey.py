@@ -433,6 +433,23 @@ def test_the_person_says_no_before_release_and_the_second_round_is_signed_off_on
     builder.attach("Review page", built)
     builder.end()
     co.beat()
+    assert co.new_in_list(before) == [], "the person was asked before Reviewer 2 read the new commit"
+    reviewer = co.turn_on("reviewer-2", engineering, "to review the commit pushed after Review 2")
+    assert head[:7] in reviewer.wake + reviewer.show(), "Reviewer 2 is not told the new commit to read"
+    page = [r for r in co.task(engineering)["to_leave"] if r["kind"] == "page"]
+    reviewer.cli(
+        "task",
+        "answer",
+        engineering,
+        page[0]["requirement_id"],
+        "ok",
+        "-m",
+        f"Read {head[:7]}: negate(None) raises.",
+        "--version",
+        reviewer.version(),
+    )
+    reviewer.end()
+    co.beat()
     assert co.new_in_list(before) == [("ask", engineering)], "the second round did not reach the person once"
     co.sign_off(engineering, "Ship it.")
     co.beat()

@@ -249,6 +249,8 @@ def _may_answer_page(
         _refuse(conn, by, "task_why", "Say what to change", task_id)
     if value == OK and standing.line.startswith(R.DECIDE) and not (notes or "").strip():
         _refuse(conn, by, "task_why", "Say why it meets the check", task_id)
+    if value == OK and R.asked_to_review(standing, by) and not (notes or "").strip():
+        _refuse(conn, by, "task_why", "Say which commits you read and what you checked", task_id)
 
 
 def _page_version(
@@ -279,16 +281,30 @@ def _write(
     page_version: int | None = None,
     typed: Row | None = None,
 ) -> str:
-    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it."""
+    """Write one answers row. `typed` is the answer requirement it meets: its name and type go on the row with it. An
+    answer on a page keeps the commits it was given at (`_heads`)."""
     H = _h()
     answer_id = H.new_id()
     settings: Row = (typed or {}).get("settings") or {}
     name = str(settings["name"]) if settings.get("name") else None
     value_type = R.answer_type(typed) if typed else None
+    heads = _heads(conn, row) if page_version is not None else None
     conn.execute(
         "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, notes, page_version, name, value_type, "
-        "created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (answer_id, row["visit"]["id"], requirement_id, str(by), value, notes, page_version, name, value_type, H.now()),
+        "heads, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            answer_id,
+            row["visit"]["id"],
+            requirement_id,
+            str(by),
+            value,
+            notes,
+            page_version,
+            name,
+            value_type,
+            heads,
+            H.now(),
+        ),
     )
     data: Row = {"requirement": requirement_id, "answer_id": answer_id}
     if page_version is not None:
@@ -296,6 +312,16 @@ def _write(
     # Through the task's history writer: an answer the Assistant or BotOps gave with the person's rights says so (via).
     H._task_event(conn, row["id"], by, "answer", None, value, notes, data=data)
     return answer_id
+
+
+def _heads(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """The newest commits of the task's linked PRs, as an answer on a page keeps them: a person's OK counts only while
+    they are still the newest, and a bot's review of the commits after the reviews names the ones it read
+    (task_requirements._new_commits). None when the task links no PR Tico has read."""
+    import json
+
+    heads = R.heads_now(conn, row)
+    return json.dumps(heads, sort_keys=True) if heads else None
 
 
 def _wake_key(row: Row, answer_id: str) -> str:
@@ -410,8 +436,9 @@ def answer(
             _refuse(conn, by, "task_requirement", why, task_id)
         value = stored
     newest = R.newest_answers(conn, row["visit"]["id"]).get(requirement_id)
-    same = (str(by), value, notes, pinned)
-    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version")) == same:
+    same = (str(by), value, notes, pinned, _heads(conn, row) if pinned is not None else None)
+    kept = (newest or {}).get("heads")
+    if newest and (newest["by_id"], newest["answer"], newest.get("notes"), newest.get("page_version"), kept) == same:
         out = E.task(conn, task_id) or row
         out["answer_id"] = newest["id"]
         return out

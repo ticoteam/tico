@@ -695,14 +695,18 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     F.refresh(company, gh, later())
     with company.transaction() as c:
         version = E.task(c, task_id)["version"]
-        go = lambda by=RM, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
+        go = lambda by=X.ANA, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
         assert refused(go, "task_requirement") == "The checks on acme/app#1 are still running"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "failure"}]}, F.version_now())
         assert refused(go, "task_requirement") == "Checks failed on acme/app#1: unit"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "success"}]}, F.version_now())
-        refused(lambda: go(v=version - 1), "task_changed")
+        refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
-        owed = go()
+        # The new commit came after the person's OK: the Release Owner sends the task back to Fixes 2 to have it
+        # reviewed and OK'd; it may not queue it as it is (an OK on an old commit never merges a new one).
+        assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        owed = go()  # a person queues it as it is now: that is their OK of the new commit
         assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
         assert effects(c, task_id) == [("act", "moot"), ("act", "owed")]
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "Queuing the PR")

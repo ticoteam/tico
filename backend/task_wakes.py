@@ -83,6 +83,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
             lines.append(f"- {R.sentences(f'{s.name}: {said}' if said else s.name)}{waits}")
             if R.asked_to_decide(s, to):
                 lines.append(f"  {R.decide_commands(str(task['id']), str(s.requirement['id']))}")
+            elif R.asked_to_review(s, to):
+                lines.append(f"  {R.review_commands(str(task['id']), str(s.requirement['id']))}")
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
@@ -91,7 +93,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
     """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
     (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it, nor once the
-    page is OK'd: a rebase after the OK is not a new version of it, and a new page would ask the person again."""
+    page is OK'd, nor while the bot that wrote the newest review is here to review them before the person is asked
+    (task_requirements._new_commits)."""
     page: list[R.Standing] = []
     for s in standings:
         settings: Row = s.requirement.get("settings") or {}
@@ -99,9 +102,36 @@ def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standin
             continue
         if s.requirement.get("person_id") or R.people_only(s.requirement):
             page.append(s)
-    if not page or any(R.NOT_REVIEWED in s.line for s in page):
+    if not page or any(R.NOT_REVIEWED in s.line for s in page) or R.delta_reviewer(conn, task):
         return None
     return R.unreviewed(conn, task)
+
+
+REVIEW_NEW_LEAD = (
+    "Commits were pushed after the reviews. Review only those commits before the person is asked to OK the work."
+)
+
+
+def review_new(conn: "sqlite3.Connection", task_id: str) -> str | None:
+    """Wake the bot asked to review the commits pushed after the reviews (task_requirements._new_commits), once per
+    newest commits: after Jev looked at the page a person OKs, and after a new commit. Not while it has a live run on
+    the task: it sees the ask in `tico task show`. The never-stuck ladder wakes it if this wake is lost."""
+    from . import task_engine as E
+
+    row: Row | None = E.task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+        return None
+    for standing in R.unmet(conn, row):
+        who = standing.on
+        if not who or not R.asked_to_review(standing, who):
+            continue
+        if live_run(conn, row, who):
+            return None
+        heads = ",".join(f"{ref}@{sha[:12]}" for ref, sha in sorted(R.heads_now(conn, row).items()))
+        visit = row["visit"]
+        wake_key = f"{task_id}:{visit['id']}:review_new:{heads}"
+        return add(conn, row, who, visit, body(conn, row, REVIEW_NEW_LEAD, to=who), wake_key=wake_key)
+    return None
 
 
 def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:

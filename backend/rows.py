@@ -1470,6 +1470,7 @@ class AnswerRow(TypedDict):
     undone_at: str | None
     name: str | None
     value_type: str | None
+    heads: str | None
 
 
 class SnoozeRow(TypedDict):
