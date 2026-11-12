@@ -42,10 +42,6 @@ const ALL = ['no-computer', 'no-credit', 'setup-halfway', 'sign-off', 'bot-waiti
 const SET_UP = ALL.filter(state => state !== 'setup-halfway');
 const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Dead ends, reported to the lead on Nov 11 (rc.8 issue hunt, track F).
-  '3 | span "BotOps has no computer"': {states: ['no-computer', 'no-credit'],
-    what: 'a task held up by a bot with no computer says so in plain text, with no link to Settings > Computers, and the cloud computer that is starting is named nowhere (ui/app/task-modal.ts, backend/task_wakes.py NO_COMPUTER)'},
-  '3 | p.muted.task-wait "Out of credit': {states: ['no-credit'],
-    what: 'the task says it is out of credit with no Add credit link beside it (the top strip has one)'},
   '3 | span "Not connected"': {states: ALL,
     what: 'Settings > Models: a plan row says Not connected and names nothing (ui/app/subscriptions.ts, chris/signin-ui)'},
   '5 | dialog onb': {states: ['setup-halfway'],

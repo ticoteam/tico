@@ -1058,6 +1058,18 @@ ENTRIES = TEAM_RULES + [
         card=_card("bots"),
         words="shared cloud machine size always on pause after minutes grow storage disk",
     ),
+    S(
+        "cloud.shared_machine.replace",
+        "Replace the shared cloud machine",
+        COMPUTERS,
+        "admin",
+        "confirm",
+        "DELETE",
+        "cloud-machines/shared",
+        value="json",
+        card=_card("computers"),
+        words="replace shared cloud machine delete disk fresh broken stuck failed",
+    ),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S(

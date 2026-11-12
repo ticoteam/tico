@@ -2684,6 +2684,10 @@ SCHEMAS = {
             "ask": "b",
         },
         required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        href={
+            "type": ["string", "null"],
+            "description": "A paused bot's cause: the app page that shows it (#/settings/computers, #/settings/billing)",
+        },
         running={
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
@@ -2938,6 +2942,7 @@ SCHEMAS = {
                             "resume_company",
                             "unlock_cloud",
                             "add_credit",
+                            "open_computers",
                             None,
                         ]
                     },

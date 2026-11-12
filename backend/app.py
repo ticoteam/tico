@@ -4939,6 +4939,20 @@ def create_app(settings=None):
 
         if not options and (first := cloud_machines.first_home(c, bot)):
             options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
+        if not options and cloud_machines.offered(c, settings) and cloud_machines.adopt(c, bot, who.actor):
+            # A Tico Cloud bot whose cloud machine has not enrolled yet: it is assigned there when it does
+            # (cloud_machines.enrolled), so nothing is refused while the machine is on its way.
+            machine = cloud_machines.coming(c, bot)
+            if machine and machine["status"] == "out_of_credit":
+                raise Problem("out_of_credit", f"Out of credit: {machine['label']} can't start. Add credit first", 409)
+            if machine and machine["status"] == "failed":
+                raise Problem(
+                    "cloud_computer_failed",
+                    f"{machine['label']} didn't start: {machine['words']}. See Settings > Computers",
+                    409,
+                )
+            if machine:
+                return {"bot": bot, "computer": machine["label"], "placed": False, "already": False, "waiting": True}
         if not options:
             raise Problem(
                 "no_computer",

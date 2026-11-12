@@ -35,6 +35,12 @@ cloud machine" under Computer).
 - A bot set to its own machine that has no computer yet when it goes live (a new company's Builder) goes on the shared
   machine first: its own is made for work, and it has none before it is live. It stays on the shared machine until a
   person switches it to its own.
+- Before a bot's cloud machine enrolls (a new company's first minutes), the bot waits for it rather than for a person:
+  its task says "<bot> is waiting for Shared cloud machine to start" with a link to Settings > Computers, which lists
+  the machine with its state (Being made, Starting, Stopped, Out of credit, or the problem). It asks nobody until the
+  machine failed (Replace machine) or the company is out of credit (Add credit). A go-live meanwhile answers 202 and
+  finishes once the machine is up and has the bot's repository, like `waiting_for_repository`; one on a failed machine
+  is refused `cloud_computer_failed`, and out of credit `out_of_credit`.
 - The shared machine is one row and one HQ machine, key `_shared` (a bot's own machine is keyed by the bot id, and no
   bot id has an underscore). It is on while any bot on it wants it (work, a move, a watcher's wake) and pauses once
   every bot on it has had no turn out and no activity for its Pause after (`pause_minutes`: 30 by default, whole
