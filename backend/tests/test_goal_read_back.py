@@ -259,8 +259,54 @@ def test_the_stop_words_halt_and_a_yes_that_opens_with_no_does_not():
         "that is wrong, stop",
     ):
         assert GR.halts(words), words
-    for words in ("thanks", "no problem", "no worries, thanks", "great", "what about Support?", "Now the next one"):
+    for words in (
+        "thanks",
+        "no problem",
+        "no worries, thanks",
+        "great",
+        "what about Support?",
+        "Now the next one",
+        # "no" and "don't" inside an agreement are not a stop; only at the start of a reply.
+        "yes to 1 and 3, no to 2",
+        "yes, no changes",
+        "looks good, no objections",
+        "sure, I don't mind",
+        "go ahead, no need to ask again",
+        "yes please, can't wait",
+        "thanks, no more for now",
+    ):
         assert not GR.halts(words), words
+
+
+def test_agreements_that_say_no_or_dont_inside_them_save(api):
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set three goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2, 3)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes to 1 and 3, no to 2")
+    save(api, attempt, steps[0])
+    save(api, attempt, steps[2])
+    assert save(api, attempt, steps[1], expected=403)["error"]["code"] == "not_agreed"
+    for words in ("yes, no changes", "sure, I don't mind"):
+        attempt = reply(api, r, attempt, "and one more")
+        step = read_back(api, attempt, {**NEW_GOAL, "title": words})["changes"][0]["steps"][0]
+        attempt = reply(api, r, attempt, words)
+        assert save(api, attempt, step)["goal"]["title"] == words, words
+
+
+def test_thanks_no_more_after_the_yes_keeps_saving(api):
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set two goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes")
+    save(api, attempt, steps[0])
+    with api.app.state.store.transaction() as c:
+        room = H.conversation(c, get(api, "assistant")["room_id"])
+        H._write_message(
+            c, "human:ana", "bot:assistant", "thanks, no more for now", room, "say", {"assistant": True}, None, None
+        )
+    save(api, attempt, steps[1])
 
 
 def test_a_stop_cited_as_the_yes_saves_nothing(api):

@@ -157,7 +157,7 @@ def agreed(words, count):
     """The change numbers the owner's agreement covers: those it names by number ("yes to 1 and 3", "yes except 2"),
     else all of them. None when it names a number the plan does not have, or the same number both ways: the Assistant
     asks again."""
-    text = " ".join(str(words or "").split())
+    text = _text(words)
     numbers = lambda part: {int(n) for n in re.findall(r"\d+", part or "")}
     if m := SOME.fullmatch(text):
         yes, no = numbers(m["yes"]), numbers(m["no"])
@@ -171,9 +171,15 @@ def agreed(words, count):
     return yes
 
 
+def _text(words):
+    """A message's words with its whitespace collapsed, as the checks below read them."""
+    return " ".join(str(words or "").split())
+
+
 def halts(words):
     """Whether the owner's message after their yes stops the saves not yet made (`_STOP`)."""
-    return bool(_STOP.search(" ".join(str(words or "").split())))
+    text = _text(words)
+    return bool(_STOP_ANYWHERE.search(text) or _STOP_OPENING.match(text))
 
 
 def not_agreed(detail):
@@ -239,7 +245,7 @@ def answered(c, who, cited):
     if halts(msg.get("body")):
         raise not_agreed("The owner's reply stops or changes the plan; it is not a yes")
     numbered = lambda body: bool(SOME.fullmatch(body) or EXCEPT.fullmatch(body))
-    words = " ".join(str(msg.get("body") or "").split())
+    words = _text(msg.get("body"))
     if not numbered(words):
         back_at = str(back["created_at"])
         for said in c.execute(
@@ -247,7 +253,7 @@ def answered(c, who, cited):
             "AND id<>? AND deleted_at IS NULL",
             (room, who.actor, back_at, at, cited),
         ):
-            if numbered(" ".join(str(said["body"] or "").split())):
+            if numbered(_text(said["body"])):
                 raise not_agreed(
                     "The owner said yes to some of this read-back by number; read back what is left and save on "
                     "their yes to it"
@@ -262,7 +268,7 @@ def answered(c, who, cited):
     yes = agreed(msg.get("body"), len(back["changes"]))
     if yes is None:
         raise not_agreed("The owner's reply names a change the read-back does not have")
-    return back, yes, " ".join(str(msg.get("body") or "").split())[:120]
+    return back, yes, words[:120]
 
 
 # The owner's "no" to a suggestion in their chat (`POST /api/v2/goal-proposals/turned-down`): no read-back and no second
@@ -286,13 +292,16 @@ _BARE_NO = re.compile(
 )
 
 
-# A stop from the owner, anywhere in their message ("ok stop", "actually, wait"): a safe failure when read too widely
-# (the Assistant reads back what is left), so it is broad. "No problem" and "no worries" are not one.
-_STOP = re.compile(
-    rf"\b(?!{_NO_YES})(?:stop|halt|cancel|abort|pause|wait|hold\s+(?:on|off|it|up)|hang\s+on|never\s*mind|"
-    r"nevermind|no|nope|nah|don'?t|do not)\b",
+# A stop from the owner: a safe failure when read too widely (the Assistant reads back what is left), so the
+# unambiguous stop phrases count anywhere in a message ("ok stop", "actually, wait"). "No" and "don't" are everyday
+# words inside an agreement ("yes to 1 and 3, no to 2", "sure, I don't mind"), so they count only when they open it,
+# and "no problem" or "no worries" never.
+_STOP_ANYWHERE = re.compile(
+    r"\b(?<!can't )(?<!cannot )(?:stop|halt|cancel|abort|pause|wait|hold\s+(?:on|off|it|up)|hang\s+on|"
+    r"never\s*mind|nevermind)\b",
     re.I,
 )
+_STOP_OPENING = re.compile(rf"\s*(?!{_NO_YES})(?:no|nope|nah|don'?t|do not)\b", re.I)
 
 
 def turned_down_words(c, cited):
