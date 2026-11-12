@@ -88,28 +88,19 @@ MONTHS = {
     "nov": 11,
     "dec": 12,
 }
-TZ_TOKENS = (
-    "pt",
-    "pst",
-    "pdt",
-    "pacific",
-    "america/los_angeles",
-    "et",
-    "est",
-    "edt",
-    "ct",
-    "cst",
-    "cdt",
-    "mt",
-    "mst",
-    "mdt",
-    "utc",
-    "gmt",
-)
 TZ_RE = re.compile(
     r"(?i)\b(PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|UTC|GMT|"
     r"Pacific(?:\s+Time)?|Eastern(?:\s+Time)?|America/Los_Angeles)\b"
 )
+
+# The zone a recognized token means. A time that names one is that instant, whatever the lint's own zone.
+TZ_ZONES = {
+    **dict.fromkeys(("pt", "pst", "pdt", "pacific", "pacific time", "america/los_angeles"), "America/Los_Angeles"),
+    **dict.fromkeys(("et", "est", "edt", "eastern", "eastern time"), "America/New_York"),
+    **dict.fromkeys(("ct", "cst", "cdt"), "America/Chicago"),
+    **dict.fromkeys(("mt", "mst", "mdt"), "America/Denver"),
+    **dict.fromkeys(("utc", "gmt"), "UTC"),
+}
 
 # A time is a date plus a clock reading: minutes ("Sep 8, 13:00") or am/pm ("Sep 8 at 1pm"). A
 # bare date ("August 24 notice", "January 19 letter") is a date, not an offered slot; the old regex split "August 24" into the 2nd at 4 o'clock and blocked an approved legal
@@ -122,8 +113,8 @@ TIME_RE = re.compile(r"""(?ix)
     (?P<h>\d{1,2})(?=:\d{2}|\s*[ap]\.?m\.?\b)(?::(?P<min>\d{2}))?\s*(?P<ap>[ap]\.?m\.?)?
     (?:\s*(?:[-–—]|to)\s*
        (?P<h2>\d{1,2})(?::(?P<min2>\d{2}))?\s*(?P<ap2>[ap]\.?m\.?)?)?
-    \s*(?P<tz>PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|UTC|GMT|Pacific(?:\s+Time)?|
-        Eastern(?:\s+Time)?|America/Los_Angeles)?
+    \s*(?P<tz>(?:PT|PST|PDT|ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|UTC|GMT|Pacific(?:\s+Time)?|
+        Eastern(?:\s+Time)?|America/Los_Angeles)\b)?
 """)
 
 
@@ -198,18 +189,22 @@ def parse_times(text, now=None, tz_name=DEFAULT_TZ):
         minute = int(m.group("min") or 0)
         if hour > 23 or minute > 59:
             continue
-        start = _year_for(mon, int(m.group("day")), hour, minute, now, tz)
+        named_tz = m.group("tz") and zone(TZ_ZONES[" ".join(m.group("tz").lower().split())])
+        start = _year_for(mon, int(m.group("day")), hour, minute, now, named_tz or tz)
         if start is None:
             continue
         end = None
         if m.group("h2"):
             h2 = _hour24(m.group("h2"), m.group("ap2") or m.group("ap"))
-            if h2 <= 23:
-                end = start.replace(hour=h2, minute=int(m.group("min2") or 0))
+            min2 = int(m.group("min2") or 0)
+            if h2 <= 23 and min2 <= 59:
+                end = start.replace(hour=h2, minute=min2)
                 if end <= start:
                     end = start + timedelta(minutes=DEFAULT_MEETING_MINUTES)
-        near = (text or "")[max(0, m.start() - 40) : m.end() + 40].lower()
-        named = bool(m.group("tz")) or any(t in near for t in TZ_TOKENS)
+        start, end = start.astimezone(tz), end and end.astimezone(tz)
+        # Search the whole text from the window's start so a window that begins inside "meet" keeps its real word edge.
+        nearby = TZ_RE.search(text, max(0, m.start() - 40))
+        named = bool(m.group("tz")) or bool(nearby and nearby.start() < m.end() + 40)
         out.append({"text": " ".join(m.group(0).split()), "start": start, "end": end, "tz_named": named})
     return out
 
