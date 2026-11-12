@@ -27,6 +27,7 @@ from backend.tests.helpers.member_bots import botops  # noqa: F401 - fixture for
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.names import SUPPORT_ACTOR
+from backend.execution import bot_claimable
 from backend.settings_admin import repository_present
 from backend import bot_settings as BS
 from backend.tests.helpers.cloud_machines import (
@@ -2565,6 +2566,26 @@ def test_a_move_refused_for_good_lets_the_bot_take_turns_where_it_is_again(cloud
     cloud.tick()
     assert placed(cloud)["ops"] == shared["runner_id"] and not cloud.row()["move_drain"]
     assert claim_on(cloud, shared, "ops") and leased(cloud, shared["runner_id"]) == ["ops"]
+
+
+def test_a_move_drain_left_when_the_new_machines_computer_goes_away_is_lifted_at_the_next_look(cloud):
+    shared = shared_computer(cloud)
+    ready(cloud.api, shared, ["ops"])
+    assert claim_on(cloud, shared, "ops")
+    post(cloud.api, "bots/ops/cloud-machine", {"placement": "own"})
+    cloud.tick()
+    post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm", "platform": "linux"})
+    assert cloud.row()["move_drain"]
+    with cloud.store.transaction() as c:  # its turn ends, and the new machine's computer is gone before the next look
+        c.execute("UPDATE attempts SET lease_until=0 WHERE bot_id='ops'")
+        cloud.api.app.state.execution.expire(c)
+        CM.save(c, "ops", runner_id=None)
+    work(cloud, text="And the next thing")
+    cloud.tick()
+    # Nothing to move to: the drain is lifted, and nothing holds the bot's claim for a move any more.
+    assert not cloud.row()["move_drain"] and placed(cloud)["ops"] == shared["runner_id"]
+    with cloud.store.read() as c:
+        assert bot_claimable(c, cloud.store.settings, shared["runner_id"], "ops")[0] != "moving"
 
 
 def control(cloud, action, bot="ops"):
