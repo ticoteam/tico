@@ -620,6 +620,326 @@ def ask_id(entry: Row) -> str:
     return f"{entry['visit_id']}:{entry['requirement_id']}"
 
 
+# The open tasks Needs you reads: on the engine, open, and not set aside by a person (a bot's snooze hides no ask,
+# `listed`). `%s` is what to select; the predicate is the partial index tasks_open_pipeline's, word for word.
+_OPEN_SQL = (
+    "SELECT %s FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL "
+    "AND s.by_id NOT LIKE 'bot:%%') ORDER BY t.id"
+)
+# What `candidates` reads of every open task when the person may be on its ladder (`_ladder_people`).
+_OPEN_ROWS = (
+    "t.id, t.owner_id, t.requester_id, t.private, t.readers, t.pipeline_id, t.stage_id, "
+    "v.id AS visit_id, v.level, v.person_id"
+)
+_OPEN_JOIN = "tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL"
+# Of the requirements of every stage and of every open visit, what says whether a task may fall to its ladder.
+_STAGE_ASKS = (
+    "SELECT stage_id, kind, person_id, condition FROM requirements WHERE stage_id IS NOT NULL AND withdrawn_at IS NULL"
+)
+_VISIT_ASKS = (
+    "SELECT r.visit_id, r.kind, r.person_id, r.condition FROM visits v JOIN requirements r ON r.visit_id = v.id "
+    "WHERE v.left_at IS NULL AND r.withdrawn_at IS NULL"
+)
+# GitHub conditions whose standing names the task's owner, GitHub or nobody's turn, never a person by the ladder.
+_NAMED_CONDITIONS = ("pr_open", "checks_pass", "pr_merged")
+_ASK_KINDS = ("ok", "answer", "page")
+
+
+def _listed(values: Iterable[str]) -> tuple[str]:
+    return (json.dumps(sorted({str(value) for value in values if value})),)
+
+
+def _ladder_ask(conn: "sqlite3.Connection", requirement: Row, private: bool = False) -> bool:
+    """Whether a requirement may wait on nobody it names, so the task's person (`person_for`) has it: an OK, a
+    question or a page naming nobody, or a person who left; GitHub's release condition when only a person can act. On
+    a private task, any ask: whoever it names may not read the task (`unreadable`)."""
+    kind, named = requirement["kind"], requirement["person_id"]
+    if kind in _ASK_KINDS:
+        return private or not named or (is_human(named) and not R.active_person(conn, named))
+    return kind == "item" and requirement["condition"] not in _NAMED_CONDITIONS
+
+
+def _ladder_people(conn: "sqlite3.Connection", person: str) -> tuple[bool, set[str]]:
+    """(whether `person` is the company's person, the pipelines whose ladder reaches them): the pipelines they own or
+    manage, or whose manager bot they are the first person above. A task falls to someone else's ladder only through
+    them, a private task's requester and readers aside."""
+    company = company_person(conn) == person
+    pipelines: set[str] = set()
+    above: dict[str, str | None] = {}
+    for found in conn.execute("SELECT id, owner_id, manager_id FROM pipelines").fetchall():
+        pid, owner, manager = str(found[0]), found[1], found[2]
+        if person in (owner, manager):
+            pipelines.add(pid)
+        elif is_bot(manager):
+            if manager not in above:
+                above[manager] = person_above(conn, manager)
+            if above[manager] == person:
+                pipelines.add(pid)
+    return company, pipelines
+
+
+def _blocked_bots(conn: "sqlite3.Connection", person: str, company: bool) -> set[str]:
+    """The bots that cannot run whose fixer (`_fixer`) is `person`: the bots they own, and for the company's person
+    every bot (a cause that stops them all, an owner who left)."""
+    if company:
+        bots = [str(found[0]) for found in conn.execute("SELECT id FROM bots").fetchall()]
+    else:
+        bots = [
+            str(found[0])
+            for found in conn.execute(
+                "SELECT bot FROM bot_config WHERE owner_id IN (?, ?)", (person, actor_id(person))
+            ).fetchall()
+        ]
+    actors = [f"bot:{bot}" for bot in bots]
+    task_wakes.prime_bots(conn, actors)
+    seen = _seen(conn)
+    out: set[str] = set()
+    for bot in actors:
+        cause = task_wakes.cannot_run(conn, bot, seen)
+        if cause and _fixer(conn, bot, cause) == person:
+            out.add(bot)
+    return out
+
+
+def _held_tasks(conn: "sqlite3.Connection") -> set[str]:
+    """The tasks one of whose bots is held on them (task_wakes.task_cause): a held run, runs that can't start, or a
+    worktree wait. Few at any time."""
+    from . import start_holds
+
+    SH: Any = start_holds
+    TW: Any = task_wakes  # its held-runs read for every task, as task_wakes.prime_holds reads it
+    out = {str(found[0]) for found in conn.execute(TW._held_runs_sql(many=True)).fetchall()}
+    out |= {str(found[0]) for found in conn.execute(SH.held_sql(many=True), (_core.KEEPER, SH.EVENT)).fetchall()}
+    return out | set(task_wakes.worktree_holds(conn))
+
+
+def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
+    """The open tasks that can put something in `person`'s Needs you, in id order: every task `needs_by_person` would
+    list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`, `needs_by_person`):
+
+    - it is theirs (its owner), the ladder already brought it to them (its visit's person), or a requirement on its
+      stage or visit names them, or was given to them;
+    - a page on it that names nobody asks again whoever sent it back or whose OK lapsed (an answer of theirs);
+    - a bot they fix cannot run (`_fixer`) and the task is that bot's turn: its owner, its pipeline's manager, a
+      requirement naming or given to it, a page's reviewer, a conflicting PR's builder;
+    - a bot of it is held on the task itself (task_wakes.task_cause);
+    - nobody it names can act, so it falls to its person (`person_for`), and they are on its ladder: they own or manage
+      its pipeline, are the first person above its manager bot, are the company's person, or ask for or read it;
+    - for the company's person, a cause they fix first (`Wait.fix`, Connect GitHub).
+
+    Most people own or manage no pipeline, so only their own rows are read, by index. Someone whose ladder reaches a
+    pipeline reads a few columns of each of its open tasks, and works out in full only those that may fall to them."""
+    company, pipelines = _ladder_people(conn, person)
+    blocked = _blocked_bots(conn, person, company)
+    named = {person, *blocked}
+    found: set[str] = set(_held_tasks(conn))
+    visits: set[str] = set()
+    stages: set[str] = set()
+    found |= {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT id FROM tasks WHERE owner_id IN (SELECT value FROM json_each(?)) AND status='open'", _listed(named)
+        ).fetchall()
+    }
+    visits |= {
+        str(row[0])
+        for row in conn.execute("SELECT id FROM visits WHERE person_id=? AND left_at IS NULL", (person,)).fetchall()
+    }
+    for stage_id, visit_id in conn.execute(
+        "SELECT stage_id, visit_id FROM requirements WHERE person_id IN (SELECT value FROM json_each(?)) "
+        "AND withdrawn_at IS NULL",
+        _listed(named),
+    ).fetchall():
+        if stage_id:
+            stages.add(str(stage_id))
+        if visit_id:
+            visits.add(str(visit_id))
+    visits |= {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT visit_id FROM answers WHERE answer='give' AND notes IN (SELECT value FROM json_each(?)) "
+            "AND undone_at IS NULL",
+            _listed(named),
+        ).fetchall()
+    }
+    stage_asks = conn.execute(_STAGE_ASKS).fetchall()
+    # A page that names nobody asks whoever sent it back, or whose OK lapsed: on any visit of the task.
+    pages = {str(row[0]) for row in stage_asks if row[1] == "page" and not row[2]}
+    paged = [
+        str(row[0])
+        for row in conn.execute(
+            "SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id = v.id WHERE v.left_at IS NULL "
+            "AND r.kind='page' AND r.person_id IS NULL AND r.withdrawn_at IS NULL "
+            "UNION SELECT task_id FROM visits WHERE left_at IS NULL AND stage_id IN (SELECT value FROM json_each(?))",
+            _listed(pages),
+        ).fetchall()
+    ]
+    if paged:
+        found |= {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT DISTINCT v.task_id FROM visits v JOIN answers a ON a.visit_id = v.id "
+                "WHERE v.task_id IN (SELECT value FROM json_each(?)) AND a.by_id=?",
+                (json.dumps(paged), person),
+            ).fetchall()
+        }
+    if blocked:
+        # A blocked bot may be asked as a page's reviewer (task_requirements.delta_reviewer) or as the builder of a PR
+        # that conflicts (pr_conflicts.builder): every task with a page, and every task with a conflicting PR.
+        stages |= {str(row[0]) for row in stage_asks if row[1] == "page"}
+        found |= {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id = v.id WHERE v.left_at IS NULL "
+                "AND r.kind='page' AND r.withdrawn_at IS NULL"
+            ).fetchall()
+        }
+        found |= set(paged)
+        found |= {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT task_id FROM task_links WHERE kind='pr' AND state IN ('open', 'draft') AND mergeable='conflict'"
+            ).fetchall()
+        }
+        managed = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT id FROM pipelines WHERE manager_id IN (SELECT value FROM json_each(?))", _listed(blocked)
+            ).fetchall()
+        }
+        if managed:
+            found |= {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT id FROM tasks WHERE pipeline_id IN (SELECT value FROM json_each(?)) AND status='open'",
+                    _listed(managed),
+                ).fetchall()
+            }
+    if company:
+        from .item_sources import github as GS
+
+        if GS.first_fix(conn):
+            stages |= {str(row[0]) for row in stage_asks if row[1] == "item"}
+            found |= {
+                str(row[0])
+                for row in conn.execute(
+                    "SELECT v.task_id FROM visits v JOIN requirements r ON r.visit_id = v.id WHERE v.left_at IS NULL "
+                    "AND r.kind='item' AND r.withdrawn_at IS NULL"
+                ).fetchall()
+            }
+    if company or pipelines:
+        found |= _ladder_tasks(conn, person, company, pipelines, stage_asks)
+    else:
+        found |= _private_ladder_tasks(conn, person, stage_asks)
+    if stages:
+        visits |= {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT id FROM visits WHERE stage_id IN (SELECT value FROM json_each(?)) AND left_at IS NULL",
+                _listed(stages),
+            ).fetchall()
+        }
+    if visits:
+        found |= {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT task_id FROM visits WHERE id IN (SELECT value FROM json_each(?)) AND left_at IS NULL",
+                _listed(visits),
+            ).fetchall()
+        }
+    if not found:
+        return []
+    return [
+        str(row[0])
+        for row in conn.execute(
+            _OPEN_SQL.replace("ORDER BY", "AND t.id IN (SELECT value FROM json_each(?)) ORDER BY") % "t.id",
+            _listed(found),
+        ).fetchall()
+    ]
+
+
+def _dicts(cursor: "sqlite3.Cursor") -> list[Row]:
+    names = [d[0] for d in cursor.description]
+    return [dict(zip(names, found, strict=True)) for found in cursor.fetchall()]
+
+
+def _asks_by(rows: Iterable[Any]) -> dict[str, list[Row]]:
+    out: dict[str, list[Row]] = {}
+    for found in rows:
+        out.setdefault(str(found[0]), []).append({"kind": found[1], "person_id": found[2], "condition": found[3]})
+    return out
+
+
+def _falls(conn: "sqlite3.Connection", row: Row, asks: dict[str, list[Row]], visit_asks: dict[str, list[Row]]) -> bool:
+    """Whether an open task may fall to its person (`person_for`) in `of`: the ladder brought it to a person, or to
+    its manager; nobody owns it, or its owner left (`holder`); or a requirement on it waits on nobody it names, or on
+    someone who may not read this private task (`_ladder_ask`)."""
+    owner = row["owner_id"]
+    if row["level"] in ("person", "manager") or not owner:
+        return True
+    if is_human(owner) and not R.active_person(conn, owner):
+        return True
+    private = row["private"] is None or bool(row["private"])
+    requirements = chain(asks.get(str(row["stage_id"]), ()), visit_asks.get(str(row["visit_id"]), ()))
+    return any(_ladder_ask(conn, requirement, private) for requirement in requirements)
+
+
+def _ladder_tasks(
+    conn: "sqlite3.Connection", person: str, company: bool, pipelines: set[str], stage_asks: list[Any]
+) -> set[str]:
+    """The open tasks that may fall to `person` by the ladder (`_falls`), reading a few columns of each open task of
+    the pipelines whose ladder reaches them (every pipeline, for the company's person), and of private tasks they ask
+    for or read."""
+    asks = _asks_by(stage_asks)
+    visit_asks = _asks_by(conn.execute(_VISIT_ASKS).fetchall())
+    out: set[str] = set()
+    for row in _dicts(conn.execute(_OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN) % _OPEN_ROWS)):
+        if not (company or row["pipeline_id"] in pipelines or _reads(conn, person, row)):
+            continue
+        if _falls(conn, row, asks, visit_asks):
+            out.add(str(row["id"]))
+    return out
+
+
+def _reads(conn: "sqlite3.Connection", person: str, row: Row) -> bool:
+    """Whether a private task falls to `person` last on its ladder: they asked for it, or are on its reader list."""
+    from . import hubdb
+
+    H: Any = hubdb
+    if not (row["private"] is None or row["private"]):
+        return False
+    return row["requester_id"] == person or person in H.reader_actors(conn, row)
+
+
+def _private_ladder_tasks(conn: "sqlite3.Connection", person: str, stage_asks: list[Any]) -> set[str]:
+    """`_ladder_tasks` for someone whose ladder reaches no pipeline: only private tasks they ask for or read."""
+    rows = [
+        row
+        for row in _dicts(
+            conn.execute(
+                _OPEN_SQL.replace("FROM tasks t", "FROM " + _OPEN_JOIN).replace(
+                    "WHERE ", "WHERE (t.private IS NOT 0) AND (t.requester_id=? OR t.readers IS NOT NULL) AND ", 1
+                )
+                % _OPEN_ROWS,
+                (person,),
+            )
+        )
+        if _reads(conn, person, row)
+    ]
+    if not rows:
+        return set()
+    asks = _asks_by(stage_asks)
+    visit_asks = _asks_by(
+        conn.execute(
+            "SELECT visit_id, kind, person_id, condition FROM requirements WHERE withdrawn_at IS NULL "
+            "AND visit_id IN (SELECT value FROM json_each(?))",
+            _listed(str(row["visit_id"]) for row in rows),
+        ).fetchall()
+    )
+    return {str(row["id"]) for row in rows if _falls(conn, row, asks, visit_asks)}
+
+
 def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     """Needs you, for one person, oldest first. A task whose work is theirs is listed once (`kind` "task"), however many
     requirements are missing. Each OK or answer that names them is its own entry (`kind` "ask"). A bot that cannot run
@@ -629,25 +949,39 @@ def needs(conn: "sqlite3.Connection", person: str) -> list[Row]:
     listed. A bot's snooze hides no ask: each OK or answer still asked of a person stays in their list (Acme rc.5, Nov
     11: a manager bot's snooze took a people-only OK out of the person's list for two days); the rest of the task is
     set aside. An ask the stage's merge conflict waits on says so in one more sentence
-    (pr_conflicts.held)."""
-    return needs_by_person(conn).get(person, [])
+    (pr_conflicts.held).
+
+    Read from the tasks that can put something in this person's list (`candidates`), each worked out as
+    `needs_by_person` works out every task, so the list is the one it gives this person, item for item."""
+    if not is_human(person):
+        return []
+    return _lists(conn, candidates(conn, person), person).get(person, [])
 
 
 def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
     """Every person's Needs you (`needs`), by person, from one pass over the open tasks: each task and its waits are
     read once, whoever they are for, where asking `needs` for each person reads every task again for each. A person
     with nothing to act on has no key. "Can this bot run" is kept for the snapshot (`_seen`)."""
+    return _lists(conn, [str(found[0]) for found in conn.execute(_OPEN_SQL % "t.id").fetchall()])
+
+
+class _Everyone:
+    """`only` for `_lists` when every person's list is wanted."""
+
+    def __contains__(self, person: object) -> bool:
+        return True
+
+
+def _lists(conn: "sqlite3.Connection", task_ids: list[str], *only_people: str) -> dict[str, list[Row]]:
+    """Needs you from these open tasks (in id order), for every person, or only for `only_people`: each task's waits
+    are worked out whoever they are for, and only the chosen people's entries are kept."""
+    only: Any = set(only_people) if only_people else _Everyone()
     out: dict[str, list[Row]] = {}
     paused: dict[str, dict[str, Row]] = {}
     seen = _seen(conn)
     fixers: dict[str, str | None] = {}
-    rows = conn.execute(
-        "SELECT t.id FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.status='open' "
-        "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL "
-        "AND s.by_id NOT LIKE 'bot:%') ORDER BY t.id"
-    ).fetchall()
-    read = prime(conn, [str(found[0]) for found in rows])
-    for (task_id,) in rows:
+    read = prime(conn, task_ids)
+    for task_id in task_ids:
         row = read[str(task_id)] if str(task_id) in read else E.task(conn, task_id)
         if row is None:  # the query lists only tasks on the engine
             raise LookupError(f"task {task_id} is not on the engine")
@@ -655,7 +989,7 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
         waits = listed(of(conn, row, seen, standings), row)
         held = next((s for s in standings if pr_conflicts.held(s)), None)
         kinds = {str(s.requirement["id"]): str(s.requirement.get("kind")) for s in standings}
-        people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who})
+        people = sorted({str(wait.who) for wait in waits if wait.state == PERSON and wait.who and wait.who in only})
         for person in people:
             mine = [wait for wait in waits if wait.state == PERSON and wait.who == person]
             if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
@@ -699,7 +1033,7 @@ def needs_by_person(conn: "sqlite3.Connection") -> dict[str, list[Row]]:
                 if wait.who not in fixers:
                     fixers[wait.who] = _fixer(conn, wait.who, seen.get(actor_id(wait.who)))
                 fixer = fixers[wait.who]
-            if not fixer:
+            if not fixer or fixer not in only:
                 continue
             fresh: Row = {"kind": "paused", "line": wait.line, "bots": [], "tasks": [], "since": wait.since or ""}
             if wait.fix or wait.href:
