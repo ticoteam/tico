@@ -959,15 +959,6 @@ def _(w):
     return task_id
 
 
-@situation("merged, a pre-release holds it and pre-releases count")
-def _(w):
-    task_id = merged(w, release={"prereleases": True}, published=(("v0.9.0", "2026-01-01T00:00:00.000000Z"),))
-    Seam.refresh(w.store, w.gh, later())
-    w.gh.publish(REPO, "v1.0.0-rc.1", at="2099-01-01T00:00:00.000000Z")
-    Seam.refresh(w.store, w.gh, later(20))
-    return task_id
-
-
 @situation("merged, release repo is another repo")
 def _(w):
     task_id = merged(w, release={"release_repo": OTHER})

@@ -174,13 +174,10 @@ def idea_to_done(r: SoftRig) -> None:
     r.gh.merge(2)
     r.settle()
 
-    # 8. Release: a pre-release does not count (D3, off by default); the release does.
+    # 8. Release: a published pre-release containing the merge counts (prereleases are on by default).
     r.at(e, "Release")
     r.says(e, "Waiting for the next release of acme/app")
     r.gh.publish("v1.1.0-rc.1", prerelease=True)
-    r.settle(300)
-    r.at(e, "Release")
-    r.gh.publish("v1.1.0")
     r.settle(300)
     expect(r.row(e)["status"] == "done", f"the Engineering task is {r.row(e)['status']}: {r.lines(e)}")
 

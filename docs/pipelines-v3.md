@@ -1112,7 +1112,8 @@ late. Nothing depends on the exact 10 seconds.
 - **Leaving Merge backwards, or closing,** takes the PRs out of the queue. That call doesn't exist today and gets built.
   If GitHub merges one first, the task shows "PR merged anyway" and the manager bot is told once.
 - **In a release** means the merge commit is in the commit history of a published release of the release repo: not a
-  draft, and no dash in the tag unless the In a release setting "Pre-releases count" is on (off by default). Time
+  draft. Pre-releases count by default, including tags with a dash; explicitly turn off In a release's
+  "Pre-releases count" setting to require a stable release. Time
   plays no part. A repo that publishes no releases: met once merged (C31). Checked when a release publishes and on the 5-minute read.
 - **Release.** In a release's setting **Release with** says how Tico cuts one: `workflow:<file>` (Tico runs that
   workflow on the default branch; the App's Actions: write), `tag` (Tico creates the tag the Release Owner names at the

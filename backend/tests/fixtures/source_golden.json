@@ -4806,132 +4806,6 @@
    "pr_queued"
   ]
  },
- "merged, a pre-release holds it and pre-releases count": {
-  "stage": "Done",
-  "status": "done",
-  "level": "owner",
-  "requirements": [],
-  "github_kinds": [
-   {
-    "kind": "pr_open",
-    "state": "met",
-    "whose": null,
-    "line": "PR open",
-    "can_push_past": true
-   },
-   {
-    "kind": "checks_pass",
-    "state": "met",
-    "whose": null,
-    "line": "Checks pass",
-    "can_push_past": true
-   },
-   {
-    "kind": "pr_merged",
-    "state": "met",
-    "whose": null,
-    "line": "Merged",
-    "can_push_past": false
-   },
-   {
-    "kind": "in_release",
-    "state": "met",
-    "whose": null,
-    "line": "In v1.0.0-rc.1",
-    "can_push_past": false
-   }
-  ],
-  "waiting": [],
-  "turn": null,
-  "prs": [
-   {
-    "ref": "acme/app#1",
-    "fact": {
-     "state": "merged",
-     "draft": false,
-     "head": "sha2",
-     "checks_state": "success",
-     "checks": [
-      [
-       "check-1",
-       "success",
-       false
-      ]
-     ],
-     "merged_sha": "sha3",
-     "merged_at": true,
-     "queue_state": "none",
-     "queued_at": false,
-     "removed_at": false,
-     "removed_reason": null,
-     "failing_check": null,
-     "failing_check_url": null,
-     "head_seen_at": true,
-     "checks_started_at": false,
-     "read_again": false
-    }
-   }
-  ],
-  "releases": {
-   "acme/app": {
-    "read": true,
-    "publishes": true,
-    "releases": [
-     {
-      "tag": "v1.0.0-rc.1",
-      "commit": "sha3",
-      "prerelease": false,
-      "holds": [
-       [
-        "sha3",
-        true
-       ]
-      ]
-     },
-     {
-      "tag": "v0.9.0",
-      "commit": "sha1",
-      "prerelease": false,
-      "holds": []
-     }
-    ]
-   }
-  },
-  "effects": [
-   {
-    "kind": "queue_pr",
-    "state": "done",
-    "tries": 1,
-    "ref": "acme/app#1",
-    "head": "sha2",
-    "error": null
-   }
-  ],
-  "due": [],
-  "github_calls": [
-   [
-    "ready",
-    "acme/app",
-    1
-   ],
-   [
-    "enqueue",
-    "acme/app",
-    1,
-    "sha2"
-   ]
-  ],
-  "wakes": [
-   [
-    "<task>:<visit1>:owner:0",
-    "bot:builder"
-   ]
-  ],
-  "older_pr_pass_items": [],
-  "events": [
-   "pr_queued"
-  ]
- },
  "merged, a release holds it: Done": {
   "stage": "Done",
   "status": "done",
@@ -5059,18 +4933,10 @@
   ]
  },
  "merged, only a pre-release holds it": {
-  "stage": "Release",
-  "status": "open",
+  "stage": "Done",
+  "status": "done",
   "level": "owner",
-  "requirements": [
-   {
-    "kind": "in_release",
-    "state": "waiting",
-    "whose": "github",
-    "line": "Waiting for the next release of acme/app",
-    "can_push_past": false
-   }
-  ],
+  "requirements": [],
   "github_kinds": [
    {
     "kind": "pr_open",
@@ -5095,19 +4961,13 @@
    },
    {
     "kind": "in_release",
-    "state": "waiting",
-    "whose": "github",
-    "line": "Waiting for the next release of acme/app",
+    "state": "met",
+    "whose": null,
+    "line": "In v1.0.0-rc.1",
     "can_push_past": false
    }
   ],
-  "waiting": [
-   [
-    "github",
-    null,
-    "Waiting for the next release of acme/app"
-   ]
-  ],
+  "waiting": [],
   "turn": null,
   "prs": [
    {
@@ -5147,7 +5007,12 @@
       "tag": "v1.0.0-rc.1",
       "commit": "sha3",
       "prerelease": false,
-      "holds": []
+      "holds": [
+       [
+        "sha3",
+        true
+       ]
+      ]
      },
      {
       "tag": "v0.9.0",

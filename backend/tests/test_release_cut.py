@@ -292,8 +292,7 @@ def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person
         assert waits[1].line == waiting[2]
         assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
         assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
-    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # a pre-release does not count here (D3)
-    gh.publish(REPO, "v1.0.0")  # the person's release
+    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # the person's prerelease counts by default
     F.refresh(company, gh, H.shift(H.now(), minutes=20))
     with company.transaction() as c:
         assert stage(c, task_id) == "Done"
@@ -323,7 +322,7 @@ def test_only_a_person_changes_how_releases_are_cut(company):
         for change in (
             setting(release_with="tag"),
             setting(release_with="workflow:release.yml"),
-            setting(prereleases=True),
+            setting(prereleases=False),
             setting(release_repo="acme/server"),
             added,
         ):
@@ -331,6 +330,11 @@ def test_only_a_person_changes_how_releases_are_cut(company):
                 edit(EM, change)  # the pipeline's manager bot
             assert raised.value.rule == "task_settings"
         edit(EM, lambda stage: stage.update(expected_minutes=600))  # the rest of it a manager bot still changes
+        assert edit(EM, setting(prereleases=True))  # explicitly enabling the default changes no policy
+        assert edit(ANA, setting(prereleases=False))
+        with pytest.raises(H.Refused, match="Only a person changes how releases are cut"):
+            edit(EM, lambda stage: stage["requirements"][0]["settings"].pop("prereleases"))
+        assert edit(ANA, lambda stage: stage["requirements"][0]["settings"].pop("prereleases"))
         assert edit(ANA, setting(release_with="tag", prereleases=True))  # a person may
         with pytest.raises(H.Refused, match="Only a person changes how releases are cut"):
             edit(EM, setting(release_with=""))  # and a bot may not take it back either
@@ -368,11 +372,36 @@ def test_the_tool_reads_github_first_and_names_the_release_that_already_holds_th
     assert gh.cuts == []
 
 
-def test_a_pre_release_the_requirement_does_not_count_is_no_reason_not_to_cut(company, gh):
+def test_a_pre_release_satisfies_in_release_by_default(company, gh):
+    task_id = to_release(company, gh)
+    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)
+    assert F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Done"
+
+
+def test_a_pre_release_does_not_satisfy_in_release_when_explicitly_disabled(company, gh):
+    from backend import pipeline_settings as PS
+
     task_id = to_release(company, gh)
     with company.transaction() as c:
-        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
+        record = PS.read(c, "eng")
+        for step in record["stages"]:
+            for req in step["requirements"]:
+                if req.get("condition") in ("pr_merged", "in_release"):
+                    req["can_push_past"] = False  # saved requirements enforce C3
+                if req.get("condition") == "in_release":
+                    req["settings"]["prereleases"] = False  # the editor's explicit off payload
+        PS.save(c, ANA, record, seen_version=record["settings_version"])
+        reloaded = PS.read(c, "eng")
+        release = next(s for s in reloaded["stages"] if s["name"] == "Release")["requirements"][0]
+        assert release["settings"] == {**WORKFLOW, "prereleases": False}
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)
+    assert F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
+        assert GR.released(c, task_id) == []
+        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
     F.run(company, gh)
     assert gh.cuts == [(REPO, "workflow", "release.yml", "")]
     with company.transaction() as c:
