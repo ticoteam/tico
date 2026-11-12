@@ -303,6 +303,38 @@ class Changes(Batches):
         rule_lines = [l for l in self.audit_lines() if l["action"] == "rule"]
         self.assertEqual(len(rule_lines), 75)
 
+    def test_an_unsubscribe_that_fails_stops_the_run_after_the_messages_before_it_are_changed(self):
+        """As one message at a time: the messages before the failing unsubscribe are labelled, archived and recorded,
+        the failing one and those after it are not."""
+        rules = self.root / "rules.yaml"
+        rules.write_text(
+            "mailboxes:\n  ana@acme.example:\n"
+            "    - id: newsletters\n      when: {has_unsubscribe_link: true}\n"
+            "      do: {label: hub/newsletter, unsubscribe: true, archive: true}\n"
+        )
+        news = [i for n, i in enumerate(self.ids()) if n % 2]
+        broken = news[3]
+
+        def unsubscribe(ctx, mid):
+            if mid == broken:
+                raise Failure(f"Gmail messages.get failed for {BOX}: boom", "", status=500)
+            return {"accepted": True, "status": "accepted"}
+
+        with (
+            mock.patch.object(cli, "RULES_FILE", rules),
+            mock.patch.object(cli, "unsubscribe_message", side_effect=unsubscribe),
+        ):
+            rc, out, _ = self.run_cli(
+                "rules", "run", "--as", "inbox", "--mailbox", BOX, "--since", "2026-08-31T00:00:00Z", "--json"
+            )
+        self.assertNotEqual(rc, 0, out)
+        self.assertEqual(self.service.batch_modifies, [news[:3]])
+        self.assertEqual([l["target"] for l in self.audit_lines() if l["action"] == "rule"], news[:3])
+        self.assertTrue(all("INBOX" not in self.service.store[i]["labelIds"] for i in news[:3]))
+        self.assertTrue(all("INBOX" in self.service.store[i]["labelIds"] for i in news[3:]))
+        hits = self.conn().execute("SELECT msg_id FROM rule_hits ORDER BY msg_id").fetchall()
+        self.assertEqual([h[0] for h in hits], news[:3])
+
 
 # ---------------------------------------------------------------- the real google client library
 

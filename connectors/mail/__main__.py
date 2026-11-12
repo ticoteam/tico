@@ -1136,14 +1136,23 @@ def apply_plans(ctx, planned):
 
     Each unsubscribe goes first, before any message is archived. The messages that get exactly the same change (the
     same labels added and removed) then go to Gmail together (change_many); a message's rule hits, audit lines and
-    local copy are written only once its change succeeded."""
-    for msg, plan in planned:
+    local copy are written only once its change succeeded. An unsubscribe that fails (not a refusal) still fails the
+    run, after the messages before it are changed and recorded, as one message at a time did."""
+    for n, (msg, plan) in enumerate(planned):
         if plan.get("unsubscribe"):
             try:
                 plan["unsubscribe_result"] = unsubscribe_message(ctx, msg["id"])
             except Refused:
                 plan["unsubscribe_result"] = {"status": "not_authorized", "accepted": False}
                 ctx.audit("unsubscribe-skipped", msg["id"], plan["unsubscribe_result"])
+            except Failure:
+                _change_planned(ctx, planned[:n])
+                raise
+    _change_planned(ctx, planned)
+
+
+def _change_planned(ctx, planned):
+    """The label changes of planned messages whose unsubscribes are done, grouped by change."""
     groups = {}  # (add, remove) -> [(message, plan)], in run order
     for msg, plan in planned:
         add, remove = _plan_change(plan)
