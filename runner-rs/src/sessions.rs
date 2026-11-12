@@ -772,7 +772,7 @@ pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory:
     if let Err(problem) = crate::repo_safety::outside_installation(path) {
         return problem;
     }
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let timeout = 45;
     let done: Result<String, Fault> = async {
         let folders: Vec<&str> = MEMORY_FOLDERS
@@ -1055,7 +1055,7 @@ pub async fn sync_shared(path: &Path, turn: &Env) -> String {
     if !path.join(".git").exists() {
         return "the checkout is missing".into();
     }
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let done: Result<String, Fault> = async {
         let dirty = g(path, &env, &["status", "--porcelain"], 15).await?;
         if !dirty.ok() {
@@ -1140,9 +1140,10 @@ pub fn own_sync_line(path: &Path, problem: &str) -> String {
 }
 
 /// After a push refused as behind: put the unpushed commits on top of what the remote gained (merge when they
-/// hold a merge), or say why not. Never forces or drops a commit; a conflict is undone (service.py catch_up).
+/// hold a merge), or say why not. Never forces or drops a commit. Lines both sides added to a memory note are both
+/// kept (safegit::MERGE_ATTRIBUTES); any other conflict is undone (service.py catch_up).
 pub async fn catch_up(path: &Path, turn: &Env) -> String {
-    let env = crate::safegit::committing_environment(turn);
+    let env = crate::safegit::merging_environment(turn);
     let mut step = "rebase";
     let done: Result<String, Fault> = async {
         let dirty = g(path, &env, &["status", "--porcelain", "--untracked-files=no"], 15).await?;
@@ -1957,8 +1958,8 @@ impl Runner {
         }
     }
 
-    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is a
-    /// person's job, said once an hour per checkout (service.py push).
+    /// Best-effort push; a push refused as behind is caught up and pushed again. One that still fails is BotOps'
+    /// job: the line said once an hour per checkout is what the health check files for BotOps (service.py push).
     pub async fn push_checkout(&self, path: &Path, env: &Env) -> bool {
         self.push_checkout_as(path, env, true).await
     }
@@ -1971,7 +1972,12 @@ impl Runner {
             let (ahead, mut error) = crate::execute::push_repo(path, env).await;
             let mut ahead = ahead;
             if error == "non-fast-forward" && !catch_up_remote {
-                error = "the remote has commits this checkout doesn't; it is rebased after the bot's next turn".into();
+                // Not stuck: the bot's next turn rebases and pushes. Only a catch-up that fails is BotOps' to fix.
+                log(&format!(
+                    "Tico runner: {} has {ahead} unpushed commits behind its remote; they are rebased and pushed after the bot's next turn",
+                    path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+                ));
+                return false;
             } else if error == "non-fast-forward" {
                 error = catch_up(path, env).await;
                 if error.is_empty() {
@@ -1995,7 +2001,7 @@ impl Runner {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
-            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); leaving it for a person"));
+            log(&format!("Tico runner: {name} has {ahead} unpushed commits and push failed ({error}); left for BotOps"));
         }
         false
     }
