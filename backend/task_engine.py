@@ -37,6 +37,7 @@ NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
 FIRST_TRY_S = 120  # seconds after a wake before the never-stuck check looks at a bot that stopped early
+HANDED_OVER_S = 24 * 3600  # a hand-off in Product's Ideas is its owner's turn this long, then Late (`handed_over`)
 GUARDED = ("status", "stage_id", "owner_id", "pipeline_id")
 
 
@@ -452,7 +453,7 @@ def _turn_of(conn: "sqlite3.Connection", row: Row) -> tuple[str | None, str]:
     (C25); a bot named on an OK is told what it is asked. None when it is nobody's turn, or a person's."""
     from . import waiting_on as W
 
-    if row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
+    if row["status"] != "open" or row.get("snooze") or (row["stage"].get("by_hand") and not handed_over(conn, row)):
         return None, ""
     waits = W.of(conn, row)
     target = W.turn(conn, row, waits, paused=True)
@@ -1092,6 +1093,51 @@ def not_held_by_hand(conn: "sqlite3.Connection", row: Row) -> bool:
     if not is_human(row.get("requester_id")):
         return False
     return not conn.execute("SELECT 1 FROM links WHERE to_task_id=?", (row["id"],)).fetchone()
+
+
+def handed_over(conn: "sqlite3.Connection", row: Row) -> bool:
+    """Work someone else handed to the owner bot in a by-hand stage that moves a person's request on (Product's
+    Ideas): a bot that is not the owner filed it there as its requester, or moved it back there. It is the owner's
+    turn, due `HANDED_OVER_S` after it entered (`handover_due`): move it on, or snooze it to park it. Past that it is
+    Late and the pipeline's manager bot is woken once (never_stuck._handoffs). An owner's own ideas, a task a person
+    put there, a person's request on its first visit (`not_held_by_hand`) and a snoozed task rest as before; so does
+    every task in a by-hand stage with the setting off (Growth's Ideas, Monitoring's Watching)."""
+    stage_row: Row = row.get("stage") or {}
+    visit: Row = row.get("visit") or {}
+    owner = row.get("owner_id")
+    if row.get("status") != "open" or not stage_row.get("by_hand") or not stage_row.get("requests_move_on"):
+        return False
+    if not visit or row.get("snooze") or not is_bot(owner) or row.get("requester_id") == owner:
+        return False
+    if not_held_by_hand(conn, row):
+        return False
+    if visit.get("entered_how") == "new":
+        by = row.get("requester_id")
+    else:
+        # Who moved it in: the one who closed the visit before this one.
+        found = conn.execute(
+            "SELECT by_id FROM visits WHERE task_id=? AND left_at IS NOT NULL AND left_at <= ? "
+            "ORDER BY left_at DESC, rowid DESC LIMIT 1",
+            (row["id"], visit["entered_at"]),
+        ).fetchone()
+        by = found[0] if found else None
+    return is_bot(by) and by != owner
+
+
+def handover_due(conn: "sqlite3.Connection", row: Row) -> str:
+    """When a hand-off (`handed_over`) is Late: `HANDED_OVER_S` after it entered the stage, plus the time it spent
+    snoozed there since."""
+    H = _h()
+    visit: Row = row["visit"]
+    snoozed = 0.0
+    for created, ended in conn.execute(
+        "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=? AND ended_at IS NOT NULL",
+        (row["id"], visit["id"]),
+    ).fetchall():
+        start, end = H.parse_ts(created), H.parse_ts(ended)
+        if start and end:
+            snoozed += max((end - start).total_seconds(), 0.0)
+    return str(H.shift(visit["entered_at"], seconds=HANDED_OVER_S + int(snoozed)))
 
 
 def fill_open_slots(conn: "sqlite3.Connection", stage_ids: Sequence[str] | None = None) -> list[str]:
