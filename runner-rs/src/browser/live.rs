@@ -82,7 +82,7 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
     let mut s = Session::start(launched, None, dir.join("files"))
         .await
         .unwrap();
-    let here = vec!["http://127.0.0.1".to_string()];
+    let here = vec![format!("http://127.0.0.1:{port}")];
 
     s.open(&format!("http://127.0.0.1:{port}/login"), &here)
         .await
@@ -125,12 +125,6 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
         "a label is not repeated: {after}"
     );
     assert!(!after.contains("pw-canary-9"));
-    let (url, _) = s.info().await;
-    assert_eq!(
-        s.signed_in(&url, &here).await,
-        Some(false),
-        "a password field shows"
-    );
 
     // The page's "show" eye makes the password field a text field: it still reads as filled, never its value.
     s.click(&ref_of(&after, "Show")).await.unwrap();
@@ -149,11 +143,6 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
         "{line}"
     );
     assert!(!flipped.contains("pw-canary-9"), "{flipped}");
-    assert_eq!(
-        s.signed_in(&url, &here).await,
-        None,
-        "the same page, not a later one"
-    );
     // A screenshot covers the shown value (it differs from one taken without covering), and puts the field back.
     let style = "document.getElementById('pw').getAttribute('style')";
     let before = s.eval(style, true).await.unwrap();
@@ -174,8 +163,8 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
 
     // The same page under another host name is not the tool's site: nothing is typed.
     let both = vec![
-        "http://127.0.0.1".to_string(),
-        "http://localhost".to_string(),
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
     ];
     s.open(&format!("http://localhost:{port}/login"), &both)
         .await

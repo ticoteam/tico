@@ -1,7 +1,7 @@
 //! Finding and starting Google Chrome: the copy Google installs and updates (`/Applications/Google Chrome.app` on a
-//! Mac, `google-chrome` on a Linux PATH), never one the runner downloads. Each account's Chrome is headful, on its
-//! own profile, with CDP only over the pipe (`--remote-debugging-pipe`): no port, no automation switches, no
-//! headless mode, and the computer's own language, time zone and user agent.
+//! Mac, `google-chrome` on a Linux PATH), never one the runner downloads. Each account has its own profile, with CDP only
+//! over the pipe (`--remote-debugging-pipe`), and the computer's own language, time zone and user agent. Linux uses
+//! headless mode when no display is available; other sessions have a window.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -18,13 +18,12 @@ pub const WIDTH: u32 = 1440;
 pub const HEIGHT: u32 = 900;
 
 /// Google Chrome on this computer, if it can show a window here: the app on a Mac; on Linux the command on PATH and
-/// a display (DISPLAY set, or the screen feature's virtual one up).
+/// no display is required (Chrome uses headless mode when it is absent).
 pub fn chrome() -> Option<PathBuf> {
     match std::env::consts::OS {
         "macos" => Some(PathBuf::from(MAC_CHROME)).filter(|p| p.is_file()),
         "linux" => {
             let path = std::env::var("PATH").unwrap_or_default();
-            display()?;
             LINUX_NAMES.iter().find_map(|n| crate::env::which(n, &path))
         }
         _ => None,
@@ -81,6 +80,15 @@ fn plist_version(text: &str) -> Option<String> {
 /// The Chrome command line after the executable. `proxy` is the turn's Browse-through proxy for a session on the
 /// bot's own computer; the browser host never has one.
 pub fn flags(profile: &Path, proxy: Option<&str>) -> Vec<String> {
+    flags_for(profile, proxy, std::env::consts::OS, display().is_some())
+}
+
+fn flags_for(
+    profile: &Path,
+    proxy: Option<&str>,
+    platform: &str,
+    has_display: bool,
+) -> Vec<String> {
     let mut f = vec![
         format!("--user-data-dir={}", profile.display()),
         "--remote-debugging-pipe".into(),
@@ -95,7 +103,10 @@ pub fn flags(profile: &Path, proxy: Option<&str>) -> Vec<String> {
         "--disable-backgrounding-occluded-windows".into(),
         "--disable-renderer-backgrounding".into(),
     ];
-    if std::env::consts::OS == "linux" {
+    if platform == "linux" {
+        if !has_display {
+            f.push("--headless=new".into());
+        }
         f.push("--password-store=basic".into());
         f.push("--disable-dev-shm-usage".into());
     }
@@ -111,9 +122,8 @@ fn plain(v: &str) -> bool {
 }
 
 /// Before a start: a profile that was not closed cleanly says so in its Preferences, and Chrome would then offer to
-/// restore pages and drop session cookies. Marked clean, and "continue where you left off" set on a new profile
-/// (Chrome then keeps session cookies, so a sign-in without "remember me" survives a restart). Only these keys are
-/// touched; a file that is not JSON is left for Chrome to deal with.
+/// restore pages. Only the clean-exit keys are touched: Chrome keeps persistent cookies and expires session-only
+/// cookies on a clean restart. A file that is not JSON is left for Chrome to deal with.
 pub fn fix_prefs(profile: &Path) -> std::io::Result<()> {
     let dir = profile.join("Default");
     let file = dir.join("Preferences");
@@ -122,7 +132,7 @@ pub fn fix_prefs(profile: &Path) -> std::io::Result<()> {
             std::fs::create_dir_all(&dir)?;
             std::fs::write(
                 &file,
-                json!({"session": {"restore_on_startup": 1}}).to_string(),
+                json!({"profile": {"exit_type": "Normal", "exited_cleanly": true}}).to_string(),
             )
         }
         Err(e) => Err(e),
@@ -157,15 +167,6 @@ pub fn fixed_prefs(text: &str) -> Option<String> {
         }
         if p.get("exited_cleanly") == Some(&json!(false)) {
             p.insert("exited_cleanly".into(), json!(true));
-            changed = true;
-        }
-    }
-    // A value already there is Chrome's to keep: it is a protected setting, and one changed behind Chrome's back is
-    // put back with a warning.
-    let session = root.entry("session").or_insert_with(|| json!({}));
-    if let Some(s) = session.as_object_mut() {
-        if !s.contains_key("restore_on_startup") {
-            s.insert("restore_on_startup".into(), json!(1));
             changed = true;
         }
     }
@@ -459,7 +460,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chrome_never_runs_automated_headless_or_on_a_port() {
+    fn chrome_uses_a_pipe_and_linux_without_a_display_uses_headless() {
         let f = flags(Path::new("/state/browsers/c1/profile"), None);
         for wanted in [
             "--user-data-dir=/state/browsers/c1/profile",
@@ -473,7 +474,6 @@ mod tests {
             assert!(f.iter().any(|a| a == wanted), "{wanted}");
         }
         for banned in [
-            "headless",
             "remote-debugging-port",
             "no-sandbox",
             "enable-automation",
@@ -483,6 +483,11 @@ mod tests {
         ] {
             assert!(!f.iter().any(|a| a.contains(banned)), "{banned}");
         }
+        let bare = flags_for(Path::new("/tmp/profile"), None, "linux", false);
+        assert!(bare.iter().any(|s| s == "--headless=new"));
+        assert!(!flags_for(Path::new("/tmp/profile"), None, "linux", true)
+            .iter()
+            .any(|s| s.starts_with("--headless")));
         let linux = f.iter().any(|a| a == "--password-store=basic");
         assert_eq!(linux, std::env::consts::OS == "linux");
         let proxied = flags(Path::new("/p"), Some("http://127.0.0.1:21001"));
@@ -495,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn prefs_are_marked_clean_and_restoring_without_touching_a_protected_value() {
+    fn prefs_are_marked_clean_without_changing_session_restore() {
         let mac = "4A7F0C2E9B";
         let crashed = format!(
             r#"{{"profile":{{"exit_type":"Crashed","exited_cleanly":false,"name":"x"}},"protection":{{"macs":{{"session":{{"restore_on_startup":"{mac}"}}}}}},"session":{{"restore_on_startup":5}}}}"#
@@ -512,9 +517,7 @@ mod tests {
             p["protection"]["macs"]["session"]["restore_on_startup"],
             mac
         );
-        let fresh: Value =
-            serde_json::from_str(&fixed_prefs(r#"{"session":{}}"#).unwrap()).unwrap();
-        assert_eq!(fresh["session"]["restore_on_startup"], 1);
+        assert!(fixed_prefs(r#"{"session":{}}"#).is_none());
         assert!(fixed_prefs(
             r#"{"profile":{"exit_type":"Normal","exited_cleanly":true},"session":{"restore_on_startup":1}}"#
         )
@@ -528,7 +531,7 @@ mod tests {
             &std::fs::read_to_string(dir.join("Default/Preferences")).unwrap(),
         )
         .unwrap();
-        assert_eq!(written["session"]["restore_on_startup"], 1);
+        assert!(written.get("session").is_none());
         std::fs::write(dir.join("Default/Preferences"), &crashed).unwrap();
         fix_prefs(&dir).unwrap();
         let again: Value = serde_json::from_str(

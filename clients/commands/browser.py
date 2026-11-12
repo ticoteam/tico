@@ -3,7 +3,7 @@
 
 Every verb is one call to `POST /api/v2/browser/commands`; the server picks the account and the computer whose Chrome
 runs it (the browser host, else the bot's own computer). Nothing here talks to Chrome, a port or a local socket. A
-refusal is one plain sentence and what to do next (`plain`), as the bot reads it; `tico login` (logins.py) shares it.
+refusal keeps the server's detail unchanged; `tico login` (logins.py) shares it.
 """
 
 import base64
@@ -23,18 +23,10 @@ MAX_UPLOAD = 10 * 1024 * 1024  # the route's cap on an upload, before base64
 SCROLL = 600  # pixels, about two-thirds of the browser's 900 px window
 
 
-def plain(exc, site):
-    """Keep the server's refusal unchanged across HTTP, CLI and MCP."""
-    return exc
-
-
 def command(api, args, verb, more=None, writes=False):
     """Run one verb on the site's browser: the server's answer, or its refusal in plain words."""
     body = {"site": args["site"], "verb": verb, "args": {k: v for k, v in (more or {}).items() if v is not None}}
-    try:
-        return api.post("browser/commands", body, key=_key(args) if writes else None)
-    except APIError as exc:
-        raise plain(exc, args["site"]) from None
+    return api.post("browser/commands", body, key=_key(args) if writes else None)
 
 
 def page_line(result):
@@ -234,10 +226,7 @@ def browser_close(api, args):
 )
 def browser_needs_you(api, args):
     body = {"site": args["site"], "line": args["line"]}
-    try:
-        return api.post("browser/needs-you", body, key=_key(args))
-    except APIError as exc:
-        raise plain(exc, args["site"]) from None
+    return api.post("browser/needs-you", body, key=_key(args))
 
 
 def _render_upload(args, result):

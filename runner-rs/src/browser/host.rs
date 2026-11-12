@@ -33,6 +33,7 @@ pub struct Command {
     /// For a session on a bot's own computer: the bot, whose Browse-through proxy it uses.
     pub bot: String,
     pub place: String,
+    deadline: Instant,
 }
 
 impl Command {
@@ -55,6 +56,16 @@ impl Command {
             value: v["value"].as_str().map(String::from),
             bot: text_of(&v["bot"]),
             place: text_of(&v["where"]),
+            // Leave room for transport after the hub measures the remaining budget.
+            deadline: Instant::now()
+                + Duration::from_secs_f64(
+                    v["expires_in"]
+                        .as_f64()
+                        .filter(|s| s.is_finite())
+                        .unwrap_or(30.0)
+                        .clamp(0.0, 30.0),
+                )
+                .saturating_sub(Duration::from_millis(250)),
         })
     }
 
@@ -178,7 +189,13 @@ async fn poll_loop(host: Arc<Host>) {
             Err(e) if e.status == 404 => Duration::from_secs(300),
             // Not the browser host and no own session here: asked again soon, as either can change.
             Err(e) if e.status == 403 || e.status == 409 => Duration::from_secs(10),
-            Err(_) => {
+            Err(e) => {
+                if backoff == 1 {
+                    log(&format!(
+                        "Tico runner: browser command poll failed (HTTP {}); will retry",
+                        e.status
+                    ));
+                }
                 let w = Duration::from_secs(backoff);
                 backoff = (backoff * 2).min(60);
                 w
@@ -235,7 +252,32 @@ async fn worker(host: Arc<Host>, profile: String, mut rx: mpsc::UnboundedReceive
         };
         match msg {
             Some(Msg::Run(cmd)) => {
-                let done = run(&host, &mut session, &cmd).await;
+                let left = cmd.deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    report(
+                        &host,
+                        &cmd,
+                        Err(failed(
+                            "browser_timeout",
+                            "This browser command expired; read the page before trying again.",
+                        )),
+                        None,
+                    )
+                    .await;
+                    continue;
+                }
+                let done = match tokio::time::timeout(left, run(&host, &mut session, &cmd)).await {
+                    Ok(done) => done,
+                    Err(_) => {
+                        if let Some(s) = session.take() {
+                            s.abort().await;
+                        }
+                        Err(failed(
+                            "browser_timeout",
+                            "This browser command expired; read the page before trying again.",
+                        ))
+                    }
+                };
                 if let Some(s) = &session {
                     s.release().await;
                 }
@@ -299,7 +341,7 @@ async fn ready<'a>(
     let mut typed = None;
     if stale {
         if let Some(s) = session.take() {
-            typed = Some(s.typed.clone());
+            typed = Some((s.typed.clone(), s.filled_values.clone()));
             if !s.alive() {
                 log(&format!(
                     "Tico runner: a browser session stopped ({}); it starts again",
@@ -325,8 +367,9 @@ async fn ready<'a>(
         let started = Session::start(launched, proxy, dir.join("files")).await;
         match started {
             Ok(mut s) => {
-                if let Some(t) = typed {
+                if let Some((t, values)) = typed {
                     s.typed = t;
+                    s.filled_values = values;
                 }
                 *session = Some(s)
             }
@@ -401,11 +444,15 @@ async fn run(host: &Host, session: &mut Option<Session>, cmd: &Command) -> Done<
             } else if field == "password" || value.chars().count() >= crate::redact::MIN_LENGTH {
                 s.typed.add_login(&[value.to_string()]);
             }
-            let typed = fill::fill(s, &cmd.sites, &field, r, value).await;
-            if typed.is_ok() && field == "password" {
-                s.password_filled().await;
+            if !value.is_empty() && !s.filled_values.iter().any(|v| v == value) {
+                if s.filled_values.len() >= 128 {
+                    s.filled_values.remove(0);
+                }
+                s.filled_values.push(value.to_string());
             }
-            typed.map(|_| Answer::default())
+            fill::fill(s, &cmd.sites, &field, r, value)
+                .await
+                .map(|_| Answer::default())
         }
         _ => Err(failed(
             "bad_request",
@@ -422,7 +469,6 @@ fn body(
     done: &Done<Answer>,
     url: Option<String>,
     title: Option<String>,
-    signed_in: Option<bool>,
     scrub: impl Fn(&str) -> String,
 ) -> Value {
     let mut b = match done {
@@ -444,18 +490,17 @@ fn body(
     if let Some(t) = title {
         b["title"] = json!(scrub(&t));
     }
-    b["signed_in"] = json!(signed_in);
+    b["signed_in"] = Value::Null;
     b
 }
 
 async fn report(host: &Host, cmd: &Command, done: Done<Answer>, session: Option<&mut Session>) {
-    let (url, title, signed_in, session) = match session {
+    let (url, title, session) = match session {
         Some(s) if s.alive() => {
             let (u, t) = s.info().await;
-            let signed_in = s.signed_in(&u, &cmd.sites).await;
-            (Some(u), Some(t), signed_in, Some(&*s))
+            (Some(u), Some(t), Some(&*s))
         }
-        other => (None, None, None, other.map(|s| &*s)),
+        other => (None, None, other.map(|s| &*s)),
     };
     let mut done = done;
     if let Ok(Answer {
@@ -483,7 +528,7 @@ async fn report(host: &Host, cmd: &Command, done: Done<Answer>, session: Option<
         });
         crate::redact::scrub_log(&own)
     };
-    let b = body(&done, url, title, signed_in, scrub);
+    let b = body(&done, url, title, scrub);
     let path = format!(
         "runner-browser-commands/{}/report",
         crate::client::quote_plus(&cmd.id)
@@ -523,7 +568,6 @@ mod tests {
             &read,
             Some("https://acme.example/?u=pw-canary-9".into()),
             Some("Acme pw-canary-9".into()),
-            Some(false),
             scrub,
         );
         assert_eq!(b["ok"], true);
@@ -532,13 +576,13 @@ mod tests {
             (b["url"].as_str(), b["title"].as_str()),
             (Some("https://acme.example/?u=••••"), Some("Acme ••••"))
         );
-        assert_eq!(b["signed_in"], false);
+        assert!(b["signed_in"].is_null());
 
         let refused: Done<Answer> = Err(failed(
             "not_on_site",
             "This page is not one of this tool's sites.",
         ));
-        let b = body(&refused, None, None, None, |t: &str| t.to_string());
+        let b = body(&refused, None, None, |t: &str| t.to_string());
         assert_eq!(
             (b["ok"].as_bool(), b["error"].as_str()),
             (Some(false), Some("not_on_site"))

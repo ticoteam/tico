@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 pub const CAPABILITY: &str = "browser_v1";
 
-/// Whether this computer can run browser sessions: Google Chrome is installed and, on Linux, has a display.
+/// Whether this computer can run browser sessions: Google Chrome is installed; Linux can use headless mode without a display.
 pub fn offers() -> bool {
     launch::chrome().is_some()
 }

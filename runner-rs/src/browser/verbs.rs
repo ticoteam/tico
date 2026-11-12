@@ -211,8 +211,8 @@ pub struct Session {
     /// The login values typed in this session: what it reports back (text, url, title) is scrubbed of them. Kept
     /// when Chrome restarts for the same account.
     pub typed: Arc<crate::redact::Redactor>,
-    /// What tells whether the account is signed in.
-    pub sign_in: SignIn,
+    /// Values used to re-find replaced login fields before a screenshot. Never logged.
+    pub filled_values: Vec<String>,
 }
 
 impl Session {
@@ -247,7 +247,7 @@ impl Session {
             world: None,
             dir,
             typed: Arc::new(crate::redact::Redactor::new(&[])),
-            sign_in: SignIn::default(),
+            filled_values: vec![],
         };
         s.prepare().await;
         Ok(s)
@@ -273,6 +273,13 @@ impl Session {
 
     pub fn page_session(&self) -> &str {
         &self.session
+    }
+
+    /// An expired action cannot keep running in Chrome after its future is cancelled.
+    pub async fn abort(mut self) {
+        let _ = self.launched.child.start_kill();
+        let _ = self.launched.child.wait().await;
+        let _ = std::fs::remove_dir_all(self.dir.join("uploads"));
     }
 
     /// Close Chrome cleanly and drop this session's files.
@@ -470,13 +477,12 @@ impl Session {
     // ---- the verbs ----
 
     pub async fn open(&mut self, url: &str, sites: &[String]) -> Done<Answer> {
-        let url = if url.trim().is_empty() {
-            default_url(sites).ok_or_else(|| failed("not_on_site", "This tool names no site."))?
-        } else {
-            url.trim().to_string()
-        };
-        let allowed = super::fill::web_origin(&url)
-            .is_some_and(|(_, host)| super::fill::site_matches(&host, sites));
+        if url.trim().is_empty() {
+            self.call("Page.bringToFront", json!({})).await?;
+            return Ok(Answer::default());
+        }
+        let url = url.trim().to_string();
+        let allowed = super::fill::page_allowed(&url, sites);
         if !allowed {
             return Err(failed(
                 "not_on_site",
@@ -675,6 +681,80 @@ impl Session {
         self.capture(true).await
     }
 
+    fn mask_script(&self) -> String {
+        format!(
+            "globalThis.__ticoValues = {}; {}",
+            json!(self.filled_values),
+            MASK
+        )
+    }
+
+    /// Cross-origin fields keep their filled-field list in their own isolated world. Cover those worlds too;
+    /// walking the top document alone cannot see an out-of-process frame's values.
+    async fn cover_frames(
+        &self,
+        covered: &mut Vec<(String, i64)>,
+        attached: &mut Vec<String>,
+    ) -> Done<()> {
+        let browser = self.browser();
+        let targets = browser
+            .call("Target.getTargets", json!({}), None)
+            .await
+            .map_err(page_error)?;
+        let targets: Vec<String> = targets["targetInfos"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|t| t["type"] == "iframe")
+            .map(|t| text_of(&t["targetId"]))
+            .collect();
+        let mut sessions = vec![self.session.clone()];
+        for target in &targets {
+            let session = match browser.attach(target).await {
+                Ok(session) => session,
+                Err(e) if gone_frame(&e) => continue,
+                Err(e) => return Err(page_error(e)),
+            };
+            attached.push(session.clone());
+            sessions.push(session);
+        }
+        for session in sessions {
+            let tree = match browser
+                .call("Page.getFrameTree", json!({}), Some(&session))
+                .await
+            {
+                Ok(tree) => tree,
+                Err(e) if gone_frame(&e) => continue,
+                Err(e) => return Err(page_error(e)),
+            };
+            let mut frames = vec![];
+            frame_ids(&tree["frameTree"], &mut frames);
+            let root = text_of(&tree["frameTree"]["frame"]["id"]);
+            for frame in frames {
+                // A child in another process is covered through its own target above.
+                if (session == self.session && frame == root)
+                    || (targets.contains(&frame) && frame != root)
+                {
+                    continue;
+                }
+                let context = match create_world(&browser, &session, &frame).await {
+                    Ok(context) => context,
+                    Err(e) if gone_frame(&e.text) => continue,
+                    Err(e) => return Err(e),
+                };
+                covered.push((session.clone(), context));
+                if let Err(e) =
+                    eval_in(&browser, &session, context, &self.mask_script(), true).await
+                {
+                    if !gone_frame(&e) {
+                        return Err(page_error(e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The screenshot, with filled fields covered (`mask`) or not (only a test compares the two).
     pub(super) async fn capture(&mut self, mask: bool) -> Done<Answer> {
         let m = self.call("Page.getLayoutMetrics", json!({})).await?;
@@ -689,15 +769,33 @@ impl Session {
         );
         // One script both reads the pixel ratio and covers the filled fields, so a frame with nothing filled costs no
         // more than it did. A page in the middle of navigating has a new document, where nothing is filled yet.
-        let prep = self
-            .eval(if mask { MASK } else { NO_MASK }, true)
-            .await
-            .unwrap_or_default();
+        let script = if mask {
+            self.mask_script()
+        } else {
+            NO_MASK.into()
+        };
+        let prep = self.eval(&script, true).await?;
         let ratio = prep["value"]["ratio"]
             .as_f64()
             .filter(|r| *r > 0.0)
             .unwrap_or(1.0);
-        let shot = self.shoot((x, y, w, h), ratio).await;
+        let mut covered = vec![];
+        let mut attached = vec![];
+        let prep_frames = if mask {
+            self.cover_frames(&mut covered, &mut attached).await
+        } else {
+            Ok(())
+        };
+        let shot = match prep_frames {
+            Ok(()) => self.shoot((x, y, w, h), ratio).await,
+            Err(e) => Err(e),
+        };
+        for (session, context) in covered {
+            let _ = eval_in(&self.browser(), &session, context, UNMASK, true).await;
+        }
+        for session in attached {
+            self.browser().detach(&session).await;
+        }
         if prep["value"]["masked"].as_u64().unwrap_or(0) > 0 {
             let _ = self.eval(UNMASK, true).await;
         }
@@ -806,34 +904,6 @@ impl Session {
         Ok(Answer::default())
     }
 
-    /// The page key `SignIn` compares: the top document and its address.
-    async fn page_key(&self, url: &str) -> String {
-        format!("{}|{url}", self.loader().await)
-    }
-
-    /// A password was just typed on this page.
-    pub async fn password_filled(&mut self) {
-        let url = self.url().await;
-        let page = self.page_key(&url).await;
-        self.sign_in.filled(page);
-    }
-
-    /// Whether the account looks signed in on the page at `url` (see `SignIn::observe`).
-    pub async fn signed_in(&mut self, url: &str, sites: &[String]) -> Option<bool> {
-        let on_site = super::fill::web_origin(url)
-            .is_some_and(|(_, host)| super::fill::site_matches(&host, sites));
-        if !on_site {
-            return None;
-        }
-        let shown = self
-            .eval(PASSWORD_SHOWN, true)
-            .await
-            .ok()
-            .and_then(|v| v["value"].as_bool());
-        let page = self.page_key(url).await;
-        self.sign_in.observe(on_site, shown, &page)
-    }
-
     // ---- a person's input, at page pixels of the newest frame ----
 
     pub async fn input_click(&mut self, x: f64, y: f64) -> Done<Answer> {
@@ -858,14 +928,30 @@ impl Session {
     }
 }
 
-/// The address `open` goes to when none is given: the tool's first site.
-pub fn default_url(sites: &[String]) -> Option<String> {
-    let first = sites.iter().map(|s| s.trim()).find(|s| !s.is_empty())?;
-    let lower = first.to_ascii_lowercase();
-    if lower.starts_with("http://") || lower.starts_with("https://") {
-        return Some(format!("{}/", first.trim_end_matches('/')));
+fn gone_frame(error: &str) -> bool {
+    let error = error.to_ascii_lowercase();
+    [
+        "no frame",
+        "no target",
+        "target closed",
+        "session closed",
+        "frame was detached",
+        "frame with the given id was not found",
+        "session with given id",
+        "cannot find context",
+        "execution context was destroyed",
+    ]
+    .iter()
+    .any(|needle| error.contains(needle))
+}
+
+fn frame_ids(tree: &Value, out: &mut Vec<String>) {
+    if let Some(id) = tree["frame"]["id"].as_str() {
+        out.push(id.to_string());
     }
-    Some(format!("https://{}/", first.trim_start_matches("*.")))
+    for child in tree["childFrames"].as_array().into_iter().flatten() {
+        frame_ids(child, out);
+    }
 }
 
 /// `e12` (or `12`) as 12.
@@ -945,56 +1031,22 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     f.write_all(bytes)
 }
 
-/// Whether the account is signed in, told conservatively from what the top page shows: a visible password field on
-/// the tool's site says no; a later page there without one, after a password was typed, says yes; anything else is
-/// not known.
-#[derive(Debug, Default)]
-pub struct SignIn {
-    /// The page (document and address) a password was typed on.
-    filled_on: Option<String>,
-}
-
-impl SignIn {
-    pub fn filled(&mut self, page: String) {
-        self.filled_on = Some(page);
-    }
-
-    /// The answer for the page `page`: on the tool's site or not, and whether its top frame shows a password field
-    /// (None: it could not be told).
-    pub fn observe(
-        &mut self,
-        on_site: bool,
-        password_shown: Option<bool>,
-        page: &str,
-    ) -> Option<bool> {
-        if !on_site {
-            return None;
-        }
-        let shown = password_shown?;
-        let later = self.filled_on.as_deref().is_some_and(|f| f != page);
-        if shown {
-            // A sign-in form again on a later page (a wrong password, a session that ended): the typed password
-            // no longer counts.
-            if later {
-                self.filled_on = None;
-            }
-            return Some(false);
-        }
-        later.then_some(true)
-    }
-}
-
-/// Whether the top document shows a password field a person could type into.
-const PASSWORD_SHOWN: &str = r#"Array.from(document.querySelectorAll('input[type=password]')).some((e) => {
-  if (e.disabled || e.offsetWidth < 2 || e.offsetHeight < 2) return false;
-  const cs = getComputedStyle(e);
-  return cs.visibility === 'visible' && +cs.opacity > 0;
-})"#;
-
 /// Before a screenshot: each filled field still on the page whose value would show (it is no longer a password
 /// field) is drawn as dots until UNMASK. Its style attribute is kept to put back as it was.
 const MASK: &str = r#"(async () => {
   const list = (globalThis.__ticoFilled || []).filter((r) => r.deref());
+  const seen = new Set(list.map((r) => r.deref()));
+  const values = globalThis.__ticoValues || [];
+  const find = (root) => {
+    for (const e of root.querySelectorAll('*')) {
+      if (e.shadowRoot) find(e.shadowRoot);
+      if (!seen.has(e) && typeof e.value === 'string' && e.value && values.some((v) => v && e.value.includes(v))) {
+        seen.add(e);
+        list.push(new WeakRef(e));
+      }
+    }
+  };
+  find(document);
   globalThis.__ticoFilled = list;
   const kept = [];
   for (const r of list) {
@@ -1166,59 +1218,10 @@ mod tests {
         assert_eq!(safe_name(""), "upload");
 
         assert_eq!(
-            default_url(&["c.tidy.com".into()]).as_deref(),
-            Some("https://c.tidy.com/")
-        );
-        assert_eq!(
-            default_url(&["http://practice.test".into()]).as_deref(),
-            Some("http://practice.test/")
-        );
-        assert_eq!(default_url(&[]), None);
-        assert_eq!(
             centre(&json!([[10, 10, 30, 10, 30, 20, 10, 20]])),
             Some((20.0, 15.0))
         );
         assert_eq!(centre(&json!([[5, 5, 5, 5, 5, 5, 5, 5]])), None);
-    }
-
-    #[test]
-    fn signed_in_is_told_only_from_a_password_field_shown_or_gone_after_one_was_typed() {
-        let mut s = SignIn::default();
-        assert_eq!(
-            s.observe(false, Some(true), "a|/login"),
-            None,
-            "off the site"
-        );
-        assert_eq!(s.observe(true, None, "a|/login"), None, "could not tell");
-        assert_eq!(s.observe(true, Some(true), "a|/login"), Some(false));
-        assert_eq!(
-            s.observe(true, Some(false), "b|/home"),
-            None,
-            "no password typed yet"
-        );
-
-        s.filled("a|/login".into());
-        assert_eq!(
-            s.observe(true, Some(true), "a|/login"),
-            Some(false),
-            "the form it was typed in"
-        );
-        assert_eq!(
-            s.observe(true, Some(false), "a|/login"),
-            None,
-            "the same page with the field gone (a show-password eye): not a later page"
-        );
-        assert_eq!(s.observe(true, Some(false), "b|/home"), Some(true));
-        assert_eq!(
-            s.observe(true, Some(false), "b|/home#x"),
-            Some(true),
-            "still"
-        );
-        assert_eq!(s.observe(false, Some(false), "c|/"), None, "off the site");
-
-        // The sign-in form again on a later page: signed out, and the old password no longer counts.
-        assert_eq!(s.observe(true, Some(true), "d|/login"), Some(false));
-        assert_eq!(s.observe(true, Some(false), "e|/home"), None);
     }
 
     #[test]

@@ -11,72 +11,50 @@ use serde_json::{json, Value};
 use super::verbs::{call_on, create_world, eval_in, failed, node_of, Done, Session};
 use crate::util::text_of;
 
-const HTTP: &str = "http://";
-
-/// `host` is one of `sites` or below one (`login.acme.example` matches `acme.example`); a site kept as `http://host`
-/// matches by its host.
-pub fn site_matches(host: &str, sites: &[String]) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    let under = |s: &str| {
-        let s = s.trim();
-        let s = s
-            .get(..HTTP.len())
-            .filter(|h| h.eq_ignore_ascii_case(HTTP))
-            .map_or(s, |_| &s[HTTP.len()..]);
-        let s = s
-            .get(.."https://".len())
-            .filter(|h| h.eq_ignore_ascii_case("https://"))
-            .map_or(s, |_| &s["https://".len()..]);
-        let s = s
-            .split('/')
-            .next()
-            .unwrap_or("")
-            // A site may carry a port (`host:8443`); the server compares ports, here the host is what counts.
-            .split(':')
-            .next()
-            .unwrap_or("")
-            .trim_start_matches("*.")
-            .trim_end_matches('.')
-            .to_ascii_lowercase();
-        !s.is_empty()
-            && (host == s
-                || host
-                    .strip_suffix(&s)
-                    .is_some_and(|head| head.ends_with('.')))
-    };
-    !host.is_empty() && sites.iter().any(|s| under(s))
-}
-
-/// The scheme and host of an http(s) URL (or origin); None for any other scheme.
-pub fn web_origin(url: &str) -> Option<(String, String)> {
-    let u = url::Url::parse(url).ok()?;
-    let host = u
-        .host_str()?
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .to_ascii_lowercase();
-    matches!(u.scheme(), "http" | "https").then(|| (u.scheme().to_string(), host))
+fn web_url(text: &str) -> Option<url::Url> {
+    if text
+        .chars()
+        .any(|c| c.is_control() || c.is_whitespace() || c == '\\')
+    {
+        return None;
+    }
+    let url = url::Url::parse(text).ok()?;
+    (matches!(url.scheme(), "http" | "https")
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then_some(url)
 }
 
 /// Whether a login for `sites` may be typed into a page at `url`: its host is one of them, and over plain http only
 /// where the tool names the site `http://host` (an eavesdropper on the network would see it typed).
 pub fn page_allowed(url: &str, sites: &[String]) -> bool {
-    let Some((scheme, host)) = web_origin(url) else {
+    let Some(page) = web_url(url) else {
         return false;
     };
-    if !site_matches(&host, sites) {
-        return false;
-    }
-    let plain: Vec<String> = sites
-        .iter()
-        .filter(|s| {
-            s.trim()
-                .get(..HTTP.len())
-                .is_some_and(|h| h.eq_ignore_ascii_case(HTTP))
-        })
-        .cloned()
-        .collect();
-    scheme == "https" || site_matches(&host, &plain)
+    sites.iter().any(|site| {
+        let address = if site.contains("://") {
+            site.trim().to_string()
+        } else {
+            format!("https://{}", site.trim().trim_start_matches("*."))
+        };
+        let Some(own) = web_url(&address) else {
+            return false;
+        };
+        let (Some(host), Some(allowed)) = (page.host_str(), own.host_str()) else {
+            return false;
+        };
+        let host = host.trim_end_matches('.');
+        let allowed = allowed.trim_end_matches('.');
+        if matches!(own.host(), Some(url::Host::Domain(_))) && !allowed.contains('.') {
+            return false;
+        }
+        let under = host == allowed
+            || (matches!(own.host(), Some(url::Host::Domain(_)))
+                && host
+                    .strip_suffix(allowed)
+                    .is_some_and(|head| head.ends_with('.')));
+        under && page.port() == own.port() && (page.scheme() == "https" || own.scheme() == "http")
+    })
 }
 
 fn not_on_site() -> super::verbs::Failed {
@@ -435,31 +413,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_login_fills_only_on_its_sites_and_their_subdomains() {
-        let sites = vec!["acme.example".to_string(), "*.shop.example".to_string()];
-        assert!(site_matches("acme.example", &sites));
-        assert!(site_matches("login.ACME.example.", &sites));
-        assert!(site_matches("a.shop.example", &sites));
-        assert!(!site_matches("evilacme.example", &sites));
-        assert!(!site_matches("acme.example.evil.example", &sites));
-        assert!(!site_matches("example", &sites));
-        assert!(!site_matches("acme.example", &[]));
-        assert_eq!(
-            web_origin("https://Login.Acme.example:8443/a?b").map(|o| o.1),
-            Some("login.acme.example".into())
-        );
-        assert_eq!(web_origin("file:///etc/passwd"), None);
-        assert_eq!(web_origin("javascript:alert(1)"), None);
-        assert_eq!(web_origin("data:text/html,x"), None);
-        assert_eq!(web_origin("null"), None);
-        assert!(site_matches(
-            "login.practice.test",
-            &["HTTP://practice.test".to_string()]
-        ));
-        assert!(site_matches(
-            "c.tidy.com",
-            &["https://c.tidy.com/".to_string()]
-        ));
+    fn the_runner_and_server_share_the_site_contract() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../../contracts/website-sites.json")).unwrap();
+        for case in cases["cases"].as_array().unwrap() {
+            let sites = case["sites"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                page_allowed(case["url"].as_str().unwrap(), &sites),
+                case["matches"].as_bool().unwrap(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[test]
@@ -475,7 +445,15 @@ mod tests {
             !page_allowed("http://login.acme.example/in", &plain),
             "only the site written http://"
         );
-        assert!(page_allowed("http://login.practice.test:8080/in", &plain));
+        assert!(!page_allowed("http://login.practice.test:8080/in", &plain));
+        assert!(page_allowed(
+            "http://login.practice.test:8080/in",
+            &["http://login.practice.test:8080".into()]
+        ));
+        assert!(!page_allowed(
+            "http://login.practice.test:8081/in",
+            &["http://login.practice.test:8080".into()]
+        ));
         assert!(page_allowed("http://a.login.practice.test/in", &plain));
         assert!(page_allowed("https://login.practice.test/in", &plain));
         assert!(!page_allowed("http://other.practice.test/in", &plain));
@@ -486,7 +464,7 @@ mod tests {
         ));
         assert!(page_allowed(
             "http://127.0.0.1:8080/",
-            &["http://127.0.0.1".to_string()]
+            &["http://127.0.0.1:8080".to_string()]
         ));
         assert!(!page_allowed("file:///etc/passwd", &https));
         assert!(!page_allowed("", &https));
