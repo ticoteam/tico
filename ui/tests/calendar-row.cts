@@ -27,6 +27,7 @@ const WEEK = [
   event('ev-allday', 'Offsite', '2026-11-12', '2026-11-13', {all_day: true}),
   event('ev-standup', 'Standup', at(12, 9), at(12, 9, 15)),
   event('ev-board', 'Board prep', at(13, 10), at(13, 11)),
+  event('ev-wed', 'Next Wednesday', at(18, 9), at(18, 10)),                         // a week on: "Wed 09:00" would read as today
   event('ev-far', 'Far away', at(20, 10), at(20, 11)),                               // past the next 7 days
 ];
 
@@ -125,8 +126,13 @@ async function oneLine(page: Page) {
       await page.goto('https://tico-ui.test/#/home');
       await page.waitForFunction(() => document.querySelector('#nav-calendar .cal-nx')?.textContent?.includes('Sales call'));
       assert.deepEqual(await says(page), {text: 'Sales call · in 3 min', back: false, fwd: true}, 'AC-7: reset on return');
+      // The minute's redraw keeps a keyboard user's focus on the arrow it was on.
+      await row.locator('[data-cal-step="1"]').focus();
+      await page.clock.runFor(60 * 1000);
+      assert.equal((await says(page)).text, 'Sales call · in 2 min', 'the minute counts down');
+      assert.equal(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.calStep), '1', 'focus stays on › through the redraw');
       // AC-11 and AC-8: Home stays open; once the call starts it reads "now", with no reload.
-      await page.clock.runFor(4 * 60 * 1000);
+      await page.clock.runFor(3 * 60 * 1000);
       await page.waitForFunction(() => document.querySelector('#nav-calendar .cal-nx')?.textContent?.includes('now'));
       assert.deepEqual(await says(page), {text: 'Sales call · now', back: false, fwd: true}, 'AC-8/AC-11: under way reads "now"');
       // The name is plain ink, not greyed out.

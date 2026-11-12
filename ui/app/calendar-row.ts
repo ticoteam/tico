@@ -140,9 +140,10 @@ function calRowSync(home = false): void {
   if (Date.now() - CAL_ROW.at >= CAL_ROW_EVERY) { const read = calRowLoad(); if (!CAL_ROW.at) liveProbe(read); }
 }
 
-// The events still to come in the next week, the one under way first.
+// The events still to come in the next week, the one under way first. The week is today and the six days after it, so a
+// weekday on the line ("Wed 09:00") never means today's.
 function calRowUpcoming(now: Date): CalOccurrence[] {
-  const t = now.getTime(), until = t + CAL_ROW_DAYS * 86400e3;
+  const t = now.getTime(), until = calAddDays(calMidnight(now), CAL_ROW_DAYS).getTime();
   return CAL_ROW.list.filter(o => calWhen(o.end).getTime() > t && calWhen(o.start).getTime() < until);
 }
 // When it starts, as the line says it: "now", "in 3 min", "15:30", "tomorrow 09:00", "Thu 10:00".
@@ -168,11 +169,15 @@ function calRowDraw(dir = 0): void {
   let i = CAL_ROW.pick ? up.findIndex(o => o.occurrence_id === CAL_ROW.pick) : 0;
   if (i < 0) { i = 0; CAL_ROW.pick = null; }
   const o = up[i]!, when = calRowWhen(o, now);
+  // The minute's redraw replaces the buttons: a keyboard user's focus stays on the same control.
+  const focused = document.activeElement instanceof HTMLElement && next.contains(document.activeElement)
+    ? document.activeElement.dataset.calStep || 'event' : null;
   const step = (d: number, label: string, glyph: string) => `<button type="button" class="cal-step" data-cal-step="${d}" aria-label="${label}">${glyph}</button>`;
   next.innerHTML = (i > 0 ? step(-1, 'Previous event', '‹') : '')
     + `<a class="cal-nx${dir > 0 ? ' cal-in-r' : dir < 0 ? ' cal-in-l' : ''}" href="${esc(calOpenHref(o))}" title="${esc(o.title)} · ${esc(when)}">`
     + `<span class="cal-nm">${esc(o.title)}</span><span class="cal-tm">· ${esc(when)}</span></a>`
     + (i < up.length - 1 ? step(1, 'Next event', '›') : '');
+  if (focused) (next.querySelector<HTMLElement>(focused === 'event' ? '.cal-nx' : `[data-cal-step="${focused}"]`) ?? next.querySelector<HTMLElement>('.cal-nx'))?.focus();
 }
 function calRowStep(d: number): void {
   const up = calRowUpcoming(new Date());
@@ -181,7 +186,6 @@ function calRowStep(d: number): void {
   if (to === i) return;
   CAL_ROW.pick = to === 0 ? null : up[to]!.occurrence_id;
   calRowDraw(d);
-  calRowEl()?.querySelector<HTMLElement>(`[data-cal-step="${d}"]`)?.focus();
 }
 
 (() => {
