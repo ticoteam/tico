@@ -368,15 +368,20 @@ def test_the_tool_reads_github_first_and_names_the_release_that_already_holds_th
     assert gh.cuts == []
 
 
-def test_a_pre_release_the_requirement_does_not_count_is_no_reason_not_to_cut(company, gh):
+def test_a_pre_release_satisfies_in_release_by_default(company, gh):
     task_id = to_release(company, gh)
-    with company.transaction() as c:
-        GR.cut(c, task_id, RM, seen_version=version(c, task_id))
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)
-    F.run(company, gh)
-    assert gh.cuts == [(REPO, "workflow", "release.yml", "")]
+    assert F.refresh(company, gh, H.shift(H.now(), minutes=20))
     with company.transaction() as c:
-        assert "release_found" not in X.events(c, task_id)
+        assert stage(c, task_id) == "Done"
+
+
+def test_a_pre_release_does_not_satisfy_in_release_when_explicitly_disabled(company, gh):
+    task_id = to_release(company, gh, release={**WORKFLOW, "prereleases": False})
+    gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)
+    assert F.refresh(company, gh, H.shift(H.now(), minutes=20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release"
 
 
 # ----------------------------------------------------------------------------- Health: true while it matters

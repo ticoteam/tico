@@ -234,7 +234,9 @@ def released(
         tag = next(
             (
                 str(release["tag"])
-                for release in reversed(GS.releases(conn, where, prereleases=bool(settings.get("prereleases"))))
+                for release in reversed(
+                    GS.releases(conn, where, prereleases=settings.get("prereleases", True) is not False)
+                )
                 if GS.included(conn, release["id"], str(metadata["merged_sha"]))
             ),
             None,
@@ -406,7 +408,7 @@ def cut(
         repo = GS.release_repo(settings, str(link["repo"]))
         held = any(
             GS.included(conn, release["id"], str(metadata["merged_sha"]))
-            for release in GS.releases(conn, repo, prereleases=bool(settings.get("prereleases")))
+            for release in GS.releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)
         )
         if held:
             continue

@@ -637,7 +637,7 @@ def _release_waits(conn: "sqlite3.Connection") -> list[Row]:
                         "repo": release_repo(setting, str(link["repo"])),
                         "sha": str(metadata["merged_sha"]),
                         "at": metadata.get("merged_at"),
-                        "prereleases": bool(setting.get("prereleases")),
+                        "prereleases": setting.get("prereleases", True) is not False,
                     }
                 )
     return out
@@ -1550,7 +1550,7 @@ def _release_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: 
         return Standing(requirement, WAITING, SOURCE, "Reading releases")
     if not publishes:
         return Standing(requirement, MET, line="This repo doesn't publish releases")  # C31
-    for release in reversed(releases(conn, repo, prereleases=bool(settings.get("prereleases")))):
+    for release in reversed(releases(conn, repo, prereleases=settings.get("prereleases", True) is not False)):
         if included(conn, release["id"], str(metadata["merged_sha"])):
             return Standing(requirement, MET, line=f"In {release['tag']}")
     return GR.standing(conn, task, requirement, repo, metadata)  # who cuts it, and what became of the ask
@@ -1581,7 +1581,7 @@ CONDITIONS = {
     "checks_pass": Condition("checks_pass", "Checks pass", PR, checks_pass),
     "pr_merged": Condition("pr_merged", "PR merged", PR, pr_merged, can_push_past="never"),
     # `release_repo` ("owner/name"; empty means the server's release repo, else each PR's own repo) and `prereleases`
-    # (a pre-release counts, D3; off by default); `release_with`, how Tico cuts a release when the Release Owner asks
+    # (a pre-release counts, default on); `release_with`, how Tico cuts a release when the Release Owner asks
     # (`workflow:<file>`, `tag`, or empty: the repo releases on its own; github_release.py).
     "in_release": Condition(
         "in_release",
