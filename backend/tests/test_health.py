@@ -1,6 +1,7 @@
 """Health: every check is computed from live state, and people who are not administrators see counts only."""
 
 import json
+import re
 
 import pytest
 
@@ -1651,6 +1652,7 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     assert check_at(5)["status"] == "ok"
     stale = check_at(15)
     assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
+    assert re.search(r"since \d\d:\d\d UTC;", stale["summary"])  # a clock time, not the ISO stamp
     assert check_at(120)["status"] == "bad"
 
 
@@ -1835,3 +1837,22 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
         assert stuck == [] and [(row["bot"], row["reason"], row.get("resting")) for row in slow] == [
             ("ops", "task_wait", True)
         ]
+
+
+def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
+    from backend import health
+
+    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials")])
+    assert not re.search(r"\d{4}-\d\d-\d\dT", text), text
+    assert re.search(r" at \d\d:\d\d UTC: invalid key", text), text
+
+
+def test_token_use_names_a_deleted_bot_deleted_bot_never_its_id(environment):
+    api = environment()
+    gone = "01a1cdda-6f96-7593-be09-719b45a9df76"  # its usage stays after the bot's row is gone
+    api.app.state.store.settings.token_alert_input = 1000
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO attempts(id,bot_id,created_at) VALUES('t1',?,?)", (gone, H.now()))
+        segment(c, "t1", input_tokens=1100)
+    summary = health_of(api)[1]["tokens"]["summary"]
+    assert summary.startswith("Deleted bot: 1,100 uncached input tokens") and gone not in summary

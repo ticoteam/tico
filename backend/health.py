@@ -747,7 +747,7 @@ def _rejected_summary(rows):
     )
     return (
         f"Sign-in rejected for {first}"
-        + (f" at {when}" if when else "")
+        + (f" at {_clock(when)}" if when else "")
         + (f": {why}" if why else ".")
         + fix
         + " It takes no work that needs it until then."
@@ -1602,9 +1602,14 @@ def _token_heavy(c, threshold):
     return answer
 
 
-def _bot_name(c, bot):
+# A bot removed since its record was written: a person reads this, never the bot's id.
+DELETED_BOT = "Deleted bot"
+
+
+def _bot_name(c, bot, missing=None):
+    """Its display name or slug; for a bot with no row, `missing`, else the id as given."""
     row = c.execute("SELECT display_name,slug FROM bots WHERE id=?", (bot,)).fetchone()
-    return (row["display_name"] or row["slug"]) if row else bot
+    return (row["display_name"] or row["slug"]) if row else bot if missing is None else missing
 
 
 def _bot_names(c, bots):
@@ -1620,6 +1625,17 @@ def _bot_names(c, bots):
             )
         )
     return {bot: found.get(bot, bot) for bot in bots}
+
+
+def _clock(at):
+    """A stored time as Health's rows say one: "07:52 UTC" today, "Nov 11 07:52 UTC" on an earlier day, never the
+    ISO stamp. Text that is not a stamp is returned as it is."""
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return str(at or "")
+    day = "" if when.date() == datetime.now(timezone.utc).date() else f"{when:%b} {when.day} "
+    return f"{day}{when:%H:%M} UTC"
 
 
 def _tokens_words(n):
@@ -1987,7 +2003,7 @@ def _backups(config, settings):
             "backups",
             "Backups",
             checked,
-            f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+            f"Backup status not checked since {_clock(backup.get('checked_at'))}; the backup location may be unreachable.",
             [fix],
         )
     behind = _age_status(since) if mode == "remote" else "ok"
@@ -2035,8 +2051,8 @@ def _backups(config, settings):
             "backups",
             "Backups",
             behind,
-            f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
-            f"{last}.",
+            f"Copies to {target or 'the remote'} have been behind the database since {_clock(since)}. The newest copy is "
+            f"from {_clock(last)}.",
             [fix],
         )
     if key_here and not key_copied:
@@ -2962,9 +2978,9 @@ def view(c, who, settings, auth, github, config):
                 )
                 + ' '
                 + (
-                    'Incident opened ' + incident['opened_at']
+                    'Incident opened ' + _clock(incident['opened_at'])
                     if incident.get('active')
-                    else 'Incident resolved ' + incident.get('resolved_at', '')
+                    else 'Incident resolved ' + _clock(incident.get('resolved_at', ''))
                 )
             )
             fixes = [_fix(*COMPUTERS)]
@@ -3478,7 +3494,7 @@ def view(c, who, settings, auth, github, config):
                         "Load",
                         "warn",
                         f"{computer['label']}: {'overloaded now' if not overload['ended_at'] else 'was overloaded'}"
-                        f" ({describe(overload)}).",
+                        f" ({describe(overload, lambda bot: _bot_name(c, bot, DELETED_BOT))}).",
                         [_fix("Open Performance", "#/computers/" + computer["id"] + "/performance")],
                     )
                 )
@@ -3835,7 +3851,7 @@ def view(c, who, settings, auth, github, config):
                 "warn",
                 "; ".join(
                     f"{name}: {_tokens_words(n)} uncached input tokens in 24 h"
-                    for name, n in ((_bot_name(c, bot), n) for bot, n in heavy[:5])
+                    for name, n in ((_bot_name(c, bot, DELETED_BOT), n) for bot, n in heavy[:5])
                 )
                 + ("." if len(heavy) <= 5 else f"; and {len(heavy) - 5} more."),
                 [_fix("Open Usage", "#/usage")],

@@ -374,3 +374,24 @@ def test_a_steering_poll_with_nothing_queued_answers_without_the_writer(api, mon
     with store.transaction() as c:
         c.execute("UPDATE attempts SET lease_until='2000-01-01T00:00:00Z' WHERE id=?", (aid,))
     assert api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(r["token"])).status_code == 409
+
+
+def test_health_load_names_the_bots_that_ran_never_their_ids(api):
+    """The Load row says who ran by name, and "Deleted bot" for one removed since, never the bot's id."""
+    r, _, attempt = setup_attempt(api)
+    rid = r["runner_id"]
+    start = (int(time.time()) // 60 - 12) * 60
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET created_at=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
+        c.execute("UPDATE bots SET display_name='Operations Lead' WHERE id='ops'")
+    busy = [sample(start + 60 * i, cpu=97.0, procs=[("cargo", 400.0)]) for i in range(10)]
+    post(api, "runners/performance", {"samples": busy}, token=r["token"])
+
+    def load():
+        return next(x for x in get(api, "health")["checks"] if x["id"] == "performance:" + rid)["summary"]
+
+    assert "running: Operations Lead" in load()
+    gone = "01a1cdda-6f96-7593-be09-719b45a9df76"  # a bot removed since: its runs keep its id, the roster has no row
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE perf_overloads SET bots=? WHERE runner_id=?", (f'[{{"bot": "{gone}", "runs": 1}}]', rid))
+    assert "running: Deleted bot" in load() and gone not in load()
