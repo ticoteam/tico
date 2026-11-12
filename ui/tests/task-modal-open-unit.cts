@@ -45,6 +45,7 @@ Object.assign(ctx, {
   taskMenuSettled: () => Promise.resolve(),
   taskLiveEdited: noop, taskLiveStart: noop, taskRailLoad: () => Promise.resolve(), taskChatLoad: () => Promise.resolve(),
   tfLoad: () => Promise.resolve(), taskRunsLoad: () => Promise.resolve(), githubNudgeTask: () => Promise.resolve(),
+  decideTaskOpen: () => Promise.resolve(false),     // decide.ts: these tasks do not wait on the person, so the page opens
 });
 const VmError = vm.runInContext('Error', ctx) as ErrorConstructor;
 const failure = (status: number, message: string) => Object.assign(new VmError(message), {status, body: {error: message}});

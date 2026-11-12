@@ -178,6 +178,20 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
           const box = await card(page).locator(`[data-dc="${what}"]`).boundingBox();
           assert.ok(box && box.y >= 0 && box.y + box.height <= 844, `${what} is on screen`);
         }
+        // The keyboard up (420 px left), on a question: the focused "Something else" box, scrolled to as a phone does,
+        // is not under the buttons kept above the keyboard (phone-rules.cts keyboardAudit).
+        await card(page).locator('[data-dc="close"]').click();
+        await page.evaluate(() => { void taskModalOpen('t-2'); });
+        await page.locator('#dc-other').waitFor();
+        await page.setViewportSize({width: 390, height: 420});
+        await page.waitForTimeout(300);
+        const covered = await page.locator('#dc-other').evaluate(el => {
+          (el as HTMLTextAreaElement).focus(); el.scrollIntoView({block: 'nearest'});
+          const r = el.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + Math.min(r.height / 2, 16));
+          return hit && hit !== el && !el.contains(hit) ? `${hit.tagName}.${hit.className} at ${Math.round(r.top)}` : '';
+        });
+        assert.equal(covered, '', 'the focused note is not covered with the keyboard up');
+        await page.setViewportSize({width: 390, height: 844});
         const sideways = await page.evaluate(() => Math.max(document.documentElement.scrollWidth, document.querySelector('#need-card')!.scrollWidth) - innerWidth);
         assert.ok(sideways <= 0, `nothing scrolls sideways (${sideways} px)`);
         assert.deepEqual(errors, []);
