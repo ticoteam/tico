@@ -30,6 +30,15 @@ from fastapi.responses import Response
 from . import events as E
 
 CAP = 500  # more changed tasks than one page: a full read is no dearer
+SNOOZE_LINE_BYTES = 200  # a brief row's snooze line, in UTF-8 bytes: the task's own read keeps the whole why
+
+
+def clip_line(text, limit=SNOOZE_LINE_BYTES):
+    """`text` cut to at most `limit` UTF-8 bytes on a character boundary, ending in "…" when it was cut."""
+    raw = text.encode()
+    if len(raw) <= limit:
+        return text
+    return raw[: limit - len("…".encode())].decode(errors="ignore").rstrip() + "…"
 
 
 def access(visible_sql):
@@ -202,7 +211,9 @@ def brief(c, rows, visible_sql="1"):
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `late`, `snoozed`
     and `pushed_past` (it entered its stage pushed past a requirement). One `H.task_waits` for every row, one read of the
     open visits and one of the open snoozes, never a read per row. A sub-task the reader may not open is named by
-    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed)."""
+    neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
+    line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
+    keeps it whole."""
     from . import waiting_on as W
     from .store import H
 
@@ -247,6 +258,8 @@ def brief(c, rows, visible_sql="1"):
         turn = turns.get(row["id"])
         if turn:
             turn["running"] = row["id"] in running
+            if turn["state"] == W.SNOOZED:
+                turn["line"] = clip_line(turn["line"])
         row["turn"] = turn
         row["late"] = late.get(row["id"])
         row["snoozed"] = row["id"] in snoozed
