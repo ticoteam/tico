@@ -157,6 +157,10 @@ const headings = (page: Page) => page.locator('#dash-grid .dash-pin-head h2').al
 // How many of `sel` are on screen; the edit controls are in the page while viewing, just not shown.
 const shown = (page: Page, sel: string) => page.locator(sel).evaluateAll(els => els.filter(el => el.checkVisibility()).length);
 const EDIT_CONTROLS = '[data-dash-grip], [data-dash-menu], [data-dash-add], [data-dash-mode="done"]';
+// Every control on the dashboard shown now that is under 40 px tall: on a phone each is the only way to what it does.
+const smallTaps = (page: Page) => page.locator('#dash-root :is(a[href], button, [role="button"], [role="menuitem"], [role="menuitemradio"])')
+  .evaluateAll(els => els.filter(el => el.checkVisibility() && el.getBoundingClientRect().height < 40)
+    .map(el => `${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 30)}: ${Math.round(el.getBoundingClientRect().height)} px`));
 async function shot(page: Page, name: string) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
@@ -310,9 +314,19 @@ async function shot(page: Page, name: string) {
       assert.equal(await page.locator('.dash-tabs a.cur').getAttribute('href'), '#/home');
       assert.equal(await page.locator('.dash-actions').isVisible(), true, 'a member arranges their own');
       assert.equal(await shown(page, EDIT_CONTROLS), 0);
+      if (viewport === PHONE) assert.deepEqual(await smallTaps(page), [], 'every Home control is at least 40 px tall on a phone');
       await page.locator('[data-dash-mode="edit"]').click();
       assert.equal(await shown(page, '[data-dash-grip]'), 5);
       assert.equal(await sideways(page), false, 'edit mode fits');
+      if (viewport === PHONE) {
+        assert.deepEqual(await smallTaps(page), [], 'every Home edit control is at least 40 px tall on a phone');
+        await page.locator('#dash-grid .dash-pin').first().locator('[data-dash-menu]').click();
+        await page.locator('.dash-menu [data-dash-remove]').waitFor();
+        assert.deepEqual(await smallTaps(page), [], 'every card menu item is at least 40 px tall on a phone');
+        assert.equal(await sideways(page), false, 'the card menu fits');
+        await page.keyboard.press('Escape');
+        await page.locator('.dash-menu').waitFor({state: 'detached'});
+      }
       await shot(page, (viewport === PHONE ? 'phone' : 'desktop') + '-my-dashboard-editing');
       await page.locator('[data-dash-mode="done"]').click();
       assert.equal(await page.locator('#dash-grid a[href="#/task/t7"]').count(), 1, 'My tasks links each task');
