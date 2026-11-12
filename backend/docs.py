@@ -57,6 +57,7 @@ PATH_MAX = 300  # characters a caller may send; clean_path may add ".md"
 ID_MAX = 16  # "doc-" and 12 hex digits
 # A list cursor is the last row's exact (path, id) as compact JSON in URL-safe base64: at most 4 bytes a character
 # (a JSON escape of `"` or `\` is 2), the id, and the 6 bytes of `["","]`.
+# The ".md" counted at 4 bytes a character leaves 9 spare bytes, enough for a `-N` of up to seven digits that free_path adds on restore.
 CURSOR_MAX = 4 * -(-(4 * (PATH_MAX + 3) + ID_MAX + 6) // 3)
 MIGRATED = "docs_migrated"
 STOP = frozenset(
