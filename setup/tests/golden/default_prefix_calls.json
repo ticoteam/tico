@@ -1,6 +1,6 @@
 {
  "_recorded_on": {
-  "setup_digest": "bc0ed6fb7f5d0eea998223bc04eec89db97f41a2f5ec89d40574e75f7b434b5c"
+  "setup_digest": "1981c9fab61460b9bf5a7ff739809e9dc61ad768e8e9e7e5801c068809d3741a"
  },
  "install": [
   [
@@ -943,6 +943,24 @@
       }
      ]
     }
+   }
+  ],
+  [
+   "ssm",
+   "send_command",
+   {
+    "DocumentName": "AWS-RunShellScript",
+    "InstanceIds": [
+     "i-3"
+    ]
+   }
+  ],
+  [
+   "ssm",
+   "get_command_invocation",
+   {
+    "CommandId": "c1",
+    "InstanceId": "i-3"
    }
   ],
   [

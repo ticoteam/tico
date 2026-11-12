@@ -1184,6 +1184,35 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
+def _version_key(v: str) -> tuple[int, ...] | None:
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", v or "")
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _keep_newer_server_version(io, s: Settings, ssm, deps, env_text: str) -> str:
+    """A re-run on a running server: an update (Update now, or scripts/install.sh on the server) moves TICO_TAG in the
+    server's .env only, and pull-env.sh replaces that .env with the stored parameter. So read the server's version first
+    and keep it when it is newer than this setup's: the parameter then holds it too, and the re-run never downgrades.
+    A first install (no saved server) asks nothing."""
+    if not s.aws_instance_id:
+        return env_text
+    cmd = f"sed -n 's/^TICO_TAG=//p' {contract.REMOTE_DIR}/.env 2>/dev/null | head -n 1"
+    try:
+        res = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep).run(cmd)
+    except ssm.exceptions.InvalidInstanceId:  # stopped, or not registered with Systems Manager (yet)
+        res = None
+    if res is None or res.returncode:
+        io.say("  Could not read the version this server runs; writing this setup's version.")
+        return env_text
+    running = res.stdout.strip().strip("\"'")
+    have, mine = _version_key(running), _version_key(s.tag)
+    if have is None or (mine is not None and have <= mine):
+        return env_text
+    io.say(f"  The server was updated to {running}; keeping it (this setup is {s.tag}).")
+    s.tag = running
+    return envfile.render(s.to_env())
+
+
 def _aws(
     io, args, s, deps, zone, records, cf, env_text, compose, url, timeout
 ) -> tuple[remote.Shell, list[dnsmod.Record]] | None:
@@ -1203,6 +1232,7 @@ def _aws(
             ) from None
     elif plan_s3 and owned.strict(s.asset_prefix):
         d.verify_plan_bucket(plan_s3)  # before the env names it and before the upload
+    env_text = _keep_newer_server_version(io, s, ssm, deps, env_text)
     d.put_env(env_text, company_file=bool(s.company_file_data) and not plan.plan_bucket)
     if plan_s3:
         # Before launch: the server copies it at first boot. A re-run puts it again, for pull-env.sh below.
