@@ -1,5 +1,5 @@
 // The Rules page header (ui/app/org-rules.ts, ui/styles/org-rules.css) at desktop 1280 and 1024 and phone 390: on each tab
-// (Internal, External, Due, Suggested) every tab link is the topmost element at its centre, no tab overlaps the header's
+// (all eight: Company, Outside, Pipelines and stages, Due, Wakes, Automations on tasks, Built in, Suggested) every tab link is the topmost element at its centre, no tab overlaps the header's
 // actions (Internal's search, External's + Add rule and + Add document, Due's + Add due date), the actions are in view,
 // and a real click on each tab opens it, with the header's rule-checks line at its longest. The search box once covered all four tabs at 1280, and + Add rule covered Suggested.
 import type * as RealHubSupport from './support/real-hub.cts';
@@ -9,10 +9,11 @@ const assert: typeof import('node:assert/strict') = require('node:assert/strict'
 const {startHub, pageAs} = require('./support/real-hub.cts') as RealHubSupport.Api;
 const {t} = require('./support/load.cts') as {t: (ms: number) => number};
 
-const TABS = ['internal', 'external', 'due', 'suggested'] as const;
-const HASH: Record<string, string> = {internal: '#/rules', external: '#/rules/external', due: '#/rules/due', suggested: '#/rules/suggested'};
+const TABS = ['internal', 'external', 'stages', 'due', 'wakes', 'automations', 'builtin', 'suggested'] as const;
+const HASH: Record<string, string> = Object.fromEntries(TABS.map(k => [k, k === 'internal' ? '#/rules' : `#/rules/${k}`]));
 // What each tab draws into the header's actions (Dana is a person, so External and Due show their buttons).
-const ACTS: Record<string, string[]> = {internal: ['.rr-q'], external: ['[data-ru-add]', '[data-ru-add-doc]'], due: ['[data-ru-add-due]'], suggested: []};
+const ACTS: Record<string, string[]> = {internal: ['.rr-q'], external: ['[data-ru-add]', '[data-ru-add-doc]'], due: ['[data-ru-add-due]'], suggested: [],
+  stages: [], wakes: [], automations: [], builtin: []};
 
 const FULL_STATS = {on: true, checks_today: 12480, unchecked_today: 1320, usd_left: 1840, people_usd: 312.45};
 

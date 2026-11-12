@@ -40,6 +40,7 @@ const ctx = vm.createContext({
   errorMessage: (_e: unknown, fallback: string) => fallback,
   TL_ICON: {plus: '+'},
   taskOwnerOptions: () => '',
+  stageRulesButtonHTML: () => '',   // stage-rules.cts draws a stage's Rules button
   needsStageCount: () => 0,   // nothing waits on the person here: no stage's ▶ (stage-review.cts draws them)
 });
 for (const file of ['task-api.ts', 'task-row.ts', 'pipeline-api.ts', 'task-pipelines.ts', 'overview-factories.ts', 'pipeline-editor.ts', 'task-requirements.ts']) {
