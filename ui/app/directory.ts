@@ -36,7 +36,7 @@ interface DirType {
   built_in: number | boolean; mode: string | null; created_by_type: string | null; created_by_id: string | null;
 }
 interface DirCount { type: string; count: number; approximate: boolean }
-interface DirListState { run: number; type: string; q: string; link: string; next: string | null; rows: DirBrief[] }
+interface DirListState { run: number; type: string; q: string; link: string; next: string | null; rows: DirBrief[]; read?: number }
 
 let DIRP: { run: number } | null = null;   // the page on screen: a late answer for a page left behind draws nothing
 let DIRL: DirListState | null = null;      // the list's query and the rows shown
@@ -176,16 +176,19 @@ async function dirLoadRows(root: HTMLElement, types: DirType[], reset: boolean):
   if (state.q) p.set('name', state.q);
   if (state.link) p.set('link', state.link);
   if (!reset && state.next) p.set('after', state.next);
-  const asked = { q: state.q, link: state.link, type: state.type };
+  // Each read is numbered; only the newest for this list draws, its rows or its error (retyping the same text included).
+  const read = (state.read ?? 0) + 1;
+  state.read = read;
+  const newest = (): boolean => DIRL === state && dirLive(state.run) && state.read === read;
   let page: DirFind;
   try {
     page = await get<DirFind>(`/v2/entities/find/${encodeURIComponent(state.type)}?${p.toString()}`, { fresh: true });
   } catch (e) {
-    if (DIRL === state && dirLive(state.run)) body.innerHTML = dirErr(e);
+    if (newest()) body.innerHTML = dirErr(e);
     return;
   }
   // A newer query has been typed since: its own read draws.
-  if (DIRL !== state || !dirLive(state.run) || asked.q !== state.q || asked.link !== state.link) return;
+  if (!newest()) return;
   state.rows = reset ? page.rows : [...state.rows, ...page.rows];
   state.next = page.next;
   const plural = dirTypeName(types, state.type, true).toLowerCase();
