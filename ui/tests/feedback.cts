@@ -63,7 +63,8 @@ function feedbackFake(page: Page, {off = false, seed = []}: {off?: boolean; seed
     const one = p.match(/^\/api\/v2\/feedback\/([^/]+)(?:\/(rule-draft|rule))?$/);
     const row = one && rows.find(r => r.id === one[1]);
     if (!row) return json({detail: 'Not found'}, 404);
-    if (method === 'DELETE') { rows.splice(rows.indexOf(row), 1); return route.fulfill({status: 204, body: ''}); }
+    // The real route answers JSON (backend/feedback.py remove()), never an empty 204.
+    if (method === 'DELETE') { rows.splice(rows.indexOf(row), 1); return json({ok: true, id: row.id}); }
     if (one![2] === 'rule-draft') return json({text: 'Keep replies to five lines or fewer.'});
     if (one![2] === 'rule') {
       Object.assign(row, {outcome: 'rule', org_rule_id: 'r-1', rule_status: 'active'});
