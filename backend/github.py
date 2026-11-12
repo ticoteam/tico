@@ -262,6 +262,36 @@ def _review_role(c, task, payload, role):
 WORKTREE_BRANCH = re.compile(r"^tico/[0-9a-f]{8}-")
 
 
+LIVE_PR_STATES = ("open", "draft")
+
+
+def _settle_branch_prs(c, task_id, repo, branch, number, state, have):
+    """A task keeps one live pull request per worktree branch: two open on one head are a race (a bot's own
+    `gh pr create` and Tico's draft in the same second), and the earliest is kept. Later live links on the branch are
+    removed, and so is `have` (this pull request's own link) when an earlier live one exists. A closed pull request is
+    never newly linked to a branch that already has one. Returns whether this pull request may stay or be linked."""
+    others = H._rows(
+        c.execute(
+            "SELECT id,number,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+            "AND lower(repo)=? AND branch=? AND number<>?",
+            (task_id, repo.lower(), branch, number),
+        )
+    )
+    if not others:
+        return True
+    if state == "closed":
+        return bool(have)
+    live = [o for o in others if o["state"] in LIVE_PR_STATES]
+    if state == "open" and (not have or have["state"] in LIVE_PR_STATES):
+        if any(o["number"] < number for o in live):
+            if have:
+                H.task_unlink(c, H.KEEPER, task_id, have["id"])
+            return False
+        for o in live:
+            H.task_unlink(c, H.KEEPER, task_id, o["id"])
+    return True
+
+
 def register_worktree_pr(c, pr):
     """A pull request whose head is a task worktree's branch in the same repository belongs to that task: its link is
     registered here, so a worktree whose bot never ran `tico task link` still gets the link its release waits on.
@@ -283,16 +313,25 @@ def register_worktree_pr(c, pr):
     from .item_sources import github as GS
 
     made = set()
+    number = int(match.group(3))
+    state = "merged" if pr.get("merged") else "closed" if pr.get("state") == "closed" else "open"
     for row in H._rows(
         c.execute(
             "SELECT id,task_id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? AND branch=?",
             (repo.lower(), branch),
         )
     ):
-        if not c.execute(
-            "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
-            (row["task_id"], repo.lower(), int(match.group(3))),
-        ).fetchone() and not GS.queues_now(c, row["task_id"]):  # in Merge only a person links a new PR
+        have = c.execute(
+            "SELECT id,coalesce(state,'open') AS state FROM task_links WHERE task_id=? AND kind='pr' "
+            "AND lower(repo)=? AND number=?",
+            (row["task_id"], repo.lower(), number),
+        ).fetchone()
+        # In Merge only a person links a new PR, and the links the stage queues stay as they are.
+        if (
+            not GS.queues_now(c, row["task_id"])
+            and _settle_branch_prs(c, row["task_id"], repo, branch, number, state, have)
+            and not have
+        ):
             link = H.task_link(c, H.KEEPER, row["task_id"], url)
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
@@ -1521,7 +1560,69 @@ def _open_draft(service, repo, branch, worktree):
     if response.status_code != 201:
         _pr_error(service, repo, branch, failed + f" (GitHub {response.status_code})")
         return []
-    return [response.json()]
+    return [_one_draft(service, repo, branch, response.json(), token)]
+
+
+def _one_draft(service, repo, branch, mine, token):
+    """GitHub accepts two pull requests on one head when both are opened in the same moment (a bot's own
+    `gh pr create` racing the draft above). The branch's open pull requests are read again right after: the earliest
+    on the same base is kept, and each later one is unlinked from its tasks and then closed with a note, so its close
+    is no news to anyone. Returns the kept pull request; a read that fails keeps the new draft."""
+    number = mine.get("number")
+    if not isinstance(number, int):
+        return mine
+    auth = {"Authorization": "Bearer " + token}
+    path = f"/repos/{quote(repo, safe='/')}"
+    try:
+        response = service._call(
+            "GET",
+            path + "/pulls",
+            headers=auth,
+            params={"head": repo.split("/")[0] + ":" + branch, "state": "open", "per_page": 10},
+        )
+        listed = response.json() if response.status_code == 200 else []
+    except (Problem, ValueError):  # GitHub unreachable, or an answer that is not JSON
+        logging.getLogger("tico.github").warning("Reading %s %s after its draft failed", repo, branch)
+        return mine
+    base = (mine.get("base") or {}).get("ref")
+    same = {
+        pr["number"]: pr
+        for pr in (listed if isinstance(listed, list) else [])
+        if isinstance(pr, dict)
+        and isinstance(pr.get("number"), int)
+        and (pr.get("head") or {}).get("ref") == branch
+        and (pr.get("base") or {}).get("ref") == base
+    }
+    same[number] = mine
+    kept = same[min(same)]
+    later = sorted(n for n in same if n != kept["number"])
+    if not later:
+        return mine
+    with service.store.transaction() as c:
+        for row in H._rows(
+            c.execute(
+                "SELECT id,task_id FROM task_links WHERE kind='pr' AND lower(repo)=? AND number IN ("
+                + ",".join("?" * len(later))
+                + ") AND coalesce(state,'open') IN ('open','draft')",
+                (repo.lower(), *later),
+            )
+        ):
+            H.task_unlink(c, H.KEEPER, row["task_id"], row["id"])
+    for n in later:
+        try:
+            service._call(
+                "POST",
+                f"{path}/issues/{n}/comments",
+                headers=auth,
+                json={"body": f"Closed by Tico as a duplicate: #{kept['number']} is this branch's pull request."},
+            )
+            service._call("PATCH", f"{path}/pulls/{n}", headers=auth, json={"state": "closed"})
+        except Problem:  # GitHub unreachable: the task already keeps only the earliest
+            logging.getLogger("tico.github").warning("Closing duplicate %s #%s failed", repo, n)
+    logging.getLogger("tico.github").info(
+        "Two pull requests opened on %s %s at once: kept #%s, closed %s", repo, branch, kept["number"], later
+    )
+    return kept
 
 
 def _remote_work(service, repo, branch, base, auth):
@@ -1539,6 +1640,20 @@ def _remote_work(service, repo, branch, base, auth):
     if response.status_code != 200:
         raise RuntimeError(f"GitHub {response.status_code}")
     return int(response.json().get("ahead_by") or 0)
+
+
+def _covered(service, repo, branch, prs, auth):
+    """The open pull request of the same task that already holds all of this branch's work, by number, or None. A bot
+    that rebases a task's pull request from its own worktree pushes the pull request's branch, and its worktree's
+    branch can be pushed too, at the same commit: that is no new work, and a draft for it would be the task's second
+    pull request. A pull request whose head is not known yet is read."""
+    for number, head in sorted(prs.items()):
+        if not head:
+            response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/{number}", headers=auth)
+            head = (response.json().get("head") or {}).get("sha") if response.status_code == 200 else None
+        if head and _remote_work(service, repo, branch, head, auth) == 0:
+            return number
+    return None
 
 
 def reconcile_worktree_prs(service):
@@ -1581,7 +1696,10 @@ def reconcile_worktree_prs(service):
             for w in H._rows(
                 c.execute(
                     "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
-                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base,"
+                    "(SELECT json_group_array(json_array(p.number,json_extract(p.detail,'$.head_sha'))) FROM task_links p "
+                    "WHERE p.task_id=w.task_id AND p.kind='pr' AND lower(p.repo)=lower(w.repo) AND p.number IS NOT NULL "
+                    "AND coalesce(p.state,'open') IN ('open','draft')) AS prs "
                     "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                     "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND "
                     + held.format("w")
@@ -1590,8 +1708,9 @@ def reconcile_worktree_prs(service):
                     (org,),
                 )
             ):
-                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
+                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set(), "prs": {}})
                 b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
+                b["prs"].update((n, sha) for n, sha in H._json(w["prs"], []) or [])
                 b["heads"].update(H.worktree_heads(H._json(w["detail"], {}) or {}))
             branches = list(branches.values())
 
@@ -1658,7 +1777,12 @@ def reconcile_worktree_prs(service):
                                     remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}
                                 ),
                             )
-                            if ahead:
+                            covered = ahead and _covered(service, repo, key, link["prs"], auth)
+                            if covered:
+                                logging.getLogger("tico.github").info(
+                                    "No draft for %s %s: its work is already in #%s", repo, key, covered
+                                )
+                            elif ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
                     registering = kind == "branch" and found
@@ -2149,7 +2273,6 @@ FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequ
 MERGE_GROUP_READ = """query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){
 mergeQueue(branch:$branch){entries(first:100){nodes{position headCommit{oid} pullRequest{number headRefOid}}}}}}"""
 WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
-FAILED_JOBS = ("failure", "timed_out", "startup_failure", "cancelled")
 
 
 class GitHubRefused(RuntimeError):
@@ -2241,8 +2364,11 @@ class AppGitHub:
         return meta
 
     def _queue_failure(self, repo, number, before):
-        """(name, url) of the first failed job of the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
-        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`, or None when GitHub will not say."""
+        """(name, url) of what failed in the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
+        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`: its failing legs, else the checks job's line
+        (`item_sources.github.failing_leg`). None when GitHub will not say."""
+        from .item_sources import github as GS
+
         try:
             runs = (
                 self._get(
@@ -2269,11 +2395,29 @@ class AppGitHub:
                 )
                 if jobs.status_code != 200:
                     return None
-                for job in jobs.json().get("jobs") or []:
-                    if job.get("conclusion") in FAILED_JOBS:
-                        return str(job.get("name") or "A check")[:200], job.get("html_url") or None
+                return GS.failing_leg(jobs.json().get("jobs") or [], lambda job: self._checks_line(repo, job))
         except Exception:  # noqa: BLE001 - the removal stands without its check
             logging.getLogger("tico.github").info("No merge-queue run read for %s #%s", repo, number)
+        return None
+
+    def _checks_line(self, repo, job):
+        """The `Failed: ...` error line the workflow's checks job printed (an annotation on its check run), or None when
+        there is none or GitHub will not say. The removal names the run without it."""
+        url = str(job.get("check_run_url") or "")
+        if not url:
+            return None
+        try:
+            notes = self.service._call(
+                "GET", url + "/annotations", headers=self._headers(repo, {"checks": "read", "metadata": "read"})
+            )
+            if notes.status_code != 200:
+                return None
+            for note in notes.json() or []:
+                message = str(note.get("message") or "")
+                if message.startswith("Failed: "):
+                    return message
+        except Exception:  # noqa: BLE001 - the removal names the run's outcome without the line
+            logging.getLogger("tico.github").info("No checks line read for %s", repo)
         return None
 
     def read_checks(self, repo, sha):

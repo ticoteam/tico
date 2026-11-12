@@ -1,1120 +1,1213 @@
-"""Listening's observation store and the shared intake: save, score, route, resolve.
+"""Listening: sources, rules and rate limits on an automation.
 
-Four tables in the hub database (hubdb `LISTENING_SCHEMA`), and a fifth, `listening_destinations`,
-that Settings > Listening writes (`ensure`):
+A listening is an automation whose trigger is `listening` (backend/automation_flow.py checks its shape). Its sources
+say where posts come from, its Keep and Drop rules which ones matter, and its limits how many are sent on and when.
+Two tables (backend/migrations/20261111190425_listening_feed.py):
 
-    listen_runs        one sweep of one query on one site; `status` tells "no results" from "blocked"
-    listen_items       what the agent saw, one row per platform post, unique on (source, native_id)
-    listen_judgments   the decision model's scores, one noul per category; a new row on reclassification
-    intake_items       the shared inbox, unique on (destination, item_id); the receiver resolves it
-    listening_destinations   destinations set in Settings; merged over the registry file's, the table wins
+    listening_sources   one row per source in the trigger, in step with the flow on every save (`sync_sources`)
+    listening_items     what the sources saved, and what became of each
 
-Flow: Listening reads pages signed in and posts a run with the items it saw (`POST
-/listening/runs`). The decision model scores each item against every category in one call (`POST
-/listening/judge`, the `listening-item` question set). Every destination whose threshold a
-score clears gets one intake row. The receiving bot reads its `new` rows and marks each
-accepted (with the record it made), rejected (with a reason) or duplicate.
+An item is `new` when saved, then `duplicate` (a copy of one already here), `kept` or `dropped` (the rules, asked of
+the decision model), `sent` (it went out in a run), `failed` (the model could not score it in three tries) or
+`expired` (not sent within a week, or its source was removed).
 
-Dedupe is the two unique keys: a post saved twice is one row, and a post routed twice to the
-same place is one row, so a re-sent run or a re-run judgment is harmless. Retries are the
-receiver polling for `new`; nothing is pushed. Reclassification adds a judgment and routes it:
-a destination the post newly clears gets a row, rows already there are left alone.
+Posts arrive three ways, all through `save`: a bot that read a Search source, the server reading a Page source
+(`read_pages`, the market watch's reader), and a Push address anyone holding its token may post to.
 
-Only Listening (and the owner) writes runs and judgments. A receiver reads and resolves only
-its own destination. The posts carry third-party names and handles, so a bot that is neither
-sees no rows (`backend/sql.py` says the same for `tico sql`).
+`run_pass` is the scheduler's pass, once per `automations.tick`, outside that tick's transaction: the model calls and
+the copy comparison run between short transactions, never inside one.
 """
 
 import hashlib
 import json
 import logging
 import re
-import sqlite3
+import secrets
 import threading
-from collections import OrderedDict
+import time
+from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-import yaml
 from fastapi import Request
 from pydantic import Field
 
 from clients import judge as J
 
+from . import automation_flow as F
 from . import hubdb as H
 from .models import Contract
 from .store import Problem
 
-LISTENER = "bot:social-media-manager"
-QUESTION_SET = "listening-item"
-RUN_STATUSES = ("ok", "blocked", "rate_limited", "error")
-INTAKE_STATUSES = ("new", "accepted", "rejected", "duplicate")
-RESOLVED = ("accepted", "rejected", "duplicate")
-SOURCE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,39}$")
-MAX_ITEMS = 200
-MAX_JUDGE = 50
-REJUDGE_DAYS = 2  # after a question-set version bump, rescore only this recent a post
+log = logging.getLogger(__name__)
 
-# Where a post goes and when. Destinations are the company's: `<registry>/listening.yaml`
-# (`templates/environment-registry/listening.yaml` is the shape), and a company with none routes
-# nowhere. Each destination names a `category` (a noul in questions/listening-item.json), a
-# `threshold`, the `receiver` bot that resolves its inbox, optional `readers`, an `unless` category
-# and threshold that keeps a post out (a vendor's promotion dressed as a question is not a lead),
-# and `what`, the sentence the receiver reads. A post goes to every destination whose threshold its
-# score reaches. Changing the file changes routing from the next decision on; rows already in an
-# inbox stay.
-LISTENING_FILE = "listening.yaml"
-WARNING_CACHE_LIMIT = 128
-_warning_revisions = OrderedDict()
-_warning_lock = threading.Lock()
+READ_STATUSES = ("ok", "blocked", "rate_limited", "error")
+ITEM_STATUSES = ("new", "duplicate", "kept", "dropped", "sent", "failed", "expired")
+MAX_ITEMS = 200  # items in one save
+TEXT_MAX = 20_000  # of a post's text kept
+SENT_TEXT = 4_000  # of a post's text carried in a run
+TITLE_MAX = 140
+MAX_SCORE = 50  # items scored in one pass
+CLAIM_MINUTES = 10  # a claim older than this is free again: its pass was cut off
+MAX_TRIES = 3
+MAX_ERRORS = 3  # failed calls in one pass before the rest wait for the next
+YES = 0.75  # a rule holds at this score
+COPY_DAYS = 30  # the copy check's window
+COPY_COMPARISONS = 2_000
+COPY_ALIKE = 0.95
+COPY_TOKENS = 8  # shorter texts are compared by key only: a few shared words are not a copy
+COPY_KEY = 20  # a text key shorter than this says too little to call two posts the same
+COPY_TEXT = 2_000  # of a post's text compared
+EXPIRE_DAYS = 7
+KEEP_SENT_DAYS = 90
+KEEP_DAYS = 30
+SEARCH_DUE_HOURS = 24
+PAGE_DUE_HOURS = 24
+PAGES_PER_PASS = 10
+PASS_SECONDS = 20  # of page reads and model calls in one pass, across every listening: the tick waits on the pass
+OVERDUE_DAYS = 2  # a source not read for this long shows hollow
+STALLED_MINUTES = 30  # a post waiting unscored this long shows the listening hollow
+PUSH_PER_MINUTE = 60
+PUSH_PATH = "/api/v2/listening/in/"
+RECENT_MAX = 25
+RECENT_TEXT = 240
+LIST_MAX = 500
+DEFAULT_AT = "08:00"
 
-
-def _warn_configuration(settings, kind, source, problems, questions=None):
-    """Log once per configuration revision; retain only bounded opaque fingerprints."""
-    key = (hashlib.sha256(str(settings.registry_dir.absolute()).encode()).digest(), kind)
-    revision = hashlib.sha256(json.dumps([source, questions, problems], default=str).encode()).digest()
-    with _warning_lock:
-        previous = _warning_revisions.get(key)
-        if kind == "destinations" and previous != revision:
-            _warning_revisions.pop((key[0], "questions"), None)
-        _warning_revisions[key] = revision
-        _warning_revisions.move_to_end(key)
-        while len(_warning_revisions) > WARNING_CACHE_LIMIT:
-            _warning_revisions.popitem(last=False)
-    if previous != revision:
-        for problem in problems:
-            logging.getLogger("tico.listening").warning("%s: %s", LISTENING_FILE, problem)
-
-
-def _actor(value):
-    value = str(value or "").strip()
-    return value if not value or ":" in value else "bot:" + value
-
-
-def question_set(settings):
-    return J.load_set(QUESTION_SET, registry_dir=settings.registry_dir)
-
-
-def category_problems(dests, qset):
-    """Configuration names only; question text and other registry content stay private."""
-    questions = qset["questions"]
-    problems = []
-    for name, cfg in dests.items():
-        for field, category in (
-            ("category", cfg["category"]),
-            ("unless category", (cfg.get("unless") or {}).get("category")),
-        ):
-            if category is not None and (questions.get(category) or {}).get("type") != "noul":
-                problems.append(f"{name}: {field} {category!r} needs a noul question in {QUESTION_SET}")
-    return problems
-
-
-def _finish(settings, out, source, qset, check_questions, problems=None):
-    """Log the destination problems once, and check the categories of what is configured."""
-    if problems is not None:
-        _warn_configuration(settings, "destinations", source, problems)
-    if out and check_questions:
-        try:
-            loaded = qset or question_set(settings)
-            found = category_problems(out, loaded)
-        except J.JudgeError as exc:
-            loaded = getattr(exc, "config_revision", exc.code)
-            found = [f"{QUESTION_SET} question set could not be loaded; check registry/questions"]
-        _warn_configuration(settings, "questions", source, found, loaded)
-    elif check_questions:
-        _warn_configuration(settings, "questions", source, [])
-    return out
-
-
-def destinations(settings, conn=None, *, qset=None, check_questions=True):
-    """The company's destinations: the registry file's, with the ones saved in Settings over them (the table
-    wins on the same key; pass `conn` to include it). A malformed file entry is skipped and logged."""
-    extra = stored(conn) if conn is not None else {}
-    try:
-        source = (settings.registry_dir / LISTENING_FILE).read_text()
-    except OSError:
-        return _finish(settings, dict(extra), None, qset, check_questions, [])
-    try:
-        document = yaml.safe_load(source) or {}
-    except yaml.YAMLError:
-        return _finish(settings, dict(extra), source, qset, check_questions, [])
-    found = document.get("destinations") if isinstance(document, dict) else None
-    if found is not None and not isinstance(found, dict):
-        _warn_configuration(settings, "destinations", source, ["destinations must be a map"])
-        return dict(extra)
-    out, problems = {}, []
-    for name, cfg in (found or {}).items():
-        try:
-            entry = {
-                "category": str(cfg["category"]),
-                "threshold": float(cfg["threshold"]),
-                "receiver": _actor(cfg["receiver"]),
-                "what": str(cfg.get("what") or ""),
-            }
-            if not 0 < entry["threshold"] <= 1 or not entry["category"] or not entry["receiver"]:
-                raise ValueError("category, receiver and a threshold in (0, 1]")
-            if cfg.get("readers"):
-                entry["readers"] = [_actor(r) for r in cfg["readers"]]
-            if cfg.get("unless"):
-                entry["unless"] = {
-                    "category": str(cfg["unless"]["category"]),
-                    "threshold": float(cfg["unless"]["threshold"]),
-                }
-        except (KeyError, TypeError, ValueError, AttributeError):
-            problems.append(f"destination {name!r} skipped (invalid destination configuration)")
-            continue
-        out[str(name)] = entry
-    out.update(extra)
-    return _finish(settings, out, source, qset, check_questions, problems)
-
-
-# ----------------------------------------------------------------------------- destinations saved in Settings
-DESTINATIONS_SCHEMA = """
-CREATE TABLE IF NOT EXISTS listening_destinations (
-  key TEXT PRIMARY KEY,
-  category TEXT NOT NULL,
-  threshold REAL NOT NULL,
-  receiver TEXT NOT NULL,
-  readers TEXT,
-  unless TEXT,
-  what TEXT,
-  updated_by TEXT,
-  updated_at TEXT)
-"""
-DESTINATION_KEY = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
-MARKET_SEEDED = "listening.market_seeded"  # registry_metadata: the market destination was offered once
-MARKET_DESTINATION = {
-    "category": "market",
-    "threshold": 0.70,
-    "receiver": "bot:librarian",
-    "what": "a post about the market: competitors, buyers, prices, regulation",
-}
-
-
-def ensure(c):
-    c.execute(DESTINATIONS_SCHEMA)
-
-
-def stored(conn):
-    """The destinations saved in Settings, shaped like the file's."""
-    try:
-        rows = H._rows(conn.execute("SELECT * FROM listening_destinations ORDER BY key"))
-    except sqlite3.OperationalError:  # a database from before the table
-        return {}
-    out = {}
-    for row in rows:
-        entry = {
-            "category": row["category"],
-            "threshold": float(row["threshold"]),
-            "receiver": row["receiver"],
-            "what": row["what"] or "",
-        }
-        readers = _loads(row["readers"], [])
-        if readers:
-            entry["readers"] = [str(r) for r in readers]
-        unless = _loads(row["unless"], None)
-        if isinstance(unless, dict) and unless.get("category"):
-            entry["unless"] = {"category": str(unless["category"]), "threshold": float(unless.get("threshold") or 0)}
-        out[row["key"]] = entry
-    return out
-
-
-def _noul_category(qset, category, field):
-    if (qset["questions"].get(category) or {}).get("type") != "noul":
-        raise Problem("invalid", f"{field} {category!r} is not a yes-or-no question in {QUESTION_SET}", 422)
-
-
-def _threshold(value, field="threshold"):
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < float(value) <= 1:
-        raise Problem("invalid", f"{field} is a number above 0 and up to 1", 422)
-    return float(value)
-
-
-def check_destination(conn, settings, key, body):
-    """A destination as the file would be read: the key, a noul category, a threshold in (0, 1], a receiver that
-    is a bot that exists, readers that exist and an optional `unless`. Refused with 422 before it is saved."""
-    key = str(key or "").strip().lower()
-    if not DESTINATION_KEY.match(key):
-        raise Problem("invalid", "a destination key is a short lowercase name like market or leads", 422)
-    try:
-        qset = question_set(settings)
-    except J.JudgeError:
-        raise Problem(
-            "judge_questions",
-            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json.",
-            422,
-        ) from None
-    category = str(body.category or "").strip()
-    _noul_category(qset, category, "category")
-    receiver = H.resolve_actor(conn, _actor(body.receiver))
-    if not receiver or not receiver.startswith("bot:") or (H.bot(conn, receiver[4:]) or {}).get("state") == "archived":
-        raise Problem("invalid", f"receiver {body.receiver!r} is not a bot on this team", 422)
-    readers = []
-    for reader in body.readers:
-        actor = H.resolve_actor(conn, _actor(reader))
-        if not actor or actor.startswith("bot:") and (H.bot(conn, actor[4:]) or {}).get("state") == "archived":
-            raise Problem("invalid", f"reader {reader!r} is not on this team", 422)
-        if actor not in readers and actor != receiver:
-            readers.append(actor)
-    entry = {
-        "category": category,
-        "threshold": _threshold(body.threshold),
-        "receiver": receiver,
-        "what": str(body.what or "").strip(),
-    }
-    if readers:
-        entry["readers"] = readers
-    if body.unless:
-        unless = str(body.unless.category or "").strip()
-        _noul_category(qset, unless, "unless category")
-        entry["unless"] = {"category": unless, "threshold": _threshold(body.unless.threshold, "unless threshold")}
-    return key, entry
-
-
-def save_destination(conn, settings, who, key, body):
-    key, entry = check_destination(conn, settings, key, body)
-    now = H.now()
-    conn.execute(
-        "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-        "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
-        "category=excluded.category, threshold=excluded.threshold, receiver=excluded.receiver, "
-        "readers=excluded.readers, unless=excluded.unless, what=excluded.what, "
-        "updated_by=excluded.updated_by, updated_at=excluded.updated_at",
-        (
-            key,
-            entry["category"],
-            entry["threshold"],
-            entry["receiver"],
-            json.dumps(entry.get("readers") or []),
-            json.dumps(entry.get("unless")),
-            entry["what"],
-            who.actor,
-            now,
-        ),
-    )
-    H.event(
-        conn, who.actor, "listening.destination", key, {"category": entry["category"], "receiver": entry["receiver"]}
-    )
-    return key
-
-
-def remove_destination(conn, settings, who, key):
-    """A saved destination goes; one only the file has is the file's to change."""
-    if not conn.execute("SELECT 1 FROM listening_destinations WHERE key=?", (key,)).fetchone():
-        if key in destinations(settings, None, check_questions=False):
-            raise Problem("yaml", f"{key} comes from listening.yaml; edit that file to remove it", 409)
-        raise Problem("not_found", f"no destination {key}", 404)
-    conn.execute("DELETE FROM listening_destinations WHERE key=?", (key,))
-    H.event(conn, who.actor, "listening.destination_removed", key, {})
-    return key
-
-
-def seed_market(conn, settings):
-    """Once, when the Librarian exists and nothing routes `market`: offer it the market posts. The marker is
-    set either way, so an owner who removes the destination later keeps it removed."""
-    if conn.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MARKET_SEEDED,)).fetchone():
-        return False
-    librarian = H.bot(conn, MARKET_DESTINATION["receiver"][4:])
-    if not librarian or librarian.get("state") == "archived":
-        return False
-    try:
-        qset = question_set(settings)
-    except J.JudgeError:
-        return False  # try again once the questions load
-    added = False
-    if (qset["questions"].get("market") or {}).get("type") == "noul" and not any(
-        d["category"] == "market" for d in destinations(settings, conn, check_questions=False).values()
-    ):
-        key = "market"
-        while conn.execute(
-            "SELECT 1 FROM listening_destinations WHERE key=?", (key,)
-        ).fetchone() or key in destinations(settings, None, check_questions=False):
-            key += "-2"
-        conn.execute(
-            "INSERT INTO listening_destinations (key, category, threshold, receiver, readers, unless, what, "
-            "updated_by, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                key,
-                "market",
-                MARKET_DESTINATION["threshold"],
-                MARKET_DESTINATION["receiver"],
-                "[]",
-                "null",
-                MARKET_DESTINATION["what"],
-                H.KEEPER,
-                H.now(),
-            ),
-        )
-        H.event(
-            conn,
-            H.KEEPER,
-            "listening.destination",
-            key,
-            {"category": "market", "receiver": "bot:librarian", "seeded": True},
-        )
-        added = True
-    conn.execute(
-        "INSERT INTO registry_metadata VALUES(?,?)", (MARKET_SEEDED, json.dumps({"at": H.now(), "added": added}))
-    )
-    return added
-
-
-def destination_list(conn, settings):
-    """Every destination with where it comes from, the categories to choose and the bots that can receive."""
-    from_file = destinations(settings, None, check_questions=False)
-    saved = stored(conn)
-    rows = []
-    for key, cfg in sorted({**from_file, **saved}.items()):
-        meta = {}
-        if key in saved:
-            meta = H._one(conn, "SELECT updated_by, updated_at FROM listening_destinations WHERE key=?", (key,)) or {}
-        rows.append(
-            {
-                "key": key,
-                "category": cfg["category"],
-                "threshold": cfg["threshold"],
-                "receiver": cfg["receiver"],
-                "readers": cfg.get("readers", []),
-                "unless": cfg.get("unless"),
-                "what": cfg.get("what", ""),
-                "source": "settings" if key in saved else "yaml",
-                "overrides_yaml": key in saved and key in from_file,
-                **meta,
-            }
-        )
-    try:
-        qset = question_set(settings)
-        categories = [
-            {"id": qid, "label": qid.replace("_", " ")}
-            for qid, q in qset["questions"].items()
-            if q.get("type") == "noul"
-        ]
-    except J.JudgeError:
-        categories = []
-    bots = [
-        {"actor": "bot:" + r["id"], "name": r["display_name"] or r["slug"]}
-        for r in H._rows(
-            conn.execute("SELECT id, slug, display_name FROM bots WHERE state<>'archived' ORDER BY display_name, slug")
-        )
-    ]
-    return {"destinations": rows, "categories": categories, "receivers": bots}
-
-
-def receivers(dests):
-    return {cfg["receiver"] for cfg in dests.values()}
-
-
-def destinations_of(actor, dests):
-    """The inboxes `actor` may read: those it receives, and those it is a reader of. Only the
-    receiver resolves an item (`resolve`)."""
-    return [name for name, cfg in dests.items() if actor == cfg["receiver"] or actor in cfg.get("readers", ())]
-
-
-def sees_everything(who):
-    return who.role == "owner" or who.actor == LISTENER
-
-
-def require_listener(who):
-    if not sees_everything(who):
-        raise Problem("forbidden", "Only Listening and the company owner save runs and decisions", 403)
-
-
-def require_reader(who, dests):
-    if sees_everything(who) or destinations_of(who.actor, dests):
-        return
-    raise Problem("forbidden", "Saved posts are for Listening, the bots it routes to, and the owner", 403)
+# The Page source's reader: `backend.market_watch.read`, or a test's own.
+READER = None
+CLOCK = time.monotonic  # the pass's clock, replaced in tests
+_PUSHES = {}  # source id -> the times of its last calls, for PUSH_PER_MINUTE
+_PUSH_LOCK = threading.Lock()
 
 
 # ----------------------------------------------------------------------------- small helpers
+LINK = re.compile(r"(?:https?://|www\.)\S+", re.I)  # the copy check ignores links: a tracking code is not a difference
+
+
 def normalize(text):
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
-def content_hash(text):
-    return hashlib.sha256(normalize(text).encode()).hexdigest()
-
-
-def _loads(value, default):
-    try:
-        return json.loads(value) if value else default
-    except ValueError:
-        return default
-
-
-def run(conn, run_id):
-    return H._row(conn.execute("SELECT * FROM listen_runs WHERE id=?", (run_id,)).fetchone())
-
-
-def item(conn, item_id):
-    return H._row(conn.execute("SELECT * FROM listen_items WHERE id=?", (item_id,)).fetchone())
-
-
-def _judgment_row(row):
-    if not row:
-        return None
-    out = dict(row)
-    out["scores"] = _loads(out.pop("scores"), {})
-    return out
-
-
-def judgment(conn, judgment_id):
-    return _judgment_row(conn.execute("SELECT * FROM listen_judgments WHERE id=?", (judgment_id,)).fetchone())
-
-
-def current_judgment(conn, item_id):
-    """The newest judgment is the current one."""
-    return _judgment_row(
-        conn.execute(
-            "SELECT * FROM listen_judgments WHERE item_id=? ORDER BY judged_at DESC, rowid DESC LIMIT 1", (item_id,)
-        ).fetchone()
-    )
-
-
-def intake_row(conn, intake_id):
-    return H._row(conn.execute("SELECT * FROM intake_items WHERE id=?", (intake_id,)).fetchone())
-
-
-# ----------------------------------------------------------------------------- writes
-def record_run(
-    conn, actor, *, source, query, status, started_at=None, pages_read=0, items_seen=None, note="", items=()
-):
-    """One sweep and every post it saw, in one transaction. A post already saved is not changed."""
-    source = str(source or "").strip().lower()
-    if not SOURCE.match(source):
-        raise Problem("invalid", f"a source is a short lowercase name like x, reddit or linkedin, not {source!r}", 422)
-    if status not in RUN_STATUSES:
-        raise Problem("invalid", f"a run status is {'|'.join(RUN_STATUSES)}, not {status}", 422)
-    query = str(query or "").strip()
-    if not query:
-        raise Problem("invalid", "say which query or page the run read", 422)
-    if status != "ok" and not str(note or "").strip():
-        raise Problem("invalid", f"a {status} run says what happened in `note`", 422)
-    items = list(items or [])
-    if len(items) > MAX_ITEMS:
-        raise Problem("invalid", f"a run saves at most {MAX_ITEMS} posts; split the sweep", 422)
-    now = H.now()
-    row = {
-        "id": H.new_id(),
-        "source": source,
-        "query": query,
-        "started_at": started_at or now,
-        "status": status,
-        "pages_read": int(pages_read or 0),
-        "items_seen": len(items) if items_seen is None else int(items_seen),
-        "note": str(note or ""),
-    }
-    conn.execute(
-        "INSERT INTO listen_runs (id, source, query, started_at, status, pages_read, items_seen, note) "
-        "VALUES (:id,:source,:query,:started_at,:status,:pages_read,:items_seen,:note)",
-        row,
-    )
-    saved, seen = [], set()
-    for raw in items:
-        native_id = str(raw.get("native_id") or "").strip()
-        url = str(raw.get("url") or "").strip()
-        content = str(raw.get("content") or "").strip()
-        if not native_id or not url or not content:
-            raise Problem("invalid", "every post needs native_id, url and content", 422)
-        if native_id in seen:
-            continue
-        seen.add(native_id)
-        existing = conn.execute(
-            "SELECT id FROM listen_items WHERE source=? AND native_id=?", (source, native_id)
-        ).fetchone()
-        if existing:
-            saved.append({"id": existing["id"], "native_id": native_id, "new": False})
-            continue
-        new = {
-            "id": H.new_id(),
-            "source": source,
-            "native_id": native_id,
-            "url": url,
-            "author": (str(raw.get("author")).strip() or None) if raw.get("author") else None,
-            "author_url": (str(raw.get("author_url")).strip() or None) if raw.get("author_url") else None,
-            "content": content,
-            "content_hash": content_hash(content),
-            "published_at": raw.get("published_at") or None,
-            "first_seen_at": now,
-            "first_run_id": row["id"],
-        }
-        conn.execute(
-            "INSERT INTO listen_items (id, source, native_id, url, author, author_url, content, content_hash, "
-            "published_at, first_seen_at, first_run_id) VALUES (:id,:source,:native_id,:url,:author,"
-            ":author_url,:content,:content_hash,:published_at,:first_seen_at,:first_run_id)",
-            new,
-        )
-        saved.append({"id": new["id"], "native_id": native_id, "new": True})
-    H.event(
-        conn,
-        actor,
-        "listen.run",
-        row["id"],
-        {"source": source, "status": status, "items": len(saved), "new": sum(1 for s in saved if s["new"])},
-    )
-    return {"run": run(conn, row["id"]), "items": saved}
-
-
-def check_scores(scores):
-    if not isinstance(scores, dict) or not scores:
-        raise Problem("invalid", "scores is a map of category -> probability", 422)
-    out = {}
-    for name, value in scores.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= float(value) <= 1:
-            raise Problem("invalid", f"score {name} is not a probability between 0 and 1", 422)
-        out[str(name)] = float(value)
-    return out
-
-
 def text_key(content):
-    """The words of a post, without the community tag or punctuation: equal for a cross-post."""
-    text = re.sub(r"^\[[^\]]{1,80}\]\s*", "", str(content or ""))
-    return re.sub(r"[^a-z0-9]+", "", text.lower())[:400]
+    """The words of a post, without the community tag, links or punctuation: equal for a cross-post. A long post's key ends
+    in a digest of all of it, so two that only start alike are not the same."""
+    text = LINK.sub(" ", re.sub(r"^\[[^\]]{1,80}\]\s*", "", str(content or "")))
+    key = re.sub(r"[^a-z0-9]+", "", text.lower())
+    return key if len(key) <= 400 else key[:336] + hashlib.sha256(key.encode()).hexdigest()
 
 
-def cross_post(conn, row, destination, days=30):
-    """True when the same text (same author, when known) already sits in this inbox."""
-    key = text_key(row["content"])
-    if len(key) < 40:
-        return False
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S")
-    for other in conn.execute(
-        "SELECT i.id, i.author, i.content FROM intake_items k JOIN listen_items i ON i.id=k.item_id "
-        "WHERE k.destination=? AND k.item_id<>? AND k.created_at>=?",
-        (destination, row["id"], since),
-    ):
-        if (not row["author"] or not other["author"] or other["author"] == row["author"]) and text_key(
-            other["content"]
-        ) == key:
-            return True
-    return False
+def tokens(text):
+    return Counter(re.findall(r"[a-z0-9]+", LINK.sub(" ", str(text or "")).lower()))
 
 
-def route(conn, row, scored, dests):
-    """Open an intake row for every destination this judgment clears. Existing rows stay, and a
-    cross-post of text already in that inbox is not sent again."""
-    opened = []
-    for name, cfg in dests.items():
-        if scored["scores"].get(cfg["category"], 0.0) < cfg["threshold"]:
-            continue
-        unless = cfg.get("unless")
-        if unless and scored["scores"].get(unless["category"], 0.0) >= unless["threshold"]:
-            continue
-        if cross_post(conn, row, name):
-            continue
-        intake_id = H.new_id()
-        cur = conn.execute(
-            "INSERT OR IGNORE INTO intake_items (id, destination, item_id, judgment_id, status, created_at) "
-            "VALUES (?,?,?,?, 'new', ?)",
-            (intake_id, name, row["id"], scored["id"], H.now()),
-        )
-        if cur.rowcount:
-            opened.append(intake_row(conn, intake_id))
-            from . import automations
-
-            automations.on_listening(conn, opened[-1], row)
-    return opened
+def alike(a, b):
+    """How much of two posts' words are shared, 0 to 1, counting a repeated word each time."""
+    union = sum((a | b).values())
+    return sum((a & b).values()) / union if union else 0.0
 
 
-def add_judgment(conn, actor, item_id, question_set, scores, dests, judged_at=None):
-    """Save one set of scores for a post and route it."""
-    row = item(conn, item_id)
-    if not row:
-        raise Problem("not_found", f"no saved post {item_id}", 404)
-    question_set = str(question_set or "").strip()
-    if not question_set:
-        raise Problem("invalid", "name the question set and version, like listening-item@1", 422)
-    scores = check_scores(scores)
-    jid = H.new_id()
-    conn.execute(
-        "INSERT INTO listen_judgments (id, item_id, question_set, scores, judged_at) VALUES (?,?,?,?,?)",
-        (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()),
-    )
-    scored = judgment(conn, jid)
-    opened = route(conn, row, scored, dests)
-    H.event(
-        conn, actor, "listen.judgment", item_id, {"set": question_set, "routed": [o["destination"] for o in opened]}
-    )
-    return {"judgment": scored, "intake": opened}
+def _iso(at):
+    return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-def resolve(conn, who, intake_id, status, dests, receiver_ref="", reason=""):
-    """The receiver's verdict. Saying the same thing twice is fine; changing it is refused."""
-    row = intake_row(conn, intake_id)
-    if not row:
-        raise Problem("not_found", f"no intake item {intake_id}", 404)
-    if who.role != "owner" and dests.get(row["destination"], {}).get("receiver") != who.actor:
-        raise Problem("forbidden", f"only the {row['destination']} receiver or the owner resolves this item", 403)
-    if status not in RESOLVED:
-        raise Problem("invalid", f"a verdict is {'|'.join(RESOLVED)}, not {status}", 422)
-    receiver_ref, reason = str(receiver_ref or "").strip(), str(reason or "").strip()
-    if status in ("accepted", "duplicate") and not receiver_ref:
-        raise Problem("invalid", f"{status} names the record: the id you created or the one it duplicates", 422)
-    if status == "rejected" and not reason:
-        raise Problem("invalid", "say in one sentence why it is rejected", 422)
-    if row["status"] != "new":
-        if (row["status"], row["receiver_ref"] or "", row["reason"] or "") == (status, receiver_ref, reason):
-            return row
-        raise Problem("conflict", f"{intake_id} is already {row['status']}", 409)
-    conn.execute(
-        "UPDATE intake_items SET status=?, receiver_ref=?, reason=?, decided_at=? WHERE id=?",
-        (status, receiver_ref or None, reason or None, H.now(), intake_id),
-    )
-    H.event(
-        conn,
-        who.actor,
-        "intake.resolve",
-        intake_id,
-        {"destination": row["destination"], "status": status, "receiver_ref": receiver_ref},
-    )
-    return intake_row(conn, intake_id)
+def _has_tables(c):
+    return H._has_table(c, "listening_sources") and H._has_table(c, "automations")
 
 
-# ----------------------------------------------------------------------------- reads
-def state_for(row):
-    """What the decision model reads: the post as the agent saw it."""
-    return {
-        "source": row["source"],
-        "url": row["url"],
-        "author": row["author"] or "",
-        "published_at": row["published_at"] or "",
-        "content": row["content"],
-    }
+def title_of(item):
+    """The post's own title, or the start of its text. No model writes one."""
+    own = normalize(item["title"])
+    if own:
+        return own[:TITLE_MAX]
+    text = normalize(item["text"])
+    return text if len(text) <= TITLE_MAX else text[: TITLE_MAX - 1] + "…"
 
 
-def unjudged(conn, label, limit=MAX_JUDGE):
-    """Posts the current question set has not scored: every post never judged, and a post judged
-    by an older version only while it is recent. A version bump rescores the last two days, not the
-    whole archive, so new sweeps never queue behind old posts and receivers are not re-sent them."""
-    since = H.shift(H.now(), days=-REJUDGE_DAYS)
-    return H._rows(
-        conn.execute(
-            "SELECT * FROM listen_items i WHERE NOT EXISTS (SELECT 1 FROM listen_judgments j "
-            "WHERE j.item_id=i.id AND j.question_set=?) AND (i.first_seen_at>=? OR NOT EXISTS "
-            "(SELECT 1 FROM listen_judgments o WHERE o.item_id=i.id)) ORDER BY first_seen_at, rowid LIMIT ?",
-            (label, since, int(limit)),
-        )
-    )
+def site_label(source):
+    if not source:
+        return ""
+    if source["kind"] == "page":
+        return "Page"
+    site = str(source["site"] or "")
+    return site[:1].upper() + site[1:]
 
 
-def inbox(conn, who, dests, destination=None, status="new", limit=100):
-    """Intake rows with the post and the scores that routed it, oldest first."""
-    if status and status not in INTAKE_STATUSES:
-        raise Problem("invalid", f"a status is {'|'.join(INTAKE_STATUSES)}", 422)
-    if destination and destination not in dests:
-        raise Problem(
-            "invalid", f"a destination is {'|'.join(dests) or 'not configured (registry/listening.yaml)'}", 422
-        )
-    allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
-    if destination:
-        if destination not in allowed:
-            raise Problem("forbidden", f"{who.actor} does not receive {destination}", 403)
-        allowed = [destination]
-    if not allowed:
-        return []
-    marks = ",".join("?" * len(allowed))
-    sql = f"SELECT * FROM intake_items WHERE destination IN ({marks})"
-    args = list(allowed)
-    if status:
-        sql += " AND status=?"
-        args.append(status)
-    sql += " ORDER BY created_at, rowid LIMIT ?"
-    args.append(max(1, min(int(limit or 100), 500)))
-    out = []
-    for row in H._rows(conn.execute(sql, args)):
-        post = item(conn, row["item_id"])
-        scored = judgment(conn, row["judgment_id"])
-        cfg = dests.get(row["destination"]) or {"category": "?", "threshold": 0}
-        out.append(
-            {
-                **row,
-                "post": post,
-                "scores": scored["scores"] if scored else {},
-                "question_set": scored["question_set"] if scored else None,
-                "routed_because": f"{cfg['category']} >= {cfg['threshold']}",
-            }
-        )
-    return out
+# ----------------------------------------------------------------------------- the trigger
+def zone_of(trigger):
+    from . import automation_due as D
+
+    return D.zone_of(trigger)
 
 
-def trace(conn, item_id):
-    """A post, the run that first saw it, every judgment, and every place it went."""
-    row = item(conn, item_id)
-    if not row:
-        raise Problem("not_found", f"no saved post {item_id}", 404)
-    judgments = [
-        _judgment_row(r)
-        for r in conn.execute(
-            "SELECT * FROM listen_judgments WHERE item_id=? ORDER BY judged_at, rowid", (item_id,)
-        ).fetchall()
+def smallest_per(trigger):
+    pers = {limit["per"] for limit in trigger.get("limits") or []}
+    return next((per for per in F.PERS if per in pers), "day")
+
+
+def send_cron(trigger):
+    """The send times as a schedule: the shortest period in the limits sets them."""
+    hour, minute = (trigger.get("at") or DEFAULT_AT).split(":")
+    clock = f"{int(minute)} {int(hour)}"
+    return {"hour": "0 * * * *", "day": f"{clock} * * *", "week": f"{clock} * * 1", "month": f"{clock} 1 * *"}[
+        smallest_per(trigger)
     ]
-    intake = H._rows(conn.execute("SELECT * FROM intake_items WHERE item_id=? ORDER BY created_at, rowid", (item_id,)))
-    return {
-        "item": row,
-        "run": run(conn, row["first_run_id"]) if row["first_run_id"] else None,
-        "judgments": judgments,
-        "current": judgments[-1] if judgments else None,
-        "intake": intake,
-    }
 
 
-def runs(conn, since=None, source=None, limit=200):
-    sql, args = "SELECT * FROM listen_runs WHERE 1", []
-    if since:
-        sql += " AND started_at>=?"
-        args.append(since)
-    if source:
-        sql += " AND source=?"
-        args.append(source)
-    sql += " ORDER BY started_at DESC, rowid DESC LIMIT ?"
-    args.append(max(1, min(int(limit or 200), 1000)))
-    return H._rows(conn.execute(sql, args))
+def next_send(trigger, at):
+    from .scheduler import next_due
+
+    return next_due(send_cron(trigger), at, zone_of(trigger))
 
 
-def stats(conn, since=None):
-    """Coverage by source and status, and precision by destination from the receivers' verdicts."""
-    since = since or (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%S")
-    coverage = {}
-    for r in conn.execute(
-        "SELECT source, status, count(*) n, sum(items_seen) seen FROM listen_runs "
-        "WHERE started_at>=? GROUP BY source, status",
-        (since,),
-    ):
-        coverage.setdefault(r["source"], {})[r["status"]] = {"runs": r["n"], "items_seen": r["seen"] or 0}
-    verdicts = {}
-    for r in conn.execute(
-        "SELECT destination, status, count(*) n FROM intake_items WHERE created_at>=? GROUP BY destination, status",
-        (since,),
-    ):
-        verdicts.setdefault(r["destination"], {s: 0 for s in INTAKE_STATUSES})[r["status"]] = r["n"]
-    for counts in verdicts.values():
-        decided = counts["accepted"] + counts["rejected"]
-        counts["precision"] = round(counts["accepted"] / decided, 3) if decided else None
-    saved = conn.execute("SELECT count(*) FROM listen_items WHERE first_seen_at>=?", (since,)).fetchone()[0]
-    routed = conn.execute("SELECT count(DISTINCT item_id) FROM intake_items WHERE created_at>=?", (since,)).fetchone()[
-        0
-    ]
-    return {"since": since, "coverage": coverage, "destinations": verdicts, "saved": saved, "routed": routed}
+def window_start(per, at, zone):
+    """Where the calendar window holding `at` starts, in the listening's zone: the clock hour, the day, Monday, the
+    1st."""
+    local = at.astimezone(ZoneInfo(zone))
+    if per == "hour":
+        return local.replace(minute=0, second=0, microsecond=0)
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    if per == "week":
+        start -= timedelta(days=start.weekday())
+    elif per == "month":
+        start = start.replace(day=1)
+    return start
 
 
-RECENT_MAX = 25
-RECENT_TEXT = 240
+def allowance(c, aid, trigger, at):
+    """How many items may go now: the least left over all the limits, each counted in its own calendar window."""
+    zone = zone_of(trigger)
+    left = []
+    for limit in trigger.get("limits") or []:
+        since = _iso(window_start(limit["per"], at, zone))
+        sent = c.execute(
+            "SELECT count(*) FROM listening_items WHERE automation_id=? AND status='sent' AND sent_at>=?", (aid, since)
+        ).fetchone()[0]
+        left.append(limit["count"] - sent)
+    return max(0, min(left)) if left else 0
 
 
-def timeline(conn, who, dests, since):
-    """The Market page's What are buyers saying? chart and list: posts first seen each UTC day by source, and the newest
-    posts routed to a destination the caller reads, one row per post, its text clipped."""
-    days = {}
-    for r in conn.execute(
-        "SELECT substr(first_seen_at,1,10) day, source, count(*) n FROM listen_items "
-        "WHERE first_seen_at>=? GROUP BY day, source",
-        (since,),
-    ):
-        days.setdefault(r["day"], {})[r["source"]] = r["n"]
-    allowed = list(dests) if sees_everything(who) else destinations_of(who.actor, dests)
-    recent = []
-    if allowed:
-        marks = ",".join("?" * len(allowed))
-        for r in conn.execute(
-            f"SELECT item_id, group_concat(destination) dests, max(created_at) at FROM intake_items "
-            f"WHERE destination IN ({marks}) AND created_at>=? GROUP BY item_id "
-            f"ORDER BY at DESC LIMIT ?",
-            (*allowed, since, RECENT_MAX),
-        ):
-            post = item(conn, r["item_id"])
-            if not post:
-                continue
-            text = " ".join(str(post["content"] or "").split())
-            recent.append(
-                {
-                    "item_id": post["id"],
-                    "source": post["source"],
-                    "url": post["url"],
-                    "author": post["author"] or "",
-                    "published_at": post["published_at"],
-                    "text": text if len(text) <= RECENT_TEXT else text[: RECENT_TEXT - 1] + "…",
-                    "destinations": sorted(set(r["dests"].split(","))),
-                    "at": r["at"],
-                }
+# ----------------------------------------------------------------------------- sources
+def _digest(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def sync_sources(c, aid, flow, now=None):
+    """The source rows follow the flow (called on every save, and with no flow when the automation is deleted). A
+    source taken out keeps its row and what it sent; its other items expire. One put back under the same id is the
+    same source again."""
+    if not H._has_table(c, "listening_sources"):
+        return
+    now = now or H.now()
+    trigger = (flow or {}).get("trigger") or {}
+    wanted = {s["id"]: s for s in trigger.get("sources") or []} if trigger.get("type") == "listening" else {}
+    have = {r["key"]: dict(r) for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (aid,))}
+    for key, source in wanted.items():
+        kind, site, target = source["kind"], source.get("site") or "", source.get("target") or ""
+        row = have.get(key)
+        if not row:
+            c.execute(
+                "INSERT INTO listening_sources(id,automation_id,key,kind,site,target,status,created_at,updated_at) "
+                "VALUES(?,?,?,?,?,?,'never',?,?)",
+                ("lsrc_" + H.new_id(), aid, key, kind, site, target, now, now),
             )
-    return {"daily": [{"day": d, "sources": days[d]} for d in sorted(days)], "recent": recent}
+        elif (row["kind"], row["target"]) != (kind, target):
+            # It reads something else now: what the old read said no longer holds, and an address is a push source's.
+            c.execute(
+                "UPDATE listening_sources SET kind=?,site=?,target=?,status='never',last_read_at=NULL,last_ok_at=NULL,"
+                "last_error=NULL,snapshot=NULL,token_hash=CASE WHEN ?='push' THEN token_hash ELSE NULL END,"
+                "deleted_at=NULL,updated_at=? WHERE id=?",
+                (kind, site, target, kind, now, row["id"]),
+            )
+        elif row["site"] != site or row["deleted_at"]:
+            c.execute(
+                "UPDATE listening_sources SET site=?,deleted_at=NULL,updated_at=? WHERE id=?", (site, now, row["id"])
+            )
+    for key, row in have.items():
+        if key in wanted or row["deleted_at"]:
+            continue
+        c.execute(
+            "UPDATE listening_sources SET deleted_at=?,token_hash=NULL,updated_at=? WHERE id=?", (now, now, row["id"])
+        )
+        c.execute(
+            "UPDATE listening_items SET status='expired',claimed_at=NULL,updated_at=? "
+            "WHERE source_id=? AND status IN ('new','kept','failed')",
+            (now, row["id"]),
+        )
 
 
-# ----------------------------------------------------------------------------- Decisions
-def scores_from(answers, questions):
-    return {qid: float(answers[qid]["noul"]) for qid, q in questions.items() if q.get("type") == "noul"}
+def _base(settings):
+    return (getattr(settings, "runner_url", "") or getattr(settings, "public_url", "") or "").rstrip("/")
 
 
-def judge_pending(store, engine, who, limit=MAX_JUDGE, item_ids=None):
-    """Score posts that have no judgment from the current set and route them. One decision call a post,
-    each audited as a `judge.call` the way `/api/v2/decisions` audits, so the caller's budget counts it."""
-    from .judge import audit_detail, daily_cap, used_today
+def _new_address(c, settings, source_id, now=None):
+    token = secrets.token_urlsafe(24)
+    c.execute(
+        "UPDATE listening_sources SET token_hash=?,updated_at=? WHERE id=?", (_digest(token), now or H.now(), source_id)
+    )
+    return _base(settings) + PUSH_PATH + token
 
-    try:
-        qset = question_set(store.settings)
-    except J.JudgeError:
-        raise Problem(
-            "judge_questions",
-            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json.",
-            422,
-        ) from None
+
+def issue_addresses(c, settings, aid):
+    """An address for each push source that has none yet, shown this once: only its token's hash is kept."""
+    if not H._has_table(c, "listening_sources"):
+        return []
+    rows = c.execute(
+        "SELECT id, key FROM listening_sources WHERE automation_id=? AND kind='push' AND token_hash IS NULL "
+        "AND deleted_at IS NULL ORDER BY created_at, key",
+        (aid,),
+    ).fetchall()
+    return [{"source": r["key"], "source_id": r["id"], "address": _new_address(c, settings, r["id"])} for r in rows]
+
+
+def source_dot(row, now):
+    """Filled: its last read went well and is recent. A push source is never overdue: filled once something came."""
+    if row["kind"] == "push":
+        return "filled" if row["last_ok_at"] else "hollow"
+    fresh = row["last_read_at"] and row["last_read_at"] >= H.shift(now, days=-OVERDUE_DAYS)
+    return "filled" if row["status"] == "ok" and fresh else "hollow"
+
+
+def source_view(row, now):
+    return {
+        "id": row["id"],
+        "automation_id": row["automation_id"],
+        "key": row["key"],
+        "kind": row["kind"],
+        "site": row["site"],
+        "target": row["target"],
+        "status": row["status"],
+        "dot": source_dot(row, now),
+        "last_read_at": row["last_read_at"],
+        "last_ok_at": row["last_ok_at"],
+        "last_error": row["last_error"],
+        **({"has_address": bool(row["token_hash"])} if row["kind"] == "push" else {}),
+    }
+
+
+def sources_of(c, aid, now=None):
+    now = now or H.now()
+    rows = c.execute(
+        "SELECT * FROM listening_sources WHERE automation_id=? AND deleted_at IS NULL ORDER BY created_at, key", (aid,)
+    ).fetchall()
+    return [source_view(r, now) for r in rows]
+
+
+def summary(c, row, flow, now=None):
+    """What the list and the editor show of a listening beside its flow: when it last sent and sends next, how many
+    kept items wait, each source's state, and one dot. Hollow: no source yet, a source that is not being read, or
+    posts waiting unscored (decisions are off, or the spend cap is reached)."""
+    if not H._has_table(c, "listening_sources"):
+        return None
+    now = now or H.now()
+    aid = row["id"]
+    sources = sources_of(c, aid, now)
+    counts = {
+        r[0]: r[1]
+        for r in c.execute(
+            "SELECT status, count(*) FROM listening_items WHERE automation_id=? AND status IN ('new','kept') "
+            "GROUP BY status",
+            (aid,),
+        ).fetchall()
+    }
+    waiting_long = c.execute(
+        "SELECT 1 FROM listening_items WHERE automation_id=? AND status='new' AND created_at<? LIMIT 1",
+        (aid, H.shift(now, minutes=-STALLED_MINUTES)),
+    ).fetchone()
+    last = c.execute(
+        "SELECT max(sent_at) FROM listening_items WHERE automation_id=? AND status='sent'", (aid,)
+    ).fetchone()[0]
+    filled = bool(sources) and all(s["dot"] == "filled" for s in sources) and not waiting_long
+    return {
+        "dot": "filled" if filled else "hollow",
+        "last_sent_at": last,
+        "next_send_at": row["next_due_at"] if flow.get("enabled") else None,
+        "waiting": counts.get("kept", 0),
+        "unscored": counts.get("new", 0),
+        "sources": sources,
+    }
+
+
+def worst(c):
+    """The worst source state across the listenings that are on, for the Tools line: `blocked`, `error`,
+    `rate_limited`, `overdue`, `ok`, or None when nothing listens."""
+    if not _has_tables(c):
+        return None
+    now = H.now()
+    rows = c.execute(
+        "SELECT s.* FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
+        "WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL AND a.enabled=1 AND a.trigger_type='listening'"
+    ).fetchall()
+    if not rows:
+        return None
+    states = set()
+    for row in rows:
+        if row["status"] in ("blocked", "error", "rate_limited"):
+            states.add(row["status"])
+        elif source_dot(row, now) == "hollow" and row["kind"] != "push":
+            states.add("overdue")
+    return next((s for s in ("blocked", "error", "rate_limited", "overdue") if s in states), "ok")
+
+
+def trouble(c):
+    """Each source of a listening that is on whose last read did not go well, for the health check."""
+    if not _has_tables(c):
+        return []
+    rows = c.execute(
+        "SELECT s.*, a.name FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
+        "WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL AND a.enabled=1 AND a.trigger_type='listening' "
+        "AND s.status IN ('blocked','error','rate_limited') ORDER BY a.name, s.created_at"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def stalled(c):
+    """The names of the listenings that are on with posts waiting unscored: decisions are off, or a cap is reached."""
+    if not _has_tables(c):
+        return []
+    rows = c.execute(
+        "SELECT DISTINCT a.name FROM listening_items i JOIN automations a ON a.id=i.automation_id "
+        "WHERE i.status='new' AND i.created_at<? AND a.deleted_at IS NULL AND a.enabled=1 ORDER BY a.name",
+        (H.shift(H.now(), minutes=-STALLED_MINUTES),),
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+# ----------------------------------------------------------------------------- save
+def _source(c, source_id):
+    row = c.execute(
+        "SELECT s.*, a.enabled, a.deleted_at AS automation_deleted_at, a.flow FROM listening_sources s "
+        "JOIN automations a ON a.id=s.automation_id WHERE s.id=?",
+        (source_id,),
+    ).fetchone()
+    if not row or row["deleted_at"] or row["automation_deleted_at"]:
+        raise Problem("not_found", "No such source", 404)
+    return dict(row)
+
+
+def save(c, source, status, items, now=None, error=""):
+    """One read of one source: its state and times, and each post not seen before as a `new` item. A post already
+    here (the same `native_id` in this listening) is left alone, so saying it twice adds nothing. Refused while the
+    listening is off."""
+    if status not in READ_STATUSES:
+        raise Problem("validation", f"status is one of {', '.join(READ_STATUSES)}", 422)
+    if not source["enabled"]:
+        raise Problem("listening_off", "This listening is off", 409)
+    now = now or H.now()
+    c.execute(
+        "UPDATE listening_sources SET status=?,last_read_at=?,last_ok_at=CASE WHEN ?='ok' THEN ? ELSE last_ok_at END,"
+        "last_error=?,updated_at=? WHERE id=?",
+        (status, now, status, now, None if status == "ok" else (normalize(error)[:300] or None), now, source["id"]),
+    )
+    saved = 0
+    for item in items:
+        text = str(item.get("text") or "")[:TEXT_MAX]
+        title = normalize(item.get("title"))[:300]
+        saved += c.execute(
+            "INSERT OR IGNORE INTO listening_items(id,automation_id,source_id,native_id,url,author,title,text,"
+            "posted_at,text_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'new',?,?)",
+            (
+                "lsn_" + H.new_id(),
+                source["automation_id"],
+                source["id"],
+                str(item["native_id"]),
+                str(item.get("url") or ""),
+                str(item.get("author") or ""),
+                title,
+                text,
+                item.get("posted_at") or None,
+                text_key(text or title),
+                now,
+                now,
+            ),
+        ).rowcount
+    fresh = c.execute("SELECT * FROM listening_sources WHERE id=?", (source["id"],)).fetchone()
+    return {"source": source_view(fresh, now), "seen": len(items), "saved": saved}
+
+
+def _push_allowed(source_id):
+    """At most PUSH_PER_MINUTE calls a minute for one address, counted on this server."""
+    at = time.monotonic()
+    with _PUSH_LOCK:
+        calls = _PUSHES.setdefault(source_id, deque())
+        while calls and calls[0] <= at - 60:
+            calls.popleft()
+        if len(calls) >= PUSH_PER_MINUTE:
+            return False
+        calls.append(at)
+        return True
+
+
+# ----------------------------------------------------------------------------- the pass
+def _reader(settings):
+    if READER is not None:
+        return READER
+    # As the market watch: a rehearsal or a test server reads no page.
+    if getattr(settings, "rehearsal", False) or getattr(settings, "test_identities", False):
+        return None
+    from . import market_watch
+
+    return market_watch.read
+
+
+def _budget(seconds=PASS_SECONDS):
+    """A pass's time for page reads and model calls: a call that answers whether any is left."""
+    end = CLOCK() + seconds
+    return lambda: CLOCK() < end
+
+
+def read_pages(store, aid, now, left=None):
+    """The server reads each Page source once a day. The first read is what later ones are compared with; after it, a
+    page that changed enough (the market watch's measure) saves one item: its title the first changed line, its text
+    what was added and removed."""
+    from . import market_watch as MW
+
+    reader = _reader(store.settings)
+    if reader is None:
+        return
     with store.read() as c:
-        dests = destinations(store.settings, c, qset=qset)
-    questions = qset["questions"]
+        due = [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM listening_sources WHERE automation_id=? AND kind='page' AND deleted_at IS NULL "
+                "AND (last_read_at IS NULL OR last_read_at<?) ORDER BY last_read_at LIMIT ?",
+                (aid, H.shift(now, hours=-PAGE_DUE_HOURS), PAGES_PER_PASS),
+            )
+        ]
+    for row in due:
+        if left and not left():  # the pass's time is used up: the page is still due at the next
+            return
+        result = reader(row["target"])
+        items, text = [], None
+        if result.get("status") == "ok":
+            text = MW.normalize(result.get("text") or "")[: MW.TEXT_MAX]
+            if row["snapshot"] is not None:
+                removed, added = MW.changes(row["snapshot"], text)
+                if MW.size_of(removed, added) >= MW.MIN_CHANGE:
+                    items.append(
+                        {
+                            "native_id": "page:" + hashlib.sha256(text.encode()).hexdigest()[:24],
+                            "url": row["target"],
+                            "title": normalize((added or removed)[0])[:TITLE_MAX],
+                            "text": MW.excerpt(removed, added),
+                            "posted_at": now,
+                        }
+                    )
+        with store.transaction() as c:
+            try:
+                source = _source(c, row["id"])
+                save(c, source, result.get("status") or "error", items, now, result.get("error") or "")
+            except Problem:  # removed or turned off while the page was read
+                continue
+            if text is not None:
+                c.execute("UPDATE listening_sources SET snapshot=? WHERE id=?", (text, row["id"]))
+
+
+def _duplicate(c, item_id, original_id, now, claimed=None):
+    """Mark one `new` item a copy of `original_id`; False when another pass got to it first. Copies never chain: a
+    copy of a copy points at that one's original, and what already pointed at this item moves, with its count, to
+    the original too."""
+    known = c.execute("SELECT status, duplicate_of_id FROM listening_items WHERE id=?", (original_id,)).fetchone()
+    if known and known["status"] == "duplicate" and known["duplicate_of_id"]:
+        original_id = known["duplicate_of_id"]
+    if original_id == item_id:
+        return False
+    done = c.execute(
+        "UPDATE listening_items SET status='duplicate',duplicate_of_id=?,claimed_at=NULL,updated_at=? "
+        "WHERE id=? AND status='new'" + (" AND claimed_at=?" if claimed else ""),
+        (original_id, now, item_id, *((claimed,) if claimed else ())),
+    ).rowcount
+    if done:
+        own = c.execute("SELECT copies FROM listening_items WHERE id=?", (item_id,)).fetchone()[0]
+        c.execute("UPDATE listening_items SET duplicate_of_id=? WHERE duplicate_of_id=?", (original_id, item_id))
+        c.execute("UPDATE listening_items SET copies=0 WHERE id=?", (item_id,))
+        c.execute("UPDATE listening_items SET copies=copies+1+?,updated_at=? WHERE id=?", (own, now, original_id))
+    return bool(done)
+
+
+def exact_copies(store, aid, now):
+    """Every `new` item whose text is, word for word, that of an earlier item of this listening is its copy. The
+    earliest stays the original, so copies never chain."""
     with store.read() as c:
-        if item_ids:
-            rows = [r for r in (item(c, i) for i in item_ids) if r]
-            missing = [i for i in item_ids if not item(c, i)]
-            if missing:
-                raise Problem("not_found", f"no saved post {missing[0]}", 404)
-        else:
-            rows = unjudged(c, qset["label"], limit)
-        used = used_today(c, who.actor)
-    cap = daily_cap(store.settings, who.role)
-    results, errors = [], []
-    for row in rows[: int(limit)]:
-        if used >= cap:
-            errors.append({"item_id": row["id"], "error": "budget"})
+        rows = c.execute(
+            "SELECT id, text_key, status FROM listening_items WHERE automation_id=? AND status<>'duplicate' "
+            "AND created_at>=? ORDER BY rowid",
+            (aid, H.shift(now, days=-COPY_DAYS)),
+        ).fetchall()
+    first, copies = {}, []
+    for row in rows:
+        key = row["text_key"]
+        if len(key) < COPY_KEY:
+            continue
+        if key not in first:
+            first[key] = row["id"]
+        elif row["status"] == "new":
+            copies.append((row["id"], first[key]))
+    if copies:
+        with store.transaction() as c:
+            for item_id, original in copies:
+                _duplicate(c, item_id, original, now)
+    return len(copies)
+
+
+def _capped(c, aid, flow, now):
+    """Whether the automation's own spend cap is reached, counting what scoring cost since its last send."""
+    cap = (flow.get("spend_cap") or {}).get("per_30m")
+    if cap is None:
+        return False
+    from . import automations as A
+
+    unsent = c.execute(
+        "SELECT coalesce(sum(cost),0) FROM listening_items WHERE automation_id=? AND run_id IS NULL AND scored_at>=?",
+        (aid, H.shift(now, minutes=-30)),
+    ).fetchone()[0]
+    return A._spent(c, aid, "") + float(unsent or 0) >= float(cap)
+
+
+def questions_of(rules):
+    """Each rule as a yes-or-no question for the decision model, `r<n>` in the trigger's order."""
+    return {f"r{n}": {"type": "noul", "instructions": rule["text"]} for n, rule in enumerate(rules)}
+
+
+def verdict(rules, answers):
+    """(status, tag, score) from the model's answers. Kept: a Keep rule holds and no Drop rule does; the tag is the
+    Keep rule that scored highest. With no Keep rules, everything a Drop rule does not take is kept, untagged."""
+
+    def score_of(n):
+        try:
+            return float((answers.get(f"r{n}") or {}).get("noul") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    keeps = [(score_of(n), rule["tag"]) for n, rule in enumerate(rules) if rule["do"] == "keep"]
+    drops = [score_of(n) for n, rule in enumerate(rules) if rule["do"] == "drop"]
+    best = max(keeps, key=lambda k: k[0], default=None)
+    worst_drop = max(drops, default=0.0)
+    if worst_drop >= YES:
+        return "dropped", "", round(best[0] if best else 1 - worst_drop, 4)
+    if best is None:
+        return "kept", "", round(1 - worst_drop, 4)
+    if best[0] >= YES:
+        return "kept", best[1], round(best[0], 4)
+    return "dropped", "", round(best[0], 4)
+
+
+def _state(item, source):
+    """What the decision model reads of a post."""
+    return {
+        "site": site_label(source),
+        "url": item["url"],
+        "author": item["author"],
+        "posted_at": item["posted_at"] or "",
+        "title": item["title"],
+        "text": item["text"],
+    }
+
+
+def _decided(c, item_id, now, status, tag, value, cost, claimed=None):
+    c.execute(
+        "UPDATE listening_items SET status=?,tag=?,score=?,cost=cost+?,scored_at=?,claimed_at=NULL,updated_at=? "
+        "WHERE id=? AND status='new'" + (" AND claimed_at=?" if claimed else ""),
+        (status, tag, value, cost, now, now, item_id, *((claimed,) if claimed else ())),
+    )
+
+
+def score(store, row, flow, now, primary=None, left=None):
+    """Claim up to MAX_SCORE `new` items, newest first, then for each, outside any transaction: a near copy of an
+    earlier item is marked so; the rest are asked of the decision model, every rule in one call. With decisions off
+    or a spend cap reached nothing is claimed and the items stay `new`. When the pass's time is used up (`left`) the
+    claims still held are released, for the next pass."""
+    from .judge import audit_detail, server_engine
+
+    aid, rules = row["id"], flow["trigger"].get("rules") or []
+    with store.transaction() as c:
+        engine = None
+        if rules:
+            engine = None if _capped(c, aid, flow, now) else server_engine(store, c, primary)
+            if engine is None:
+                return {"off": True}
+        claimed = [
+            dict(r)
+            for r in c.execute(
+                "SELECT rowid AS n, * FROM listening_items WHERE automation_id=? AND status='new' "
+                "AND (claimed_at IS NULL OR claimed_at<?) ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (aid, H.shift(now, minutes=-CLAIM_MINUTES), MAX_SCORE),
+            )
+        ]
+        if not claimed:
+            return {"scored": 0}
+        c.execute(
+            f"UPDATE listening_items SET claimed_at=? WHERE id IN ({','.join('?' * len(claimed))})",
+            (now, *(r["id"] for r in claimed)),
+        )
+        others = [
+            dict(r)
+            for r in c.execute(
+                "SELECT rowid AS n, id, substr(text,1,?) AS text, substr(text,-?) AS tail, length(text) AS size, title "
+                "FROM listening_items WHERE automation_id=? AND status<>'duplicate' AND created_at>=? "
+                "ORDER BY rowid DESC LIMIT ?",
+                (COPY_TEXT, COPY_TEXT, aid, H.shift(now, days=-COPY_DAYS), COPY_COMPARISONS + MAX_SCORE),
+            )
+        ]
+        sources = {r["id"]: dict(r) for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (aid,))}
+    questions = questions_of(rules)
+    label = "listening." + aid
+    words, gone = {}, set()
+
+    def words_of(other):
+        if other["id"] not in words:
+            words[other["id"]] = tokens(other["text"] or other["title"])
+        return words[other["id"]]
+
+    def copy_of(item):
+        """The earlier item this one is a near copy of. Two texts are alike when their first COPY_TEXT characters
+        are; a longer text also needs the whole lengths within the bar and its last COPY_TEXT characters alike, so
+        two long posts that only open the same are not copies."""
+        mine = tokens(item["text"][:COPY_TEXT] or item["title"])
+        size, length = sum(mine.values()), len(item["text"])
+        tail = None
+        if size < COPY_TOKENS:
+            return None
+        compared = 0
+        for other in others:  # newest first
+            if other["n"] >= item["n"] or other["id"] in gone:
+                continue
+            compared += 1
+            if compared > COPY_COMPARISONS:
+                break
+            theirs = words_of(other)
+            total = sum(theirs.values())
+            # Two texts whose lengths differ by more than the bar allows cannot clear it.
+            if min(size, total) < COPY_ALIKE * max(size, total):
+                continue
+            if alike(mine, theirs) < COPY_ALIKE:
+                continue
+            if max(length, other["size"]) > COPY_TEXT:
+                if min(length, other["size"]) < COPY_ALIKE * max(length, other["size"]):
+                    continue
+                tail = tail or tokens(item["text"][-COPY_TEXT:])
+                if alike(tail, tokens(other["tail"])) < COPY_ALIKE:
+                    continue
+            return other["id"]
+        return None
+
+    def on(c):
+        return bool(
+            c.execute(
+                "SELECT 1 FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1 "
+                "AND trigger_type='listening'",
+                (aid,),
+            ).fetchone()
+        )
+
+    def release(items):
+        with store.transaction() as c:
+            for item in items:
+                c.execute(
+                    "UPDATE listening_items SET claimed_at=NULL WHERE id=? AND status='new' AND claimed_at=?",
+                    (item["id"], now),
+                )
+
+    out = {"scored": 0, "duplicates": 0, "errors": 0}
+    ordered = sorted(claimed, key=lambda r: -r["n"])  # newest first: when time runs out the old ones wait
+    for place, item in enumerate(ordered):
+        original = copy_of(item)
+        if original:
+            with store.transaction() as c:
+                if _duplicate(c, item["id"], original, now, claimed=now):
+                    gone.add(item["id"])
+                    out["duplicates"] += 1
+            continue
+        if not rules:
+            with store.transaction() as c:
+                if still := on(c):
+                    _decided(c, item["id"], now, "kept", "", 1.0, 0.0, claimed=now)
+            if not still:
+                release(ordered[place:])
+                break
+            out["scored"] += 1
+            continue
+        # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
+        with store.read() as c:
+            go = on(c) and not _capped(c, aid, flow, now)
+        if not go or (left and not left()):
+            release(ordered[place:])
+            out["cut"] = True
             break
         try:
-            answer = engine(state_for(row), questions, qset["label"])
-        except J.JudgeError as exc:
+            state = _state(item, sources.get(item["source_id"]))
+            J.validate(state, questions, label)
+            assert engine is not None  # rules without an engine returned above
+            result = engine(state, questions, label)
+        except Exception as exc:  # noqa: BLE001 - one post's failure is that post's; the pass goes on
+            code = J.error_code(exc) if isinstance(exc, J.JudgeError) else type(exc).__name__
             with store.transaction() as c:
                 H.event(
-                    c, who.actor, "judge.call", qset["label"], {"questions": len(questions), "error": J.error_code(exc)}
+                    c, H.KEEPER, "judge.call", label, {"automation": aid, "questions": len(questions), "error": code}
                 )
-            errors.append({"item_id": row["id"], "error": J.error_code(exc)})
-            if exc.retryable or exc.code == "spend_cap":  # the rest stay unjudged for the next call
+                if code != "spend_cap":  # the month's decision cap is not the post's fault, so not a try
+                    c.execute(
+                        "UPDATE listening_items SET tries=tries+1,claimed_at=NULL,updated_at=?,"
+                        "status=CASE WHEN tries+1>=? THEN 'failed' ELSE status END "
+                        "WHERE id=? AND status='new' AND claimed_at=?",
+                        (now, MAX_TRIES, item["id"], now),
+                    )
+            out["errors"] += 1
+            if code == "spend_cap" or out["errors"] >= MAX_ERRORS:
+                release(ordered[place:])
                 break
             continue
-        used += 1
+        answers = result.get("answers") or {}
+        status, tag, value = verdict(rules, answers)
         with store.transaction() as c:
             H.event(
                 c,
-                who.actor,
+                H.KEEPER,
                 "judge.call",
-                qset["label"],
+                label,
                 {
+                    "label": label,
+                    "automation": aid,
                     "questions": len(questions),
-                    "types": ["noul"],
-                    **audit_detail(answer),
-                    "answers": J.summary(answer["answers"]),
+                    **audit_detail(result),
+                    "answers": J.summary(answers),
                 },
             )
-            results.append(
-                add_judgment(c, who.actor, row["id"], qset["label"], scores_from(answer["answers"], questions), dests)
-            )
+            # Turned off or deleted while the call ran: no result is written, the post stays `new`.
+            if still := on(c):
+                _decided(c, item["id"], now, status, tag, value, float(result.get("cost_usd") or 0), claimed=now)
+        if not still:
+            release(ordered[place:])
+            break
+        out["scored"] += 1
+    return out
+
+
+def expire(c, aid, now):
+    """A post not sent within a week of arriving is too old to send."""
+    return c.execute(
+        "UPDATE listening_items SET status='expired',claimed_at=NULL,updated_at=? "
+        "WHERE automation_id=? AND status IN ('new','kept') AND created_at<?",
+        (now, aid, H.shift(now, days=-EXPIRE_DAYS)),
+    ).rowcount
+
+
+def _short_url(url):
+    return re.sub(r"^https?://(www\.)?", "", str(url or "")).rstrip("/")
+
+
+def _lines(entries):
+    width = max((len(e["tag"]) for e in entries), default=0)
+    out = []
+    for n, entry in enumerate(entries, 1):
+        head = f"{n}. {entry['tag'].ljust(width)}  " if width else f"{n}. "
+        copies = entry["copies"]
+        about = [entry["site"], f"{copies} {'copy' if copies == 1 else 'copies'}" if copies else ""]
+        about.append(_short_url(entry["url"]))
+        out.append(head + entry["title"])
+        out.append("   " + " · ".join(part for part in about if part))
+    return "\n".join(out)
+
+
+def payload_of(c, row, flow, items, at, now, waiting):
+    """What a send's run carries (the trigger's payload): the text, each item, the items grouped by tag in the order
+    their first item ranks, and the counts since the send before."""
+    aid, zone = row["id"], zone_of(flow["trigger"])
+    sources = {r["id"]: dict(r) for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (aid,))}
+    entries = []
+    for item in items:
+        source = sources.get(item["source_id"])
+        entries.append(
+            {
+                "id": item["id"],
+                "tag": item["tag"],
+                "title": title_of(item),
+                "url": item["url"],
+                "site": site_label(source),
+                "source": source["key"] if source else "",
+                "author": item["author"],
+                "copies": item["copies"],
+                "score": item["score"],
+                "text": item["text"][:SENT_TEXT],
+            }
+        )
+    groups = {}
+    for entry in entries:
+        groups.setdefault(entry["tag"], []).append(entry)
+    last = c.execute(
+        "SELECT max(sent_at) FROM listening_items WHERE automation_id=? AND status='sent'", (aid,)
+    ).fetchone()[0]
+    since = last or ""
+
+    def count(where):
+        return c.execute(
+            f"SELECT count(*) FROM listening_items WHERE automation_id=? AND {where}", (aid, since)
+        ).fetchone()[0]
+
+    local = at.astimezone(ZoneInfo(zone))
+    head = f"{flow['name']} · {local.strftime('%a %b')} {local.day}, {local.strftime('%H:%M')}"
     return {
-        "question_set": qset["label"],
-        "judged": len(results),
-        "routed": sum(len(r["intake"]) for r in results),
-        "results": results,
-        "errors": errors,
+        "listening": {
+            "name": flow["name"],
+            "sent_at": now,
+            "count": len(entries),
+            "waiting": waiting,
+            "text": f"{head} · {len(entries)} of {len(entries) + waiting}\n\n{_lines(entries)}",
+            "items": entries,
+            "groups": [
+                {"tag": tag, "count": len(members), "text": _lines(members), "items": members}
+                for tag, members in groups.items()
+            ],
+            "counts": {
+                "read": count("created_at>?"),
+                "duplicates": count("status='duplicate' AND updated_at>?"),
+                "dropped": count("status='dropped' AND scored_at>?"),
+                "kept": count("status IN ('kept','sent') AND scored_at>?"),
+                "sent": len(entries),
+                "waiting": waiting,
+                "failed": count("status='failed' AND updated_at>?"),
+            },
+        }
     }
 
 
+def send(store, aid, at, now):
+    """When the send time has come: the allowance's worth of kept items, best first, go out as one run and are marked
+    `sent` with it, in one transaction. Nothing to send queues no run. The next time is the first one after now, so
+    the times missed while the server was down send once."""
+    from . import automations as A
+    from . import cloud_access
+
+    with store.transaction() as c:
+        row = c.execute(
+            "SELECT * FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1 AND trigger_type='listening'",
+            (aid,),
+        ).fetchone()
+        if not row:
+            return None
+        row = dict(row)
+        flow = A.flow_of(row)
+        trigger = flow["trigger"]
+        after = _iso(next_send(trigger, at))
+        if not row["next_due_at"]:
+            c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (after, aid))
+            return None
+        if row["next_due_at"] > now:
+            return None
+        c.execute("UPDATE automations SET next_due_at=? WHERE id=?", (after, aid))
+        if cloud_access.routines_paused(c):  # out of credit or locked: what is kept waits, as a schedule is passed over
+            return None
+        room = allowance(c, aid, trigger, at)
+        items = [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM listening_items WHERE automation_id=? AND status='kept' "
+                "ORDER BY coalesce(score,0)+0.05*min(copies,4) DESC, posted_at DESC, rowid DESC LIMIT ?",
+                (aid, room),
+            )
+        ]
+        if not items:
+            return None
+        kept = c.execute(
+            "SELECT count(*) FROM listening_items WHERE automation_id=? AND status='kept'", (aid,)
+        ).fetchone()[0]
+        payload = payload_of(c, row, flow, items, at, now, kept - len(items))
+        queued = A.fire(c, "listening", payload, f"listening:{aid}:{row['next_due_at']}", only=aid)
+        if not queued:
+            return None
+        rid = queued[0]
+        # What scoring cost since the last send is this run's, so it counts toward the automation's spend cap. Each
+        # scored item is charged once, to the first run after it: `run_id` on one not sent yet says it was.
+        cost = c.execute(
+            "SELECT coalesce(sum(cost),0) FROM listening_items WHERE automation_id=? AND run_id IS NULL AND cost>0",
+            (aid,),
+        ).fetchone()[0]
+        c.execute("UPDATE listening_items SET run_id=? WHERE automation_id=? AND run_id IS NULL AND cost>0", (rid, aid))
+        c.execute(
+            f"UPDATE listening_items SET status='sent',run_id=?,sent_at=?,updated_at=? "
+            f"WHERE id IN ({','.join('?' * len(items))})",
+            (rid, now, now, *(i["id"] for i in items)),
+        )
+        if cost:
+            run = c.execute("SELECT saved_state FROM automation_runs WHERE id=?", (rid,)).fetchone()
+            state = json.loads(run["saved_state"] or "{}")
+            state["cost"] = round(float(state.get("cost") or 0) + float(cost), 6)
+            c.execute(
+                "UPDATE automation_runs SET cost=?,saved_state=? WHERE id=?",
+                (state["cost"], json.dumps(state, default=str), rid),
+            )
+        return rid
+
+
+def run_pass(store, at=None, primary=None):
+    """One pass over every listening that is on: read its pages, mark copies, score, expire, send. Each listening's
+    failure is its own; the others still run. Reading and scoring share PASS_SECONDS, so the tick is never held long;
+    the listening whose unscored post has waited longest goes first, so a busy one cannot keep the others waiting.
+    Expire and send run for every listening whatever time is left: they make no outside call and must be on time."""
+    at = at or datetime.now(timezone.utc)
+    now = _iso(at)
+    with store.read() as c:
+        if not _has_tables(c):
+            return
+        rows = [
+            dict(r)
+            for r in c.execute(
+                "SELECT a.*, (SELECT min(i.created_at) FROM listening_items i WHERE i.automation_id=a.id "
+                "AND i.status='new') AS waiting_since FROM automations a WHERE a.deleted_at IS NULL "
+                "AND a.trigger_type='listening' ORDER BY waiting_since IS NULL, waiting_since, a.created_at"
+            )
+        ]
+    left = _budget()
+    for row in rows:
+        if not left():
+            break
+        if not row["enabled"]:  # off: nothing is read or scored
+            continue
+        try:
+            read_pages(store, row["id"], now, left)
+            exact_copies(store, row["id"], now)
+            score(store, row, json.loads(row["flow"]), now, primary, left)
+        except Exception:
+            log.exception("listening pass failed for %s", row["id"])
+    for row in rows:
+        try:
+            with store.transaction() as c:
+                expire(c, row["id"], now)  # on or off: what waits still grows too old
+            send(store, row["id"], at, now)
+        except Exception:
+            log.exception("listening send failed for %s", row["id"])
+
+
+def prune(c, now=None):
+    """Maintenance: sent items go after KEEP_SENT_DAYS, the rest after KEEP_DAYS (the copy check's window), and a
+    removed source once nothing of its is left."""
+    if not H._has_table(c, "listening_items"):
+        return 0
+    now = now or H.now()
+    gone = c.execute(
+        "DELETE FROM listening_items WHERE (status='sent' AND coalesce(sent_at,created_at)<?) "
+        "OR (status<>'sent' AND created_at<?)",
+        (H.shift(now, days=-KEEP_SENT_DAYS), H.shift(now, days=-KEEP_DAYS)),
+    ).rowcount
+    c.execute(
+        "DELETE FROM listening_sources WHERE deleted_at IS NOT NULL "
+        "AND NOT EXISTS (SELECT 1 FROM listening_items i WHERE i.source_id=listening_sources.id)"
+    )
+    return gone
+
+
+# ----------------------------------------------------------------------------- reads
+def item_view(row, sources):
+    source = sources.get(row["source_id"])
+    return {
+        "id": row["id"],
+        "automation_id": row["automation_id"],
+        "source_id": row["source_id"],
+        "source": source["key"] if source else "",
+        "site": site_label(source),
+        "native_id": row["native_id"],
+        "url": row["url"],
+        "author": row["author"],
+        "title": title_of(row),
+        "text": row["text"][:SENT_TEXT],
+        "posted_at": row["posted_at"],
+        "status": row["status"],
+        "tag": row["tag"],
+        "score": row["score"],
+        "copies": row["copies"],
+        "duplicate_of_id": row["duplicate_of_id"],
+        "tries": row["tries"],
+        "scored_at": row["scored_at"],
+        "run_id": row["run_id"] if row["status"] == "sent" else None,
+        "sent_at": row["sent_at"],
+        "created_at": row["created_at"],
+    }
+
+
+def _visible(c, who):
+    """The listenings `who` may see, by id: the automations' own rule."""
+    from . import automations as A
+
+    out = {}
+    for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND trigger_type='listening'").fetchall():
+        flow = A.flow_of(row)
+        if A.may_see(c, who, flow):
+            out[row["id"]] = flow
+    return out
+
+
+def stats(c, who, since=None):
+    """The Market page's What are buyers saying? chart and list: items sent each UTC day by site, and the newest sent
+    items, each one's text clipped. Only from the listenings the caller may see."""
+    since = since or H.shift(H.now(), days=-7)
+    seen = _visible(c, who) if _has_tables(c) else {}
+    days, recent = {}, []
+    if seen:
+        marks = ",".join("?" * len(seen))
+        sources = {
+            r["id"]: dict(r)
+            for r in c.execute(f"SELECT * FROM listening_sources WHERE automation_id IN ({marks})", tuple(seen))
+        }
+        for r in c.execute(
+            f"SELECT substr(sent_at,1,10) AS day, source_id, count(*) AS n FROM listening_items "
+            f"WHERE automation_id IN ({marks}) AND status='sent' AND sent_at>=? GROUP BY day, source_id",
+            (*seen, since),
+        ):
+            site = site_label(sources.get(r["source_id"])) or "Other"
+            days.setdefault(r["day"], {})
+            days[r["day"]][site] = days[r["day"]].get(site, 0) + r["n"]
+        for r in c.execute(
+            f"SELECT * FROM listening_items WHERE automation_id IN ({marks}) AND status='sent' AND sent_at>=? "
+            f"ORDER BY sent_at DESC, rowid DESC LIMIT ?",
+            (*seen, since, RECENT_MAX),
+        ):
+            text = normalize(r["text"] or r["title"])
+            recent.append(
+                {
+                    "item_id": r["id"],
+                    "source": site_label(sources.get(r["source_id"])) or "Other",
+                    "url": r["url"],
+                    "author": r["author"],
+                    "published_at": r["posted_at"],
+                    "text": text if len(text) <= RECENT_TEXT else text[: RECENT_TEXT - 1] + "…",
+                    "destinations": [r["tag"]] if r["tag"] else [],
+                    "at": r["sent_at"],
+                }
+            )
+    return {"since": since, "daily": [{"day": d, "sources": days[d]} for d in sorted(days)], "recent": recent}
+
+
 # ----------------------------------------------------------------------------- HTTP
-class ListenItem(Contract):
+class ListeningItem(Contract):
     native_id: str = Field(min_length=1, max_length=300)
-    url: str = Field(min_length=1, max_length=2000)
+    url: str = Field(default="", max_length=2000)
     author: str | None = Field(default=None, max_length=300)
-    author_url: str | None = Field(default=None, max_length=2000)
-    content: str = Field(min_length=1, max_length=20_000)
-    published_at: str | None = Field(default=None, max_length=40)
+    title: str | None = Field(default=None, max_length=1000)
+    text: str | None = Field(default=None, max_length=200_000)
+    posted_at: str | None = Field(default=None, max_length=40)
 
 
-class ListenRun(Contract):
-    source: str = Field(min_length=1, max_length=40)
-    query: str = Field(min_length=1, max_length=2000)
-    status: str = Field(min_length=1, max_length=20)
-    started_at: str | None = Field(default=None, max_length=40)
-    pages_read: int = Field(default=0, ge=0, le=10_000)
-    items_seen: int | None = Field(default=None, ge=0, le=100_000)
-    note: str = Field(default="", max_length=4000)
-    items: list[ListenItem] = Field(default_factory=list, max_length=MAX_ITEMS)
-
-
-class ListenJudgment(Contract):
-    item_id: str = Field(min_length=1, max_length=80)
-    question_set: str = Field(min_length=1, max_length=80)
-    scores: dict[str, float] = Field(min_length=1, max_length=40)
-
-
-class ListenJudgments(Contract):
-    judgments: list[ListenJudgment] = Field(min_length=1, max_length=MAX_ITEMS)
-
-
-class ListenJudge(Contract):
-    limit: int = Field(default=20, ge=1, le=MAX_JUDGE)
-    item_ids: list[str] = Field(default_factory=list, max_length=MAX_JUDGE)
-
-
-class IntakeResolve(Contract):
-    status: str = Field(min_length=1, max_length=20)
-    receiver_ref: str = Field(default="", max_length=300)
-    reason: str = Field(default="", max_length=2000)
-
-
-class DestinationUnless(Contract):
-    category: str = Field(min_length=1, max_length=80)
-    threshold: float
-
-
-class DestinationBody(Contract):
-    category: str = Field(min_length=1, max_length=80)
-    threshold: float
-    receiver: str = Field(min_length=1, max_length=120)
-    readers: list[str] = Field(default_factory=list, max_length=20)
-    unless: DestinationUnless | None = None
-    what: str = Field(default="", max_length=300)
+class ListeningSave(Contract):
+    status: str = Field(default="ok", max_length=20)
+    error: str = Field(default="", max_length=2000)
+    items: list[ListeningItem] = Field(default_factory=list, max_length=MAX_ITEMS)
 
 
 def install(app, store, auth, mutate):
-    def settings_reader(who):
+    from . import automations as A
+
+    def may_feed(c, who, source):
+        """Who saves what a source read: any bot (the one that reads sites signed in), the top of the org, and whoever
+        may change the listening."""
+        return who.role in ("owner", "bot") or A.may_change(c, who, json.loads(source["flow"]))
+
+    @app.get("/api/v2/listening/sources")
+    def sources_list(request: Request, due: int = 0, automation: str = "", limit: int = LIST_MAX):
+        """The sources the caller may read. With `due=1`: the Search sources of the listenings that are on that were
+        not read in the last day, the longest unread first."""
+        who = request.state.identity
         auth.domain(who)
-        if who.role != "owner" and not auth.bot_admin(who):
-            raise Problem("forbidden", "Listening destinations are for the owner and the admins", 403)
-
-    @app.get("/api/v2/listening/destinations")
-    def destination_index(request: Request):
-        settings_reader(request.state.identity)
+        now = H.now()
         with store.read() as c:
-            return destination_list(c, store.settings)
+            rows = c.execute(
+                "SELECT s.*, a.name, a.enabled, a.flow FROM listening_sources s JOIN automations a "
+                "ON a.id=s.automation_id WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL "
+                "AND a.trigger_type='listening'"
+                + (" AND a.id=?" if automation else "")
+                + (
+                    " AND a.enabled=1 AND s.kind='search' AND (s.last_read_at IS NULL OR s.last_read_at<?)"
+                    if due
+                    else ""
+                )
+                + " ORDER BY s.last_read_at IS NOT NULL, s.last_read_at, s.created_at, s.key",
+                (*((automation,) if automation else ()), *((H.shift(now, hours=-SEARCH_DUE_HOURS),) if due else ())),
+            ).fetchall()
+            out = [
+                {**source_view(r, now), "automation": r["name"]}
+                for r in rows
+                if who.role in ("owner", "bot") or A.may_see(c, who, json.loads(r["flow"]))
+            ]
+        return {"sources": out[: max(1, min(int(limit), LIST_MAX))]}
 
-    @app.put("/api/v2/listening/destinations/{key}")
-    def destination_put(request: Request, key: str, body: DestinationBody):
+    @app.post("/api/v2/listening/sources/{source_id}/items")
+    def source_save(request: Request, source_id: str, body: ListeningSave):
         who = request.state.identity
 
         def work(c):
             auth.domain(who)
-            if who.role != "owner":
-                raise Problem("forbidden", "Only the owner changes Listening destinations", 403)
-            saved = save_destination(c, store.settings, who, key, body)
-            return {
-                "destination": next(d for d in destination_list(c, store.settings)["destinations"] if d["key"] == saved)
+            source = _source(c, source_id)
+            if not may_feed(c, who, source):
+                raise Problem("forbidden", "Only a bot or whoever may change this listening saves what it read", 403)
+            return save(c, source, body.status, [i.model_dump() for i in body.items], error=body.error)
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/listening/sources/{source_id}/address")
+    def source_address(request: Request, source_id: str, body: Contract):
+        """A new address for a push source. The old one stops working; the new one is shown this once."""
+        who = request.state.identity
+
+        def work(c):
+            auth.domain(who)
+            source = _source(c, source_id)
+            if not A.may_change(c, who, json.loads(source["flow"])):
+                raise Problem("forbidden", "Only whoever may change this listening gives it a new address", 403)
+            if source["kind"] != "push":
+                raise Problem("validation", "Only a push source has an address", 422)
+            address = _new_address(c, store.settings, source["id"])
+            return {"source": source["key"], "source_id": source["id"], "push_address": address}
+
+        # The address is shown once: the idempotency record keeps the answer without it (store.SHOWN_ONCE).
+        out = dict(mutate(request, body, work))
+        if "push_address" in out:
+            out["address"] = out.pop("push_address")
+        return out
+
+    @app.post(PUSH_PATH + "{token}")
+    def push(token: str, body: ListeningSave):
+        """A push source's address: no sign-in, the token is the right. The body is Save's."""
+        with store.transaction() as c:
+            found = c.execute("SELECT id FROM listening_sources WHERE token_hash=?", (_digest(token),)).fetchone()
+            if not found:
+                raise Problem("not_found", "No such address", 404)
+            source = _source(c, found["id"])
+            if not _push_allowed(source["id"]):
+                raise Problem("rate_limited", f"At most {PUSH_PER_MINUTE} calls a minute", 429)
+            out = save(c, source, body.status, [i.model_dump() for i in body.items], error=body.error)
+            return {"seen": out["seen"], "saved": out["saved"]}
+
+    @app.get("/api/v2/listening/items")
+    def items_list(request: Request, automation: str, status: str = "", run: str = "", limit: int = 100):
+        """A listening's items, newest first, for its run page and for looking into what it did."""
+        who = request.state.identity
+        auth.domain(who)
+        if status and status not in ITEM_STATUSES:
+            raise Problem("validation", f"status is one of {', '.join(ITEM_STATUSES)}", 422)
+        with store.read() as c:
+            row = A._row(c, automation)
+            if not row or not A.may_see(c, who, A.flow_of(row)):
+                raise Problem("not_found", "No such listening", 404)
+            sources = {
+                r["id"]: dict(r)
+                for r in c.execute("SELECT * FROM listening_sources WHERE automation_id=?", (automation,))
             }
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/listening/destinations/{key}/remove")
-    def destination_remove(request: Request, key: str, body: Contract):
-        who = request.state.identity
-
-        def work(c):
-            auth.domain(who)
-            if who.role != "owner":
-                raise Problem("forbidden", "Only the owner changes Listening destinations", 403)
-            return {"removed": remove_destination(c, store.settings, who, key.strip().lower())}
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/listening/runs")
-    def run_create(request: Request, body: ListenRun):
-        who = request.state.identity
-
-        def work(c):
-            auth.domain(who)
-            require_listener(who)
-            return record_run(
-                c,
-                who.actor,
-                source=body.source,
-                query=body.query,
-                status=body.status,
-                started_at=body.started_at,
-                pages_read=body.pages_read,
-                items_seen=body.items_seen,
-                note=body.note,
-                items=[i.model_dump() for i in body.items],
-            )
-
-        return mutate(request, body, work)
-
-    @app.get("/api/v2/listening/runs")
-    def run_list(request: Request, since: str | None = None, source: str | None = None, limit: int = 200):
-        auth.domain(request.state.identity)
-        with store.read() as c:
-            return {"runs": runs(c, since, source, limit)}
-
-    @app.post("/api/v2/listening/judgments")
-    def judgment_create(request: Request, body: ListenJudgments):
-        who = request.state.identity
-
-        def work(c):
-            auth.domain(who)
-            require_listener(who)
-            dests = destinations(store.settings, c)
-            return {
-                "results": [
-                    add_judgment(c, who.actor, j.item_id, j.question_set, j.scores, dests) for j in body.judgments
-                ]
-            }
-
-        return mutate(request, body, work)
-
-    @app.post("/api/v2/listening/judge")
-    def judge_route(request: Request, body: ListenJudge):
-        who = request.state.identity
-        auth.domain(who)
-        require_listener(who)
-        from .judge import over_spend_cap, server_engine
-
-        with store.read() as c:
-            capped = over_spend_cap(c, store.settings)
-            engine = None if capped else server_engine(store, c, getattr(app.state, "judge", None))
-        if capped:
-            raise Problem(
-                "spend_cap",
-                "Decide has reached the team's monthly spend cap; posts stay unjudged until the 1st (UTC)",
-                429,
-            )
-        if engine is None:
-            raise Problem("judge_unconfigured", "No decision model is configured on this server", 503)
-        return judge_pending(store, engine, who, body.limit, body.item_ids or None)
-
-    @app.get("/api/v2/listening/items/{item_id}")
-    def item_trace(request: Request, item_id: str):
-        who = request.state.identity
-        auth.domain(who)
-        with store.read() as c:
-            dests = destinations(store.settings, c)
-            require_reader(who, dests)
-            found = trace(c, item_id)
-        if not sees_everything(who):
-            mine = set(destinations_of(who.actor, dests))
-            if not any(row["destination"] in mine for row in found["intake"]):
-                raise Problem("not_found", f"no saved post {item_id}", 404)
-            found["intake"] = [row for row in found["intake"] if row["destination"] in mine]
-        return found
+            rows = c.execute(
+                "SELECT * FROM listening_items WHERE automation_id=?"
+                + (" AND status=?" if status else "")
+                + (" AND run_id=? AND status='sent'" if run else "")
+                + " ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (
+                    automation,
+                    *((status,) if status else ()),
+                    *((run,) if run else ()),
+                    max(1, min(int(limit), LIST_MAX)),
+                ),
+            ).fetchall()
+            return {"items": [item_view(r, sources) for r in rows]}
 
     @app.get("/api/v2/listening/stats")
     def stats_route(request: Request, since: str | None = None):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            dests = destinations(store.settings, c)
-            require_reader(who, dests)
-            out = stats(c, since)
-            out.update(timeline(c, who, dests, out["since"]))
-            return out
-
-    @app.get("/api/v2/intake")
-    def intake_list(request: Request, destination: str | None = None, status: str | None = "new", limit: int = 100):
-        who = request.state.identity
-        auth.domain(who)
-        with store.read() as c:
-            dests = destinations(store.settings, c)
-            require_reader(who, dests)
-            return {"items": inbox(c, who, dests, destination, status or None, limit), "destinations": dests}
-
-    @app.post("/api/v2/intake/{intake_id}/resolve")
-    def intake_resolve(request: Request, intake_id: str, body: IntakeResolve):
-        who = request.state.identity
-
-        def work(c):
-            auth.domain(who)
-            return {
-                "intake": resolve(
-                    c, who, intake_id, body.status, destinations(store.settings, c), body.receiver_ref, body.reason
-                )
-            }
-
-        return mutate(request, body, work)
+            return stats(c, who, since)

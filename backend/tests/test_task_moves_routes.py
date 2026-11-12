@@ -103,6 +103,21 @@ def test_reassign_snooze_and_unsnooze(api):
     refused(api, f"tasks/{made['id']}/snooze", {"until": "not a date"}, status=422)
 
 
+def test_status_all_lists_snoozed_tasks_with_the_rest(api):
+    """Tico Team, Nov 11: GET /api/v2/tasks?status=all left out three snoozed tasks. All is every task; the default list
+    still leaves a snoozed one out until its date."""
+    snoozed, done, other = task(api, "Plan the offsite"), task(api, "Book the venue"), task(api, "Pick a menu")
+    post(api, f"tasks/{snoozed['id']}/snooze", {"until": "2099-01-05", "why": "After the holidays"})
+    post(api, f"tasks/{done['id']}/move", {"to": "closed", "why": "Booked elsewhere", "version": done["version"]})
+
+    def ids(query):
+        return {t["id"] for t in get(api, "tasks?" + query)["tasks"]} & {snoozed["id"], done["id"], other["id"]}
+
+    assert ids("status=all") == {snoozed["id"], done["id"], other["id"]}
+    assert ids("") == {done["id"], other["id"]}
+    assert ids("status=all&snoozed=hide") == {done["id"], other["id"]}
+
+
 def test_an_ask_is_answered_given_and_withdrawn_on_the_task(api):
     made = task(api, owner="ana")
     asked = api.post(

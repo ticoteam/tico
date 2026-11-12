@@ -1204,14 +1204,15 @@ class Onboarding:
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
         Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, and the Finance Owner once Finance is set
         up), the Assistant's routines it never had, General's manager once the General Manager exists
-        (pipeline_settings.ensure_presets) and BotOps' daily "Sweep stuck tasks" once BotOps is active. Every start
+        (pipeline_settings.ensure_presets), BotOps' daily "Sweep stuck tasks" once BotOps is active, and the models of
+        the bots that follow the company's plans (plan_models.follow). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import, the sample
         company) and a computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
         what a person changed alone.
 
         Each step runs in its own savepoint. `failed(step, exc)` takes a step's failure and the next step runs; with no
         `failed` the failure is raised (the caller's transaction then keeps nothing)."""
-        from . import bookkeeper, pipeline_settings
+        from . import bookkeeper, pipeline_settings, plan_models
 
         # In order: a later step reads a bot an earlier one makes (General's manager is the General Manager).
         steps = (
@@ -1227,6 +1228,7 @@ class Onboarding:
             ("seat_repositories", self.seat_repositories),
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
+            ("plan_models", lambda c: plan_models.follow(c, self.settings, H.KEEPER)),
         )
         for name, step in steps:
             c.execute("SAVEPOINT complete_company")

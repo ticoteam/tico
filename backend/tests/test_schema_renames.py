@@ -167,6 +167,8 @@ DROPPED_INDEXES |= {"org_rules_source", "rule_sources_name", "sqlite_autoindex_r
 # (tasks is made again, so its old indexes go with it), and by 20261110110625_drop_old_engine_leftovers.py.
 _CUTOVER = importlib.import_module("backend.migrations.20261110054000_pipelines_v3_cutover")
 RETIRED |= set(_CUTOVER.OLD_TABLES) | {"task_rules", "first_start_seeds"}
+# Listening's old model (20261111190425_listening_feed): its tables go, with their indexes.
+RETIRED |= {"listen_runs", "listen_items", "listen_judgments", "intake_items", "listening_destinations"}
 DROPPED |= {("tasks", column) for column in _CUTOVER.DEAD_COLUMNS}
 # Old indexes on tasks that the new table does not make again: over dead columns, the old statuses or the close rule.
 DROPPED_INDEXES |= {

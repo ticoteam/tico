@@ -1208,7 +1208,9 @@ def parser():
         "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
     )
     s.add_argument("--brief", action="store_true", help="leave out bodies")
-    s.add_argument("--all", action="store_true", help="every task and every bot you may see, as {tasks, bots}")
+    s.add_argument(
+        "--all", action="store_true", help="every task (snoozed ones too) and every bot you may see, as {tasks, bots}"
+    )
     s.add_argument(
         "--snoozed",
         choices=["only", "all"],
@@ -1294,45 +1296,15 @@ def parser():
     cli_spec.add(sub, market_commands.CLI)  # tico market: clients/commands/market.py
 
     listen = sub.add_parser(
-        "listening", help="Listening's saved posts: save a sweep, decide where each post goes, trace a post"
+        "listening", help="Listening's sources: the ones due a read, and saving what a read found"
     ).add_subparsers(dest="sub")
-    s = listen.add_parser("save", help="one sweep of one query and the posts it saw, from a JSON file")
-    s.add_argument(
-        "--file", required=True, help="JSON: {source, query, status, note, pages_read, items: [...]}; - for stdin"
-    )
+    s = listen.add_parser("sources", help="the Search sources due a read")
+    s.add_argument("--automation", help="only this listening's sources")
+    s.set_defaults(fn="listening sources")
+    s = listen.add_parser("save", help="what one read of one source found, from a JSON file")
+    s.add_argument("--source", required=True, help="source id, from `tico listening sources`")
+    s.add_argument("--file", required=True, help="JSON: {status, error, items: [...]}; - for stdin")
     s.set_defaults(fn="listening save")
-    s = listen.add_parser(
-        "decide", help="put the listening-item decisions to new posts and route them to the message bots"
-    )
-    s.add_argument("--limit", type=int, default=20)
-    s.add_argument("--item", action="append", dest="item_ids", default=[])
-    s.set_defaults(fn="listening decide")
-    s = listen.add_parser("show", help="a post, its run, its decisions, and where it went")
-    s.add_argument("id")
-    s.set_defaults(fn="listening show")
-    s = listen.add_parser("runs", help="sweeps, newest first, with ok/blocked/rate_limited/error")
-    s.add_argument("--since")
-    s.add_argument("--source")
-    s.set_defaults(fn="listening runs")
-    s = listen.add_parser("stats", help="coverage by source and precision by message bot")
-    s.add_argument("--since")
-    s.set_defaults(fn="listening stats")
-    item = listen.add_parser(
-        "item", help="posts Listening routed to you: list them, then accept or reject each"
-    ).add_subparsers(dest="subsub")
-    s = item.add_parser("list", help="your posts, oldest first")
-    s.add_argument("--destination")
-    s.add_argument("--status", default="new", choices=["new", "accepted", "rejected", "duplicate"])
-    s.add_argument("--limit", type=int, default=100)
-    s.set_defaults(fn="listening item list")
-    s = item.add_parser(
-        "resolve", help="accepted --ref <your record>, duplicate --ref <existing>, or rejected --reason"
-    )
-    s.add_argument("id")
-    s.add_argument("--status", required=True, choices=["accepted", "rejected", "duplicate"])
-    s.add_argument("--ref", dest="receiver_ref", default="")
-    s.add_argument("--reason", default="")
-    s.set_defaults(fn="listening item resolve")
 
     def mcp_flags(s):
         s.add_argument(
@@ -2607,9 +2579,7 @@ RENAMED = [
     (("files",), ("file",), (), None),
     (("meetings", "transcript"), ("meeting", "read"), (), None),
     (("meetings",), ("meeting",), (), None),
-    (("listen", "judge"), ("listening", "decide"), (), None),
     (("listen",), ("listening",), (), None),
-    (("intake",), ("listening", "item"), (), None),
     (("tools",), ("tool",), (), None),
     (("integrations",), ("tool", "list"), (), None),
     (("integration",), ("tool", "show"), (), None),

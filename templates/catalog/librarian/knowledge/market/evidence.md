@@ -11,7 +11,7 @@ No evidence, no write. A report without a source you can point at is `rejected` 
 
 ## Competitor versus phrase-stealer
 
-These words come from the listening watchlist. Use them as the entity's `tier`.
+Use these words as the entity's `tier`.
 
 - **core** — an organization a customer would hire instead of your team. `competes_with` your team.
 - **lookalike** — same job, smaller or adjacent. `competes_with` your team until you verify otherwise.

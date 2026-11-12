@@ -434,3 +434,58 @@ def test_a_reassign_names_only_someone_who_can_act(c, general):
     assert E.task(c, row["id"])["owner_id"] == "bot:builder"
     assert E.reassign(c, row["id"], "bot:reviewer", ANA)["owner_id"] == "bot:reviewer"
     assert E.reassign(c, row["id"], ANA, ANA)["owner_id"] == ANA
+
+
+def _filed_in_build(c):
+    """Build (limit 1) holds the importer; the exporter waits on deck; then the importer's builder files a fix for its
+    own failing check into the same pipeline (Tico Team, Nov 12: Engineering's Build was full with the parent in it)."""
+    parent = X.new_task(c, ANA, "Build the importer", "eng")
+    other = X.new_task(c, ANA, "Build the exporter", "eng")
+    assert E.fill_open_slots(c) == [parent["id"]]
+    child = X.new_task(c, "bot:builder", "Fix the importer's browser check", "eng", parent=parent["id"])
+    return parent, other, child
+
+
+def test_a_sub_task_goes_into_the_full_stage_its_filer_is_in_and_the_limit_holds_for_the_rest(c, build):
+    from backend import never_stuck
+    from backend import waiting_on as W
+
+    parent, other, child = _filed_in_build(c)
+    waits = W.of(c, E.task(c, parent["id"]))
+    assert (waits[0].state, waits[0].who) == (W.TASKS, child["id"])  # the importer waits on its fix
+    assert E.fill_open_slots(c) == [child["id"]]  # the older exporter has no room; the fix rides the importer's slot
+    assert E.task(c, child["id"])["stage"]["name"] == "Build"
+    assert E.task(c, other["id"])["stage"]["name"] == "On deck"
+    assert [(w.state, w.line) for w in W.of(c, E.task(c, other["id"]))] == [(W.ROOM, "No room in Build")]
+    with _refused("task_stage_full"):
+        E.move(c, other["id"], E.NEXT, ANA)
+    assert not [b for b in never_stuck.rules_hold(c) if b[:2] in ("1:", "6:")]  # one over is the filer's slot
+    # The fix done, it moves on, and the importer, done too, frees the slot the exporter takes.
+    X.say_done(c, E.task(c, child["id"]))
+    assert E.advance(c, child["id"])["stage"]["name"] == "Review"
+    assert E.task(c, other["id"])["stage"]["name"] == "On deck"
+    X.say_done(c, E.task(c, parent["id"]))
+    assert E.advance(c, parent["id"])["stage"]["name"] == "Review"
+    assert E.fill_open_slots(c) == [other["id"]]
+
+
+def test_a_sub_task_filed_on_an_earlier_visit_waits_for_room_like_any_other(c, build):
+    parent, _other, child = _filed_in_build(c)
+    review = E.move(c, parent["id"], "Review", ANA, "Built by hand")
+    back = E.move(c, parent["id"], "Build", "bot:reviewer", "It drops rows", seen_version=review["version"])
+    assert back["stage"]["name"] == "Build"
+    assert not E.rides_with_filer(c, child["id"], back["stage_id"])  # the filer left the visit that filed it
+    assert E.advance(c, child["id"]) is None
+
+
+def test_never_stuck_flags_a_filer_that_waits_on_a_sub_task_waiting_for_its_room(c, build, monkeypatch):
+    from backend import never_stuck
+
+    monkeypatch.setattr(E, "rides_with_filer", lambda *_: False)  # the engine before the fix
+    parent, _other, child = _filed_in_build(c)
+    assert E.fill_open_slots(c) == []
+    found = [b for b in never_stuck.rules_hold(c) if "waits for room" in b]
+    assert found == [
+        f"1: task {parent['id']} waits on {child['id']}, which waits for room in the stage {parent['id']} holds"
+    ]
+    assert found[0].tasks == (parent["id"], child["id"])

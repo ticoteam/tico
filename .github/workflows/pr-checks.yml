@@ -20,7 +20,8 @@
 # on the merge commit that lands on main (scripts/ci/merge_commit_checks.sh), since a change queued ahead can break one
 # (a migration timestamp, a route, a lint rule).
 # A failed `tests` leg cancels its whole run (its last step), in a queue group or a pull request. The
-# `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute.
+# `checks` job still runs (always()) and fails, so the queue drops a failing group within about a minute. The failing
+# leg ends "cancelled" too (its own cancel stops it), so `checks` names the leg and step that failed.
 # `checks` is the one required check. It fails when a job it needs failed or was cancelled; a skipped job passes. A draft
 # pull request runs nothing.
 # A skipped run proves nothing on its own: Tico reads a head whose every check was skipped as pending (backend/github.py
@@ -113,7 +114,9 @@ jobs:
       # A merge queue group supersedes the older groups of its pull request: a rebuilt queue entry has a new head. The
       # concurrency group cannot key on the number (an expression cannot read it from head_ref), so this step cancels
       # those older queued and running runs. It runs for merge_group only, so a pull request's own runs are never listed,
-      # and it never cancels its own run. Continue-on-error: a failed cancel leaves the older group to finish alone.
+      # and it never cancels its own run. It cancels only a group GitHub has already dropped (its gh-readonly-queue ref
+      # returns 404): a cancelled group that is still live fails `checks` and ejects its pull request.
+      # Continue-on-error: a failed cancel leaves the older group to finish alone.
       - name: Cancel older queue groups for this pull request
         if: github.event_name == 'merge_group'
         continue-on-error: true
@@ -597,11 +600,14 @@ jobs:
           DESKTOP_APP: ${{ needs.desktop-app.result }}
           RECORDER: ${{ needs.recorder.result }}
           CADDY: ${{ needs.caddy-linux.result }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           status=0
+          cancelled=0
           check() {
             case "$2" in
               success | skipped) ;;
+              cancelled) echo "::error::$1 ended with cancelled" >&2; status=1; cancelled=1 ;;
               *) echo "::error::$1 ended with $2" >&2; status=1 ;;
             esac
           }
@@ -612,4 +618,17 @@ jobs:
           check desktop-app "$DESKTOP_APP"
           check recorder "$RECORDER"
           check caddy-linux "$CADDY"
+          # A failed leg cancels the whole run, itself included, so its job reads "cancelled". Name the step that
+          # really failed, or say that nothing did (cancelled from outside: a superseded queue group, or by hand).
+          if [ "$cancelled" = 1 ]; then
+            # shellcheck disable=SC2016 # $job is a jq variable, not a shell one.
+            failed=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" \
+              --jq '.jobs[] | select(.name != "checks") | .name as $job | .steps[]? | select(.conclusion == "failure") | "\($job): \(.name)"' \
+              2>/dev/null | paste -sd ';' - | sed 's/;/; /g') || failed=''
+            if [ -n "$failed" ]; then
+              echo "::error::Failed: ${failed}. Fail fast then cancelled the other legs."
+            else
+              echo "::error::No step failed: the run was cancelled from outside (a superseded queue group, or by hand)."
+            fi
+          fi
           exit "$status"

@@ -22,7 +22,10 @@ declare function cloudAccessApply(cloud: {access: string; billing_url: string | 
             cloud_access: {access: 'frozen', reason: 'out_of_credit', billing_url: billing},
           }}));
           await page.route('**/api/v2/tasks/t-credit', route => route.fulfill({json: {
-            task: {...held, turn: line ? {state: 'bot', who: 'bot:pm', line, requirement_id: null, since: null, until: null, ask: false} : null},
+            // The turn carries the cause's page (backend/task_wakes.py CAUSE_PAGES); the queued run says it in words.
+            task: {...held, turn: line ? {state: 'bot', who: 'bot:pm', requirement_id: null, since: null, until: null, ask: false,
+              ...(/^out of credit/i.test(line) ? {line: 'PM Tico Cloud is out of credit', href: '#/settings/billing'}
+                : {line: 'PM has no computer', href: '#/settings/computers'})} : null},
             waiting_for: line, children: [], comments: [], events: [],
           }}));
         },

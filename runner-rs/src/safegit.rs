@@ -588,6 +588,53 @@ pub fn committing_environment(turn: &Env) -> Env {
     env
 }
 
+/// Merge attributes for the runner's own rebases and merges in a bot's repository. A bot's memory notes are
+/// append-mostly and written from several checkouts and turns at once, so two sides adding lines at the same spot is
+/// the usual clash there: git's built-in union driver keeps both sides' lines. `memory/state.md` is rewritten whole
+/// each turn, not appended to, so it keeps the ordinary text merge. Nothing here names a program to run.
+pub const MERGE_ATTRIBUTES: &str = "/memory/**/*.md merge=union\n/memory/state.md merge=text\n";
+
+/// A read-only file holding MERGE_ATTRIBUTES, made once per process like the empty hooks directory; None when the
+/// temporary folder cannot take it (the rebase then stops on a clash as it would without it).
+fn merge_attributes() -> Option<&'static Path> {
+    static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "tico-merge-attributes-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
+        // A new file, never one already there (or a link placed at that name).
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .ok()?;
+        file.write_all(MERGE_ATTRIBUTES.as_bytes()).ok()?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444)).ok()?;
+        Some(path)
+    })
+    .as_deref()
+}
+
+/// `committing_environment()` for a rebase or merge of a bot's commits onto its remote: memory notes that both sides
+/// added to merge with both sides kept (MERGE_ATTRIBUTES) instead of stopping the push on a conflict.
+pub fn merging_environment(turn: &Env) -> Env {
+    let mut env = committing_environment(turn);
+    if let Some(file) = merge_attributes() {
+        let n = env
+            .get("GIT_CONFIG_COUNT")
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+        env.insert(format!("GIT_CONFIG_KEY_{n}"), "core.attributesFile".into());
+        env.insert(format!("GIT_CONFIG_VALUE_{n}"), file.display().to_string());
+        env.insert("GIT_CONFIG_COUNT".into(), (n + 1).to_string());
+    }
+    env
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

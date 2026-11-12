@@ -229,7 +229,7 @@ def _requests(conn: "sqlite3.Connection") -> int:
         if not row or not E.not_held_by_hand(conn, row) or R.unmet(conn, row):
             continue
         nxt = E.next_stage(conn, row)
-        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt) or E.shut_out(conn, row, nxt):
+        if not nxt or nxt["kind"] != "work" or not E.has_room(conn, nxt, task_row=row) or E.shut_out(conn, row, nxt):
             continue
         E.move(conn, row["id"], nxt["id"], SYSTEM, seen_version=row.get("version"))
         moved += 1
@@ -873,6 +873,10 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
         waits = W.of(conn, row, seen)
         if not waits:
             broken.append(Break(f"1: task {task_id} waits on nothing", [task_id]))
+        for wait in waits:
+            if wait.state == W.TASKS and wait.who and _waits_for_its_room(conn, row, str(wait.who), seen):
+                said = f"1: task {task_id} waits on {wait.who}, which waits for room in the stage {task_id} holds"
+                broken.append(Break(said, [task_id, wait.who]))
         if row.get("snooze"):
             # Set aside: nobody's turn is chased. A bot's snooze still hides no ask from the person it names (rule 3).
             waits = W.listed(waits, row)
@@ -926,6 +930,19 @@ def rules_hold(conn: "sqlite3.Connection") -> list[str]:
     broken += _rule_6(conn)
     broken += _rule_7(conn)
     return broken
+
+
+def _waits_for_its_room(conn: "sqlite3.Connection", row: Row, filed: str, seen: dict[str, str | None]) -> bool:
+    """The task waits on a task it filed, and that one waits for room in the limited stage the task is in: neither can
+    move until something else leaves. The engine lets a sub-task in on its filer's slot (`task_engine.rides_with_filer`),
+    so this is a safety net."""
+    child = E.task(conn, filed)
+    if not child or child["status"] != "open" or child.get("snooze") or not child.get("stage"):
+        return False
+    ahead = E.next_stage(conn, child)
+    if not ahead or ahead["id"] != row["stage_id"] or E.has_room(conn, ahead, task_row=child):
+        return False
+    return any(wait.state == W.ROOM for wait in W.of(conn, child, seen))
 
 
 def _told(told: str | None, visit: Row) -> bool:
@@ -997,7 +1014,8 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
 def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     """A forward move never overfills a stage. Counted: the open tasks that came into a limited stage by a forward move
     since the stage's settings last changed and were never snoozed there. A task that came back, was reopened or had a
-    snooze end may sit one over."""
+    snooze end may sit one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's
+    slot (task_engine.rides_with_filer)."""
     return _lines(
         conn,
         "SELECT s.id, COUNT(*), s.task_limit FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
@@ -1005,6 +1023,8 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
         "WHERE s.kind='work' AND s.task_limit > 0 AND v.entered_how IN ('met', 'pushed_past') "
         "AND v.entered_at >= s.updated_at "
         "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.visit_id = v.id) "
+        "AND NOT EXISTS (SELECT 1 FROM links l JOIN visits f ON f.id = l.visit_id "
+        "WHERE l.to_task_id = t.id AND f.stage_id = s.id) "
         "GROUP BY s.id HAVING COUNT(*) > s.task_limit",
         "6: stage {0} holds {1} tasks that moved forward into it, over its limit of {2}",
     )

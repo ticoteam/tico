@@ -10,128 +10,46 @@ from clients.commands._schemas import _key, _s
 from clients.commands._requester import _as_person
 
 
-# ----------------------------------------------------------------------------- listening, intake
+# ----------------------------------------------------------------------------- listening
+@tool(
+    "tico_listening_sources",
+    "Listening: the Search sources that are due a read, each with its id, site and what to search for.",
+    {"automation": _s("Only this listening's sources")},
+)
+def listen_sources(api, args):
+    return api.get("listening/sources", due=1, automation=args.get("automation"))
+
+
 @tool(
     "tico_listening_save",
-    "Listening: save one sweep of one query and every post it saw. status is ok, blocked, "
-    "rate_limited or error; anything but ok says what happened in note. A post already saved is not changed.",
+    "Listening: save what one read of one source found. status is ok, blocked, rate_limited or error; anything "
+    "but ok says what happened in error. An item already saved is not changed.",
     {
-        "source": _s("x, reddit, linkedin, facebook, news, x-bookmarks, reddit-saved, ..."),
-        "query": _s("The query or page the sweep read"),
-        "status": {"type": "string", "enum": ["ok", "blocked", "rate_limited", "error"]},
-        "started_at": _s("ISO time the sweep started; default now"),
-        "pages_read": {"type": "integer", "default": 0},
-        "items_seen": {"type": "integer"},
-        "note": _s("What happened, required unless ok", default=""),
+        "source": _s("Source id, from tico_listening_sources"),
+        "status": {"type": "string", "enum": ["ok", "blocked", "rate_limited", "error"], "default": "ok"},
+        "error": _s("What happened, unless ok", default=""),
         "items": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "native_id": _s("The platform's id for the post"),
+                    "native_id": _s("The site's id for the post, or its link"),
                     "url": _s("Link to the post"),
                     "author": _s("Handle or name as shown"),
-                    "author_url": _s("Author profile link"),
-                    "content": _s("The visible text"),
-                    "published_at": _s("ISO time, if shown"),
+                    "title": _s("Title, if it has one"),
+                    "text": _s("The visible text"),
+                    "posted_at": _s("ISO time, if shown"),
                 },
-                "required": ["native_id", "url", "content"],
+                "required": ["native_id", "text"],
             },
         },
     },
-    required=("source", "query", "status"),
+    required=("source",),
     writes=True,
 )
 def listen_save(api, args):
-    body = {
-        k: args[k]
-        for k in ("source", "query", "status", "started_at", "pages_read", "items_seen", "note", "items")
-        if args.get(k) is not None
-    }
-    return api.post("listening/runs", body, key=_key(args))
-
-
-@tool(
-    "tico_listening_decide",
-    "Listening: put the listening-item decision questions to saved posts that have no decision yet, one "
-    "probability per category, and route each post to every inbox whose threshold it clears.",
-    {"limit": {"type": "integer", "default": 20}, "item_ids": {"type": "array", "items": {"type": "string"}}},
-    writes=True,
-)
-def listen_decide(api, args):
-    return api.post(
-        "listening/decide",
-        {"limit": int(args.get("limit") or 20), "item_ids": args.get("item_ids") or []},
-        key=_key(args),
-    )
-
-
-@tool(
-    "tico_listening_show",
-    "One saved post: the run that first saw it, every decision, and every inbox it went to.",
-    {"id": _s("Saved post id (listen_items.id)")},
-    required=("id",),
-)
-def listen_show(api, args):
-    return api.get("listening/items/" + args["id"])
-
-
-@tool(
-    "tico_listening_runs",
-    "Listening's sweeps, newest first, with their status: tells no results from blocked.",
-    {"since": _s("ISO date or time"), "source": _s("x, reddit, linkedin, ...")},
-)
-def listen_runs(api, args):
-    return api.get("listening/runs", since=args.get("since"), source=args.get("source"))
-
-
-@tool(
-    "tico_listening_stats",
-    "Coverage by source and status, and accepted/rejected counts and precision by inbox.",
-    {"since": _s("ISO date or time; default seven days ago")},
-)
-def listen_stats(api, args):
-    return api.get("listening/stats", since=args.get("since"))
-
-
-@tool(
-    "tico_listening_item_list",
-    "Posts Listening routed to your inbox, oldest first, with the post, the scores and why "
-    "it was routed. Resolve each one with tico_listening_item_resolve.",
-    {
-        "destination": _s("An inbox name from the team's registry/listening.yaml; default yours"),
-        "status": {"type": "string", "enum": ["new", "accepted", "rejected", "duplicate"], "default": "new"},
-        "limit": {"type": "integer", "default": 100},
-    },
-)
-def intake_list(api, args):
-    return api.get(
-        "intake",
-        destination=args.get("destination"),
-        status=args.get("status") or "new",
-        limit=args.get("limit") or 100,
-    )
-
-
-@tool(
-    "tico_listening_item_resolve",
-    "Your verdict on an inbox item: accepted with the id of the record you made, duplicate "
-    "with the id it duplicates, or rejected with one sentence why.",
-    {
-        "id": _s("Intake item id"),
-        "status": {"type": "string", "enum": ["accepted", "rejected", "duplicate"]},
-        "receiver_ref": _s("The record you created or the one it duplicates", default=""),
-        "reason": _s("One sentence; required when rejected", default=""),
-    },
-    required=("id", "status"),
-    writes=True,
-)
-def intake_resolve(api, args):
-    return api.post(
-        f"intake/{args['id']}/resolve",
-        {"status": args["status"], "receiver_ref": args.get("receiver_ref") or "", "reason": args.get("reason") or ""},
-        key=_key(args),
-    )
+    body = {k: args[k] for k in ("status", "error", "items") if args.get(k) is not None}
+    return api.post("listening/sources/" + quote(args["source"], safe="") + "/items", body, key=_key(args))
 
 
 # ----------------------------------------------------------------------------- company inbound messages

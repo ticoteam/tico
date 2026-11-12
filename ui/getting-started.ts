@@ -3,7 +3,7 @@
    kept per person is whether they saw the tour. Strategy's Market tab, when empty (ui/market-page.ts), is
    where the market is asked for. */
 'use strict';
-interface GsItem { id: string; done: boolean; skipped?: boolean }
+interface GsItem { id: string; done: boolean; skipped?: boolean; optional?: boolean }
 interface GsAnswer { items: GsItem[]; can_build?: boolean; tour_seen?: boolean; dismissed?: boolean }
 interface GsTour {
   root: HTMLDivElement; steps: [string, string, string][]; at: number; phone: boolean; opener: HTMLElement | null;

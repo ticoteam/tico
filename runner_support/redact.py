@@ -226,7 +226,17 @@ class Redactor:
             (result["too_large"] if large else small).append(path)
         result["rewritten"], result["left_out"] = self.scrub_files(small, root)
         if since:
-            patch = _git(root, "log", "-p", "--no-ext-diff", "--no-textconv", "--format=", since + "..HEAD", raw=True)
+            patch = _git(
+                root,
+                "log",
+                "-p",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--format=",
+                since + "..HEAD",
+                *_shared(root),
+                raw=True,
+            )
             result["committed"] = bool(patch) and self.holds(patch)
         return result
 
@@ -331,6 +341,14 @@ def git_failure(stderr, secrets=(), limit=300):
 def head(root):
     """The checkout's current commit, or "" when it has none."""
     return (_git(Path(root), "rev-parse", "--verify", "-q", "HEAD") or "").strip()
+
+
+def _shared(root):
+    """What the commit check leaves out besides `since..HEAD`: the commits already on a remote's other branches (a
+    rebase onto, or merge of, the base brings them in; the turn made none of them). The checked-out branch's own
+    remote copy stays in, and a detached HEAD leaves nothing out (runner-rs redact.rs shared_branches)."""
+    branch = _git(root, "symbolic-ref", "-q", "--short", "HEAD").strip()
+    return ("--not", "--exclude=*/HEAD", f"--exclude=*/{branch}", "--remotes") if branch else ()
 
 
 def _git(root, *args, raw=False):

@@ -28,10 +28,12 @@ type SettingsGatewayTiers = {tiers: Record<string, SettingsTier>; levels: {id: s
 // GET /v2/usage/limits: each bot's use limit and the company's default (ui/app/usage.ts draws them).
 type SettingsLimits = {bots?: Record<string, UseLimit>; default?: UseDefault};
 // GET /v2/operations: the computers, services and issues that the Computers and Health views draw.
-type SettingsOperations = {machines: SettingsMachine[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
+// A cloud machine whose computer has not enrolled yet (backend/cloud_machines.py coming_rows): listed before it is one.
+type SettingsCloudComing = {key: string; label: string; shared: boolean; bot: string | null; status: string; words: string; replace: boolean};
+type SettingsOperations = {machines: SettingsMachine[]; cloud_coming?: SettingsCloudComing[]; services: SettingsService[]; issues?: SettingsIssue[]; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; scheduler_enabled?: boolean};
 // GET /v2/models: the model catalogue, the harness manifests (HARNESS_ROWS), the Tico Gateway and the enabled providers.
 type SettingsCatalog = {models: SettingsModel[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabled_providers?: string[]; default?: {model?: string}};
-type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
+type SettingsData = {people: SettingsPerson[]; machines: SettingsMachine[]; cloudComing?: SettingsCloudComing[]; services: SettingsService[]; models: SettingsModel[]; issues: SettingsIssue[]; history: SettingsHistory; loaded?: boolean; schedulerEnabled?: boolean; runnable?: SettingsRunnable; agents?: SettingsAgentRow[]; harnesses?: HarnessRow[]; gateway?: SettingsGatewayTiers | null; enabledProviders?: string[]; defaultModel?: string; limits?: SettingsLimits | null};
 type SettingsPresence = {interval: number; timeout: number; at: number; checking: boolean; failed: boolean; timer: number | null; pending: Promise<unknown> | null; request: number; applied: number};
 type SettingsDestinationHeld = {name?: string; credentials?: string[]; old?: {address?: string}; new?: {address?: string}; path?: string};
 // GET /v2/bots/<bot>/execution-review: the stopped runs a person decides on.
@@ -59,12 +61,13 @@ const teamLabel = (t?: string) => (S.orgGroups || []).find(g => g.id === t)?.nam
 let SETTINGS_DATA: SettingsData = {people: [], machines: [], services: [], models: [], issues: [], history: {changes: [], transitions: []}};
 // Presence is judged when a response arrives, never by aging a cached heartbeat on a later paint.
 const SETTINGS_PRESENCE: SettingsPresence = {interval: 25000, timeout: 10000, at: 0, checking: false, failed: false, timer: null, pending: null, request: 0, applied: 0};
-function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request) {
+function settingsMachinesSnapshot(machines: SettingsMachine[], request = ++SETTINGS_PRESENCE.request, coming: SettingsCloudComing[] = []) {
   if (request < SETTINGS_PRESENCE.applied) return;
   SETTINGS_PRESENCE.applied = request;
   SETTINGS_PRESENCE.at = Date.now();
   SETTINGS_PRESENCE.failed = false;
   SETTINGS_DATA.machines = machines;
+  SETTINGS_DATA.cloudComing = coming;
 }
 async function settingsMachinesRead() {
   const request = ++SETTINGS_PRESENCE.request;
@@ -75,7 +78,7 @@ async function settingsMachinesRead() {
       new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Presence check timed out')), SETTINGS_PRESENCE.timeout); })
     ]);
     if (!Array.isArray(operations.machines)) throw new Error('Presence unavailable');
-    settingsMachinesSnapshot(operations.machines, request);
+    settingsMachinesSnapshot(operations.machines, request, Array.isArray(operations.cloud_coming) ? operations.cloud_coming : []);
     return operations;
   } finally { clearTimeout(timer); }
 }
@@ -663,6 +666,7 @@ async function loadSettings() {
     S.emps = namedRoster(employees);
     setPeople(people);
     SETTINGS_DATA = {people: (people.people || []).filter((p: SettingsPerson) => !p.hidden), machines: S.me?.cloud ? SETTINGS_DATA.machines : [],
+      cloudComing: S.me?.cloud ? SETTINGS_DATA.cloudComing || [] : [],
       runnable: operations.runnable || {},
       agents: operations.agents || [],
       services: operations.services || [], models: catalog.models || [],

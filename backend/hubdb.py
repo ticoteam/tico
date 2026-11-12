@@ -600,56 +600,9 @@ ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
 CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
 """
 
-# Listening's observation store and the shared intake (backend/listening.py). Four tables: what a
-# sweep covered, what it saw, what the decision model scored, and where each post was sent. A market insight
-# filed from an intake item names it in `source_ref`, once per reporter.
+# A market insight names what it was filed from in `source_ref`, once per reporter. (The listening tables this once
+# made are gone: backend/migrations/20261111190425_listening_feed.py.)
 LISTENING_SCHEMA = """
-CREATE TABLE IF NOT EXISTS listen_runs (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  query TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  pages_read INTEGER DEFAULT 0,
-  items_seen INTEGER DEFAULT 0,
-  note TEXT);
-CREATE INDEX IF NOT EXISTS listen_runs_started ON listen_runs(started_at, source);
-
-CREATE TABLE IF NOT EXISTS listen_items (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  native_id TEXT NOT NULL,
-  url TEXT NOT NULL,
-  author TEXT,
-  author_url TEXT,
-  content TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  published_at TEXT,
-  first_seen_at TEXT NOT NULL,
-  first_run_id TEXT REFERENCES listen_runs(id),
-  UNIQUE (source, native_id));
-
-CREATE TABLE IF NOT EXISTS listen_judgments (
-  id TEXT PRIMARY KEY,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  question_set TEXT NOT NULL,
-  scores TEXT NOT NULL,
-  judged_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS listen_judgments_item ON listen_judgments(item_id, judged_at);
-
-CREATE TABLE IF NOT EXISTS intake_items (
-  id TEXT PRIMARY KEY,
-  destination TEXT NOT NULL,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  judgment_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'new',
-  receiver_ref TEXT,
-  reason TEXT,
-  created_at TEXT NOT NULL,
-  decided_at TEXT,
-  UNIQUE (destination, item_id));
-CREATE INDEX IF NOT EXISTS intake_items_queue ON intake_items(destination, status, created_at);
-
 ALTER TABLE market_insights ADD COLUMN source_ref TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS market_insights_source_ref
   ON market_insights(reported_by, source_ref) WHERE source_ref IS NOT NULL;
@@ -5062,6 +5015,10 @@ def task_comment(
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
+    if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
+        from . import task_engine
+
+        task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
@@ -5085,11 +5042,23 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
+    until = shift(now(), hours=24)
+    for recipient, mid in _woken_bots(conn, msg):
+        conn.execute(
+            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
+            "VALUES(?,?,?,?,?)",
+            (task_id, recipient, person, mid, until),
+        )
+
+
+def _woken_bots(conn, msg):
+    """The bots a message wakes, each with the message that starts its run: the bot it is written to, unless it is
+    quiet, and each bot a steer or queue delivery is pending for."""
     woken = []
     refs = _json(msg.get("refs"), {}) or {}
     if is_bot(msg.get("recipient_id")) and not refs.get("quiet"):
         woken.append((msg["recipient_id"], msg["id"]))
-    woken += [
+    return woken + [
         (r["recipient"], r["carrier_id"])
         for r in _rows(
             conn.execute(
@@ -5099,13 +5068,6 @@ def delegate_woken(conn, task_id, person, msg):
             )
         )
     ]
-    until = shift(now(), hours=24)
-    for recipient, mid in woken:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
 
 
 def jobs_mark(conn):
@@ -5421,6 +5383,48 @@ def task_comment_delete(conn, actor, task_id, message_id):
     _withdraw_queued_comment_copies(conn, message_id)
     _refresh_comment_replies(conn, deleted)
     return deleted
+
+
+PR_IN_TEXT = re.compile(r"https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)", re.IGNORECASE)
+
+
+def review_finding_route(conn, actor, task_id, target):
+    """A bot never gives a person a General task about a pull request that an open pipeline task owns: a finding on a
+    task's own pull request goes back to that task's Builder through its review (docs/pipelines-v3.md, Engineering),
+    and what only a person decides there (the spec, the OK) is asked on that task. The pull request is one the task
+    links, or one its title or body names by URL. Refused as `review_route`, naming the task it belongs on."""
+    if not is_bot(actor) or not is_human(target):
+        return
+    row = task(conn, task_id)
+    if not row or row.get("pipeline_id") != GENERAL_PIPELINE:
+        return
+    prs = {
+        (str(repo).lower(), int(number))
+        for repo, number in conn.execute(
+            "SELECT repo, number FROM task_links WHERE task_id=? AND kind='pr' AND repo IS NOT NULL "
+            "AND number IS NOT NULL",
+            (task_id,),
+        )
+    }
+    words = f"{row.get('title') or ''}\n{row.get('body') or ''}"
+    prs |= {(f"{owner}/{name}".lower(), int(number)) for owner, name, number in PR_IN_TEXT.findall(words)}
+    for repo, number in sorted(prs):
+        own = conn.execute(
+            "SELECT t.title, s.name FROM task_links l JOIN tasks t ON t.id=l.task_id JOIN stages s ON s.id=t.stage_id "
+            "WHERE l.kind='pr' AND lower(l.repo)=? AND l.number=? AND t.id<>? AND t.status='open' "
+            "AND t.pipeline_id IS NOT NULL AND t.pipeline_id<>? ORDER BY t.created_at LIMIT 1",
+            (repo, number, task_id, GENERAL_PIPELINE),
+        ).fetchone()
+        if own:
+            refuse(
+                conn,
+                actor,
+                "review_route",
+                f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
+                "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
+                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
+            )
 
 
 def task_create(

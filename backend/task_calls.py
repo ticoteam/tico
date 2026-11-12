@@ -326,6 +326,7 @@ def task_reassign(
         if is_human(target):
             from . import strategy_acts
 
+            H.review_finding_route(conn, actor, task_id, target)
             acts: Any = strategy_acts
             acts.gate(conn, actor, "person_task", f"give {acts.TASK} to {H.person_name(conn, target)}", task_id=task_id)
         from . import task_relations

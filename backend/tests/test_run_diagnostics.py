@@ -165,6 +165,50 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
     get(api, f"attempts/{a['id']}/capture", expected=404)
 
 
+def test_failed_tool_calls_are_returned_by_the_capture_route_scrubbed_merged_and_private(api, tmp_path):
+    from clients.hubtools import write_fixture
+
+    machine, msg, a = setup_attempt(api)
+    post(api, f"attempts/{a['id']}/started", {'thread_id': 'failed-tools'}, machine['token'])
+    events = [
+        {'seq': 1, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'started', 'item_id': 'call_ui'}},
+        {'seq': 2, 'kind': 'tool', 'payload': {'tool': 'shell', 'status': 'failed', 'item_id': 'call_ui'}},
+    ]
+    post(api, f"attempts/{a['id']}/events", {'events': events}, machine['token'])
+    ui = {
+        'item_id': 'call_ui',
+        'tool': 'shell',
+        'command': 'npx playwright test ui/tests/login.spec.ts --token=ghp_abcdefghijklmnopqrstuvwxyz0123',
+        'exit_code': 1,
+        'output_tail': "Error: browserType.launch: Executable doesn't exist\nAPI key: sk-test_abcdefghijklmnop0123",
+    }
+    node = {'item_id': 'call_node', 'tool': 'node', 'output_tail': 'Chromium is not installed'}
+    # A failed-calls report alone leaves the stderr tail as it was; a later report adds to the run's list.
+    post(api, f"attempts/{a['id']}/diagnostics", {'tail': 'harness stderr'}, machine['token'])
+    assert post(api, f"attempts/{a['id']}/diagnostics", {'failed_tools': [ui]}, machine['token'])['failed_tools'] == 1
+    post(api, f"attempts/{a['id']}/diagnostics", {'failed_tools': [node]}, machine['token'])
+    found = get(api, f"attempts/{a['id']}/capture")
+    assert found['stderr_tail'] == 'harness stderr'
+    assert [t['item_id'] for t in found['failed_tools']] == ['call_ui', 'call_node']
+    shown = found['failed_tools'][0]
+    assert shown['command'].startswith('npx playwright test ui/tests/login.spec.ts') and shown['exit_code'] == 1
+    assert "Executable doesn't exist" in shown['output_tail']
+    assert 'abcdefghijklmnop' not in json.dumps(found)
+    assert {e['payload'].get('item_id') for e in found['output']['events']} >= {'call_ui'}
+    assert get(api, f"attempts/{a['id']}/capture?full=false")['failed_tools'] == 2
+    write_fixture(found, tmp_path)
+    kept = json.loads((tmp_path / ('replay-' + a['id']) / 'failed_tools.json').read_text())
+    assert kept[1]['output_tail'] == 'Chromium is not installed'
+    # The same gate as raw stderr: not other people, not the run list, not the run's steps.
+    get(api, f"attempts/{a['id']}/capture", 'ben-test', expected=403)
+    assert "Executable doesn't exist" not in json.dumps(listed(api, a['id']))
+    assert "Executable doesn't exist" not in json.dumps(get(api, f"turns/{a['id']}/steps"))
+    # Removing a secret drops the failed calls too, and a runner's retry cannot put them back.
+    post(api, f"messages/{msg['id']}/redact", {'span': 'summarize the current', 'label': 'removed'})
+    assert post(api, f"attempts/{a['id']}/diagnostics", {'failed_tools': [ui]}, machine['token'])['failed_tools'] == 0
+    get(api, f"attempts/{a['id']}/capture", expected=404)
+
+
 @pytest.mark.parametrize(
     ('outcome', 'text', 'stopped', 'expected'),
     [

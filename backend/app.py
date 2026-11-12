@@ -98,6 +98,7 @@ from .credential_cards import install_credential_cards, scrub_attempt
 from .github import PATH as GITHUB_WEBHOOK_PATH
 from .github_app import CALLBACK_PATH as GITHUB_APP_CALLBACK_PATH
 from .triggers import PATH as TRIGGER_HOOK_PATH
+from .listening import PUSH_PATH as LISTENING_PUSH_PATH
 from .tool_proxy import PREFIX as TOOL_PROXY_PATH
 from .store import H, P, Problem, Store, encode
 from . import bot_settings as BS
@@ -807,6 +808,9 @@ def create_app(settings=None):
                 return await call_next(request)
             # A webhook trigger's address carries its own secret (backend/triggers.py).
             if request.url.path.startswith(TRIGGER_HOOK_PATH) and request.method == "POST":
+                return await call_next(request)
+            # A listening's push address carries its own token (backend/listening.py).
+            if request.url.path.startswith(LISTENING_PUSH_PATH) and request.method == "POST":
                 return await call_next(request)
             # A proxied tool call (backend/tool_proxy.py) carries its own signed token where the vendor's key goes, and
             # no Tico identity: the route refuses anything not signed for that tool and a live run.
@@ -2937,6 +2941,8 @@ def create_app(settings=None):
             raise Problem("status", "status is open, done or closed", 422)
         if snoozed not in (None, "hide", "only", "all"):
             raise Problem("snoozed", "snoozed is hide, only or all", 422)
+        if status == "all" and snoozed is None:
+            snoozed = "all"  # every task means the snoozed ones too: they are open, only set aside
         if number is not None and not 1 <= number <= 999_999_999:
             raise Problem("number", "number is a task number, from 1", 422)
         since = H.parse_ts(updated_since) if updated_since else None
@@ -3586,6 +3592,8 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
+        H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []
@@ -4933,6 +4941,20 @@ def create_app(settings=None):
 
         if not options and (first := cloud_machines.first_home(c, bot)):
             options = [first]  # a cloud-mode bot whose own machine is not made yet: the shared one first
+        if not options and cloud_machines.offered(c, settings) and cloud_machines.adopt(c, bot, who.actor):
+            # A Tico Cloud bot whose cloud machine has not enrolled yet: it is assigned there when it does
+            # (cloud_machines.enrolled), so nothing is refused while the machine is on its way.
+            machine = cloud_machines.coming(c, bot)
+            if machine and machine["status"] == "out_of_credit":
+                raise Problem("out_of_credit", f"Out of credit: {machine['label']} can't start. Add credit first", 409)
+            if machine and machine["status"] == "failed":
+                raise Problem(
+                    "cloud_computer_failed",
+                    f"{machine['label']} didn't start: {machine['words']}. See Settings > Computers",
+                    409,
+                )
+            if machine:
+                return {"bot": bot, "computer": machine["label"], "placed": False, "already": False, "waiting": True}
         if not options:
             raise Problem(
                 "no_computer",

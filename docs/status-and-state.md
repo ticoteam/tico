@@ -121,6 +121,9 @@ Values (`JOB_STATES`):
 - `completed`: answered.
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
+  A run whose harness process was killed or crashed resumes once by itself; a second in a row waits for its operator
+  or BotOps. Until someone chooses, its task's wait line, Needs you and Health say it waits on a person, and **Run
+  now** on the task (by its operator or BotOps) runs it again.
 - `canceled`: stopped before it finished (a person stopped it, the task closed, a duplicate wake
   replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 0002.
 
@@ -481,10 +484,10 @@ Without a CHECK (not constrained here; values are whatever the code writes):
 - `bot_tool_requests.state`, `credential_requests.status`, `credential_imports.state`, `bot_transitions.state`,
   `bot_transition_checkpoints.state`, `model_logins.state`, `oauth_grants.state`, `cloud_machines.state`, `computer_keys.state`,
   `seats.request_state`, `seat_requests.state`, `service_jobs.state`, `slack_events.state`, `slack_posts.state`,
-  `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `intake_items.status`, `support_tickets.status`,
+  `worktree_waits.state`, `check_waits.state`, `calendar_actions.status`, `listening_items.status`, `support_tickets.status`,
   `rule_suggestions.status`, `runner_versions.update_state`, `runner_harness_actions.state`, `update_queue.state`,
   `mail_items.state`, `mail_items.status`, `market_*.status`, `inbound_inboxes.state`, `bills_inbound.state`,
-  `learning_runs.status`, `lens_runs.status`, `listen_runs.status`, `flight_slow.status`, `redesign_migrations.state`,
+  `learning_runs.status`, `lens_runs.status`, `listening_sources.status`, `flight_slow.status`, `redesign_migrations.state`,
   `task_trash.status`, `assistant_actions.status`, `automation_mail_actions.state`, `ask_ingest_items.outcome`,
   `batches.state`, `attempts.outcome`, `schedule_occurrences.outcome`, `stale_suggestions.verdict`, `stall_triage.outcome`,
   `trigger_bodies.outcome`, `trigger_deliveries.outcome`, `webhook_attempts.status`, `org_rule_holds.reviewer`, `kpis.stage`

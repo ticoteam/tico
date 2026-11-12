@@ -165,9 +165,8 @@ MODEL_CATALOG = tuple(
             "efforts": ("low", "medium", "high", "xhigh", "max"),
             "default_effort": "medium",
         },
-        # Gated (Dev 693): priced, not offered. `held` rows are never listed or picked, and `deprecated` gives them the
-        # refusals every retired row gets (a bot cannot choose them, the cloud and memory pickers skip them). Product
-        # opens customer availability separately; until then this row stays held, even if Tico HQ publishes a tier for the id.
+        # Offered on Codex (Product opened it, 2026-11-11; it was held under Dev 693). The Tico AI Gateway still holds
+        # the id (gateway_tiers.HELD_MODELS): no HQ tier that runs it is published, so paid Gateway use stays closed.
         {
             "id": "gpt-6.1-terra",
             "context_tokens": 1_050_000,
@@ -176,8 +175,6 @@ MODEL_CATALOG = tuple(
             "provider": "openai",
             "efforts": ("low", "medium", "high", "xhigh", "max"),
             "default_effort": "medium",
-            "deprecated": True,
-            "held": True,
         },
         {
             "id": "gpt-6-sol",

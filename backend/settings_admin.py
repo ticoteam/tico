@@ -706,10 +706,6 @@ class SettingsAdmin:
             bot_id,
             {"operator": operator, "owners": owners, "runner": body.runner_id},
         )
-        if body.slug == "librarian":
-            from . import listening
-
-            listening.seed_market(c, self.settings)  # once: its market posts (Settings > Listening)
         visible = self.auth.bot_accesses(c, who)
         same_name = [
             r["slug"]

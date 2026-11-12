@@ -28,9 +28,11 @@ class FakeDecide:
     def __init__(self, choice="new_topic", confidence=0.95):
         self.choice, self.confidence = choice, confidence
         self.calls, self.fail, self.hold = [], None, None
+        self.asked = threading.Event()  # set when a call arrives, so a test waits for the call itself
 
     def __call__(self, state, questions, label=None):
         self.calls.append({"state": state, "questions": questions, "label": label})
+        self.asked.set()
         if self.hold:
             self.hold.wait(5)
         if self.fail:
@@ -480,20 +482,23 @@ CHANGES = {
 
 
 @pytest.mark.parametrize("change", sorted(CHANGES))
-def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, change):
+def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, change, monkeypatch):
     api, _, conversation, model, _ = chat
+    # The budget is how long a send may wait, which this test does not measure. On a loaded runner the reads before
+    # Decide can run past BUDGET, and a check cut short there never asks, so the budget must not decide the ordering.
+    monkeypatch.setattr(T, "BUDGET", 30)
     before = session_state(api, conversation)
     model.hold = threading.Event()
     sent = {}
     sender = threading.Thread(target=lambda: sent.update(post(api, "chat/ops", {"text": UNRELATED})))
     sender.start()
-    deadline = time.monotonic() + 1.0
-    while not model.calls and time.monotonic() < deadline:
-        time.sleep(0.01)
-    assert model.calls, "the check is asking Decide"
-    with api.app.state.store.transaction() as c:
-        CHANGES[change](api, c, conversation)
-    model.hold.set()  # a confident new topic, about the chat as it was
+    try:
+        # Decide is asked only after the chat was read, so a change made once it is asked is one it did not see.
+        assert model.asked.wait(10), "the check is asking Decide"
+        with api.app.state.store.transaction() as c:
+            CHANGES[change](api, c, conversation)
+    finally:
+        model.hold.set()  # a confident new topic, about the chat as it was
     sender.join(5)
     assert "topic_changed" not in (sent.get("refs") or {}), "no divider"
     expected = {**before, "epoch": 1, "thread": False} if change == "cleared" else before

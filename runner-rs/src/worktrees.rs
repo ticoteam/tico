@@ -1731,6 +1731,12 @@ const BUILD: &[&str] = &[
     ".build",
     ".swiftpm",
     "DerivedData",
+    // Gitignored and written by the repo's checks: ruff-baseline.toml (scripts/lint_baseline.py), ui/types/api.d.ts
+    // (scripts/gen_ui_types.py), .basedpyright (scripts/pyright_baseline.py, check_types.sh), ci-results (scripts/pr_checks.py).
+    "ruff-baseline.toml",
+    "api.d.ts",
+    ".basedpyright",
+    "ci-results",
 ];
 
 pub fn build_file(name: &str) -> bool {
@@ -3715,6 +3721,96 @@ mod tests {
             pushed.trim(),
             "the open pull request's branch gets no new commit"
         );
+    }
+
+    #[tokio::test]
+    async fn a_merged_tree_holding_only_files_the_checks_write_is_removed() {
+        let folder = temp_folder("generated-only");
+        let (workspace, remote, clone) = (
+            folder.0.join("workspace"),
+            folder.0.join("remote.git"),
+            folder.0.join("clone"),
+        );
+        let (base, path) = (
+            workspace.join("repos/org__product"),
+            workspace.join("tasks/12345678/org__product"),
+        );
+        std::fs::create_dir_all(workspace.join("repos")).unwrap();
+        std::fs::create_dir_all(workspace.join("tasks/12345678")).unwrap();
+        sh(
+            &folder.0,
+            &[
+                "init",
+                "-q",
+                "--bare",
+                "--initial-branch=main",
+                remote.to_str().unwrap(),
+            ],
+        );
+        sh(
+            &folder.0,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                clone.to_str().unwrap(),
+            ],
+        );
+        // The repository's rules for the two files its checks write, committed on main.
+        std::fs::write(
+            clone.join(".gitignore"),
+            "/ruff-baseline.toml\n/ui/types/api.d.ts\n",
+        )
+        .unwrap();
+        std::fs::write(clone.join("file"), "base\n").unwrap();
+        sh(&clone, &["add", "-A"]);
+        sh(&clone, &["commit", "-qm", "Base"]);
+        sh(&clone, &["push", "-q", "origin", "main"]);
+        sh(
+            &folder.0,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                base.to_str().unwrap(),
+            ],
+        );
+        sh(
+            &base,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "tico/12345678-build",
+                path.to_str().unwrap(),
+                "origin/main",
+            ],
+        );
+        // The task's pull request is merged and its branch is pushed; the checks left only their ignored files.
+        std::fs::create_dir_all(path.join("ui/types")).unwrap();
+        std::fs::write(path.join("ruff-baseline.toml"), "[lint]\n").unwrap();
+        std::fs::write(path.join("ui/types/api.d.ts"), "export {};\n").unwrap();
+        assert_eq!(
+            sh(&path, &["status", "--porcelain"]),
+            "",
+            "ignored files are not changes"
+        );
+        let mut row = json!({
+            "id": "link1", "link_id": "link1", "task_id": "12345678abcdef", "path": "tasks/12345678/org__product",
+            "repo": "org/product", "branch": "tico/12345678-build", "default_branch": "main", "state": "present",
+            "task_closed": true, "prs_finished": true
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        let state = act(&workspace, &mut row, "remove", &test_env(), &[], || async {
+            true
+        })
+        .await
+        .unwrap();
+        assert_eq!(state, "removed");
+        assert!(!path.exists());
     }
 
     #[tokio::test]

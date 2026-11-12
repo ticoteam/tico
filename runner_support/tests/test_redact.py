@@ -107,6 +107,41 @@ def test_scrubbing_never_runs_checkout_programs_or_writes_through_symlinks(tmp_p
     assert (outside / 'secret').read_text() == SECRET
 
 
+def test_a_rebase_onto_the_base_is_not_a_committed_secret_and_the_bots_own_commit_still_is(tmp_path):
+    origin, repo = tmp_path / 'origin.git', tmp_path / 'work'
+
+    def git(*args, at=repo):
+        return subprocess.run(
+            ['git', '-C', str(at), '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', *args],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+
+    git('init', '-q', '--bare', '-b', 'main', str(origin), at=tmp_path)
+    git('clone', '-q', str(origin), str(repo), at=tmp_path)
+    git('commit', '-q', '--allow-empty', '-m', 'init')
+    git('push', '-q', 'origin', 'HEAD:main')
+    git('switch', '-q', '-c', 'tico/1234abcd-task')
+    (repo / 'task.txt').write_text("the task's work\n")
+    git('add', '.')
+    git('commit', '-q', '-m', 'task')
+    git('switch', '-q', 'main')
+    (repo / 'main.txt').write_text(f'path={SECRET}\n')  # someone else's commit on main
+    git('add', '.')
+    git('commit', '-q', '-m', 'main')
+    git('push', '-q', 'origin', 'main')
+    git('switch', '-q', 'tico/1234abcd-task')
+    since = git('rev-parse', 'HEAD')
+    r = redact.Redactor([SECRET])
+    git('rebase', '-q', 'origin/main')
+    assert not r.scrub_tree(repo, since)['committed']
+    (repo / 'task.txt').write_text(f'key={SECRET}\n')
+    git('commit', '-q', '-am', 'leak')
+    git('push', '-q', '-f', 'origin', 'tico/1234abcd-task')
+    assert r.scrub_tree(repo, since)['committed']
+
+
 def test_atomic_scrub_never_follows_a_swapped_symlink(tmp_path, monkeypatch):
     import os
 

@@ -855,6 +855,11 @@ UI_RUNNER = "scripts/ui-tests.cts"
 # scripts, a helper most scripts run), the change runs every script the release check runs, about four VMs.
 SUPPORT = "ui/tests/support/"
 BROWSER_ALL_OVER = 40
+# The phone dead-end scripts (release-only) fail when a KNOWN break stops happening, so a fix in the app's own files
+# (ui/app/, ui/styles/) breaks them until their KNOWN line goes. Rule 6 runs all of them for such a change, and for their
+# rules file; no other change runs them, and the smoke set does not carry them.
+PHONE_SCOPE = ("ui/app/", "ui/styles/", "ui/tests/support/phone-rules.cts")
+PHONE_PREFIX = "phone-dead-ends-"
 
 
 def runnable_scripts(root=ROOT):
@@ -1058,9 +1063,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
     6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
-       changed or gone helper under ui/tests/support/, and the scripts named after UI source outside UI_MAP. More than
-       BROWSER_ALL_OVER picked runs every script `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull
-       request keeps them.
+       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, and every
+       phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
+       `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
@@ -1195,7 +1200,10 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     direct = set()
     if any(n.startswith("ui/") for n in names):  # rule 6
         runnable = set(runnable_scripts(root))
+        phone = {s for s in runnable if s.startswith(PHONE_PREFIX)}
         for name in names:
+            if name.startswith(PHONE_SCOPE):
+                direct |= phone
             if is_browser(name) and name in live:
                 direct.add(Path(name).stem)
             elif name.startswith(SUPPORT):
@@ -1955,6 +1963,16 @@ def superseded_runs(runs, head_ref, run_number):
     return ids
 
 
+def queue_ref_dropped(repo, branch, run=subprocess.run):
+    """Whether the merge queue has dropped the group on `branch` (gh-readonly-queue/...): GitHub deletes a group's ref
+    when it rebuilds or removes the group. Only a 404 counts; any other answer (the ref exists, an API error) keeps the
+    run, which then finishes alone at worst."""
+    if not branch.startswith("gh-readonly-queue/"):
+        return False
+    result = run(["gh", "api", f"repos/{repo}/git/ref/heads/{branch}", "--silent"], capture_output=True, text=True)
+    return result.returncode != 0 and "HTTP 404" in (result.stderr or "")
+
+
 def junit_ran(path):
     """Whether a pytest JUnit report holds a test that ran (passed or failed), not only skipped ones."""
     path = Path(path)
@@ -2185,11 +2203,18 @@ def main():
             for run in page.get("workflow_runs", [])
         ]
         own = os.environ.get("GITHUB_RUN_ID", "")
+        repo = os.environ["GITHUB_REPOSITORY"]
+        branches = {run["id"]: run.get("head_branch") or "" for run in runs}
         for run_id in superseded_runs(runs, args.head_ref, args.run_number):
             if str(run_id) == own:
                 continue
+            # A cancelled group that is still the queue's live entry fails `checks` and ejects its pull request, so
+            # only a group GitHub has already dropped (its gh-readonly-queue ref deleted) is cancelled.
+            if not queue_ref_dropped(repo, branches[run_id]):
+                print(f"Keeping merge queue run {run_id}: its group {branches[run_id]} is still live or unknown")
+                continue
             print(f"Cancelling superseded merge queue run {run_id}")
-            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", os.environ["GITHUB_REPOSITORY"]], check=False)
+            subprocess.run(["gh", "run", "cancel", str(run_id), "--repo", repo], check=False)
     elif args.action == "smoke-check":
         problems = smoke_check()
         for problem in problems:

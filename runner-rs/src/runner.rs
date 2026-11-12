@@ -290,6 +290,14 @@ impl Runner {
                     let text = crate::redact::scrub_credentials(&text, &[]);
                     let id = aid.clone();
                     let _ = state.off(move |s| s.stderr(&id, &text)).await;
+                } else if ev["kind"] == "diagnostic" && ev["failed_tool"].is_object() {
+                    // A failed call's command and output tail: its own capped rows, never an event.
+                    let detail = crate::run_diagnostics::scrub_failed_tool(
+                        &ev["failed_tool"],
+                        redactor.as_deref(),
+                    );
+                    let id = aid.clone();
+                    let _ = state.off(move |s| s.failed_tool(&id, &detail)).await;
                 } else {
                     let _ = out.send(ev);
                 }
@@ -323,6 +331,33 @@ impl Runner {
                 || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408)
             {
                 let _ = self.state.off(move |s| s.stderr_sent(&id, revision)).await;
+            }
+        }
+        let filter = aid.map(str::to_string);
+        let failed = self
+            .state
+            .off(move |s| s.pending_failed_tools(filter.as_deref()))
+            .await
+            .unwrap_or_default();
+        for (id, rows) in failed.into_iter().take(10) {
+            let details: Vec<&Value> = rows.iter().map(|(_, d)| d).collect();
+            let sent = tokio::time::timeout(
+                Duration::from_secs(2),
+                self.client.post(
+                    &format!("attempts/{id}/diagnostics"),
+                    &json!({"failed_tools": details}),
+                    None,
+                ),
+            )
+            .await;
+            if matches!(sent, Ok(Ok(_)))
+                || matches!(&sent, Ok(Err(e)) if (400..500).contains(&e.status) && e.status != 429 && e.status != 408)
+            {
+                let items: Vec<String> = rows.into_iter().map(|(item, _)| item).collect();
+                let _ = self
+                    .state
+                    .off(move |s| s.failed_tools_sent(&id, &items))
+                    .await;
             }
         }
     }

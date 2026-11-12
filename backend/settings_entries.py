@@ -26,7 +26,6 @@ SETTINGS_FILES = sorted(
         "settings-devices.ts",
         "settings-history.ts",
         "settings-hosted.ts",
-        "settings-listening.ts",
         "settings-people.ts",
         "settings-providers.ts",
         "settings-recurring.ts",
@@ -1059,6 +1058,18 @@ ENTRIES = TEAM_RULES + [
         card=_card("bots"),
         words="shared cloud machine size always on pause after minutes grow storage disk",
     ),
+    S(
+        "cloud.shared_machine.replace",
+        "Replace the shared cloud machine",
+        COMPUTERS,
+        "admin",
+        "confirm",
+        "DELETE",
+        "cloud-machines/shared",
+        value="json",
+        card=_card("computers"),
+        words="replace shared cloud machine delete disk fresh broken stuck failed",
+    ),
     # Letting a bot run workflows or edit workflow files, or turning Create product repositories back on (the Owner
     # only), is the person's own click: from BotOps, a Confirm card (backend/repositories.py bot_set).
     S(
@@ -1408,29 +1419,6 @@ ENTRIES = TEAM_RULES + [
         "webhooks/{id}/update",
         value="json",
         card=HOOKS_OUT_CARD,
-    ),
-    # Listening
-    S(
-        "listening.destination",
-        "Listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "PUT",
-        "listening/destinations/{id}",
-        value="json",
-        card=_card("listening"),
-    ),
-    S(
-        "listening.destination.remove",
-        "Remove a listening destination",
-        "Settings > Listening",
-        "owner",
-        "confirm",
-        "POST",
-        "listening/destinations/{id}/remove",
-        value="json",
-        card=_card("listening"),
     ),
     # Tasks
     S(

@@ -6493,7 +6493,7 @@
    ],
    "bot:release": [
     "task_requirement",
-    "The checks on acme/app#1 are still running"
+    "acme/app#1 has commits since the person's OK. Move the task back to Fixes 2, where they are reviewed and OK'd again."
    ],
    "bot:builder": [
     "task_requirement",

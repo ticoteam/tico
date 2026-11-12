@@ -130,8 +130,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C20.** Sub-tasks nest at most 5 deep.
 - **C21.** A rule made from a 👎 on an ask stops the next ask like it. On the third 👎 on one bot's asks in 30 days, the
   sheet opens with the rule already drafted. *Today a rule made from a 👎 lets the work through with a note.*
-- **C22.** A commit added after your OK still merges once it is green. The task shows "Changed after OK" and the manager
-  bot is told. It doesn't come back to you.
+- **C22.** Your OK is for the commits you were shown. A commit added after it is reviewed by a bot and comes back to
+  you before it merges; in Merge only a person queues it as it is, and a bot sends the task back to Fixes 2. The task
+  shows "Changed after OK" and the manager bot is told. *Until Nov 12 a commit after your OK merged once green.*
 - **C23.** A row is the title and a mark, on one line. In your own list it is the ask, as a sentence. Who has it and what
   is missing is on the task. *Draft 5 put those words on the row.*
 - **C24.** A person never has to type a reason to snooze, move back, reassign or close. Moving on with something missing
@@ -405,6 +406,10 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   the Heartbeat.
 - Pushing past does not push past the limit. Change the limit instead.
 - Back, Reopen and unsnooze can leave a stage one over its limit. It takes no new task until it is under again.
+- A sub-task needs no room in the stage of the task that filed it, while that task is still on the visit that filed it:
+  the filer waits on it, so it comes in on the filer's slot. The stage may then sit over its limit, as after Back.
+  *Changed Nov 12: on Tico Team a Build task waited on a fix it had filed, and the fix waited for room in that full
+  Build.*
 
 ### Snooze
 
@@ -455,7 +460,9 @@ Every 10 s, for each open task: what is missing, who has it, and are they on it?
    repeats.
 
 At any of the three steps: if the task changed, the count goes back to zero and the check asks again whose turn it
-is.
+is. While the owner bot has it, a person's comment that wakes the bot also puts the count back to zero: the run it
+starts is the first of a new count, so a bot that says "I'll carry on" and stops is woken again 2 min later. A comment
+the Assistant or BotOps writes for a person does not.
 
 ### What the check does for each kind of wait
 
@@ -539,7 +546,8 @@ A wait on the outside world, such as a vendor, is a snooze to a date. It is the 
 
 ### Rules that hold at all times
 
-1. Every open task has at least one named wait.
+1. Every open task has at least one named wait, and none waits on a task it filed that waits for room in the stage the
+   filer holds.
 2. Every bot's turn has a live run, a queued wake, a next try time, or has gone up a level.
 3. Every person's turn shows exactly once in that person's Needs you. The list is a read, so there is nothing to create
    or withdraw.
@@ -762,14 +770,27 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
   the newest commit, and what both reviewers found on the commit they reviewed. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
-  then **a person OKs it** (people only). Expected time: 4 hours.
+  then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
+  before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
+  the reviews found and the spec, and OKs them or sends them back as an answer on the page, at the commits it read. A
+  send back is the Builder's to fix; its next commits are a new round. After 2 rounds in a visit, or with no other bot
+  that reviewed the task, the person is asked anyway and the ask says "not reviewed by a bot". With no commits after
+  Review 2 the person is asked at once. The person's OK counts only while the PRs are at the commits it was given at:
+  a commit after it (a fix, a rebase) is reviewed the same way and the person is asked again.
 - **Merge.** Owner: Release Owner. On enter: queue the PRs. To leave: PR merged. Can't be pushed past. Expected
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
-  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends the task
-  back to Fixes 2 when the fault needs the Builder. A commit pushed in Merge does not send the task back through Review:
-  the merge queue's checks are the gate.
+  PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and sends the task back to Fixes 2,
+  where that commit is reviewed and OK'd, or sends it back when the fault needs the Builder. Only a person queues a PR
+  again at a commit other than the one the task came into Merge with (C22).
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).
+
+A review finding on a task's own PR (a bug, a security flaw, a risky path) goes back through the review: blocking on the
+Review page, or a send back in Fixes 2, so the task goes to Fixes and the Builder fixes it. It never becomes a task for
+a person; what only a person decides (the Spec OK, the pre-release OK) is asked on the task itself. Tico refuses
+(`review_route`) a bot that gives a person a General task linking or naming a PR an open pipeline task links, with the
+task it belongs on. Seen live: Reviewer 2 sent a real bug on its task's PR "privately" through the Engineering Manager
+to a person's Needs you.
 
 Also:
 
@@ -1035,18 +1056,22 @@ late. Nothing depends on the exact 10 seconds.
   While the stage waits on a person's OK or answer, the conflict is held: it stays not met, the person's ask adds one
   line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
   not change under the person. When the person answers, the Builder is woken once to rebase: after an OK it is told to
-  leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase does
-  not ask the person again: their OK stands unless a new page is attached.
+  leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. The rebase is a
+  new commit: the person's OK no longer counts, it is reviewed like any commit after Review 2 (Fixes 2), and the
+  person is asked again for the same page.
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
   owner is told once. Tico never queues it again by itself. The owner (the Release Owner, who may push to PR
-  branches) queues it again (`tico task queue`), after pushing its own fix if one is needed, or sends the task back to
-  Fixes 2. Queuing again is refused while the PR's own checks on its newest commit are running or failing, with the
-  reason. A commit pushed in Merge keeps the task in Merge: the reviews of the earlier commit stand for this visit.
-- **A commit after the person's OK** still merges once it is green. The task shows "Changed after OK" and the manager bot
-  is told once (C22).
+  branches) queues it again (`tico task queue`) at the commit the task came into Merge with, or sends the task back to
+  Fixes 2 (after pushing its own fix, if one is needed). Queuing again is refused while the PR's own checks on its
+  newest commit are running or failing, with the reason, and, for a bot, when the PR has a commit after the one the
+  person OK'd ("<ref> has commits since the person's OK. Move the task back to Fixes 2, where they are reviewed and
+  OK'd again.").
+- **A commit after the person's OK** does not merge on that OK. In Fixes 2 it is reviewed and the person is asked
+  again; in Merge only a person queues it, and a bot sends the task back to Fixes 2. The task shows "Changed after OK"
+  and the manager bot is told once (C22).
 - **A PR linked in Merge.** While a task is in a stage that queues PRs, only a person links another PR to it: a bot is
   told "Send the task back before linking another pull request.", and a bot's worktree branch PR is not linked there.
 - **`tico/merge-ok`.** Before queuing a PR, the server posts a check run `tico/merge-ok` = success on exactly the commit
@@ -1641,8 +1666,8 @@ into a test in phase 1.
 - **F26. Moved back out of Merge, and the PR still merges.** Prevented. Same as F17. Moving back takes the PRs out of the
   queue in the same step.
 - **F27. The reviewed commit and the merged commit differ.** Tightened. A PR is queued at the commit that was checked.
-  New (C22): a commit added after your OK still merges once green, the task shows "Changed after OK", and the manager bot
-  is told once. It doesn't come back to you.
+  C22 (Nov 12): a commit added after your OK is reviewed by a bot and comes back to you before it merges; the task
+  shows "Changed after OK", and the manager bot is told once.
 - **F28. Checks pass waits on Tico's own check run.** Prevented. It ignores them.
 - **F29. A crash right after a move.** Prevented. The on-enter action is written in the same transaction as the move,
   keyed by the visit. It happens once or not at all, and a retry does nothing.
@@ -1886,7 +1911,8 @@ Numbered in order so they can be cited (scenario 1 to 52).
 48. A third 👎 on one bot's asks in 30 days: the sheet opens with a drafted rule.
 49. A bot makes an ask that a rule covers: refused with the rule's words. With the rule check down: the ask goes through.
 50. A closed task's PR merges anyway: the task shows it and the manager bot is told once.
-51. A commit lands after the person's OK: it merges once green and the task shows "Changed after OK".
+51. A commit lands after the person's OK: a bot reviews it, the person is asked again, and the task shows "Changed
+    after OK".
 52. A linked task is deleted: the waiting task treats it as Closed.
 
 ### Ten real tasks

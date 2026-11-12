@@ -161,7 +161,8 @@ def _paused(c):
         bot
         for bot in owners
         if (cause := task_wakes.cannot_run(c, bot, seen)) is not None
-        and cause not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP)  # it starts by itself once it is live
+        and cause
+        not in (*task_wakes.COMPANY_WIDE, task_wakes.BEING_SET_UP, task_wakes.CLOUD_STARTING)  # it starts by itself
     ]
     if not stopped:
         return []

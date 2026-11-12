@@ -674,6 +674,7 @@ _PROPOSABLE_BOTOPS = [
         ("POST", r"/api/v2/strategy-bot/(checks|level)"),
         ("POST", r"/api/v2/bots/[^/]+/cloud-machine(?:/replace)?"),
         ("POST", r"/api/v2/cloud-machines/shared"),
+        ("DELETE", r"/api/v2/cloud-machines/shared"),
         ("PUT", r"/api/v2/cloud-machines/support"),
         ("POST", r"/api/v2/postal/orders"),
         ("PUT", r"/api/v2/postal/addresses/[^/]+/grants/(bot|person)/[^/]+"),
@@ -685,8 +686,6 @@ _PROPOSABLE_BOTOPS = [
         ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"),
         ("POST", r"/api/v2/tasks/[^/]+/links"),
         ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
-        ("PUT", r"/api/v2/listening/destinations/[^/]+"),
-        ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
         ("POST", r"/api/v2/roadmaps/settings"),
         ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
         ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
@@ -1114,7 +1113,14 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/bots/([^/]+)/cloud-machine/replace",
             lambda g: f"Replace bot {bot(g[0])}'s cloud machine and delete its disk. The next task starts a fresh one.",
         ),
-        (r"/api/v2/cloud-machines/shared", lambda g: "Change the shared cloud machine: " + values(body)),
+        (
+            r"/api/v2/cloud-machines/shared",
+            lambda g: (
+                "Replace the shared cloud machine and delete its disk. The next task starts a fresh one."
+                if method == "DELETE"
+                else "Change the shared cloud machine: " + values(body)
+            ),
+        ),
         (r"/api/v2/postal/orders", lambda g: "Order a postal address for the mailbox: " + values(body)),
         (r"/api/v2/bots/([^/]+)/budget", lambda g: f"Change bot {bot(g[0])}'s run budget: " + values(body)),
         (
@@ -1136,11 +1142,6 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/github/product-repos",
             lambda g: f"Create the private, empty GitHub repository {body.get('org', '')}/{body.get('name', '')}",
         ),
-        (
-            r"/api/v2/listening/destinations/([^/]+)",
-            lambda g: f"Change the listening destination “{g[0]}”: " + values(body),
-        ),
-        (r"/api/v2/listening/destinations/([^/]+)/remove", lambda g: f"Remove the listening destination “{g[0]}”"),
         (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
         (
             r"/api/v2/inbound/inboxes/([^/]+)/release",

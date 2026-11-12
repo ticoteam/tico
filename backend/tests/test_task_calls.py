@@ -310,6 +310,45 @@ def test_reassign_gives_the_task_to_its_new_owner_and_tells_the_automations_once
         H.task_reassign(c, ANA, row["id"], "bot:nobody")
 
 
+def _pr(c, task_id, number, repo="acme/app"):
+    c.execute(
+        "INSERT INTO task_links(id,task_id,kind,url,repo,number,created_at) VALUES(?,?,'pr',?,?,?,?)",
+        (H.new_id(), task_id, f"https://github.com/{repo}/pull/{number}", repo, number, H.now()),
+    )
+
+
+def test_a_finding_on_a_pipeline_tasks_own_pull_request_is_never_handed_to_a_person(c):
+    """Seen live on PR #3390: Reviewer 2 filed a real bug on its task's own PR to the Engineering Manager, which gave
+    it to a person. A finding on the PR is the review verdict, the Builder's to fix: a bot can't give a person a General
+    task that links or names it, by reassigning or by filing one."""
+    X.pipeline(c, "engineering", "Engineering", stages=[{"name": "Review 2", "owner": HELPER}])
+    work = X.new_task(c, ANA, "Order export totals", pipeline_id="engineering", assignee=BUILDER)
+    _pr(c, work["id"], 12)
+    finding = _new(c, by=HELPER, owner=MANAGER, title="Bug in the totals")
+    _pr(c, finding["id"], 12, repo="Acme/App")
+    with _refused("review_route") as refused:
+        H.task_reassign(c, MANAGER, finding["id"], ANA, "Only a person should see this.", _version(c, finding["id"]))
+    assert "acme/app#12" in str(refused.value) and "Order export totals" in str(refused.value)
+    assert H.task(c, finding["id"])["owner_id"] == MANAGER
+    named = H.task_create(
+        c, MANAGER, "Look at this", "See https://github.com/acme/app/pull/12 line 4.", ANA, lint=False
+    )
+    with _refused("review_route"):
+        H.review_finding_route(c, MANAGER, named["id"], ANA)  # app.task_create's check, once its links are written
+    # Bot to bot, a person's own hand-over, another PR, and a PR whose pipeline task ended all pass.
+    assert (
+        H.task_reassign(c, MANAGER, finding["id"], BUILDER, "Yours.", _version(c, finding["id"]))["owner_id"] == BUILDER
+    )
+    assert H.task_reassign(c, ANA, finding["id"], BEN, "Yours.", _version(c, finding["id"]))["owner_id"] == BEN
+    other = _new(c, by=HELPER, owner=MANAGER, title="Pick a release date")
+    _pr(c, other["id"], 13)
+    assert (
+        H.task_reassign(c, MANAGER, other["id"], ANA, "A date is Ana's.", _version(c, other["id"]))["owner_id"] == ANA
+    )
+    H.task_close(c, ANA, work["id"], "Dropped", _version(c, work["id"]))
+    H.review_finding_route(c, MANAGER, named["id"], ANA)
+
+
 # ----------------------------------------------------------------------------- field edits
 def test_an_edit_changes_fields_raises_the_version_once_and_never_the_status(c):
     row = _new(c)

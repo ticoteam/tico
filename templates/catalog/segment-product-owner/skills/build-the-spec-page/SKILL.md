@@ -54,8 +54,9 @@ content in `.scroll`.
 
        tico task attach <id> page:<file id> --req "<requirement>" --version N
 
-   Then end the turn. Jev checks it, then the person on the requirement OKs it; do not answer it yourself. If they send
-   it back, read the note, revise the page, publish it again and attach the new version.
+   Then end the turn. Jev checks it, then the stage asks the person on the requirement to OK it; do not answer it
+   yourself or ask them again. If they send it back, read the note, revise the page, publish it again and attach the
+   new version.
 
 ## Done
 

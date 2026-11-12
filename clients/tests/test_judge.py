@@ -71,7 +71,7 @@ class Sets(unittest.TestCase):
         with tempfile.TemporaryDirectory() as registry:
             directory = Path(registry) / "questions"
             directory.mkdir()
-            for name in ("listening-item", "mail-triage"):
+            for name in ("covered", "mail-triage"):
                 original = J.load_set(name, root=J.QUESTIONS_DIR)
                 custom = {k: v for k, v in original.items() if k != "label"}
                 custom["version"] += 1
@@ -88,7 +88,7 @@ class Sets(unittest.TestCase):
                 path.unlink()
                 self.assertEqual(J.load_set(name, registry_dir=registry)["label"], original["label"])
             base = {
-                "id": "listening-item",
+                "id": "covered",
                 "version": 1,
                 "summary": "fixture",
                 "questions": {"lead": {"type": "noul", "instructions": "A lead"}},
@@ -104,9 +104,9 @@ class Sets(unittest.TestCase):
                     },
                 },
             ):
-                (directory / "listening-item.json").write_text(json.dumps(invalid))
+                (directory / "covered.json").write_text(json.dumps(invalid))
                 with self.assertRaises(J.JudgeError):
-                    J.load_set("listening-item", registry_dir=registry)
+                    J.load_set("covered", registry_dir=registry)
 
     def test_registry_symlinks_and_nonfiles_never_read_outside_or_fall_back(self):
         import os, tempfile
@@ -124,14 +124,14 @@ class Sets(unittest.TestCase):
                 (outside / "questions").mkdir()
                 secret = "outside-question-content-must-not-be-read"
                 data = {
-                    "id": "listening-item",
+                    "id": "covered",
                     "version": 99,
                     "summary": secret,
                     "questions": {"lead": {"type": "noul", "instructions": secret}},
                 }
-                victim = outside / "questions/listening-item.json"
+                victim = outside / "questions/covered.json"
                 victim.write_text(json.dumps(data))
-                path = questions / "listening-item.json"
+                path = questions / "covered.json"
                 if case == "file-link":
                     path.symlink_to(victim)
                 elif case == "internal-link":
@@ -175,7 +175,7 @@ class Sets(unittest.TestCase):
 
                 with mock.patch.object(J.os, "open", side_effect=contained_open):
                     with self.assertRaises(J.JudgeError) as refused:
-                        J.load_set("listening-item", registry_dir=registry)
+                        J.load_set("covered", registry_dir=registry)
                 self.assertEqual(refused.exception.code, "invalid")
                 self.assertEqual(
                     refused.exception.detail,
@@ -191,7 +191,7 @@ class Sets(unittest.TestCase):
             root = Path(directory)
             questions = root / "registry/questions"
             questions.mkdir(parents=True)
-            path = questions / "listening-item.json"
+            path = questions / "covered.json"
             path.write_text((J.QUESTIONS_DIR / path.name).read_text())
             victim = root / "outside.json"
             victim.write_text("private-outside-fixture")
@@ -205,7 +205,7 @@ class Sets(unittest.TestCase):
 
             with mock.patch.object(J.os, "open", side_effect=swapped_open), mock.patch.object(J.os, "fdopen") as read:
                 with self.assertRaises(J.JudgeError):
-                    J.load_set("listening-item", registry_dir=questions.parent)
+                    J.load_set("covered", registry_dir=questions.parent)
                 read.assert_not_called()
 
 

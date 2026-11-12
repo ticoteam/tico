@@ -92,7 +92,17 @@ def test_every_step_type_saves_and_defaults_fill():
         {"type": "task_received", "to": "bot:assistant"},
         {"type": "schedule", "cron": "0 9 * * 1-5", "tz": "America/New_York"},
         {"type": "webhook", "id": "trg_1"},
-        {"type": "listening", "destination": "acme-mentions"},
+        {
+            "type": "listening",
+            "sources": [{"id": "s1", "kind": "search", "site": "reddit", "target": "acme"}],
+            "rules": [
+                {"do": "keep", "tag": "leads", "text": "Someone looking for a tool"},
+                {"do": "drop", "text": "A vendor"},
+            ],
+            "limits": [{"count": 3, "per": "hour"}, {"count": 10, "per": "day"}],
+            "at": "08:00",
+            "tz": "America/New_York",
+        },
         {
             "type": "event",
             "name": "meeting.ready",

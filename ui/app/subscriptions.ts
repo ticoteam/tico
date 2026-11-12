@@ -114,20 +114,36 @@ function subsUsageHTML(sub: SubsRow) {
   return '';
 }
 function subsStatusHTML(sub: SubsRow) {
-  if (sub.status !== 'needs_reconnect') return '';
-  const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
-  return subsMayEdit() ? `<button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Reconnect</button>`
-    : `<span class="pill waiting"${title}>Reconnect</span>`;
+  if (sub.status === 'needs_reconnect') {
+    const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
+    return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
+      : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
+  }
+  const computers = sub.computers || [];
+  if (!computers.length && subsOwned(sub.kind)) return `<span class="subs-diagnosis">No computer assigned</span>${subsMayEdit() ? ' <span class="muted">Assign this plan to a computer in Settings → Computers.</span>' : ''}`;
+  const offline = computers.map(id => {
+    const machine = (SETTINGS_DATA?.machines || []).find(row => row.id === (typeof id === 'string' ? id : id.runner_id));
+    return machine && (machine.online === false || ['stopped', 'stopping'].includes(String(machine.cloud_machine?.state))) ? subsComputerLabel(id) : '';
+  }).filter(Boolean);
+  if (offline.length) return `<span class="subs-usage">Computer offline: ${esc(offline.join(', '))} · Bring it online.</span>`;
+  if (sub.status && sub.status !== 'working') {
+    const names = computers.map(subsComputerLabel).filter(Boolean).join(', ');
+    return `<span class="subs-diagnosis">Connection unavailable${names ? ` on ${esc(names)}` : ''}</span>`;
+  }
+  return '';
 }
 function subsRowHTML(sub: SubsRow) {
   const count = (sub.computers || []).length;
   const names = (sub.computers || []).map(subsComputerLabel).join(', ');
+  const status = subsStatusHTML(sub);
+  const usage = subsUsageHTML(sub);
+  const offlineWithUsage = status?.includes('Computer offline:') && (typeof sub.usage?.used_pct === 'number' || typeof sub.usage?.cost_usd_month === 'number');
   return `<tr data-subs-row="${esc(sub.id)}">
     <td class="subs-name">${esc(sub.name)}</td>
     <td class="muted subs-kind">${esc(sub.label || subsKind(sub.kind).label)}</td>
     <td class="subs-owner">${esc(sub.owner_name || '')}</td>
     <td class="subs-count" title="${esc(names || 'No computers')}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span></td>
-    <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
+    <td class="subs-use">${offlineWithUsage ? `${status} ${usage}` : status || usage}</td>
     <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {

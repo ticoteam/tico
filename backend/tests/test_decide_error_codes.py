@@ -1,6 +1,6 @@
 """A failed Decide call keeps only its error code (`clients/judge.py`, `error_code`), never the provider's error text,
-which can echo the request back: the Decide route's audit, the Slack gateway's audit, reason and log, and the listening
-API's per-post errors. Support triage uses the same list (test_support_triage.py)."""
+which can echo the request back: the Decide route's audit, the Slack gateway's audit, reason and log, and listening's
+audit of a post it could not score. Support triage uses the same list (test_support_triage.py)."""
 
 import io
 import json
@@ -9,6 +9,7 @@ import urllib.error
 
 import pytest
 
+from backend import hubdb as H
 from backend import judge as B
 from backend.tests.helpers.api import headers, post  # noqa: F401
 from backend.tests.helpers.judge import QUESTIONS, events
@@ -73,23 +74,17 @@ def test_the_decide_route_answers_and_audits_the_code_not_the_echoed_request(api
         assert "7Q4X" not in result.text
 
 
-def test_the_listening_api_answers_with_the_code_and_audits_it_not_the_echoed_post(api, monkeypatch):
-    from backend.tests.helpers.listening import _bots, _post, _token
+def test_listening_audits_the_code_not_the_echoed_post(api):
+    from backend import listening as L
+    from backend.tests.helpers.automation_runs import sql
+    from backend.tests.helpers.listening import item, listening, save, source_id
 
-    _bots(api)
-    listening = _token(api, "social-media-manager")
-    saved = post(
-        api,
-        "listening/runs",
-        {"source": "x", "query": "q", "status": "ok", "items": [_post("1", SECRET + " [creator]")]},
-        token=listening,
-    )
-    api.app.state.judge = echoing()
-    out = post(api, "listening/judge", {}, token=listening)
-    assert out["judged"] == 0 and out["errors"] == [{"item_id": saved["items"][0]["id"], "error": "invalid"}]
-    assert "7Q4X" not in json.dumps(out)
-    ((_, detail),) = events(api, "bot:social-media-manager")
-    assert detail["error"] == "invalid" and "7Q4X" not in json.dumps(detail)
+    made = listening(api, rules=[{"do": "keep", "tag": "leads", "text": "A lead"}])
+    save(api, source_id(api, made["id"]), [item(1, SECRET)])
+    L.run_pass(api.app.state.store, None, echoing())
+    assert [(r["status"], r["tries"]) for r in sql(api, "SELECT status, tries FROM listening_items")] == [("new", 1)]
+    ((target, detail),) = events(api, H.KEEPER)
+    assert target == "listening." + made["id"] and detail["error"] == "invalid" and "7Q4X" not in json.dumps(detail)
 
 
 def test_the_slack_gateway_keeps_the_code_in_its_audit_reason_and_log_not_the_echoed_message(gateway, hub, caplog):

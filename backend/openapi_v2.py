@@ -729,8 +729,8 @@ STABLE = [
         "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and "
         "why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since "
         "filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), "
-        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all or asked for by ids or "
-        "number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
+        "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by "
+        "ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
         "answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in "
         "full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
         "TaskList",
@@ -2684,6 +2684,10 @@ SCHEMAS = {
             "ask": "b",
         },
         required=["state", "who", "line", "requirement_id", "since", "until", "ask"],
+        href={
+            "type": ["string", "null"],
+            "description": "A paused bot's cause: the app page that shows it (#/settings/computers, #/settings/billing)",
+        },
         running={
             "type": "boolean",
             "description": "On a list row: a bot's turn (state bot) is a run going now; false while it waits to try "
@@ -2938,6 +2942,7 @@ SCHEMAS = {
                             "resume_company",
                             "unlock_cloud",
                             "add_credit",
+                            "open_computers",
                             None,
                         ]
                     },

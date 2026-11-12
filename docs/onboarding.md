@@ -9,7 +9,7 @@ and one primary button each:
    team of built-ins only is always on. **Create team** makes it. **Change** opens the detailed [team builder](#the-team-builder); **I have a company
    file** takes a company file instead.
 3. **What your bots run on.** Two rows: the computer, and **Add a Claude or ChatGPT subscription** (recommended). Both
-   are optional; **Done** lands on Tasks. The model plan is a default, chosen in Settings > Models, not a step.
+   are optional, except on Tico Cloud, where **Done** waits for a plan or key; **Done** lands on Tasks. The model plan is a default, chosen in Settings > Models, not a step.
 
 Every team gets the assistant, BotOps, the Librarian and the Strategy Owner, and none of them can be archived.
 **Setup picks the chart, not the bots:** the built-ins and any seat marked `live` are the bots on day one, and they work

@@ -167,13 +167,12 @@ async function rdqPlayerOpen(id: string): Promise<void> {
   } catch (error) { body.innerHTML = `<p class="market-empty">${esc(errorMessage(error, 'That note is not in the market.'))}</p>`; }
 }
 
-// With no posts yet, an admin still gets the question for its Settings: it is where Listening is set up.
+// With no posts yet, an admin still gets the question for its link to Listening (#/listening), where it is set up.
 function rdqSayingHtml(stats: RdqStats | null | undefined, heard: boolean): string {
   if (!stats) return '';
   const series = rdmSeries(stats.daily), {legend, chart} = rdmChartHtml(series);
   return `${heard ? `<div class="mkt-say"><div class="mkt-card"><div class="rdm-hd"><h4 class="mkt-lab">Posts a day</h4><span class="rdm-leg" id="rdm-leg">${legend}</span></div>${chart}</div>
-      <div class="mkt-card">${rdmRowsHtml(stats.recent || [])}</div></div>` : ''}
-    ${settingsIsAdmin() ? `<div class="mkt-card rdm-set" id="rdm-set" hidden><div id="set-listening">${skelRows(2, {card: true, dot: false})}</div></div>` : ''}`;
+      <div class="mkt-card">${rdmRowsHtml(stats.recent || [])}</div></div>` : ''}`;
 }
 
 async function mountMarketPage(shell: HTMLElement) {
@@ -202,7 +201,7 @@ async function mountMarketPage(shell: HTMLElement) {
     players && rdqSection('players', 'Who are we up against?', answers.players, tracked ? `${tracked} tracked` : '', players),
     reach && rdqSection('reach', 'How does it reach buyers?', answers.reach, '', reach),
     saying && rdqSection('saying', 'What are buyers saying?', answers.saying,
-      settingsIsAdmin() ? '<button class="linkish" type="button" data-rdm-settings aria-expanded="false" aria-controls="rdm-set">Settings</button>' : '', rdqSayingHtml(stats, heard)),
+      settingsIsAdmin() ? `<a class="linkish" href="${RD_LISTENING}">Listening</a>` : '', rdqSayingHtml(stats, heard)),
   ].filter(Boolean);
   const tiles = rdqTilesHtml(offering, revenue);
   shell.innerHTML = `<div class="mkt-pg"><header class="mkt-top"><h2>Market</h2>${name ? `<span class="mkt-name">${esc(name)}</span>` : ''}
@@ -292,13 +291,6 @@ function rdmRowsHtml(recent: RdqRecent[]): string {
 }
 document.addEventListener('click', ev => {
   const target = eventElement(ev);
-  const set = target?.closest<HTMLElement>('[data-rdm-settings]');
-  if (set) {
-    const box = $('#rdm-set'), open = box.hidden;
-    box.hidden = !open; set.setAttribute('aria-expanded', String(open));
-    if (open) void renderSettingsListening();
-    return;
-  }
   // A spike's marker lights the posts sent that day.
   const spike = target?.closest<HTMLElement>('.rdm-spk');
   if (spike) {

@@ -393,28 +393,32 @@ def listening(v, after, n):
 
 
 def listening_rows(v):
-    """Listening: one row while any destination is set, for the owner, admins and whoever receives or reads one."""
+    """Listening: one row while any listening is on, for admins and the listenings' owners. Its state is the worst
+    of their sources': a blocked or failed read shows as an error, one limited or not read lately as waiting."""
     from . import listening as L
 
-    try:
-        dests = L.destination_list(v.c, v.settings)
-    except Exception:  # noqa: BLE001 - a broken question set leaves the row out, never the page
+    if not (table(v.c, "listening_sources") and table(v.c, "automations")):
         return []
-    dests = dests["destinations"]
-    if not dests:
+    owners = [
+        r["owner_id"]
+        for r in v.c.execute(
+            "SELECT DISTINCT owner_id FROM automations WHERE deleted_at IS NULL AND enabled=1 "
+            "AND trigger_type='listening' ORDER BY owner_id"
+        )
+    ]
+    actors = {"human:" + o[7:] if o.startswith("person:") else o for o in owners}
+    if not owners or not (v.admin or v.who.actor in actors):
         return []
-    actors = set()
-    for d in dests:
-        actors.add(d.get("receiver") or "")
-        actors.update(d.get("readers") or [])
-    if not (v.admin or v.who.actor in actors):
-        return []
-    last = (
-        v.c.execute("SELECT status FROM listen_runs ORDER BY started_at DESC LIMIT 1").fetchone()
-        if table(v.c, "listen_runs")
-        else None
-    )
-    status = "waiting" if not last else "error" if last["status"] in ("error", "failed") else "on"
+    worst = L.worst(v.c)
+    status = "error" if worst in ("blocked", "error") else "on" if worst == "ok" else "waiting"
+    words = {
+        None: "No sources",
+        "ok": "",
+        "blocked": "A source was blocked",
+        "error": "A source failed",
+        "rate_limited": "A source was rate limited",
+        "overdue": "A source was not read lately",
+    }
     bots, more = v.bots(H.actor_id(a) for a in sorted(actors) if a.startswith("bot:"))
     people = [a for a in sorted(actors) if a.startswith("human:")]
     readers = ", ".join(v.name(a) for a in people[:5]) or "Its bots"
@@ -426,11 +430,11 @@ def listening_rows(v):
             status,
             "company",
             readers,
-            "#/strategy/market/listening",
-            detail=f"{len(dests)} destination{'s' if len(dests) != 1 else ''}",
+            "#/listening",
+            detail=words[worst],
             bots=bots,
             more=more,
-            can=v.who.role == "owner",
+            can=v.admin,
         )
     ]
 

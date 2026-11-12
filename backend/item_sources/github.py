@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -370,8 +371,9 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
 def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row) -> int:
     """A new commit on a PR whose review page was for an older one: the page no longer counts ("New commits since the
     review"), so the stage's owner bot is woken now, once per commit, instead of by the two-minute wake for an owner
-    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. Returns
-    how many wakes were added."""
+    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. On a stage
+    where a person OKs a page that is not a review, the bot asked to review the new commits is woken too
+    (task_wakes.review_new). Returns how many wakes were added."""
     from .. import task_requirements as R
     from .. import task_wakes
 
@@ -393,6 +395,10 @@ def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row)
         body = task_wakes.body(conn, row, lead, to=str(owner))
         key = f"{task_id}:{visit['id']}:review_again:{ref}:{head}"
         if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
+            added += 1
+    for task_id in task_ids:
+        # Before a person OKs a page that is not a review (Fixes 2): the new commit is the last reviewer's to read.
+        if task_wakes.review_new(conn, task_id):
             added += 1
     return added
 
@@ -423,6 +429,52 @@ def removal_words(reason: object) -> str:
         return "GitHub gave no reason"
     words = text.replace("_", " ")
     return words[:1].upper() + words[1:].lower() if words.isupper() else words[:1].upper() + words[1:]
+
+
+# What failed in a merge queue run, for a removal's `failing_check`. The workflow's `checks` job (pr-checks.yml) names the
+# same legs in its error line, "Failed: <job>: <step>. Fail fast then cancelled the other legs.", or says "No step failed"
+# when the run was cancelled from outside (a superseded queue group, or by hand).
+CHECKS_JOB = "checks"
+LEG_FAILURES = ("failure", "timed_out", "startup_failure")  # a leg that ended in failure; a fail-fast cancel is not one
+CANCELLED_FROM_OUTSIDE = "no step failed: the run was cancelled from outside"
+FAILED_LINE = "Failed: "
+FAIL_FAST = ". Fail fast"
+
+
+def failing_leg(jobs: list[Row], checks_line: Callable[[Row], str | None]) -> tuple[str, str | None] | None:
+    """What made a merge queue run fail, as a removal names it: the legs that ended in failure (each job, with the steps
+    that failed in it), never a leg a fail-fast cancel stopped. With none, the checks job's "Failed: ..." line, which
+    `checks_line` reads and is called only then. Else that no step failed. Returns (name, url) with the url of the first
+    failing leg, or of the checks job; None when the run's jobs are not known."""
+    if not jobs:
+        return None
+    legs: list[str] = []
+    leg_url: str | None = None
+    checks: Row = {}
+    for job in jobs:
+        if job.get("name") == CHECKS_JOB:
+            checks = job
+            continue
+        job_steps: list[Row] = job.get("steps") or []
+        steps = [str(step.get("name") or "") for step in job_steps if step.get("conclusion") == "failure"]
+        if job.get("conclusion") not in LEG_FAILURES and not steps:
+            continue
+        name = str(job.get("name") or "A check")
+        legs.append(f"{name}: {', '.join(steps)}" if steps else name)
+        leg_url = leg_url or job.get("html_url") or None
+    if legs:
+        return "; ".join(legs)[:200], leg_url
+    checks_url = checks.get("html_url") or None
+    line = checks_line(checks) or ""
+    if line.startswith(FAILED_LINE):
+        return line.removeprefix(FAILED_LINE).split(FAIL_FAST, 1)[0][:200], checks_url
+    return CANCELLED_FROM_OUTSIDE, checks_url
+
+
+def real_failure(check: object) -> bool:
+    """Whether a removal's `failing_check` names a check that really failed in the queue's run. The cancelled-from-outside
+    line does not, and nor does a removal whose run was not read (no name): those keep the count (`requeue`)."""
+    return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
 
 
 def check_state(status: object, conclusion: object) -> str:
@@ -833,13 +885,14 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   with "Dropped from the merge queue: <reason>", and the owner gets ONE wake (`removed`), keyed
 #   `<task>:<visit>:queue_removed:<ref>:<removed_at>`. Tico never queues it again by itself. The third removal in one
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
-#   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person.
+#   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person. A second removal for failed
+#   checks at the same head is not queued again: its wake says to send the task back to Fixes 2, and `requeue` refuses it.
 # - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
 #   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
-#   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new
-#   commit once (`changed_after_ok`, C22).
+#   Merge, but only a person queues it again at that commit: a bot sends the task back to Fixes 2, where the new commits
+#   are reviewed and OK'd again (`SENT_BACK_FOR_NEW`). The manager hears of the new commit once (`changed_after_ok`).
 # - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
 #   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
 #   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
@@ -857,6 +910,13 @@ WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
+# Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
+SENT_BACK_FOR_NEW = (
+    "{ref} has commits since the person's OK. Move the task back to Fixes 2, where they are reviewed and OK'd again."
+)
+# GitHub's removal reasons for a check that failed in the queue's run, as `removal_words` words them. Taken out this way
+# twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
+FAILED_CHECKS = frozenset(removal_words(reason) for reason in ("failed_checks", "checks_failed"))
 
 
 def removed_wake_key(task_id: str, visit_id: str, ref: str, removed_at: str) -> str:
@@ -937,7 +997,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     is owed again. Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
     running") or failing ("Checks failed on <ref>: <names>"), and when the caller may not; `task_changed` (a bot's
-    stale `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person."""
+    stale `seen_version`), `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it
+    back to Fixes 2). Who may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest
+    commit is not the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row:
@@ -972,10 +1034,29 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         refuse("task_requirement", "Nothing was taken out of the merge queue")
     for link in again:
         metadata, ref = link["metadata"], link["ref"]
+        first = effects(conn, visit_id, ref)
+        if not E.is_human(by) and first and first[0].get("pinned") not in (None, metadata["head_sha"]):
+            # The person OK'd the commit the task came into Merge with: a newer one is not OK'd and no bot reviewed
+            # it. Only a person queues it as it is now; otherwise it goes back to Fixes 2.
+            refuse("task_requirement", SENT_BACK_FOR_NEW.format(ref=ref))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
+        removals = failed_checks_removals(conn, task_id, visit_id, str(metadata["head_sha"]))
+        named = [removal for removal in removals if removal.get("real")]
+        if named:
+            refuse(
+                "task_requirement",
+                f"GitHub took {ref} out of the merge queue for failed checks ({named[0].get('check')}). Send the task back "
+                "to Fixes 2 instead.",
+            )
+        if len(removals) >= 2:
+            refuse(
+                "task_requirement",
+                f"GitHub took {ref} out of the merge queue for failed checks twice at this commit. Send the task back "
+                "to Fixes 2 instead.",
+            )
     ts = _h().now()
     owed: list[Row] = []
     for link in again:
@@ -1033,6 +1114,9 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             (task_id, key),
         ).fetchone():
             continue
+        head = str(metadata.get("head_sha") or "")
+        failed = metadata.get("removed_reason") in FAILED_CHECKS
+        real = failed and real_failure(metadata.get("failing_check"))
         data = {
             "key": key,
             "visit": visit["id"],
@@ -1040,6 +1124,9 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             "reason": metadata.get("removed_reason"),
             "check": metadata.get("failing_check"),
             "url": metadata.get("failing_check_url"),
+            "head": head,
+            "checks_failed": failed,
+            "real": real,
         }
         E._event(conn, task_id, E.SYSTEM, "pr_queue_removed", None, ref, removed_line(metadata), data)
         E.changed(conn, task_id, E.SYSTEM)
@@ -1053,10 +1140,21 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             )
             continue
         link = f" {metadata['failing_check_url']}" if metadata.get("failing_check_url") else ""
-        lead = (
-            f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
-            f"`tico task queue {task_id}`, push a fix to the PR branch and then queue it again, or move it back."
-        )
+        if failed and real:
+            lead = (
+                f"GitHub took {ref} out of the merge queue for failed checks. {removed_line(metadata)}.{link} It is not "
+                "queued again as it is: send the task back to Fixes 2 with the failing step and the run link."
+            )
+        elif failed and len(failed_checks_removals(conn, task_id, str(visit["id"]), head)) >= 2:
+            lead = (
+                f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
+                f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
+            )
+        else:
+            lead = (
+                f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
+                f"`tico task queue {task_id}`, push a fix to the PR branch and then queue it again, or move it back."
+            )
         fresh: Row = E.task(conn, task_id) or row
         body = task_wakes.body(conn, fresh, lead, to=str(owner))
         if task_wakes.add(conn, fresh, str(owner), visit, body, wake_key=key):
@@ -1073,6 +1171,18 @@ def drops_in_visit(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> i
         (task_id, visit_id),
     ).fetchone()
     return int(found[0]) if found else 0
+
+
+def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: str, head: str) -> list[Row]:
+    """The removals of the task's PRs for failed checks at `head` during this visit, one `pr_queue_removed` row each
+    (`removed` writes them): `check` is the check named there and `real` whether it really failed."""
+    found = conn.execute(
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
+        "AND json_valid(data) AND json_extract(data, '$.visit')=? AND json_extract(data, '$.head')=? "
+        "AND json_extract(data, '$.checks_failed')=1",
+        (task_id, visit_id, head),
+    ).fetchall()
+    return [cast(Row, json.loads(row[0])) for row in found]
 
 
 def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:

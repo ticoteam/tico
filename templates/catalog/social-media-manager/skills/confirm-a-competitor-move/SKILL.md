@@ -1,6 +1,6 @@
 ---
 name: "confirm-a-competitor-move"
-description: "Confirm a competitor move before the digest calls it real: load the company's own page again, name the change in one line, rule out tests and regional pricing, and require a pattern of independent sources for complaints."
+description: "Confirm a competitor move before a note calls it real: load the company's own page again, name the change in one line, rule out tests and regional pricing, and require a pattern of independent sources for complaints."
 ---
 # Confirm a competitor move
 
@@ -15,7 +15,7 @@ Steps:
    lawsuit, a funding round, or a launch into a new market.
 5. For a complaint, require a pattern: several independent sources on the same issue in the same window. One complaint is a
    watch note.
-6. Classify it: a same-day move, a weekly watch note, or no move. Only a move goes into the digest's real-moves section, with its
+6. Classify it: a same-day move, a weekly watch note, or no move. Only a move goes into the note as a move, with its
    link and one line on why it matters.
 
 Checks before you finish:

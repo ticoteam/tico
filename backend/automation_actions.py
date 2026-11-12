@@ -728,13 +728,6 @@ FIND = {
         "id",
         2,
     ),
-    "listening": (
-        "SELECT i.id, i.destination, l.url, l.author, l.content, i.created_at AS at FROM intake_items i "
-        "JOIN listen_items l ON l.id=i.item_id WHERE {after} AND l.content LIKE ?",
-        "i.created_at",
-        "i.id",
-        1,
-    ),
     "docs": (
         "SELECT id, path, title, updated_at AS at FROM docs WHERE archived=0 AND {after} "
         "AND (title LIKE ? OR path LIKE ?)",

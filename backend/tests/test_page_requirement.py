@@ -421,10 +421,13 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
             E.add_requirement(
                 c, row["id"], WRITER, kind, BEN, "OK to merge?", choices=choices, shows=shows, seen_version=_v(c, row)
             )
+    # Nor a question of the person the page waits on (Tico Team, Nov 12): it goes on the page.
+    with _refused("The stage already asks Ben to OK Spec page"):
+        E.add_requirement(c, row["id"], WRITER, "answer", BEN, "Round half up or half even?", seen_version=_v(c, row))
     asked = E.add_requirement(
-        c, row["id"], WRITER, "answer", BEN, "Round half up or half even?", seen_version=_v(c, row)
+        c, row["id"], WRITER, "answer", ANA, "Round half up or half even?", seen_version=_v(c, row)
     )
-    assert asked["requirement_id"], "a real question is still the bot's to ask"
+    assert asked["requirement_id"], "a real question of someone else is still the bot's to ask"
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Spec", "the question is still open"
 
 
@@ -489,6 +492,58 @@ def test_a_plain_yes_no_question_on_a_stage_with_a_page_a_person_oks_is_allowed(
         seen_version=_v(c, row),
     )
     assert asked["requirement_id"], "a plain clarifying yes/no is the Product Owner's to ask"
+
+
+def test_a_bot_does_not_ask_the_person_the_stages_page_ok_already_asks(c, store):
+    """Tico Team rc.7 (Nov 12): the Product Owner attached the Spec page, which asks the person to OK it, and also asked
+    them "Please OK the attached spec" as a question of its own. Needs you showed two items and Spec waited on both.
+    The question is refused while Jev checks the page and once it waits on the person; a question of anyone else still
+    works; the page OK alone moves the task."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    page_row = _attach(c, row, "page:" + fid, by=po)
+    for choices in (None, ["Looks good", "Needs changes"]):
+        with _refused("The stage already asks Ben to OK Spec page. Do not ask them again"):
+            E.add_requirement(
+                c,
+                row["id"],
+                po,
+                "answer",
+                BEN,
+                "Please OK the attached spec.",
+                choices=choices,
+                seen_version=_v(c, row),
+            )
+    _say(c, page_row, "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
+    with _refused("The stage already asks Ben to OK Spec page"):
+        E.add_requirement(c, row["id"], po, "answer", BEN, "Please OK the attached spec.", seen_version=_v(c, row))
+    assert [s.requirement["id"] for s in R.unmet(c, E.task(c, row["id"]))] == [rid], "one thing waits: the page OK"
+    assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] != "Spec", "the page OK alone moves it"
+
+
+def test_a_bots_question_of_someone_else_while_the_page_ok_waits_still_works(c, store):
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    asked = E.add_requirement(c, row["id"], po, "answer", ANA, "Which importer first?", seen_version=_v(c, row))
+    assert asked["requirement_id"]
+
+
+def test_a_bots_question_of_a_person_no_stage_ok_waits_on_still_works(c, store):
+    """Before a page is attached nothing waits on the person: the Product Owner's clarifying question is asked."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    asked = E.add_requirement(c, row["id"], po, "answer", BEN, "Should negate accept strings?", seen_version=_v(c, row))
+    assert asked["requirement_id"]
 
 
 def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c, store):
@@ -686,12 +741,9 @@ def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     assert _standing(c, row).line == "Jev is checking"
 
 
-def test_the_pre_release_ask_says_when_the_newest_commit_had_no_bots_review(c, store):
-    """Acme rc.4 C1: after the person sent the pre-release page back, the Builder pushed a new commit; nobody reviewed
-    it and the PR merged on the person's OK. The route stays (a product decision); the ask says it, before the OK, from
-    the Review page's recorded head, and so does the Builder's wake."""
-    from backend import task_wakes as TW
-
+def _in_fixes_2(c, store, *more):
+    """Review (Reviewer's page at 62de57f, Jev passed it), then Fixes 2: the Writer (the Builder) owns it, and a person
+    OKs its Pre-release page (people only). `more`: Fixes 2's other requirements. Returns (task, Pre-release id)."""
     made = X.pipeline(
         c,
         "eng",
@@ -705,37 +757,137 @@ def test_the_pre_release_ask_says_when_the_newest_commit_had_no_bots_review(c, s
             {
                 "name": "Fixes 2",
                 "owner": WRITER,
-                "requirements": [{"kind": "page", "line": "Pre-release", "who_oks": "people_only"}],
+                "requirements": [{"kind": "page", "line": "Pre-release", "who_oks": "people_only"}, *more],
             },
         ),
         manager="bot:manager",
     )
-    (rid,) = made["requirements"]["Fixes 2"]
+    rid = made["requirements"]["Fixes 2"][0]
     row = X.new_task(c, ANA, "Absolute value", "eng", assignee=REVIEWER)
     _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
     review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
     _say(c, _attach(c, row, "page:" + review, by=REVIEWER, requirement="Review"), "met")
     assert E.advance(c, row["id"])["stage"]["name"] == "Fixes 2"
     assert R.unreviewed(c, E.task(c, row["id"])) is None, "the head is the reviewed one"
-    fid, _ = _page(c, store)
-    _say(c, _attach(c, row, "page:" + fid, requirement="Pre-release"), "unsure", "Can't tell")
-    assert _f2(c, row).line == "Jev is unsure: Can't tell", "everything was reviewed: no line"
-    A.answer(c, row["id"], rid, BEN, "no", "Rename it to absolute_value.")
-    _push(c, "acme/app", 45, "eace67e94458")
-    line = "New commits since the reviews (now at eace67e): not reviewed by a bot."
+    return row, rid
+
+
+def _pre_release(c, store, row, verdict="met", reasons="", fid=None):
+    """The Builder's Pre-release page and Jev's verdict on it, nudging the task as the Jev step does."""
+    fid, _ = _page(c, store, "<p>Built and checked</p>", fid=fid)
+    said = _say(c, _attach(c, row, "page:" + fid, requirement="Pre-release"), verdict, reasons)
+    V._nudge(c, said, V._waiting(c, said))
+    return fid
+
+
+def _bot(c, row, rid, by, value, notes=None):
+    """A bot's answer, at the task's version it saw."""
+    return A.answer(c, row["id"], rid, by, value, notes, seen_version=E.task(c, row["id"])["version"])
+
+
+def _review_wakes(c, row):
+    return [(key, to) for key, to in X.wakes(c, row["id"]) if ":review_new:" in key]
+
+
+def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked(c, store):
+    """Live, rc.7 (Nov 12, 00:48Z): the Builder pushed dce5a62 in Fixes 2, after both reviews; Jev was unsure (p 0.51)
+    and the pre-release OK went to the person with no bot's review of that commit, which broke an acceptance criterion.
+    Now the bot that wrote the newest review reads only the new commits first; the person is asked after it OKs them."""
+    from backend import task_wakes as TW
+    from backend import waiting_on as W
+
+    row, rid = _in_fixes_2(c, store)
+    _push(c, "acme/app", 45, "dce5a62aa000")
     told = TW.body(c, E.task(c, row["id"]), to=WRITER)
-    assert f"{line} Say so on the page the person OKs." in told, told
-    _page(c, store, "<p>v2 at eace67e</p>", fid=fid)
-    _say(c, _attach(c, row, "page:" + fid, requirement="Pre-release"), "unsure", "Still can't tell")
+    assert R.NOT_REVIEWED not in told, "the reviewer reviews them: the Builder's page need not say so"
+    _pre_release(c, store, row, "unsure", "Can't tell")
     standing = _f2(c, row)
-    assert (standing.state, standing.on) == (R.WAITING, BEN)
+    assert (standing.state, standing.on) == (R.WAITING, REVIEWER), "not the person's yet"
+    assert standing.line.startswith(f"{R.REVIEW_NEW} since the reviews (now at dce5a62): read only them")
+    assert W.turn(c, E.task(c, row["id"])) == REVIEWER
+    ((key, to),) = _review_wakes(c, row)
+    assert to == REVIEWER and key.endswith(":review_new:acme/app#45@dce5a62aa000")
+    body = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
+    assert body.startswith(TW.REVIEW_NEW_LEAD) and f"tico task answer {row['id']} {rid} ok -m" in body
+    with _refused("This is asked of"):
+        A.answer(c, row["id"], rid, BEN, "ok")  # no person OK before the review
+    with _refused("Say which commits you read"):
+        _bot(c, row, rid, REVIEWER, "ok")
+    _bot(c, row, rid, REVIEWER, "ok", "Read dce5a62: sign() fixed, the tests cover 0.")
+    assert R.unreviewed(c, E.task(c, row["id"])) is None, "the reviewer's OK names the commit it read"
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, None), "now any person's"
     assert standing.line == (
-        f'Version 2, after the send back: "Rename it to absolute_value." {line} Jev is unsure: Still can\'t tell'
+        "reviewer reviewed the commits since the reviews: Read dce5a62: sign() fixed, the tests cover 0. "
+        "Jev is unsure: Can't tell"
     )
-    (ask,) = [r for r in H.task_view(c, row["id"], BEN)["to_leave"] if r["requirement_id"] == rid]
-    assert line in json.dumps(ask), "the task view shows it where the ask is"
-    assert told.count(R.NOT_REVIEWED) == 1
-    assert TW.body(c, E.task(c, row["id"]), to=WRITER).count(R.NOT_REVIEWED) == 1, "said once, on the ask"
+    A.answer(c, row["id"], rid, BEN, "ok")
+    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+
+
+def test_a_fixes_2_with_no_new_commits_goes_straight_to_the_person(c, store):
+    row, _ = _in_fixes_2(c, store)
+    _pre_release(c, store, row)
+    standing = _f2(c, row)
+    assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "OK someone (version 1)")
+    assert _review_wakes(c, row) == []
+
+
+def test_the_reviewers_send_back_is_the_builders_and_after_two_rounds_the_person_is_asked_anyway(c, store):
+    row, rid = _in_fixes_2(c, store)
+    _push(c, "acme/app", 45, "bbbbbbb00000")
+    _pre_release(c, store, row)
+    _bot(c, row, rid, REVIEWER, "no", "offline.length === computers.length became offline.length.")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
+    assert standing.line == (
+        "reviewer sent back the new commits: offline.length === computers.length became offline.length."
+    )
+    assert any(to == WRITER and "sent this back" in body for to, body in _bodies(c, row))
+    # The Builder's fix is round 2: the reviewer again.
+    _push(c, "acme/app", 45, "ccccccc00000")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, REVIEWER)
+    assert standing.line.startswith(f"{R.REVIEW_NEW} since the reviews (now at ccccccc)")
+    _bot(c, row, rid, REVIEWER, "no", "Still off by one.")
+    assert _f2(c, row).on == WRITER
+    # Two rounds this visit: the next commits go to the person, who is told no bot reviewed them.
+    _push(c, "acme/app", 45, "ddddddd00000")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, None)
+    assert standing.line == (f"New commits since the reviews (now at ddddddd): {R.NOT_REVIEWED} OK someone (version 1)")
+
+
+def test_an_ok_on_an_old_commit_does_not_move_the_task_on_a_new_one(c, store):
+    row, rid = _in_fixes_2(c, store, {"kind": "owner_done"})
+    done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
+    _push(c, "acme/app", 45, "bbbbbbb00000")
+    _pre_release(c, store, row)
+    _bot(c, row, rid, REVIEWER, "ok", "Read bbbbbbb.")
+    A.answer(c, row["id"], rid, BEN, "ok")
+    assert _f2(c, row).met
+    # A commit after Ben's OK: the OK was for bbbbbbb. The task does not leave on it.
+    _push(c, "acme/app", 45, "ccccccc00000")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, REVIEWER)
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2"
+    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc: a rebase, no change.")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, BEN), "asked of the person whose OK it was"
+    assert standing.line == (
+        "New commits since Ben's OK. reviewer reviewed the commits since the reviews: Read ccccccc: a rebase, no "
+        "change. OK Ben (version 1)"
+    )
+    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2"
+    A.answer(c, row["id"], rid, BEN, "ok")
+    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+
+
+def _bodies(c, row):
+    return c.execute(
+        "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? ORDER BY created_at, id", (row["id"] + ":%",)
+    ).fetchall()
 
 
 def _f2(c, row):

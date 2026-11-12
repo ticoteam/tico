@@ -20,7 +20,6 @@ let CLOUD_ACCESS: CloudAccessState | null = null, CLOUD_TIMER = 0, CLOUD_SHOWN =
 const CLOUD_POLL = 30000;
 const CLOUD_WHY: Record<string, string> = {trial_over: 'Your trial has ended.', unpaid: "This month's payment didn't go through."};
 const cloudPayUrl = (u: unknown): string => typeof u === 'string' && /^https:\/\/\S+$/.test(u) ? u : '';
-const cloudBillingUrl = (): string => cloudPayUrl(CLOUD_ACCESS?.billing_url) || 'https://app.tico.dev/billing';
 // A cloud value that carries one of the access words above, and is not anything else; any other value is not a cloud company.
 function isCloudAccessState(value: unknown): value is CloudAccessState {
   return typeof value === 'object' && value !== null && 'access' in value && typeof value.access === 'string' && CLOUD_ACCESS_WORDS.includes(value.access);
@@ -60,12 +59,17 @@ document.querySelectorAll<HTMLButtonElement>('[data-cloud-refresh]').forEach(but
 function cloudAccessLocked(cloud: CloudAccessState | null | undefined) {
   if (CLOUD_SHOWN !== 'locked') cloudAccessApply({...(CLOUD_ACCESS || {}), ...(cloud || {}), access: 'locked'});
 }
+// The strip's Add credit link, for a line elsewhere that says the company is out of credit; '' unless it is.
+function cloudCreditLinkHTML(): string {
+  if (CLOUD_ACCESS?.access !== 'frozen') return '';
+  return ` <a data-cloud-pay href="${esc(cloudPayUrl(CLOUD_ACCESS.billing_url) || 'https://app.tico.dev/billing')}" target="_blank" rel="noopener noreferrer">Add credit</a>`;
+}
 // The status poll (refresh.js, boot.js) carries it on every page.
 function cloudAccessFromStatus() {
   if (S.status && 'cloud_access' in S.status) cloudAccessApply(S.status.cloud_access);
 }
 function cloudAccessRender() {
-  const access = CLOUD_ACCESS?.access || 'open', root = document.documentElement;
+  const access = CLOUD_ACCESS?.access || 'open', url = cloudPayUrl(CLOUD_ACCESS?.billing_url), root = document.documentElement;
   root.classList.toggle('cloud-frozen', access === 'frozen');
   root.classList.toggle('cloud-locked', access === 'locked');
   root.classList.toggle('strip', root.classList.contains('demo') || access === 'frozen');
@@ -73,7 +77,7 @@ function cloudAccessRender() {
   if (banner) banner.hidden = access !== 'frozen';
   if (lock) lock.hidden = access !== 'locked';
   document.querySelectorAll<HTMLAnchorElement>('[data-cloud-pay]').forEach(a => {
-    a.href = cloudBillingUrl();
+    a.href = url || 'https://app.tico.dev/billing';
   });
   if (access !== 'locked') return;
   const why: HTMLElement | null = $('#cloud-lock [data-cloud-why]');

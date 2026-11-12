@@ -78,8 +78,12 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
                         field = field.replace(form, label)
                     fields[index] = field
             c.execute("UPDATE attempt_diagnostics SET end_reason=?,last_event=? WHERE attempt_id=?", (*fields, aid))
-        # Always-on stderr can contain the same customer material as the opt-in stream.
-        c.execute("UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL WHERE attempt_id=?", (aid,))
+        # Always-on stderr and failed tool output can contain the same customer material as the opt-in stream.
+        c.execute(
+            "UPDATE attempt_diagnostics SET stderr_tail=NULL,stderr_at=NULL,failed_tools=NULL,failed_tools_at=NULL "
+            "WHERE attempt_id=?",
+            (aid,),
+        )
         row = c.execute("SELECT frames FROM attempt_captures WHERE attempt_id=?", (aid,)).fetchone()
         if row and any(f in row["frames"] for f in forms):
             frames = row["frames"]
@@ -178,7 +182,10 @@ def export(c, who, auth, aid, full=True):
         (aid, H.shift(H.now(), days=-KEEP_DAYS)),
     ).fetchone()
     stderr = diagnostic['stderr_tail'] if diagnostic else ''
-    if not cap and not stderr:
+    # Each failed tool call's command and output tail (run_diagnostics.keep_failed_tools); `item_id` matches its
+    # `tool` events below.
+    failed = run_diagnostics.failed_tools(c, aid, H.shift(H.now(), days=-KEEP_DAYS))
+    if not cap and not stderr and not failed:
         raise Problem("not_found", "No stream or stderr was captured for this run, or it is over a week old", 404)
     stream_captured = bool(cap)
     cap = (
@@ -190,7 +197,7 @@ def export(c, who, auth, aid, full=True):
             "bytes": 0,
             "truncated": False,
             "dropped_bytes": 0,
-            "created_at": diagnostic['stderr_at'],
+            "created_at": diagnostic['stderr_at'] if diagnostic else None,
         }
     )
     diagnostics = run_diagnostics.metadata(c, aid)
@@ -200,6 +207,7 @@ def export(c, who, auth, aid, full=True):
             "provider": cap["provider"],
             "bytes": cap["bytes"],
             "stderr_bytes": len((stderr or "").encode()),
+            "failed_tools": len(failed),
             "stream_captured": stream_captured,
             **diagnostics,
             "truncated": bool(cap["truncated"]),
@@ -232,6 +240,7 @@ def export(c, who, auth, aid, full=True):
         "provider": cap["provider"],
         "stream_captured": stream_captured,
         "stderr_tail": stderr or "",
+        "failed_tools": json.loads(mask(json.dumps(failed))),
         "truncated": bool(cap["truncated"]),
         "dropped_bytes": cap["dropped_bytes"],
         "captured": cap["created_at"],

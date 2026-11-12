@@ -225,10 +225,27 @@ def depth(conn: "sqlite3.Connection", task_id: str) -> int:
         levels += 1
 
 
-def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0) -> bool:
-    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit."""
+# The task that filed this one, on the visit it filed it in, is still on that visit and in that stage.
+_FILER_IN = (
+    "SELECT 1 FROM links l JOIN tasks p ON p.id = l.from_task_id AND p.status='open' AND p.stage_id=? "
+    "JOIN visits v ON v.id = l.visit_id AND v.task_id = p.id AND v.left_at IS NULL WHERE l.to_task_id=?"
+)
+
+
+def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> bool:
+    """A sub-task filed by a task that is still in `stage_id`, on the visit that filed it: it goes into that stage on
+    its filer's slot. The filer waits on it, so making it wait for room there could hold both forever."""
+    return conn.execute(_FILER_IN, (stage_id, task_id)).fetchone() is not None
+
+
+def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
+    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit. For
+    `task_row`, it also has room when the task that filed it is there (`rides_with_filer`): the stage may then hold one
+    over its limit, and takes no other task until it is under again."""
     limit = stage_row.get("task_limit")
     if stage_row["kind"] != "work" or not limit:
+        return True
+    if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
     held = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
@@ -836,7 +853,7 @@ def move(
             decided = [s for s in missing if R.asked_to_decide(s, by)]
             missing = [s for s in missing if not R.asked_to_decide(s, by)]
         _may_push_past(conn, by, row, why, missing, target["id"])
-        if target["kind"] == "work" and not has_room(conn, target):
+        if target["kind"] == "work" and not has_room(conn, target, task_row=row):
             # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
             # person's request that moves on by itself (`not_held_by_hand`).
             held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
@@ -1055,7 +1072,7 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return None
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target) or shut_out(conn, row, target):
+    if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
     return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
 
@@ -1178,10 +1195,10 @@ PROGRESS_SQL = (
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
     """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
     requirements and filed tasks of this visit, and where each requirement stands (so a PR that opened or a check that
-    finished is a change). A comment is not a change. Nor is a snooze or its end: setting a task aside earns no more
-    runs. Nor is the task's version: it says the row changed since someone looked, and a field edit (a new title, a
-    label) raises it. A move and a reassign start the ladder again themselves. `standings` saves reading them again
-    when the caller has them."""
+    finished is a change). A comment is not a change (a person's that wakes the owner bot restarts the ladder itself:
+    `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
+    says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
+    start the ladder again themselves. `standings` saves reading them again when the caller has them."""
     from . import read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
@@ -1221,6 +1238,25 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     row = task(conn, task_id)
     if row and row["status"] == "open":
         _reset_ladder(conn, row["visit"], _h().now(), by)
+
+
+def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A person wrote to the task's owner bot while the owner has it (a comment that wakes the bot): the ladder starts
+    again, as when an answer comes. The run the comment starts is the first of the new count, so if it stops before
+    the task is finished the bot is woken again after the first gap: never left for the hour a third try waits, and
+    never handed straight to the manager for runs spent before the person spoke. A person's own words or their token
+    count; the Assistant or BotOps acting for them do not (`hubdb.VIA`), since a bot that could restart the ladder could
+    keep a task going round it for ever. A task a person or the manager bot has keeps its level: Try again is the way
+    back from a person."""
+    H = _h()
+    if not is_human(by) or H.VIA.get():
+        return
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+        return
+    if (row["visit"].get("level") or "owner") != "owner":
+        return
+    _reset_ladder(conn, row["visit"], H.now(), by)
 
 
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:
@@ -1460,7 +1496,8 @@ def add_requirement(
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
-    `_replace_open`)."""
+    `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
+    (`_stage_asks`)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1482,6 +1519,13 @@ def add_requirement(
         page = _people_page(conn, row, kind, shows, choices)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
+    if is_bot(by) and kind == "answer" and is_human(person):
+        signoff = _stage_asks(conn, row, str(person))
+        if signoff:
+            name = H.actor_name(conn, person)
+            _refuse(
+                conn, by, "task_requirement", f"The stage already asks {name} to OK {signoff}. {ASKED_HINT}", task_id
+            )
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
@@ -1540,6 +1584,33 @@ def _people_page(
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
         if named or (kind == "ok" and not refs):
+            return R.name_of(requirement)
+    return None
+
+
+# What a bot is told when the stage already asks the person it names (`_stage_asks`).
+ASKED_HINT = "Do not ask them again: put any question on the page or in a comment."
+
+
+def _stage_asks(conn: "sqlite3.Connection", row: Row, person: str) -> str | None:
+    """The name of the stage's OK or page that waits on `person` now, or None. A bot's question to that same person
+    would be a second item in their Needs you, and the stage would wait on both (Tico Team, Nov 12: the Product Owner
+    asked "Please OK the attached spec" beside the Spec page's own OK, and Spec stayed after the page was OK'd). A page
+    a person OKs anyway counts while Jev is still checking it: it goes to them next."""
+    from . import waiting_on
+
+    for standing in R.standings(conn, row):
+        requirement = standing.requirement
+        if standing.state != R.WAITING or not requirement.get("stage_id") or requirement["kind"] not in R.STEERED:
+            continue
+        on = standing.on
+        if on == R.JEV:
+            if not (requirement.get("person_id") or R.people_only(requirement)):
+                continue  # Jev passing it is enough: no person is asked
+            on = R.person_of(conn, requirement, row["visit"]["id"])
+        elif on and not is_human(on):
+            continue  # a bot named to approve, or a source
+        if (on or waiting_on.person_for(conn, row)) == person:
             return R.name_of(requirement)
     return None
 

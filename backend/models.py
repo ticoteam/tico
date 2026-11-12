@@ -2579,8 +2579,21 @@ class AttemptThread(Contract):
     source_continuation: SourceContinuation | None = None
 
 
+class FailedTool(Contract):
+    """A tool call that failed in a run, as its runner scrubbed it (runner-rs run_diagnostics.rs failed_tool)."""
+
+    item_id: str = Field(max_length=200)
+    tool: str = Field(default="", max_length=200)
+    command: str = Field(default="", max_length=4000)
+    exit_code: int | None = None
+    output_tail: str = Field(default="", max_length=8192)
+
+
 class AttemptStderr(Contract):
-    tail: str = Field(max_length=65536)
+    """A run's bounded diagnostics: its harness's stderr tail, its failed tool calls, or both."""
+
+    tail: str | None = Field(default=None, max_length=65536)
+    failed_tools: list[FailedTool] = Field(default_factory=list, max_length=20)
 
 
 class Event(Contract):

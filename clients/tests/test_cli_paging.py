@@ -82,3 +82,12 @@ def test_api_refuses_two_bodies_and_a_missing_file(calls, tmp_path, capsys):
     assert exit_of(["api", "POST", "threads", "--file", str(tmp_path / "missing.json")]) == 2
     assert "Cannot read" in capsys.readouterr().out
     assert calls == []
+
+
+def test_task_list_all_asks_for_the_snoozed_tasks_too(calls):
+    """`--all` is every task you may see: a snoozed task is open, only set aside, and was left out."""
+    run(["task", "list", "--all"])
+    assert calls[0] == ("GET", "tasks", {"snoozed": "all"})
+    calls.clear()
+    run(["task", "list", "--all", "--snoozed", "only"])
+    assert calls[0] == ("GET", "tasks", {"snoozed": "only"})

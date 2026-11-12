@@ -695,6 +695,7 @@ def operation_issues(c, who, auth):
     Every issue says whether a person has to act (`needs_person`); only those light the account's status dot.
     Stopped runs and quarantined bots are BotOps's to review, so they say no, and Settings > Health lists them.
     """
+    from . import cloud_machines
     from .agents import still_reporting
 
     issues, seen = [], set()
@@ -1073,6 +1074,19 @@ def operation_issues(c, who, auth):
             )
         elif agent:
             pass  # an external agent that reported in lately: no computer to check
+        elif bot["state"] == "active" and not location["machine"] and (cloud := cloud_machines.coming(c, slug)):
+            # A Tico Cloud bot goes on its cloud machine's computer once it enrolls: nothing to assign. Only a
+            # machine that failed needs a person; out of credit is the company's strip.
+            failed = cloud["status"] == "failed"
+            add(
+                "machine",
+                f"{bot['display_name']} is waiting for {cloud['label']} to start",
+                cloud["words"] + (f". {queued} saved request{'s' if queued != 1 else ''} waiting." if queued else "."),
+                bot=slug,
+                needs_person=failed,
+                severity="error" if failed else "warning",
+                action="Replace it in Settings → Computers." if failed else None,
+            )
         elif bot["state"] == "active" and not location["machine"]:
             # Nothing waiting means nothing urgent: a bot nobody has placed yet is setup, not a fault.
             add(
@@ -3077,6 +3091,12 @@ def install_views(app, store, auth, mutate, task_view):
                 "cloud": True,
                 "computers": machines,
                 "machines": machines,
+                # Cloud machines not enrolled yet (being made, starting, failed): listed before they are computers.
+                "cloud_coming": [
+                    row
+                    for row in (cloud_machines.coming_rows(c) if cloud_machines.offered(c, store.settings) else [])
+                    if row["bot"] not in unseen
+                ],
                 "runnable": runnable_choices(c, who, auth, store.settings),
                 "agents": agent_listing(c, who, auth),
                 "services": health,

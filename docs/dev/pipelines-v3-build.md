@@ -155,7 +155,7 @@ def task(conn, task_id) -> dict | None
     # None for a task that is not on the engine.
 def pipeline(conn, pipeline_id), stages(conn, pipeline_id), stage(conn, stage_id)
 def next_stage(conn, task_row) -> dict | None      # the next work stage, or Done after the last
-def has_room(conn, stage_row, extra=0) -> bool     # snoozed tasks hold no slot
+def has_room(conn, stage_row, extra=0, task_row=None) -> bool  # snoozed tasks hold no slot; a sub-task rides its filer's
 def owner_for(stage_row, assignee, current=None)   # who owns a task in a stage
 def depth(conn, task_id) -> int
 def check_version(conn, by, task_row, seen_version, cascade=False) -> None   # task_changed; a bot must send one
@@ -420,7 +420,8 @@ It is the only caller of `move()` with `by=SYSTEM`, through `advance`.
 
 What `rules_hold` reads for each rule:
 
-1. Every open task has at least one wait.
+1. Every open task has at least one wait, and no `tasks` wait names a sub-task whose `room` wait is for the full stage
+   the filer is in.
 2. Every bot's turn on a task that is not snoozed has a live run, a queued wake, a next try time, or a level above
    `owner`.
 3. Every person's turn is in that person's `needs` exactly once: one `task` entry for the task's own work, and one
@@ -430,7 +431,7 @@ What `rules_hold` reads for each rule:
 5. At most one handoff per visit; no handed-off task still open after its visit was left by Back or Close; no
    `queue_pr` effect of such a visit without its `dequeue_pr`.
 6. In a stage with a limit, the open tasks that came in by a forward move since the stage last changed, and were never
-   snoozed there, number at most the limit.
+   snoozed there, number at most the limit. A sub-task filed while its filer was in the stage is not counted.
 7. No wake is queued for a task that is snoozed, Done or Closed.
 
 ## answers.py
@@ -598,10 +599,20 @@ page          no page attached                          not_met  owner   No page
               met, no person                             met              Jev passed it
 ```
 
-A page a person OKs that is not `at_head` (Fixes 2's Review page) also says, before the OK, when a linked PR's newest
-commit is not one a met Review page (`at_head`, Jev passed or OK'd) was attached at: "New commits since the reviews
-(now at <sha>): not reviewed by a bot." (`task_requirements.unreviewed`, from `item_versions` and the PR's head; Tico
-keeps no commit count). The bot's wake on that stage says it too. A waiting page's `since` is when that version was
+A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
+bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
+newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
+at <sha>): read only them, against what the reviews found and the spec. OK them or send them back, and say what you
+read." That bot answers on the page (`tico task answer <id> <requirement> ok|no -m ...`, notes required either way):
+the answer keeps the commits it was given at (`answers.heads`). Its OK makes those commits reviewed, and the person's
+ask then starts "<bot> reviewed the commits since the reviews: <notes>." Its no is `not_met` on the owner: "<bot>
+sent back the new commits: <notes>". A round is one set of commits it answered at; after `DELTA_ROUNDS` (2) rounds in
+a visit, or with no such bot, the person is asked with "New commits since the reviews (now at <sha>): not reviewed by
+a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits, and counts only while they
+are still the newest: after a new commit it is gone, the ask starts "New commits since <name>'s OK.", and the new
+commits go through the same review. Answers from before `heads` was kept stand. The Builder's wake says "not
+reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
 asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
 `tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push
 past.

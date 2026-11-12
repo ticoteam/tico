@@ -83,6 +83,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
             lines.append(f"- {R.sentences(f'{s.name}: {said}' if said else s.name)}{waits}")
             if R.asked_to_decide(s, to):
                 lines.append(f"  {R.decide_commands(str(task['id']), str(s.requirement['id']))}")
+            elif R.asked_to_review(s, to):
+                lines.append(f"  {R.review_commands(str(task['id']), str(s.requirement['id']))}")
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")
     lines.append(ENDINGS)
     return "\n".join(lines)
@@ -91,7 +93,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
     """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
     (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it, nor once the
-    page is OK'd: a rebase after the OK is not a new version of it, and a new page would ask the person again."""
+    page is OK'd, nor while the bot that wrote the newest review is here to review them before the person is asked
+    (task_requirements._new_commits)."""
     page: list[R.Standing] = []
     for s in standings:
         settings: Row = s.requirement.get("settings") or {}
@@ -99,9 +102,36 @@ def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standin
             continue
         if s.requirement.get("person_id") or R.people_only(s.requirement):
             page.append(s)
-    if not page or any(R.NOT_REVIEWED in s.line for s in page):
+    if not page or any(R.NOT_REVIEWED in s.line for s in page) or R.delta_reviewer(conn, task):
         return None
     return R.unreviewed(conn, task)
+
+
+REVIEW_NEW_LEAD = (
+    "Commits were pushed after the reviews. Review only those commits before the person is asked to OK the work."
+)
+
+
+def review_new(conn: "sqlite3.Connection", task_id: str) -> str | None:
+    """Wake the bot asked to review the commits pushed after the reviews (task_requirements._new_commits), once per
+    newest commits: after Jev looked at the page a person OKs, and after a new commit. Not while it has a live run on
+    the task: it sees the ask in `tico task show`. The never-stuck ladder wakes it if this wake is lost."""
+    from . import task_engine as E
+
+    row: Row | None = E.task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+        return None
+    for standing in R.unmet(conn, row):
+        who = standing.on
+        if not who or not R.asked_to_review(standing, who):
+            continue
+        if live_run(conn, row, who):
+            return None
+        heads = ",".join(f"{ref}@{sha[:12]}" for ref, sha in sorted(R.heads_now(conn, row).items()))
+        visit = row["visit"]
+        wake_key = f"{task_id}:{visit['id']}:review_new:{heads}"
+        return add(conn, row, who, visit, body(conn, row, REVIEW_NEW_LEAD, to=who), wake_key=wake_key)
+    return None
 
 
 def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:
@@ -269,6 +299,12 @@ BEING_SET_UP = "is still being set up"
 ONBOARDING = "is still onboarding: a person above it marks its onboarding complete"
 REMOVED = "was removed"
 NO_COMPUTER = "has no computer"
+# A bot of a Tico Cloud company waits for its cloud machine's computer instead (backend/cloud_machines.py `coming`): on
+# its way by itself (nobody is asked), or failed (a person replaces it in Settings > Computers). `cause_line` names the
+# machine in place of CLOUD_WORDS.
+CLOUD_WORDS = "its cloud computer"
+CLOUD_STARTING = "is waiting for its cloud computer to start"
+CLOUD_FAILED = "can't run: its cloud computer didn't start"
 RUNS_FAILING = "keeps failing its runs"
 LOGIN = "has a login to reconnect"
 COMPANY_PAUSED = "The company is paused"
@@ -281,7 +317,30 @@ def cause_line(conn: "sqlite3.Connection", actor: str | None, cause: str) -> str
     """A cause from `cannot_run` as one sentence: "Builder has no computer", "Tico Cloud is locked"."""
     if cause in COMPANY_WIDE:
         return cause
+    if cause in (CLOUD_STARTING, CLOUD_FAILED):
+        from . import cloud_machines
+
+        machine = cloud_machines.coming(conn, str(_h().actor_id(actor)))
+        if machine:
+            cause = cause.replace(CLOUD_WORDS, machine["label"])
     return f"{_h().actor_name(conn, actor)} {cause}"
+
+
+# Where a person sees, or fixes, what keeps a bot from running: a page of the app, for a link beside the line.
+COMPUTERS_PAGE = "#/settings/computers"
+BILLING_PAGE = "#/settings/billing"
+CAUSE_PAGES = {
+    NO_COMPUTER: COMPUTERS_PAGE,
+    CLOUD_STARTING: COMPUTERS_PAGE,
+    CLOUD_FAILED: COMPUTERS_PAGE,
+    OUT_OF_CREDIT: BILLING_PAGE,
+    CLOUD_LOCKED: BILLING_PAGE,
+}
+
+
+def cause_href(cause: str | None) -> str | None:
+    """The page for a cause from `cannot_run` (CAUSE_PAGES), or None."""
+    return CAUSE_PAGES.get(cause or "")
 
 
 def cannot_run(conn: "sqlite3.Connection", actor: str | None, seen: dict[str, str | None] | None = None) -> str | None:
@@ -335,7 +394,7 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
         # A computer that is offline is not a cause: a cloud computer sleeps until work is queued for it.
         placed = _read(conn, _PLACED, (bot,))
         if not placed or placed[0]:
-            return NO_COMPUTER
+            return _computer_cause(conn, bot) if not placed else NO_COMPUTER
     onboarding = _read(conn, _ONBOARDING, (bot,))
     if onboarding and cast("Any", statuses).is_parked(onboarding[0] or ""):
         return ONBOARDING
@@ -345,6 +404,19 @@ def _cause(conn: "sqlite3.Connection", bot: str) -> str | None:
     if cast("Any", reconnects).bot_open(conn, bot, "login:"):
         return LOGIN  # its computer's sign-in was refused: a person reconnects it (backend/reconnects.py)
     return None
+
+
+def _computer_cause(conn: "sqlite3.Connection", bot: str) -> str:
+    """A bot on no computer: on a Tico Cloud company, what its cloud machine is doing (`cloud_machines.coming`), else
+    NO_COMPUTER. A machine that cannot start while the company is out of credit is the company's cause."""
+    from . import cloud_machines
+
+    machine = cast("Any", cloud_machines).coming(conn, bot)
+    if not machine:
+        return NO_COMPUTER
+    if machine["status"] == "out_of_credit":
+        return OUT_OF_CREDIT
+    return CLOUD_FAILED if machine["status"] == "failed" else CLOUD_STARTING
 
 
 # `_cause`'s reads of one bot, kept for the snapshot (`_read`); `prime_bots` reads them for many bots at once.
@@ -398,10 +470,12 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
 # wakes the task once the worktree is ready (backend/worktree_waits.py), so until then it is Paused, not the bot's turn.
 WORKTREE_WAITING = "is waiting for a free worktree"
 WORKTREE_RESERVED = "is waiting for its worktree to be set up"
-# Or a run of it on the task stopped after it may have acted, and Tico holds the task's work until someone checks it
-# (execution.auto_reconcile records `job.held`; `POST jobs/{id}/reconcile` resumes or dismisses it). Until then the bot
-# claims nothing more on the task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold.
-RUN_HELD = "has a run held for a check"
+# Or a run of it on the task stopped partway after it may have acted (its job is `uncertain`), and Tico holds the task's
+# work until someone runs it again or leaves it (`POST jobs/{id}/reconcile`; execution.auto_reconcile resumes a safe one
+# by itself, and hands the rest to BotOps with `job.held`). From the moment it stops the bot claims nothing more on the
+# task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold (Nov 12: a Codex reviewer
+# stopped partway and its task still said it was the reviewer's turn for the 15 minutes before `job.held`).
+RUN_HELD = "stopped partway: waiting on a person to run it again"
 # Or its computer handed back its runs on the task before starting them, start_holds.SAME times for the same reason, and
 # BotOps has a task to find why (backend/start_holds.py). Paused until BotOps closes it: never a silent "Queued" loop.
 CANT_START = "can't start its runs here: BotOps is checking why"
@@ -435,15 +509,15 @@ def task_cause(
 
 
 def _held_runs_sql(many: bool = False) -> str:
-    """The bots (slugs, comma-joined) with a run held for a check on one task (`RUN_HELD`): a job still uncertain whose
-    attempt auto_reconcile held. With `many`, (task, bots) for every task that has one. Few rows: jobs_uncertain holds
-    only those."""
+    """The bots (slugs, comma-joined) with a run held on one task (`RUN_HELD`): a job still uncertain that nobody has
+    chosen for yet (no `job_recovery` for its try; a saved choice waits only for its lane, and runs by itself). With
+    `many`, (task, bots) for every task that has one. Few rows: jobs_uncertain holds only those."""
     task = str(_h().MESSAGE_TASK_SQL).replace("cv.", "uc.")
     return (
         f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT u.bot_id) FROM jobs u "
         "JOIN messages m ON m.id = u.message_id JOIN conversations uc ON uc.id = m.conversation_id "
-        "WHERE u.state = 'uncertain' AND EXISTS (SELECT 1 FROM events e WHERE e.action = 'job.held' AND "
-        f"e.target = u.attempt_id) {'GROUP BY 1' if many else f'AND {task} = ?'}"
+        "WHERE u.state = 'uncertain' AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id = u.id AND "
+        f"r.attempt_id IS u.attempt_id) {'GROUP BY 1' if many else f'AND {task} = ?'}"
     )
 
 

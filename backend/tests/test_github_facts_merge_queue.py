@@ -5,9 +5,11 @@ backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
 import hashlib
 import hmac
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from backend import github as G
 from backend import heartbeat as HB
 from backend.item_sources import github as MQ
 from backend import never_stuck as NS
@@ -447,7 +449,8 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         woken = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
         assert len(woken) == 1 and woken[0].startswith(f"{task_id}:")
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
-        assert "e2e" in body and "https://ci/9" in body and f"tico task queue {task_id}" in body
+        assert "e2e" in body and "https://ci/9" in body and "Fixes 2" in body
+        assert f"tico task queue {task_id}" not in body  # a check that really failed is not queued again as it is
         assert X.events(c, task_id).count("pr_queue_removed") == 1
         assert effects(c, task_id) == [("act", "done")]
     gh.push(REPO, 1)  # a fix pushed in Merge: the task stays in Merge and nothing queues it by itself
@@ -487,6 +490,210 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
         moved_back = E.move(c, task_id, "Build", X.ANA, "Needs the Builder")
         E.move(c, task_id, "Merge", X.ANA, "Again", seen_version=moved_back["version"])
         assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
+
+
+QUEUE_FAILED = "Checks failed in the merge queue"
+REAL_LEG = "browser-2: Run selected tests"
+
+
+def queue_removal_bodies(c, task_id):
+    keys = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
+    return [c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0] for key in keys]
+
+
+def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=REAL_LEG, url="https://ci/1")
+    F.refresh(company, gh, later(10))
+    with company.transaction() as c:
+        (first,) = queue_removal_bodies(c, task_id)
+        assert REAL_LEG in first and "Fixes 2" in first and f"tico task queue {task_id}" not in first
+        version = E.task(c, task_id)["version"]
+        detail = refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert REAL_LEG in detail and "Fixes 2" in detail
+        assert stage(c, task_id) == "Merge"
+    head = gh.push(REPO, 1)  # a fix pushed: a bot may not queue that commit, a person may
+    F.refresh(company, gh, later(30))
+    with company.transaction() as c:
+        assert "Fixes 2" in refused(
+            lambda: MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"]), "task_requirement"
+        )
+        owed = MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])
+        assert [e["pinned"] for e in owed] == [head]
+
+
+@pytest.mark.parametrize("check", [MQ.CANCELLED_FROM_OUTSIDE, None])
+def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_fixes(company, check):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=check, url="https://ci/1")
+    F.refresh(company, gh, later(10))
+    with company.transaction() as c:
+        (first,) = queue_removal_bodies(c, task_id)
+        assert f"tico task queue {task_id}" in first
+        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])  # once, after the outside cancel
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, QUEUE_FAILED, check=check, url="https://ci/2")  # the same head is taken out again
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        later_bodies = queue_removal_bodies(c, task_id)
+        assert len(later_bodies) == 2
+        (second,) = [body for body in later_bodies if body != first]
+        assert "Fixes 2" in second and "Queue it again" not in second
+        version = E.task(c, task_id)["version"]
+        assert "Fixes 2" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert stage(c, task_id) == "Merge"
+
+
+def job(name, conclusion, failed_steps=(), url=None):
+    """One job of a merge queue run as the Actions API lists it: its steps, the failed ones given by name."""
+    steps = [{"name": "Set up", "conclusion": "success"}] + [{"name": s, "conclusion": "failure"} for s in failed_steps]
+    return {
+        "name": name,
+        "conclusion": conclusion,
+        "html_url": url or f"https://ci/{name}",
+        "check_run_url": "https://api.github.com/repos/acme/app/check-runs/77",
+        "steps": steps,
+    }
+
+
+FAIL_FAST = [job("checks", "failure"), job("python-1", "cancelled"), job("browser-1", "cancelled")]
+
+
+def test_a_removal_names_the_leg_that_failed_and_not_the_legs_a_fail_fast_cancelled():
+    jobs = [
+        FAIL_FAST[0],
+        job("python-1", "cancelled"),
+        job("browser-2", "failure", ["Run selected tests"], "https://ci/b2"),
+    ]
+
+    def no_line(_checks):
+        raise AssertionError("the checks line is read only when no leg failed")
+
+    assert MQ.failing_leg(jobs + [job("browser-1", "cancelled")], no_line) == (REAL_LEG, "https://ci/b2")
+
+
+def test_every_failed_leg_is_named_with_its_failed_steps_and_a_timed_out_leg_counts():
+    jobs = [
+        job("checks", "failure"),
+        job("python-1", "failure", ["pytest"]),
+        job("browser-2", "failure", ["Run selected tests", "Upload"]),
+        job("e2e", "timed_out"),
+    ]
+    assert MQ.failing_leg(jobs, lambda _checks: None) == (
+        "python-1: pytest; browser-2: Run selected tests, Upload; e2e",
+        "https://ci/python-1",
+    )
+
+
+@pytest.mark.parametrize(
+    "line, want",
+    [
+        (
+            "Failed: browser-2: Run selected tests. Fail fast then cancelled the other legs.",
+            REAL_LEG,
+        ),
+        (
+            "Failed: python-1: pytest; browser-2: Run selected tests. Fail fast then cancelled the other legs.",
+            "python-1: pytest; browser-2: Run selected tests",
+        ),
+        (
+            "No step failed: the run was cancelled from outside (a superseded queue group, or by hand).",
+            MQ.CANCELLED_FROM_OUTSIDE,
+        ),
+        (None, MQ.CANCELLED_FROM_OUTSIDE),
+    ],
+)
+def test_with_no_failed_leg_the_checks_line_names_it_or_the_run_was_cancelled_from_outside(line, want):
+    assert MQ.failing_leg(FAIL_FAST, lambda _checks: line) == (want, "https://ci/checks")
+
+
+def test_no_jobs_means_the_run_is_not_known():
+    assert MQ.failing_leg([], lambda _checks: "Failed: x: y. Fail fast") is None
+
+
+class Answers:
+    """The GitHub App's HTTP service for `AppGitHub._queue_failure`: each path answers (status, json) and `asked` keeps
+    the paths read."""
+
+    def __init__(self, answers):
+        self.answers = answers
+        self.asked = []
+
+    def mint(self, repos, permissions):
+        return "token", None
+
+    def _call(self, method, path, **kwargs):
+        self.asked.append(path)
+        status, body = self.answers.get(path, (404, {}))
+        return SimpleNamespace(status_code=status, json=lambda: body)
+
+
+RUNS = "/repos/acme/app/actions/runs"
+JOBS = "https://api.github.com/repos/acme/app/actions/runs/9/jobs"
+ANNOTATIONS = "https://api.github.com/repos/acme/app/check-runs/77/annotations"
+
+
+def queue_failure(jobs, notes=None, notes_status=200, runs=None):
+    """(what `AppGitHub._queue_failure` names for PR 1, the paths it read) for a merge queue run with these jobs and the
+    checks job's annotations."""
+    if runs is None:
+        runs = [
+            {
+                "head_branch": "gh-readonly-queue/main/pr-1-abc123",
+                "created_at": "2026-11-10T10:00:00Z",
+                "jobs_url": JOBS,
+            }
+        ]
+    service = Answers(
+        {
+            RUNS: (200, {"workflow_runs": runs}),
+            JOBS: (200, {"jobs": jobs}),
+            ANNOTATIONS: (notes_status, [{"message": line} for line in notes or []]),
+        }
+    )
+    return G.AppGitHub(service)._queue_failure("acme/app", 1, ""), service.asked
+
+
+def test_the_app_names_the_failed_leg_and_reads_no_annotation():
+    jobs = [
+        job("checks", "failure"),
+        job("python-1", "cancelled"),
+        job("browser-2", "failure", ["Run selected tests"], "https://ci/b2"),
+    ]
+    named, asked = queue_failure(jobs)
+    assert named == (REAL_LEG, "https://ci/b2")
+    assert ANNOTATIONS not in asked
+
+
+def test_the_app_reads_the_checks_line_only_when_no_leg_failed():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, asked = queue_failure(jobs, ["Failed: python-1: pytest. Fail fast then cancelled the other legs."])
+    assert named == ("python-1: pytest", "https://ci/checks")
+    assert ANNOTATIONS in asked
+
+
+def test_the_app_says_cancelled_from_outside_when_the_checks_line_says_no_step_failed():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, _ = queue_failure(jobs, ["No step failed: the run was cancelled from outside (by hand)."])
+    assert named == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+
+
+def test_the_app_still_names_the_run_when_its_annotations_cannot_be_read():
+    jobs = [job("checks", "failure"), job("python-1", "cancelled")]
+    named, _ = queue_failure(jobs, notes_status=500)
+    assert named == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+
+
+def test_the_app_names_no_run_when_none_was_queued_for_the_pr():
+    named, asked = queue_failure([], runs=[])
+    assert named is None
+    assert JOBS not in asked
 
 
 def test_a_queue_entry_that_vanishes_without_a_word_is_a_drop(company):
@@ -695,14 +902,18 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     F.refresh(company, gh, later())
     with company.transaction() as c:
         version = E.task(c, task_id)["version"]
-        go = lambda by=RM, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
+        go = lambda by=X.ANA, v=version: MQ.requeue(c, task_id, by, seen_version=v)  # noqa: E731
         assert refused(go, "task_requirement") == "The checks on acme/app#1 are still running"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "failure"}]}, F.version_now())
         assert refused(go, "task_requirement") == "Checks failed on acme/app#1: unit"
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "success"}]}, F.version_now())
-        refused(lambda: go(v=version - 1), "task_changed")
+        refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
-        owed = go()
+        # The new commit came after the person's OK: the Release Owner sends the task back to Fixes 2 to have it
+        # reviewed and OK'd; it may not queue it as it is (an OK on an old commit never merges a new one).
+        assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
+        owed = go()  # a person queues it as it is now: that is their OK of the new commit
         assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
         assert effects(c, task_id) == [("act", "moot"), ("act", "owed")]
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "Queuing the PR")

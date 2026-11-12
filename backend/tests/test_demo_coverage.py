@@ -79,6 +79,7 @@ PAGES = {
 # Nav pages that the demo does not fill, with the reason.
 NO_DEMO_DATA = {
     "welcome": "Finish setup shows only until setup is done, and the demo starts set up.",
+    "listening": "The demo makes no listening: its sources would have nothing to read.",
 }
 
 

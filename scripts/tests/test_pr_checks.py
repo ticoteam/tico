@@ -524,6 +524,27 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
 
 
+PHONE_SCRIPTS = {
+    f"phone-dead-ends-{state}" for state in ("bot-waiting", "no-computer", "no-credit", "setup-halfway", "sign-off")
+}
+
+
+def test_a_ui_app_or_style_change_runs_the_phone_dead_end_scripts_and_a_backend_change_does_not(tmp_path):
+    # A fix in ui/app/ or ui/styles/ removes a KNOWN phone break, and its dead-end script fails until the line goes: such a
+    # change runs all five scripts, and so does their rules file. A backend change runs none of them.
+    smoke_tree(tmp_path)
+    source(tmp_path, "ui/styles/x.css", ".x { color: red; }\n")
+    source(tmp_path, "ui/app/x.ts", "export const x = 1;\n")
+    source(tmp_path, "ui/tests/support/phone-rules.cts", "// the phone rules\n")
+    for name in PHONE_SCRIPTS:
+        source(tmp_path, f"ui/tests/{name}.cts", "require('./support/phone-rules.cts');\n")
+    source(tmp_path, "backend/health.py", "")
+    for changed in (["ui/styles/x.css"], ["ui/app/x.ts"], ["ui/tests/support/phone-rules.cts"]):
+        plan = checks.selection(changed, root=tmp_path, core=[])
+        assert PHONE_SCRIPTS <= set(plan["browser_direct"]) and PHONE_SCRIPTS <= set(plan["browser"]), changed
+    assert not PHONE_SCRIPTS & set(checks.selection(["backend/health.py"], root=tmp_path, core=[])["browser"])
+
+
 def test_docs_plan_has_an_explicit_no_test_job_and_never_calls_pytest(tmp_path, monkeypatch, mapped):
     # CHANGELOG.md and docs/openapi/v2.json are gone; pytest.ini is a tracked file a test reads.
     for read, reader in (("pytest.ini", "backend/tests/test_ddl_guard.py"),):
@@ -1313,18 +1334,32 @@ def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default
     assert recorder["runs-on"] == "macos-latest"
 
 
-def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes():
+def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_skipped_passes(tmp_path):
     gate = workflow_jobs()["jobs"]["checks"]
     assert gate["name"] == "checks" and "always()" in gate["if"]
     needs = set(gate["needs"])
     assert needs == set(workflow_jobs()["jobs"]) - {"checks", "timings"}
     env = gate["steps"][0]["env"]
-    names = {key: re.search(r"needs\.([\w-]+)\.result", value).group(1) for key, value in env.items()}
+    names = {
+        key: found.group(1) for key, value in env.items() if (found := re.search(r"needs\.([\w-]+)\.result", value))
+    }
     assert set(names.values()) == needs
+    # A cancelled need makes the gate ask the run's jobs which step failed; a stub gh answers for the API.
+    (tmp_path / "gh").write_text("#!/bin/sh\necho 'python-6: Run selected tests'\n")
+    (tmp_path / "gh").chmod(0o755)
+
+    def gate_run(results):
+        run_env = {
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            **{key: results[name] for key, name in names.items()},
+        }
+        return subprocess.run(
+            ["bash", "-e", "-c", gate["steps"][0]["run"]], env=run_env, capture_output=True, text=True
+        )
 
     def exit_code(results):
-        run_env = {**os.environ, **{key: results[name] for key, name in names.items()}}
-        return subprocess.run(["bash", "-c", gate["steps"][0]["run"]], env=run_env, capture_output=True).returncode
+        return gate_run(results).returncode
 
     passing = dict.fromkeys(needs, "success")
     assert exit_code(passing) == 0
@@ -1332,6 +1367,8 @@ def test_checks_is_the_one_gate_and_fails_on_a_failed_or_cancelled_need_while_sk
     assert exit_code({**passing, "tests": "failure"}) == 1
     assert exit_code({**passing, "caddy-linux": "cancelled"}) == 1
     assert exit_code({**passing, "plan": "skipped"}) == 0
+    cancelled = gate_run({**passing, "tests": "cancelled"})
+    assert cancelled.returncode == 1 and "::error::Failed: python-6: Run selected tests." in cancelled.stdout
 
 
 def test_a_deleted_file_runs_the_tests_that_name_or_read_its_old_path(tmp_path, mapped):
@@ -1882,6 +1919,36 @@ def test_a_queue_group_supersedes_only_the_older_queue_groups_of_its_own_pull_re
     head = "refs/heads/gh-readonly-queue/main/pr-2905-eee555"
     assert checks.superseded_runs(runs, head, 12) == [1, 2]
     assert checks.superseded_runs(runs, "refs/heads/some-branch", 12) == []
+
+
+def test_only_a_group_the_queue_already_dropped_is_cancelled():
+    """A cancelled group that is still live fails `checks` and ejects its pull request (#3380), so the cancel step
+    cancels a group only once GitHub has deleted its gh-readonly-queue ref; any other answer keeps it."""
+
+    def answer(returncode, stderr):
+        calls = []
+
+        def run(args, **_):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, returncode, "", stderr)
+
+        return run, calls
+
+    branch = "gh-readonly-queue/main/pr-3380-4f5617e0"
+    run, calls = answer(1, "gh: Not Found (HTTP 404)\n")
+    assert checks.queue_ref_dropped("o/r", branch, run=run)
+    assert calls == [["gh", "api", f"repos/o/r/git/ref/heads/{branch}", "--silent"]]
+    assert not checks.queue_ref_dropped("o/r", branch, run=answer(0, "")[0])  # still the live entry
+    assert not checks.queue_ref_dropped("o/r", branch, run=answer(1, "gh: Server Error (HTTP 502)\n")[0])
+    run, calls = answer(1, "gh: Not Found (HTTP 404)\n")
+    assert not checks.queue_ref_dropped("o/r", "main", run=run) and calls == []
+
+
+def test_checks_names_the_step_that_failed_when_a_leg_ended_cancelled():
+    step = workflow_jobs()["jobs"]["checks"]["steps"][0]
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert 'select(.conclusion == "failure")' in step["run"] and "cancelled from outside" in step["run"]
+    assert step["run"].rstrip().endswith('exit "$status"')
 
 
 def test_a_queue_group_cancels_older_groups_for_its_pull_request_and_no_pull_request_run_is_affected():
