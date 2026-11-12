@@ -1,6 +1,6 @@
 # Spec and launch practice
 
-The standing method behind `playbooks/write-a-spec-page.md`, `playbooks/validate-in-production.md` and the four spec and launch skills.
+The standing method behind `playbooks/write-a-spec-page.md`, `playbooks/validate-in-production.md` and the spec, validation and launch skills.
 It holds what is known about specs and launches, so each run does not re-derive it. Every figure carries its
 source and the year it was read. Check a figure at its source before you quote it in a spec or a review.
 

@@ -57,11 +57,12 @@ on another team or another repository? Is every rabbit hole fixed, cut or time-b
 
 ## 6. Build the page and attach it
 
-Follow `skills/build-the-spec-page/SKILL.md` for the visual page, or publish the written spec as it is:
+Follow `skills/build-the-spec-page/SKILL.md`: one page, the change in its first line, every screen it touches before
+and after at phone (390 px) and desktop (1280 px) width, with red numbered arrows on what changes. Publish it:
 
-    tico file publish specs/<slug>.md --task <id>
+    tico page publish specs/<slug>.html --spec --task <id>
 
-Either prints the file id. Attach it to the requirement `tico task show` names:
+It prints the file id. Attach it to the requirement `tico task show` names:
 
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 

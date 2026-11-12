@@ -1,8 +1,10 @@
 # Validate in production
 
-Used when a Product task you own enters Validate: its Engineering work is done. Budget 30 minutes. The outcome is a
-"Checked in production" page attached to the stage's requirement, naming the version production runs, which Jev checks.
-No person OK is needed.
+Used when a Product task you own enters Validate: its Engineering work is done. Budget 45 minutes. The outcome is one
+"Checked in production" page attached to the stage's requirement: the verdict first, the version production runs, each
+acceptance criterion with its screenshot or measurement and its result, and what could not be checked. Jev checks it.
+You do the checking and bring the proof; a person never does the QA. Do not ask a person to test the change, look at
+it or send a screenshot: what you could not check goes on the page under "Could not check".
 
 ---
 
@@ -28,24 +30,38 @@ one that carries the change, snooze again the same way.
 
 ## 3. Check each criterion in production
 
-For each criterion tagged before release, do it in production, or read the evidence that shows it (a test account, a
-screenshot, a record), and write met or not met with the evidence. To read a pull request's CI, give gh the pull
-request's link, or `-R <owner/name>` with its number: a `git archive` copy has no remote to find the repository from.
+Read `skills/build-the-validation-page/SKILL.md` first. For each criterion tagged before release, check it in production
+and keep its proof:
+- **A screen**: open production in the read-only view with `tico bot app-shot` at phone (390 px) and desktop (1280 px)
+  width, and keep the screenshots. A size or a position is measured from the screenshot, and the number written down.
+- **No screen** (an API, a command, a job): run it or read it on the version production runs, and keep the call and its
+  output.
+- **The pull request's checks**: give gh the pull request's link, or `-R <owner/name>` with its number: a
+  `git archive` copy has no remote to find the repository from.
 
-    gh pr checks <pull request link>
-    gh run list -R <owner/name> --commit <merge sha>
-    gh run view <run id> -R <owner/name> --log-failed
+      gh pr checks <pull request link>
+      gh run list -R <owner/name> --commit <merge sha>
+      gh run view <run id> -R <owner/name> --log-failed
 
-Your GitHub access reads pull requests, checks, statuses and workflow runs; it never writes them. For each criterion tagged after launch, write who
-watches it, for how long, and the read date from the spec's "How we will know".
+  Your GitHub access reads pull requests, checks, statuses and workflow runs; it never writes them.
 
-## 4. Write and attach the page
+Write met, not met or not checked for each, with its proof. A criterion you cannot check (the read-only view is off, a
+screen only another person sees and no test account shows it) is "not checked" with the reason; it is never met. For
+each criterion tagged after launch, write who watches it, for how long, and the read date from the spec's "How we will
+know".
 
-Write `reports/YYYY-MM-DD-checked-<slug>.md`: the version production runs and when it was read, each criterion with
-met or not met and its evidence, the after-launch checks with their watchers and read dates, and what could not be checked.
-Publish it with `tico file publish reports/YYYY-MM-DD-checked-<slug>.md --task <id>` (it prints the file id) and attach it:
+## 4. Build the page and attach it
 
+Follow `skills/build-the-validation-page/SKILL.md`: one page, the verdict line first, the version line, each criterion
+with its result and proof, the screenshots at both widths with red numbered arrows, what could not be checked, and the
+after-launch checks. Write `reports/YYYY-MM-DD-checked-<slug>.html`, publish it on the task (it prints the file id) and
+attach it:
+
+    tico page publish reports/YYYY-MM-DD-checked-<slug>.html --title "Checked in production: <the change>" --task <id>
     tico task attach <id> page:<file id> --req "<requirement>" --version N
+
+Then end the turn: Jev checks the page against the spec. When it sends the page back, its note says what is missing:
+check again, publish a new version and attach it.
 
 ## 5. Not validated
 

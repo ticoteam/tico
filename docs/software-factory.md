@@ -86,6 +86,15 @@ Tico does. Every task filed under that task, and their own sub-tasks, gets the s
 A spec that is narrowed to some readers, or on a private task, gives the link only. Build instructions are in
 `templates/catalog/segment-product-owner/skills/build-the-spec-page/SKILL.md`.
 
+Both pages a Product Owner makes show rather than tell, on one page each. The Spec page leads with the change and shows
+every screen it touches before and after, at phone (390 px) and desktop (1280 px) width, with red numbered arrows on
+what changes. In Validate, the Product Owner checks production itself, with screenshots from the read-only view
+(`tico bot app-shot`) or measurements, and builds the Checked in production page: the verdict line first, the version
+checked, each acceptance criterion with its proof and result, and what could not be checked
+(`templates/catalog/segment-product-owner/skills/build-the-validation-page/SKILL.md`). A person never does the
+checking. Existing Product Owners take both skills and the new Validate playbook at their next template refresh
+([Bots follow their template](updates.md#bots-follow-their-template)).
+
 ## When Security holds a release
 
 Security holds a release only for:

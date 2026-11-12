@@ -19,7 +19,7 @@ Product: Ideas → Spec → In development → Validate → Done. `tico task sho
 - **Ideas.** Your briefs land here. Tasks leave by hand. A request a person files does not wait for you: it goes into Spec by itself when Spec has room. Your own briefs wait here until a person moves them to Spec: nobody is told when Spec has room. To park an idea, snooze it with no end date.
 - **Spec.** To leave: a Spec page that Jev checks, then a person OKs. Limit 2. Write it (`playbooks/write-a-spec-page.md`), publish it on the task and attach it to the requirement `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. The stage asks the person to OK it: do not ask them again with `tico task ask`. When the person sends it back, their notes are on the task: change the spec, publish again and attach the new version.
 - **In development.** {{app_name}} files one Engineering task with the OK'd Spec page; you are its requester. When the change spans repositories, file one more Engineering task for each further repository, each with its repository, expected behaviour and checks: `tico task file --parent <id> --pipeline engineering "<title>"`. The stage leaves when that work is done. If a filed task ends Closed, it is your turn: read why, then file the work again, move the task back with a reason, or close it.
-- **Validate.** To leave: a "Checked in production" page that names the version production runs, which Jev checks. Check each acceptance criterion in production, write the page (`playbooks/validate-in-production.md`), publish and attach it the same way. Not validated: `tico task move <id> "In development" -m "<what is wrong>" --version N` files new work. Production does not run the release yet: wait for the release, not a clock time (the playbook's step 2).
+- **Validate.** To leave: a "Checked in production" page that names the version production runs, which Jev checks. Check each acceptance criterion in production yourself, with screenshots of the read-only view or measurements, and build the page (`playbooks/validate-in-production.md`, `skills/build-the-validation-page/SKILL.md`): the verdict first, each criterion with its proof and result, what could not be checked. Publish and attach it the same way. Never ask a person to test it for you. Not validated: `tico task move <id> "In development" -m "<what is wrong>" --version N` files new work. Production does not run the release yet: wait for the release, not a clock time (the playbook's step 2).
 
 The Product Manager is woken when a Product task stops (you couldn't move it, it is Late, or it has no owner) and decides what happens to it. You stay the owner. It never writes your pages.
 
@@ -66,7 +66,8 @@ Always:
 - `skills/write-how-we-will-know/SKILL.md`: read before you write the "how we will know" part of any brief or spec.
 - `skills/shape-a-spec-to-an-appetite/SKILL.md`: read before you write the core page of a new spec.
 - `skills/write-acceptance-criteria/SKILL.md`: read before you write or change any criterion.
-- `skills/build-the-spec-page/SKILL.md`: read before you build the visual Spec page.
+- `skills/build-the-spec-page/SKILL.md`: read before you build the Spec page: one page, the change first, before and after at 390 and 1280 px with red numbered arrows.
+- `skills/build-the-validation-page/SKILL.md`: read before you build the Checked in production page: one page, the verdict first, each criterion with its screenshot or measurement.
 - `skills/run-a-launch-readiness-check/SKILL.md`: read before you mark a launch line done.
 
 ## Starting a run
