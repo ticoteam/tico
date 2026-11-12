@@ -35,12 +35,15 @@ interface CloudMachineBot extends Employee {
   cloud_machine?: CloudMachineRow | null;
 }
 // A size HQ offers (GET /v2/cloud-machines, `sizes`): its name, and its price and disk when HQ sends them.
+// `available` false: the company's plan cannot start it, and `reason` says why ("Needs a higher plan").
 interface CloudMachineSize {
   name: string;
   cpu?: number;
   memory_gb?: number;
   usd_per_hour?: number;
   disk_gb?: number;
+  available?: boolean;
+  reason?: string;
 }
 const CLOUD_SIZE_NAMES = ['small', 'default', 'large', 'xlarge'];
 const CLOUD_STATES: Record<string, string> = {none: 'Not started yet', starting: 'Starting', running: 'Running', stopping: 'Stopping',
@@ -67,11 +70,17 @@ async function cloudMachineSizes(): Promise<CloudMachineSize[]> {
   }
   return CLOUD_SIZES ?? [];
 }
+// A size the plan cannot start says why after it: "XLarge · 16 CPU · … — needs a higher plan".
 function cloudSizeLabel(size: CloudMachineSize): string {
-  if (!size.cpu) return cloudSizeName(size.name);
+  const why = size.available === false ? ` — ${cloudSizeReason(size)}` : '';
+  if (!size.cpu) return cloudSizeName(size.name) + why;
   const hourly = Number(size.usd_per_hour).toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 6});
   const disk = size.disk_gb ? ` · ${size.disk_gb} GB disk` : '';
-  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h`;
+  return `${cloudSizeName(size.name)} · ${size.cpu} CPU · ${size.memory_gb} GB${disk} · $${hourly}/h${why}`;
+}
+function cloudSizeReason(size: CloudMachineSize): string {
+  const why = size.reason || 'Needs a higher plan';
+  return why.charAt(0).toLowerCase() + why.slice(1);
 }
 // "Running · Default · $0.42 this month · 3 starts", then a size waiting for the restart, and a grow note only while it
 // needs someone ("Disk 96% full: XLarge is the largest size"); a problem replaces the state.
@@ -133,10 +142,12 @@ async function cloudMachineMount(rows: ParentNode | null | undefined, slug: stri
   if (!sizes.length || !select.isConnected) return;
   select.innerHTML = cloudSizeOptions(sizes, select.value, select.dataset.machineSize);
 }
-// A size with less disk than the machine has now is off: a disk cannot shrink.
+// A size with less disk than the machine has now is off: a disk cannot shrink. So is one the company's plan cannot
+// start (HQ's `available` false), shown with its reason rather than hidden, so people see larger sizes exist.
 function cloudSizeOptions(sizes: CloudMachineSize[], value: string | undefined, machineSize: string | null | undefined): string {
   const floor = sizes.find(size => size.name === machineSize)?.disk_gb || 0;
-  return sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''} ${size.disk_gb && size.disk_gb < floor ? 'disabled' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
+  const off = (size: CloudMachineSize) => size.available === false || Boolean(size.disk_gb && size.disk_gb < floor);
+  return sizes.map(size => `<option value="${esc(size.name)}" ${size.name === value ? 'selected' : ''} ${off(size) ? 'disabled' : ''}>${esc(cloudSizeLabel(size))}</option>`).join('');
 }
 // One change to a cloud machine: the bot's (`/bots/<bot>/cloud-machine`), or the shared one's for a control whose
 // scope is shared. It moves no revision, so the next held row keeps the one it has.

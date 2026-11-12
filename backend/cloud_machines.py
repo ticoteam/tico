@@ -18,7 +18,8 @@ A machine is a boat.dev VM Tico HQ owns (tico-services); HQ keeps the boat key, 
     Machine {id, key, size, state: starting|running|stopping|stopped|deleted|failed, started_at, stopped_at,
              cost_month_usd, starts_month, last_error, pending: delete|stop|start|null}
     Size    {name, cpu, memory_gb, usd_per_hour (the customer's price), start_usd, idle_stop_s (HQ's break-even; the
-             server pauses by a machine's Pause after, not by this)}
+             server pauses by a machine's Pause after, not by this), available? (false: this company's plan cannot
+             start it; missing is true), reason? (why not, for a person: "Needs a higher plan")}
 
 `key` is a bot's id for its own machine and SHARED (`_shared`, never a bot id: ids are [a-z0-9-]) for the company's
 shared one, so each is made once. HQ counts the shared machine as one machine against its caps.
@@ -192,6 +193,11 @@ STOP_REFUSED = "Stop refused"  # grow_note while a resize's stop is refused (Hea
 # HQ's refusals of a start that are about the size it asked for: the next start goes at the size the machine has.
 SIZE_REFUSALS = ("cpu_cap", "plan_required", "too_small", "invalid_size")
 SIZE_RETRIES = ("cpu_cap",)  # of those, the ones that may pass later (GROW_RETRY); the rest hold until a person acts
+# Of those, the ones that say the company's plan cannot run the size at all: a machine with no smaller size to keep (a
+# new or replaced one) falls back to the largest the plan allows (`fallback_size`), and the person who chose is told.
+# HQ may pass the provider's own word ("machine_class_plan_required"), so a code or last_error is matched by its end.
+PLAN_REFUSALS = {"plan_required": "needs a higher plan", "invalid_size": "isn't available on this plan"}
+FALLBACK_NOTICE_S = 24 * 3600  # one notice per machine and refused size this often (`fall_back`)
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -267,7 +273,54 @@ def parse_size(value):
         "start_usd": float(_number(value.get("start_usd") or 0)),
         "idle_stop_s": idle,
         **({"disk_gb": disk} if type(disk) in (int, float) and disk > 0 else {}),
+        # A size HQ says the plan cannot start; a missing mark (an older HQ) is available, as before.
+        **(
+            {"available": False, "reason": _text(value.get("reason"), 60) or "Needs a higher plan"}
+            if value.get("available") is False
+            else {}
+        ),
     }
+
+
+def plan_refusal(code):
+    """The PLAN_REFUSALS code that refusal code or HQ's `last_error` ends with, or None."""
+    text = (code or "").strip().lower()
+    return next((known for known in PLAN_REFUSALS if text == known or text.endswith("_" + known)), None)
+
+
+def unavailable(offered, name):
+    """Why HQ says the company's plan cannot start size `name` (its `reason`), or None when it can or has not said."""
+    found = next((s for s in offered if s["name"] == name), None)
+    if not found or found.get("available") is not False:
+        return None
+    return found.get("reason") or "Needs a higher plan"
+
+
+def fallback_size(offered, name):
+    """The size to start at once HQ refused `name` for the plan: the largest the plan can start that is smaller than
+    it (fewer CPUs, else earlier in HQ's list). Where HQ marks no size unavailable, the next smaller listed one: each
+    refusal steps down one. None at the smallest, or for a size HQ did not list."""
+    order = {s["name"]: (s.get("cpu") or 0, i) for i, s in enumerate(offered)}
+    if name not in order:
+        return None
+    smaller = [s for s in offered if order[s["name"]] < order[name] and s.get("available") is not False]
+    return max(smaller, key=lambda s: order[s["name"]])["name"] if smaller else None
+
+
+def fallback_words(offered, name, code):
+    """Why size `name` could not start, in a person's words: HQ's reason for it when it marked it, else the code's."""
+    why = unavailable(offered, name)
+    return why[:1].lower() + why[1:] if why else PLAN_REFUSALS.get(code or "", "refused by the provider")
+
+
+def fallback_note(offered, name, code):
+    """The machine's status note after a fallback, until a person changes its size: "XLarge needs a higher plan"."""
+    return f"{cloud_size_name(name)} {fallback_words(offered, name, code)}"
+
+
+def bot_name(c, key):
+    found = H.bot(c, key) or {}
+    return found.get("display_name") or found.get("slug") or key
 
 
 class HQ:
@@ -436,8 +489,15 @@ def intend_delete(c, current, reason="manual"):
     )
 
 
-def count_enrollment_failure(c, key, machine_id):
-    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt."""
+def count_enrollment_failure(c, key, machine_id, last_error=None):
+    """Spend one try per id under the write lock, before any HTTP or adoption can lose this attempt. A machine HQ says
+    failed because the plan cannot run its size (`last_error`, else the row's for this id) spends none: its computer
+    never had a chance to connect, and `Manager.fall_back` starts the next one smaller instead."""
+    if last_error is None:
+        current = row(c, key)
+        last_error = current["last_error"] if current and current["machine_id"] == machine_id else ""
+    if plan_refusal(last_error):
+        return row(c, key)
     added = c.execute(
         "INSERT OR IGNORE INTO cloud_machine_enrollment_failures(machine_id,bot) VALUES(?,?)", (machine_id, key)
     ).rowcount
@@ -1665,8 +1725,11 @@ class Manager:
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
                         # HQ never got it a computer: it counts like one that never enrolled, so a boat that keeps
                         # failing stops being asked (no_enroll), and the work it was woken for may wake a new one.
-                        # Only HQ's list says so: a refused or unanswered create may be a passing outage.
-                        count_enrollment_failure(c, key, machine["id"])
+                        # Only HQ's list says so: a refused or unanswered create may be a passing outage. One HQ made
+                        # and then failed because the plan cannot run its size is that refusal, not a stall.
+                        count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+                        if machine["state"] == "failed" and current["state"] != "failed":
+                            self.plan_failed(c, current, machine, at)
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
                     elif machine["state"] in ON and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
@@ -1837,7 +1900,9 @@ class Manager:
         )
         adopted = row(c, key)
         if machine["state"] == "failed" or not fresh_runner and (dead or at >= adopted["enroll_by"]):
-            count_enrollment_failure(c, key, machine["id"])
+            count_enrollment_failure(c, key, machine["id"], machine["last_error"])
+            if machine["state"] == "failed":
+                self.plan_failed(c, adopted, machine, at)
         elif adopted["enroll_fails"] >= ENROLL_TRIES:
             save(c, key, problem="no_enroll", problem_at=H.now())
 
@@ -2183,6 +2248,7 @@ class Manager:
                 grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
                 grow_note=f"Couldn't change to {cloud_size_name(current['size'])}",
             )
+        plan = plan_refusal(refused.code) if action in ("create", "start") else None
         if action == "stop" and resizing(current) and "failures" in fields:
             if fields["failures"] >= STOP_TRIES:
                 # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
@@ -2199,7 +2265,15 @@ class Manager:
             else:
                 fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
-            save(c, key, **fields)
+            if plan and "grow_refused_size" in fields:
+                # A resize the plan cannot run: it starts at the size it has (above), and whoever chose is told.
+                fields["grow_note"] = fallback_note(sizes(c), current["size"], plan)
+                save(c, key, **fields)
+                self.tell(c, current, current["machine_size"], plan, at)
+            elif plan and self.fall_back(c, current, current["size"], plan, at, **fields):
+                return  # a new or replaced machine: the next look asks again, one size down (`fall_back`)
+            else:
+                save(c, key, **fields)
             if restarting and refused.code in ("starts_full", "cpu_cap"):
                 from .cloud_machine_health import file_card as file_health_card
 
@@ -2222,6 +2296,97 @@ class Manager:
                         **({"size": current["size"]} if "grow_refused_size" in fields else {}),
                     },
                 )
+
+    def plan_failed(self, c, current, machine, at):
+        """HQ made machine `machine` and then failed it because the plan cannot run its size (its `last_error`): fall
+        back as for a refused create, or, at the smallest size, say so and back off as an ordinary refusal does."""
+        code = plan_refusal(machine["last_error"])
+        if not code:
+            return
+        tried = machine["size"] or current["size"]
+        if tried != current["size"]:
+            return  # a person chose another size meanwhile: the next machine is made at theirs
+        if not self.fall_back(c, current, tried, code, at):
+            failures = current["failures"] + 1
+            save(
+                c,
+                current["bot"],
+                problem="hq:" + code,
+                problem_at=H.now(),
+                failures=failures,
+                next_try_at=at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1)),
+            )
+
+    def fall_back(self, c, current, refused_size, code, at, **fields):
+        """HQ refused size `refused_size` for machine row `current` because the plan cannot run it (`code`, one of
+        PLAN_REFUSALS) and there is no smaller size it already has: set it to the largest size the plan can start
+        (`fallback_size`), ask again at once with no failure counted, keep the note until a person changes the size, and
+        tell whoever chose (`tell`). `fields` are the refusal's own (create_asked_at, start_asked_at). False at the
+        smallest size: the refusal is then an ordinary one."""
+        key = current["bot"]
+        target = fallback_size(sizes(c), refused_size)
+        if target is None:
+            return False
+        fields.update(
+            size=target,
+            grow_refused_size=refused_size,
+            grow_blocked_until=None,
+            grow_note=fallback_note(sizes(c), refused_size, code),
+            failures=0,
+            next_try_at=None,
+            problem="",
+            problem_at=None,
+        )
+        save(c, key, **fields)
+        H.event(
+            c,
+            H.KEEPER,
+            "cloud_machine.refused",
+            key,
+            {"action": "create", "code": code, "size": refused_size, "fallback": target},
+        )
+        self.tell(c, {**current, "size": refused_size}, target, code, at)
+        return True
+
+    def tell(self, c, current, runs_at, code, at):
+        """One notice that machine row `current` could not start at its size and runs at `runs_at`, to the person who
+        last chose for it (else the company owner), and a `cloud_machine.size_fallback` event. A second one for the same
+        machine and refused size within FALLBACK_NOTICE_S sends no second notice."""
+        key, refused_size = current["bot"], current["size"]
+        H.event(
+            c,
+            H.KEEPER,
+            "cloud_machine.size_fallback",
+            key,
+            {"from": refused_size, "to": runs_at, "code": code, "at": at},
+        )
+        for earlier in c.execute(
+            "SELECT detail FROM events WHERE action='cloud_machine.size_fallback' AND target=? "
+            "ORDER BY created_at DESC LIMIT 20 OFFSET 1",
+            (key,),
+        ):
+            try:
+                seen = json.loads(earlier["detail"] or "{}")
+            except ValueError:
+                continue
+            if seen.get("from") == refused_size and at - (seen.get("at") or 0) < FALLBACK_NOTICE_S:
+                return
+        chooser = current.get("changed_by") or ""
+        if not str(chooser).startswith("human:"):
+            owner = self.execution.auth.owner_id(c)
+            chooser = H.human_actor(owner) if owner else ""
+        if not chooser:
+            return
+        name = "The shared cloud machine" if key == SHARED else f"{bot_name(c, key)}'s cloud machine"
+        H.notice(
+            c,
+            H.KEEPER,
+            chooser,
+            f"{name} couldn't start at {cloud_size_name(refused_size)} ({fallback_words(sizes(c), refused_size, code)}), "
+            f"so it runs at {cloud_size_name(runs_at)}. Its work isn't waiting. To change it, pick another size in "
+            "its Computer settings.",
+            refs={"cloud_machine": key},
+        )
 
     async def loop(self, stop):
         import asyncio
@@ -2521,11 +2686,23 @@ def change(
 
 def size_fields(c, before, size, grow_storage):
     """A person's size and Grow storage choice as row fields. A real change of either clears a refused size (it may be
-    asked again); the same value again changes nothing. A size with less disk than the machine has is refused: a disk
+    asked again) and a fallback's note; the same value again changes nothing. A size HQ says the plan cannot start is
+    refused (`size_unavailable`, with the sizes it can), and so is one with less disk than the machine has: a disk
     cannot shrink, so HQ would refuse the restart."""
     fields = {}
     if size is not None and size != before["size"]:
-        disk = {s["name"]: s.get("disk_gb") for s in sizes(c)}
+        offered_now = sizes(c)
+        why = unavailable(offered_now, size)
+        if why:
+            # The same answer a person gets in Settings, where the size is greyed out: an agent learns it here.
+            can = [s["name"] for s in offered_now if s.get("available") is not False]
+            raise Problem(
+                "size_unavailable",
+                f"{cloud_size_name(size)}: {why}. Choose one of: " + ", ".join(can),
+                422,
+                extra={"size": size, "reason": why, "available": can},
+            )
+        disk = {s["name"]: s.get("disk_gb") for s in offered_now}
         have = before["machine_size"] if before["machine_size"] and before["state"] not in DEAD else None
         if have and disk.get(size) and disk.get(have) and disk[size] < disk[have]:
             raise Problem(
