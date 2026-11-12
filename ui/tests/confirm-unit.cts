@@ -68,6 +68,7 @@ function page(desktop: boolean) {
     askConfirm(message: string, from?: unknown): Promise<boolean>;
     confirm(message: string): unknown;
     location: {hash: string};
+    S: {me: {id: string} | null};
   };
   return {run, button};
 }
@@ -114,6 +115,13 @@ void (async () => {
     p.run.location.hash = '#/home';
     dialogs[0]!.resolve(true); await doing;
     assert.equal(writes.length, 0, `${name}: OK on a page that moved on sends nothing`);
+
+    // Someone else signed in while the question was up: the answer was not theirs, so OK sends nothing.
+    p = page(true); writes = []; dialogs = [];
+    doing = act(p); await settle();
+    p.run.S.me = {id: 'human:ben'};
+    dialogs[0]!.resolve(true); await doing;
+    assert.equal(writes.length, 0, `${name}: OK after another person signed in sends nothing`);
 
     // OK, with a second click while the question is up: one dialog, exactly one write.
     p = page(true); writes = []; dialogs = [];
