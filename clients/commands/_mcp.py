@@ -49,6 +49,26 @@ def _kinds(schema):
     return [kind] if isinstance(kind, str) else kind or []
 
 
+def as_json_integers(value, schema):
+    """`value` with each integral float that `schema` types as an integer sent as an int: JSON Schema counts 1.0 as an
+    integer, and the server's strict integer fields refuse a float."""
+    if (
+        isinstance(value, float)
+        and value.is_integer()
+        and "integer" in (kinds := _kinds(schema))
+        and "number" not in kinds
+    ):
+        return int(value)
+    if isinstance(value, dict):
+        props, extra = schema.get("properties", {}), schema.get("additionalProperties", {})
+        return {
+            k: as_json_integers(v, props.get(k, extra if isinstance(extra, dict) else {})) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [as_json_integers(item, schema.get("items", {})) for item in value]
+    return value
+
+
 def argument_error(value, schema, path="arguments"):
     types = {
         "object": dict,
@@ -190,6 +210,7 @@ class Protocol:
             )
         if error := argument_error(args, entry["inputSchema"]):
             return self._tool_error(rid, {"error": "validation", "detail": error, "retryable": False})
+        args = as_json_integers(args, entry["inputSchema"])
         try:
             result = entry["fn"](self.api, args)
         except ValueError as exc:
