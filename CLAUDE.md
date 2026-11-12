@@ -25,9 +25,11 @@ A Tico bot working a task on this repository follows these where the rest of thi
 ## Tests
 `python3 -m pytest -q` (parallel by default) runs the default Python suite, which leaves out tests marked
 `@pytest.mark.slow`; `npm run test:ui` runs the core browser scripts (`CORE` in `scripts/ui-tests.cts`). In a fresh clone or worktree, a bot's
-runner included, run `scripts/dev_setup.sh` first (`--browser` adds Chromium for the browser scripts): runner images ship
-no dev tools. Without Google Chrome, set `TICO_BROWSER_CHANNEL=` (empty) so the scripts use
-Playwright's Chromium. On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
+runner included, run `scripts/dev_setup.sh` first (`--browser` readies the browser scripts: Google Chrome when it is on PATH,
+else Playwright's Chromium): runner images ship no dev tools. The browser scripts run on Google Chrome, so leave
+`TICO_BROWSER_CHANNEL` unset (Tico computers have Chrome). A computer without Chrome (rare; a person's laptop) runs
+`scripts/dev_setup.sh --browser` for Playwright's Chromium and sets `TICO_BROWSER_CHANNEL=` (empty).
+On a small computer (two CPUs, software WebGL) run the scripts you changed one at a time;
 the parallel suite is the release check's job on a full-size machine. The PR checks
 workflow runs the cheap checks (lint, generated types, the OpenAPI document, the wire contract, workflows, shell scripts) on each push to a
 pull request, on free GitHub-hosted runners. A ready pull request from this repository also runs a light set of tests (`plan --light`: the tests its change reaches directly, the smoke set, at most ten VMs; the browser scripts and Caddy image only when it touches their own inputs; `scripts/pr_checks.py` NARROW), and every other job the queue runs (the Caddy image, the Rust and desktop checks, the macOS recorder tests) when its change reaches it, on GitHub-hosted runners, so `checks` (the one required check) passes only when they pass; a draft runs nothing, and a fork's pull request runs the cheap

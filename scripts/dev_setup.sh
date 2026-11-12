@@ -7,7 +7,8 @@
 #                                    and uv; node_modules (npm ci)
 #   scripts/dev_setup.sh --rust      also the Rust toolchain check.sh's cargo fmt uses (rustup, in your home); on by
 #                                    itself when your branch touches a Rust crate
-#   scripts/dev_setup.sh --browser   also Playwright's Chromium, for the browser scripts (pytest never starts a browser)
+#   scripts/dev_setup.sh --browser   for the browser scripts: Google Chrome when it is on PATH, else Playwright's Chromium
+#                                    (pytest never starts a browser)
 # check.sh puts .venv/bin first on its PATH by itself. Anything else: .venv/bin/python, or `source .venv/bin/activate`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -113,10 +114,16 @@ if [ "$RUST" = 1 ]; then
   fi
 fi
 
-# 5. Chromium for the browser scripts, only when asked. The system libraries it needs are the image's (or your OS's).
+# 5. The browser scripts run on Google Chrome when it is on PATH (Tico computers have it), so Playwright's Chromium is
+# downloaded only when asked and there is none. The system libraries it needs are the image's (or your OS's).
 if [ "$BROWSER" = 1 ]; then
-  out=$(npx --no-install playwright install chromium 2>&1) || { printf '%s\n' "$out" >&2; fail "Playwright could not install Chromium"; }
-  if [ -n "$out" ]; then done_list+=("Chromium"); fi
+  chrome=$(command -v google-chrome || command -v google-chrome-stable || true)
+  if [ -n "$chrome" ]; then
+    say "browser scripts use Google Chrome ($chrome), Chromium skipped"
+  else
+    out=$(npx --no-install playwright install chromium 2>&1) || { printf '%s\n' "$out" >&2; fail "Playwright could not install Chromium"; }
+    if [ -n "$out" ]; then done_list+=("Chromium"); fi
+  fi
 fi
 
 if [ "${#done_list[@]}" -eq 0 ]; then
