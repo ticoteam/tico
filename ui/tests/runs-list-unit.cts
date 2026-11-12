@@ -30,11 +30,11 @@ for (const name of ['issues.ts', 'settings-history.ts']) {
 }
 
 // As run_view sends them: `id`, never `run`.
-const row = (id: string, more: Record<string, unknown>) => ({id, bot: 'ops', employee: 'ops', issue: null, outcome: null,
+const row = (id: string, state: string, more: Record<string, unknown>) => ({id, state, bot: 'ops', employee: 'ops', issue: null, outcome: null,
   failure_reason: '', duration_s: null, output_tokens: null, cost_usd: null, resumed: false, fallback: null, ran_on: null, ...more});
-const done = row('run-done', {state: 'completed', outcome: 'completed', exit: 0, finished_at: '2026-11-12T12:00:00Z', duration_s: 65});
-const failed = row('run-failed', {state: 'failed', outcome: 'failed', exit: 1, finished_at: '2026-11-12T12:01:00Z', failure_reason: 'boom'});
-const live = (state: string) => row('run-' + state, {state, exit: null, finished_at: null});
+const done = row('run-done', 'completed', {outcome: 'completed', exit: 0, finished_at: '2026-11-12T12:00:00Z', duration_s: 65});
+const failed = row('run-failed', 'failed', {outcome: 'failed', exit: 1, finished_at: '2026-11-12T12:01:00Z', failure_reason: 'boom'});
+const live = (state: string) => row('run-' + state, state, {exit: null, finished_at: null});
 const lives = ['leased', 'running', 'input'].map(live);
 
 ctx.__rows = [done, failed, ...lives];
