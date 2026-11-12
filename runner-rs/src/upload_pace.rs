@@ -13,27 +13,23 @@
 //! uploads keeps today's 50 ms; 20 or more turns, or uploads near 250 ms, reach the 1 s ceiling, so the runner's
 //! uploads per second stay about level as turns are added. The bounds cap how far slow uploads can widen the window.
 //!
+//! The outbox summary is kept in memory as rows are written and acknowledged (Outbox), so deciding when to upload
+//! never reads the runner's database, whose one connection is busy with each event's fsync.
+//!
 //! An upload takes what was recorded when it began; rows recorded meanwhile wait for the pacer, not the upload.
 //!
 //! Nothing here changes what is stored: `Runner::flush` still sends every row once, keyed on its seq range, and
 //! acknowledges in order. A failed upload is tried again a second later, as before.
 
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// Event kinds that may wait for the window once the turn's first text is up. Every other kind goes at once.
 pub const MAY_WAIT: [&str; 2] = ["delta", "tokens"];
 
-/// MAY_WAIT as an SQL list, for crate::state::State::waiting.
-pub fn may_wait_sql() -> String {
-    MAY_WAIT
-        .iter()
-        .map(|k| format!("'{k}'"))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-/// The outbox rows past the server's ack, summed (crate::state::State::waiting).
+/// The outbox rows past the server's ack, summed (Outbox::waiting).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Waiting {
     /// The oldest waiting row's seq: a new oldest row restarts the age clock.
@@ -47,16 +43,71 @@ pub struct Waiting {
     pub text: bool,
 }
 
-impl Waiting {
-    /// What to assume when the outbox could not be read: something that must go, so `flush` tries (and reports).
-    pub fn unknown() -> Self {
-        Waiting {
-            first_seq: -1,
-            count: 1,
-            bytes: 0,
-            urgent: true,
-            text: false,
+/// Each attempt's rows written by this process and not yet acknowledged: (seq, payload bytes, may wait, text).
+/// crate::state keeps it beside the database (State::append, append_batch, ack). Rows from before a restart are
+/// not here; those go up through recovery's flush, which this does not pace.
+#[derive(Default)]
+pub struct Outbox(Mutex<HashMap<String, VecDeque<(i64, u64, bool, bool)>>>);
+
+impl Outbox {
+    /// Rows numbered from `first` were committed, in order, as (kind, payload bytes).
+    pub fn wrote<'a>(
+        &self,
+        aid: &str,
+        first: i64,
+        rows: impl IntoIterator<Item = (&'a str, usize)>,
+    ) {
+        let mut all = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let queue = all.entry(aid.to_string()).or_default();
+        for (offset, (kind, bytes)) in rows.into_iter().enumerate() {
+            queue.push_back((
+                first + offset as i64,
+                bytes as u64,
+                MAY_WAIT.contains(&kind),
+                kind == "delta" || kind == "message",
+            ));
         }
+    }
+
+    /// The server holds every row up to `seq`.
+    pub fn acked(&self, aid: &str, seq: i64) {
+        let mut all = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(queue) = all.get_mut(aid) {
+            while queue.front().is_some_and(|r| r.0 <= seq) {
+                queue.pop_front();
+            }
+            if queue.is_empty() {
+                all.remove(aid);
+            }
+        }
+    }
+
+    pub fn forget(&self, aid: &str) {
+        self.0.lock().unwrap_or_else(|p| p.into_inner()).remove(aid);
+    }
+
+    pub fn waiting(&self, aid: &str) -> Waiting {
+        let all = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(queue) = all.get(aid) else {
+            return Waiting::default();
+        };
+        let mut w = Waiting {
+            first_seq: queue.front().map_or(0, |r| r.0),
+            count: queue.len(),
+            ..Waiting::default()
+        };
+        for &(_, bytes, may_wait, text) in queue {
+            w.bytes += bytes;
+            w.urgent |= !may_wait;
+            w.text |= text;
+        }
+        w
+    }
+
+    /// The newest row written for `aid` and not yet acknowledged.
+    pub fn last_seq(&self, aid: &str) -> Option<i64> {
+        let all = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        all.get(aid).and_then(|q| q.back()).map(|r| r.0)
     }
 }
 
@@ -402,6 +453,32 @@ mod tests {
             p.due(t0 + 1020 * MS, &urgent, true, 50 * MS, &ADAPTIVE),
             Some(t0 + 1020 * MS)
         );
+    }
+
+    #[test]
+    fn the_outbox_sums_unacknowledged_rows_and_drops_them_as_acks_arrive() {
+        let outbox = Outbox::default();
+        assert_eq!(outbox.waiting("a1"), Waiting::default());
+        outbox.wrote("a1", 1, [("status", 10)]);
+        outbox.wrote("a1", 2, [("delta", 40), ("delta", 40), ("tokens", 20)]);
+        let w = outbox.waiting("a1");
+        assert_eq!(
+            (w.first_seq, w.count, w.bytes, w.urgent, w.text),
+            (1, 4, 110, true, true)
+        );
+        outbox.acked("a1", 1);
+        let w = outbox.waiting("a1");
+        assert_eq!(
+            (w.first_seq, w.count, w.bytes, w.urgent, w.text),
+            (2, 3, 100, false, true)
+        );
+        assert_eq!(outbox.last_seq("a1"), Some(4));
+        outbox.acked("a1", 4);
+        assert_eq!(outbox.waiting("a1"), Waiting::default());
+        assert_eq!(outbox.last_seq("a1"), None);
+        outbox.wrote("a1", 5, [("tool", 30)]);
+        outbox.forget("a1");
+        assert_eq!(outbox.waiting("a1").count, 0);
     }
 
     #[test]

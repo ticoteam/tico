@@ -61,6 +61,9 @@ pub static APPENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 pub struct State {
     pub directory: PathBuf,
     conn: Arc<Mutex<Connection>>,
+    /// The event rows written since this process started and not yet acknowledged, summed in memory for
+    /// crate::upload_pace, so pacing a turn's uploads never waits on this connection or its fsyncs.
+    pub outbox: Arc<crate::upload_pace::Outbox>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +106,7 @@ impl State {
         Ok(State {
             directory: directory.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
+            outbox: Arc::default(),
         })
     }
 
@@ -252,6 +256,7 @@ impl State {
                 params![aid, seq, kind, text],
             )?;
             tx.commit()?;
+            self.outbox.wrote(aid, seq, [(kind, text.len())]);
             Ok(seq)
         })
     }
@@ -278,7 +283,13 @@ impl State {
                     insert.execute(params![aid, first + offset as i64, kind, text])?;
                 }
             }
-            tx.commit()
+            tx.commit()?;
+            self.outbox.wrote(
+                aid,
+                first,
+                rows.iter().map(|(kind, text)| (kind.as_str(), text.len())),
+            );
+            Ok(())
         })
     }
 
@@ -300,37 +311,13 @@ impl State {
     }
 
     /// The attempt's newest recorded seq (0 before its first event).
+    #[cfg(test)]
     pub fn last_seq(&self, aid: &str) -> Result<i64, String> {
         self.with(|c| {
             c.query_row(
                 "SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?",
                 params![aid],
                 |r| r.get(0),
-            )
-        })
-    }
-
-    /// The rows `pending` would send, summed for crate::upload_pace: the oldest seq, how many, their payload bytes,
-    /// whether one may not wait (a kind outside upload_pace::MAY_WAIT) and whether one is visible text.
-    pub fn waiting(&self, aid: &str) -> Result<crate::upload_pace::Waiting, String> {
-        self.with(|c| {
-            c.query_row(
-                &format!(
-                    "SELECT coalesce(min(e.seq),0), count(*), coalesce(sum(length(CAST(e.payload AS BLOB))),0), \
-                     coalesce(max(e.kind NOT IN ({})),0), coalesce(max(e.kind IN ('delta','message')),0) \
-                     FROM events e JOIN attempts a ON a.id=e.attempt_id WHERE e.attempt_id=? AND e.seq>a.ack",
-                    crate::upload_pace::may_wait_sql()
-                ),
-                params![aid],
-                |r| {
-                    Ok(crate::upload_pace::Waiting {
-                        first_seq: r.get(0)?,
-                        count: r.get::<_, i64>(1)? as usize,
-                        bytes: r.get::<_, i64>(2)? as u64,
-                        urgent: r.get::<_, i64>(3)? != 0,
-                        text: r.get::<_, i64>(4)? != 0,
-                    })
-                },
             )
         })
     }
@@ -342,7 +329,9 @@ impl State {
                 params![seq, aid],
             )
             .map(|_| ())
-        })
+        })?;
+        self.outbox.acked(aid, seq);
+        Ok(())
     }
 
     pub fn finish(&self, aid: &str, completion: &Map<String, Value>) -> Result<Value, String> {

@@ -1477,12 +1477,7 @@ impl Runner {
             if flags.done.load(Ordering::SeqCst) {
                 return;
             }
-            let id = aid.clone();
-            let waiting = self
-                .state
-                .off(move |s| s.waiting(&id))
-                .await
-                .unwrap_or_else(|_| crate::upload_pace::Waiting::unknown());
+            let waiting = self.state.outbox.waiting(&aid);
             let shown = self.first_posted.lock().unwrap().contains(&aid);
             let now = Instant::now();
             due = pacer.due(

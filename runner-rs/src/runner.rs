@@ -380,12 +380,9 @@ impl Runner {
             .or_default()
             .clone();
         let _held = lock.lock().await;
-        let id = aid.to_string();
+        // Rows from before a restart are not in the in-memory outbox: then everything pending.
         let upto = if self.upload_bounds.flush_snapshot {
-            self.state
-                .off(move |s| s.last_seq(&id))
-                .await
-                .map_err(|e| ApiError::new("state", e, 0, false))?
+            self.state.outbox.last_seq(aid).unwrap_or(i64::MAX)
         } else {
             i64::MAX
         };
@@ -433,6 +430,7 @@ impl Runner {
 
     pub fn forget_flush(&self, aid: &str) {
         self.flush_locks.lock().unwrap().remove(aid);
+        self.state.outbox.forget(aid);
         self.first_posted.lock().unwrap().remove(aid);
     }
 
