@@ -343,6 +343,8 @@ async function shot(page: Page, name: string) {
       assert.equal(new Set(widths).size, 1, 'one column');
       assert.ok(widths[0]! >= 340, 'the full width');
       assert.equal(await sideways(page), false, 'no sideways scroll');
+      const actionHeights = await page.locator('.dash-list a').evaluateAll(els => els.map(el => Math.round(el.getBoundingClientRect().height)));
+      assert.ok(actionHeights.length > 0 && actionHeights.every(height => height >= 40), 'dashboard task and question links are at least 40 px tall');
       await shot(page, 'phone-dashboard');
       await page.locator('[data-dash-mode="edit"]').click();
       await page.locator('#dash-grid .dash-pin').nth(1).locator('[data-dash-menu]').click();
