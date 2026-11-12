@@ -424,6 +424,16 @@ def test_quiet_tail_ends_at_its_timeout():
     )
     assert slept and max(slept) <= 0.5  # a reconnect wait stops at the deadline too
 
+    class SlowConnect(Tail):  # the connect itself uses up the budget
+        def stream(self, *a, **k):
+            now[0] += 1
+            return super().stream(*a, **k)
+
+    now[0], notes = 0, []
+    client = SlowConnect([APIError("unavailable", "timed out", retryable=True)])
+    events_tail.tail(client, timeout=0.5, emit=lambda line: None, note=notes.append, clock=lambda: now[0])
+    assert notes == [] and len(client.opened) == 1  # no "trying again" note when time is up
+
 
 def test_events_tail_fields_pick_each_line(shell, capsys):
     args = hubcli.parser().parse_args(["events", "tail", "--count", "1"])

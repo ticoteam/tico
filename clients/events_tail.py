@@ -154,6 +154,8 @@ def tail(
         except APIError as exc:
             if not exc.retryable:
                 raise
+            if deadline is not None and clock() >= deadline:
+                return printed  # the connect timed out at the requested timeout: no retry to announce
             failures += 1
             wait = min(RECONNECT_MAX, 2 ** min(failures, 5)) + random.random()
             note(f"event stream unavailable ({exc.detail}); trying again in {wait:.0f}s")
