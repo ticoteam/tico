@@ -394,7 +394,6 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     with the task from Merge (`page_for`)."""
     from . import page_verdicts as V
     from .item_sources import github as F
-    from . import task_pages as P
 
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
