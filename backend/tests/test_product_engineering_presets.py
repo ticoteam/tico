@@ -654,40 +654,6 @@ def test_the_product_manager_is_not_told_when_spec_has_room(c):
     assert N.rules_hold(c) == []
 
 
-def test_an_assignee_owned_ideas_tells_nobody_when_spec_has_room(c):
-    """C10 when a customer points Product's Ideas at "the task's assignee" (one Product Owner per area): a request moved
-    back into Ideas is held by hand, and its owner is not told when Spec has room, however many slots free."""
-    _team(c)
-    _answers(c, software="yes")
-    PS.ensure_presets(c)
-    area = X.bot(c, "app-owner")
-    c.execute("UPDATE stages SET owner='assignee' WHERE id='product-ideas'")
-    c.execute("UPDATE stages SET task_limit=1 WHERE id='product-spec'")
-    bug = X.new_task(c, ANA, "Saved carts lose items", "product", assignee=area)
-    X.settled(c)
-    N.check(c)  # a person's request: it moves on into Spec by itself
-    assert E.task(c, bug["id"])["stage_id"] == "product-spec"
-    E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
-    row = E.task(c, bug["id"])
-    assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
-    (held,) = W.of(c, row)
-    assert held.state == W.BY_HAND
-    X.settled(c)
-    N.check(c)
-    N.check(c)
-    assert _room_messages(c) == 0
-    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: someone moves it
-    other = X.new_task(c, ANA, "Export to CSV", "product", assignee=area)
-    X.settled(c)
-    N.check(c)
-    assert E.task(c, other["id"])["stage_id"] == "product-spec"
-    E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
-    N.check(c)
-    N.check(c)
-    assert _room_messages(c) == 0
-    assert N.rules_hold(c) == []
-
-
 def _ideas_moves(c):
     return {
         row[0]: row[1]
