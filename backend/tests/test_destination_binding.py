@@ -448,7 +448,7 @@ def test_a_send_claimed_before_a_clear_is_never_sent_without_its_header(api, net
     D.deliver(store, vault, claimed, transport=net.transport)
     assert net.seen == []
     with store.read() as c:
-        assert c.execute("SELECT state FROM webhook_sends WHERE id=?", (claimed,)).fetchone()["state"] == "ready"
+        assert c.execute("SELECT state FROM webhook_sends WHERE id=?", (claimed.id,)).fetchone()["state"] == "ready"
 
 
 def test_only_the_creator_an_admin_or_the_owner_moves_a_webhook(api, net):

@@ -20,7 +20,7 @@ CREATE INDEX IF NOT EXISTS webhook_events_created ON webhook_events(created_at);
 CREATE TABLE IF NOT EXISTS webhook_sends (
   id TEXT PRIMARY KEY, event_id TEXT NOT NULL, webhook_id TEXT NOT NULL, type TEXT NOT NULL,
   subject TEXT NOT NULL DEFAULT '', body TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'ready',
-  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, claimed_at TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0, next_attempt_at TEXT NOT NULL, claimed_at TEXT, claim_token TEXT,
   last_status INTEGER, last_error TEXT NOT NULL DEFAULT '', delivered_at TEXT, created_at TEXT NOT NULL,
   UNIQUE(webhook_id, event_id));
 CREATE INDEX IF NOT EXISTS webhook_sends_due ON webhook_sends(state, next_attempt_at);

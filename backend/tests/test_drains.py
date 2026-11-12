@@ -20,10 +20,10 @@ def slow_steps(monkeypatch, seconds):
     """Every run step takes `seconds`, as a slow model or connector would; returns the runs advanced, in order."""
     real, went = automations.Hub.go, []
 
-    def go(self, rid):
+    def go(self, claimed):
         time.sleep(seconds)
-        went.append(rid)
-        return real(self, rid)
+        went.append(claimed.id)
+        return real(self, claimed)
 
     monkeypatch.setattr(automations.Hub, "go", go)
     return went

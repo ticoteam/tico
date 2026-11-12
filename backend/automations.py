@@ -12,7 +12,9 @@ transaction. A run that waits (an llm turn, a batch time) is saved with its thre
 A run is saved after every step that did something, before the next starts, and each effect is written once: its key
 (`<run id>:<step record>`) goes in `automation_effects` in the effect's own transaction, so doing it again answers
 what it answered the first time. A run claimed whose server stopped is put back in the queue by the tick and goes on
-from its last save (at most MAX_RESUMES times). A turn that ends while its run is still being worked leaves its answer
+from its last save (at most MAX_RESUMES times). Each claim stamps its own token, which the tick clears when it takes a
+run back: a worker that was only stalled, not stopped, finds another token when it comes back, and neither its saves
+nor its result touch the run. A turn that ends while its run is still being worked leaves its answer
 in `automation_turn_answers`, which the run picks up when it is saved.
 
 Reading mail and Slack is the owner's: an automation hears and finds only what its owner may read (`may_read_inbox`),
@@ -42,6 +44,7 @@ import json
 import logging
 import threading
 import weakref
+from typing import NamedTuple
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -57,7 +60,7 @@ from . import task_models
 from . import task_run_models
 from .migrations import renames
 from .models import Contract
-from . import audit_log, cloud_access, listening
+from . import audit_log, cloud_access, listening, outbox
 from .store import H, Problem
 from . import sources as SRC
 
@@ -74,7 +77,8 @@ SCHEMA = (
     "PRIMARY KEY(automation_id, n))",
     "CREATE TABLE IF NOT EXISTS automation_runs(id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, version INTEGER NOT NULL, "
     "trigger_ref TEXT NOT NULL DEFAULT '', started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL, "
-    "cost REAL NOT NULL DEFAULT 0, saved_state TEXT, claimed_at TEXT, wake_at TEXT, chain TEXT NOT NULL DEFAULT '[]')",
+    "cost REAL NOT NULL DEFAULT 0, saved_state TEXT, claimed_at TEXT, wake_at TEXT, chain TEXT NOT NULL DEFAULT '[]', "
+    "claim_token TEXT)",
     "CREATE INDEX IF NOT EXISTS automation_runs_of ON automation_runs(automation_id, started_at)",
     "CREATE INDEX IF NOT EXISTS automation_runs_queue ON automation_runs(status, started_at)",
     # The overview reads every visible automation's runs over a time range (backend/automation_overview.py).
@@ -2267,8 +2271,9 @@ class HubServices:
     """The executor's services in the hub. Each call with an effect takes its own short transaction, acting as the
     automation's owner with `via: automation:<id>` on what it logs and its chain on what it writes."""
 
-    def __init__(self, hub, row, flow, run_id, chain):
+    def __init__(self, hub, row, flow, run_id, chain, token=None):
         self.hub, self.row, self.flow, self.run_id, self.chain = hub, row, flow, run_id, chain
+        self.token = token  # the claim this worker runs the run under (Hub.claim)
         self.auto = {
             "id": row["id"],
             "flow": flow,
@@ -2608,11 +2613,17 @@ class HubServices:
             )
 
     def on_hold(self):
-        """Whether no further step may start: the run guard put the automation on hold since this run was claimed, or
-        the run was dropped meanwhile (it is no longer `running`)."""
+        """Whether no further step may start: the run guard put the automation on hold since this run was claimed, the
+        run was dropped meanwhile (it is no longer `running`), or this worker's claim lapsed (the tick took the run back
+        after STALE_MINUTES without a save, and another worker may have it now)."""
         with self.hub.store.read() as c:
-            run = c.execute("SELECT status FROM automation_runs WHERE id=?", (self.run_id,)).fetchone()
-            return _hold_row(c, self.row["id"]) is not None or not run or run["status"] != "running"
+            run = c.execute("SELECT status, claim_token FROM automation_runs WHERE id=?", (self.run_id,)).fetchone()
+            return (
+                _hold_row(c, self.row["id"]) is not None
+                or not run
+                or run["status"] != "running"
+                or run["claim_token"] != self.token
+            )
 
     def checkpoint(self, state):
         """Save the run after a step that did something, before the next one starts."""
@@ -2621,11 +2632,15 @@ class HubServices:
         self.dirty = False
 
         def work(c):
+            # Only under this worker's claim: once the tick has taken the run back, the save is the next worker's.
+            if not c.execute(
+                "UPDATE automation_runs SET saved_state=?,cost=?,claimed_at=? WHERE id=? AND status='running' "
+                "AND claim_token=?",
+                (json.dumps(state, default=str), state.get("cost", 0), H.now(), self.run_id, self.token),
+            ).rowcount:
+                log.warning("automation run %s: a save from a lapsed claim was dropped", self.run_id)
+                return
             _found_done(c, self.row["id"], state)
-            c.execute(
-                "UPDATE automation_runs SET saved_state=?,cost=?,claimed_at=? WHERE id=? AND status='running'",
-                (json.dumps(state, default=str), state.get("cost", 0), H.now(), self.run_id),
-            )
 
         self._write(work)
 
@@ -2641,6 +2656,13 @@ OCCUPIED = (
     "AND h.run_id NOT IN (SELECT f.id FROM automation_runs f WHERE f.automation_id=:aid "
     "AND f.status IN ('running','waiting') AND f.wake_at IS NULL))"
 )
+
+
+class RunClaim(NamedTuple):
+    """A run this worker holds, and the claim's token that its saves and its settling must carry."""
+
+    id: str
+    token: str
 
 
 class Hub:
@@ -2683,11 +2705,12 @@ class Hub:
             queued.close()  # the write below must not run under a read still open on the table
             if pick is None:
                 return None
+            token = outbox.new_token()
             c.execute(
-                "UPDATE automation_runs SET status='running',claimed_at=? WHERE id=? AND status='queued'",
-                (H.now(), pick),
+                "UPDATE automation_runs SET status='running',claimed_at=?,claim_token=? WHERE id=? AND status='queued'",
+                (H.now(), token, pick),
             )
-            return pick
+            return RunClaim(pick, token)
 
     def drain(self, limit=200, budget=None):
         """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever. With a
@@ -2698,10 +2721,10 @@ class Hub:
         def runs():
             done = 0
             while done < limit and drains.left(budget):
-                rid = self.claim()
-                if not rid:
+                claimed = self.claim()
+                if not claimed:
                     break
-                self.go(rid)
+                self.go(claimed)
                 done += 1
             return done
 
@@ -2726,9 +2749,16 @@ class Hub:
             worker.wait(ticket, wait)
         return None
 
-    def go(self, rid):
+    def go(self, claimed):
+        """Advance a claimed run and settle it. True when this claim settled it; False when the claim lapsed first (the
+        tick took the run back after STALE_MINUTES without a save): then what this worker found is logged and dropped,
+        and the run, its cost and its parked turn answers are left to the claim that replaced it."""
+        rid, token = claimed
         with self.store.read() as c:
             run = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
+            if run["claim_token"] != token:
+                log.warning("automation run %s: its claim lapsed before it started; left to the claim that has it", rid)
+                return False
             row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
             version = c.execute(
                 "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
@@ -2738,25 +2768,35 @@ class Hub:
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
             flow = {**{k: v for k, v in flow_of(row).items() if k not in VERSIONED}, **json.loads(version["flow"])}
-            services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")))
+            services = HubServices(self, dict(row), flow, rid, tuple(json.loads(run["chain"] or "[]")), token)
             with SRC.writing_as(SRC.automation_key(row["id"])):  # the keeper lines its steps write name it
                 state = E.advance(flow, state, services)
         except Exception as exc:  # noqa: BLE001 - a bug in a run fails that run, not the drain
             state = {**state, "status": "failed", "error": (str(exc) or type(exc).__name__)[:300]}
         with self.store.transaction() as c:
+            now = c.execute("SELECT status, claim_token FROM automation_runs WHERE id=?", (rid,)).fetchone()
+            if now["claim_token"] != token:
+                log.warning(
+                    "automation run %s: a late result (%s, cost %s) from a lapsed claim was dropped; the run is %s",
+                    rid,
+                    state.get("status"),
+                    state.get("cost", 0),
+                    now["status"],
+                )
+                return False
             _take_parked(c, rid, state)
             settle_mail(c, state)  # in the same write as the save, so a result reported meanwhile is not lost
-            if c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()[0] == "skipped":
+            if now["status"] == "skipped":
                 # Dropped (or its automation turned off or deleted) during the step: what the step did is saved (with
                 # the answers and costs of turns that ended meanwhile, taken above), the run stays skipped, and
                 # nothing it queued is sent.
                 state["status"] = "skipped"
                 _cancel_mail(c, rid, state)
                 c.execute(
-                    "UPDATE automation_runs SET cost=?,saved_state=?,claimed_at=NULL WHERE id=?",
+                    "UPDATE automation_runs SET cost=?,saved_state=?,claimed_at=NULL,claim_token=NULL WHERE id=?",
                     (state.get("cost", 0), json.dumps(state, default=str), rid),
                 )
-                return
+                return True
             status = state["status"]
             if any(t.get("state") == E.READY for t in state.get("threads") or []) and status not in ("failed",):
                 # Put on hold while a step ran: it finished that step and stopped, and waits held, not queued.
@@ -2770,8 +2810,8 @@ class Hub:
             if status == "waiting":
                 state["waiting_since"] = H.now()  # a turn's day to answer runs from here, not from the run's start
             c.execute(
-                "UPDATE automation_runs SET status=?,cost=?,saved_state=?,finished_at=?,wake_at=?,claimed_at=NULL "
-                "WHERE id=?",
+                "UPDATE automation_runs SET status=?,cost=?,saved_state=?,finished_at=?,wake_at=?,claimed_at=NULL,"
+                "claim_token=NULL WHERE id=?",
                 (
                     status,
                     state.get("cost", 0),
@@ -2785,6 +2825,7 @@ class Hub:
                 _due_failed(c, rid, _run_error(state))
             if status not in ("waiting", "held"):
                 _ring(c)  # queued again, or done: a run of this automation that the cap held back can start now
+        return True
 
 
 # ---------------------------------------------------------------------------------------------------- mail actions
@@ -3168,7 +3209,8 @@ def tick(store, at=None, drain=True):
                 _fail(c, run["id"], state, now, "it was cut off more than %d times" % MAX_RESUMES)
             else:
                 c.execute(
-                    f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,saved_state=? WHERE id=?",
+                    f"UPDATE automation_runs SET status={RUNNABLE},claimed_at=NULL,claim_token=NULL,saved_state=? "
+                    "WHERE id=?",
                     (json.dumps(state, default=str), run["id"]),
                 )
         # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
@@ -3181,7 +3223,7 @@ def tick(store, at=None, drain=True):
             state = {**json.loads(run["saved_state"] or "{}"), "status": "skipped"}
             _take_parked(c, run["id"], state)
             c.execute(
-                "UPDATE automation_runs SET cost=?,saved_state=?,claimed_at=NULL WHERE id=?",
+                "UPDATE automation_runs SET cost=?,saved_state=?,claimed_at=NULL,claim_token=NULL WHERE id=?",
                 (state.get("cost", 0), json.dumps(state, default=str), run["id"]),
             )
         # A turn (or a mail computer) that never answered would hold the run waiting for ever.
@@ -3449,8 +3491,8 @@ def _fail(c, rid, state, now, why):
         _cancel_mail(c, rid)
     was = c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()
     c.execute(
-        "UPDATE automation_runs SET status='failed',finished_at=?,claimed_at=NULL,saved_state=coalesce(?,saved_state) "
-        "WHERE id=?",
+        "UPDATE automation_runs SET status='failed',finished_at=?,claimed_at=NULL,claim_token=NULL,"
+        "saved_state=coalesce(?,saved_state) WHERE id=?",
         (now, json.dumps(state, default=str) if state else None, rid),
     )
     if was and was["status"] != "failed":
