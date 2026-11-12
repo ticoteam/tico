@@ -181,8 +181,8 @@ class Protocol:
             k
             for k in entry["inputSchema"].get("required", [])
             if k not in args
-            or args[k] is None and "null" not in _kinds(properties.get(k, {}))
-            or args[k] == "" and properties.get(k, {}).get("minLength") != 0
+            or (args[k] is None and "null" not in _kinds(properties.get(k, {})))
+            or (args[k] == "" and properties.get(k, {}).get("minLength") != 0)
         ]
         if missing:
             return self._tool_error(
