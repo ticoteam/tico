@@ -162,3 +162,22 @@ def test_a_manual_run_answers_after_the_workers_pass_that_takes_it(api):
         worker.stop.set()
         thread.join(5)
     assert run["status"] == "ok" and worker.passes >= 1
+
+
+def test_runs_and_gmail_actions_share_one_budget_and_take_turns_going_first(api, monkeypatch):
+    aid = make(api, [WAKE])
+    for _ in range(4):
+        queued(api, aid)
+    slow_steps(monkeypatch, 0.5)
+    seen = []
+
+    def mail(store, limit=200, budget=None):
+        seen.append(("mail", budget is not None and budget.left()))
+        return 0
+
+    monkeypatch.setattr(automations, "drain_workspace_mail", mail)
+    first = drains.Budget(0.75)
+    hub(api).drain(budget=first)  # Gmail actions first: the whole budget is still there
+    second = drains.Budget(0.75)
+    assert hub(api).drain(budget=second) == 2 and second.spent  # runs first, then Gmail gets no fresh budget
+    assert seen == [("mail", True), ("mail", False)]

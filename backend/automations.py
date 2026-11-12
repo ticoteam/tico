@@ -2652,6 +2652,7 @@ class Hub:
         self._app, self.store, self.settings = weakref.ref(app), store, store.settings
         self.lock = threading.Lock()
         self.worker = None  # the queue's drain worker (backend/drains.py) while the server runs one
+        self.mail_first = False  # which half of a budgeted pass goes first; they take turns
 
     @property
     def app(self):
@@ -2688,20 +2689,27 @@ class Hub:
 
     def drain(self, limit=200, budget=None):
         """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever. With a
-        `budget` (backend/drains.py), no new run is claimed once it is spent, and the mail gets a budget of its own."""
+        `budget` (backend/drains.py) both share it: nothing new is claimed once it is spent, and the two take turns
+        going first, so a long queue of runs never keeps the mail waiting for ever (or the other way round)."""
         from . import drains
 
-        done = 0
-        while done < limit and drains.left(budget):
-            rid = self.claim()
-            if not rid:
-                break
-            self.go(rid)
-            done += 1
-        mail = budget.again() if budget else None
-        drain_workspace_mail(self.store, budget=mail)
-        if budget and mail and mail.spent:
-            budget.spent = True  # work is left for the next pass
+        def runs():
+            done = 0
+            while done < limit and drains.left(budget):
+                rid = self.claim()
+                if not rid:
+                    break
+                self.go(rid)
+                done += 1
+            return done
+
+        if budget is not None:
+            self.mail_first = not self.mail_first
+            if self.mail_first:
+                drain_workspace_mail(self.store, budget=budget)
+                return runs()
+        done = runs()
+        drain_workspace_mail(self.store, budget=budget)
         return done
 
     def drain_now(self, wait=None):
