@@ -252,7 +252,8 @@ def cloud_replace(api, args):
 @tool(
     "tico_subscription_list",
     "The company's AI subscriptions (a person): each one's name, kind, runtime, status, a preview of its value (never "
-    "the value), who added it and the computers given it; and the computers that cannot take one until they update. "
+    "the value), who added it and owns it and the computers given it; each computer given a person's plans for a tool "
+    "(`people_plans`: whose, the plan in use and why); and the computers that cannot take one until they update. "
     "Adding one or pasting a value is the person's own, in Settings > Models. Example: tico subscription list",
     {},
 )
@@ -271,12 +272,39 @@ def subscription_list(api, args):
                 },
                 "computers": [labels.get(r, r) for r in s.get("computers") or []],
                 "added_by": s.get("added_by_name") or s.get("added_by"),
+                **({"owner": s.get("owner_name")} if s.get("owner_name") else {}),
             }
             for s in subs.get("subscriptions") or []
         ],
+        "people_plans": [
+            {
+                "computer": labels.get(a.get("runner_id"), a.get("runner_id")),
+                "tool": a.get("runtime"),
+                "plans": f"{(a.get('set') or {}).get('person_name')}'s plans",
+                "count": (a.get("set") or {}).get("plans"),
+                "on": (a.get("set") or {}).get("on_name"),
+                "why": _set_why((a.get("set") or {}).get("why") or {}),
+            }
+            for a in given.get("assignments") or []
+            if a.get("person")
+        ],
         "cannot_take_one": [label for rid, label in labels.items() if rid not in capable],
-        "detail": "Give one to a computer: tico settings set models.computer_subscription",
+        "detail": "Give one, or a person's plans (`person`), to a computer: tico settings set models.computer_subscription",
     }
+
+
+def _set_why(why):
+    """Why a computer given a person's plans is on the plan it is on, in a line (backend model_subscriptions.set_state)."""
+    kind, plan, until = why.get("kind"), why.get("plan"), why.get("until")
+    if kind == "held":
+        return f"{plan} at its limit until {until}"
+    if kind == "reconnect":
+        return f"{plan} needs reconnecting"
+    if kind == "all_held":
+        return f"all at their limit, next reset {until}: the computer's own login, the Gateway or waiting"
+    if kind == "none":
+        return "the person owns no plan for this tool"
+    return "soonest reset with usage left"
 
 
 # ----------------------------------------------------------------------------- registration

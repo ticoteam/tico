@@ -92,12 +92,18 @@ def _tokens(text):
     return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
 
 
-def find(words, limit=20):
-    """Entries whose name, place, key or words hold the most of `words`, best first; every entry for no words."""
+def find(words, limit=20, extra=None):
+    """Entries whose name, place, key or words hold the most of `words`, best first; every entry for no words.
+    `extra`: {key: words} read from the company's own data at search time (a plan owner's name for the picker that
+    gives a computer their plans)."""
     wanted = _tokens(words)
+    extra = extra or {}
     rows = []
     for e in _entries():
-        name, rest = _tokens(e.name), _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words)))
+        name, rest = (
+            _tokens(e.name),
+            _tokens(" ".join((e.where, e.key.replace(".", " ").replace("_", " "), e.words, extra.get(e.key, "")))),
+        )
         hits = len(wanted & (name | rest))
         if wanted and not hits:
             continue
@@ -559,8 +565,14 @@ def install(app, store, auth, settings):
     def settings_find(request: Request, q: str = "", limit: int = 20):
         """Settings that write, found by their words (all of them with none): key, name, place, who may change it, class,
         route and body shape, and the link to the card."""
+        from . import model_subscriptions
+
         auth.domain(request.state.identity)
-        rows = find(q[:200], max(1, min(int(limit), 200)))
+        extra = {}
+        if q.strip():
+            with store.read() as c:
+                extra["models.computer_subscription"] = " ".join(model_subscriptions.owner_names(c))
+        rows = find(q[:200], max(1, min(int(limit), 200)), extra)
         return {"settings": [public(e, settings.public_url) for e in rows]}
 
     @app.get("/api/v2/settings/catalog/{key}")

@@ -9041,7 +9041,7 @@ STABLE.extend(
             'get',
             'Model subscriptions',
             'listComputerSubscriptions',
-            'Which subscription each computer uses per runtime, and the computers that can take one',
+            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
             'ComputerSubscriptionList',
         ),
         (
@@ -9049,7 +9049,7 @@ STABLE.extend(
             'put',
             'Model subscriptions',
             'setComputerSubscription',
-            'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true',
+            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
             'ComputerSubscriptionResult',
         ),
     ]
@@ -9077,6 +9077,8 @@ SCHEMAS['ModelSubscription'] = obj(
                         'cost_usd_month': NUM_N,
                         'resets_at': 'n',
                         'reason': {'type': ['string', 'null']},
+                        'weekly_resets_at': 'n',
+                        'weekly_used_pct': NUM_N,
                     },
                     required=['window', 'used_pct', 'cost_usd_month'],
                 ),
@@ -9089,6 +9091,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name': 's',
         'created_at': 's',
         'updated_at': 's',
+        'order': {'type': ['integer', 'null']},
+        'in_use_on': items({'type': 'string'}),
     },
     required=[
         'id',
@@ -9109,6 +9113,8 @@ SCHEMAS['ModelSubscription'] = obj(
         'owner_name',
         'created_at',
         'updated_at',
+        'order',
+        'in_use_on',
     ],
 )
 SCHEMAS['ModelSubscriptionList'] = obj(
@@ -9132,10 +9138,23 @@ SCHEMAS['ModelSubscriptionList'] = obj(
 SCHEMAS['ModelSubscriptionDeleted'] = obj(
     {'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'}
 )
+_SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
+_PERSON_SET = obj({'person': 's', 'person_name': 's', 'plans': 'i', 'on': 'n', 'on_name': 'n', 'why': _SET_WHY})
 SCHEMAS['ComputerSubscriptionList'] = obj(
     {
-        'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+        'assignments': items(
+            obj(
+                {
+                    'runner_id': 's',
+                    'runtime': {'enum': ['claude', 'codex']},
+                    'subscription_id': 's',
+                    'person': 's',
+                    'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
+                }
+            )
+        ),
         'capable': items({'type': 'string'}),
+        'people': items(obj({'id': 's', 'name': 's', 'claude': 'i', 'codex': 'i'}, required=['id', 'name'])),
     }
 )
 SCHEMAS['ComputerSubscriptionResult'] = obj(
@@ -9143,6 +9162,7 @@ SCHEMAS['ComputerSubscriptionResult'] = obj(
         'runner_id': 's',
         'runtime': {'enum': ['claude', 'codex']},
         'subscription_id': 'n',
+        'person': 's',
         'stopped': 'i',
         'sessions_reset': 'i',
     }
