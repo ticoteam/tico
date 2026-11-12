@@ -455,6 +455,13 @@ def of(
         full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
         line = f"No room in {name}" if full else f"Moving to {name}"
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
+    elif by_hand and not unmet and E.handed_over(conn, row):
+        # Someone else handed it to the owner bot: the owner's turn, with a due time; Late wakes the manager bot
+        # (never_stuck._handoffs).
+        ahead = E.next_stage(conn, row)
+        line = f"Move to {ahead['name'] if ahead else 'the next stage'}, or snooze to park it"
+        wait = _turn(conn, row, row["owner_id"], line, None, entered, False, seen)
+        out.append(replace(wait, until=E.handover_due(conn, row)))
     elif by_hand:
         out.append(Wait(BY_HAND, stage["id"], f"Leaves {stage['name']} by hand", None, entered))
     elif not unmet:
