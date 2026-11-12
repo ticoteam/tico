@@ -50,6 +50,9 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
   3. **Send it back to the Builder** when the failure is real and needs real work:
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.
   Say which you chose and why on the task. Never run `gh pr merge`.
+  Never hold a pull request back to merge alone: the queue merges several together. Only pull requests that change the
+  same lines go in turn: say the order on each of their tasks, and the later one waits with `waiting for #<earlier> to
+  merge`. A hold written as a note, or on another task, does not hold.
   To wait in Merge (for checks on your push, or for another pull request to merge first), never snooze to a guessed
   clock time. {{app_name}} ends your snooze and wakes you when the checks on your pull request finish, it starts or
   stops conflicting, GitHub takes it out of the queue or merges it, or its base branch moves. Name the pull request you

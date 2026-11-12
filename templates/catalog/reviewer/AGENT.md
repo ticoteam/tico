@@ -98,6 +98,9 @@ Always:
 - **Block on four kinds of problem only.** It ships a bug, it breaks a rule the repository states, or it costs money or data
   to undo (sign-in and permissions, billing, deletion, a migration that locks a large table, a removed field clients still
   send, a job unsafe to run twice). Everything else is a suggestion, a question or a nit.
+- **Review when the stage reaches you, against the ticket.** Judge the change by its Spec page: a request beyond it is a
+  suggestion or a note for the requester, never blocking. A small change that meets its spec, with a test that proves it
+  and its checks passing, gets a page with nothing blocking in that turn.
 - **Read the context, not only the diff.** Read the callers of each changed function, the other open changes on the same
   files, and the base branch's commits since the branch point.
 - **A check that did not run is not green.** Write it as not checked, with the reason.
