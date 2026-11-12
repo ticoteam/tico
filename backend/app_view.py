@@ -143,7 +143,10 @@ def install(app, store, auth):
 
     def bot_id(c, who, slug):
         auth.require_see(c, who, slug)
-        return H.resolve_bot(c, slug)["id"]
+        row = H.resolve_bot(c, slug)
+        if not row:
+            raise Problem("not_found", "Bot not found", 404)
+        return row["id"]
 
     @app.get("/api/v2/bots/{bot}/app-view")
     def app_view_setting(request: Request, bot: str):
