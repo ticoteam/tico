@@ -140,6 +140,7 @@ const block = (seq: number, event: string, data: Record<string, unknown>) => `id
   const second = await send(following, block(12, 'needs', {count: 1, version: 'v1', base: 'v0', changed: ['t9'], removed: []}));
   assert.equal(second.searchParams.get('after'), '11');
   assert.equal(first.searchParams.get('needs'), 'changes');
+  assert.equal(first.searchParams.get('output'), 'compact', 'run steps as compact signals: no screen reads their contents');
   await page.locator('.cnt.needs', {hasText: '1'}).first().waitFor();
   assert.equal(reads.needs.filter(q => !q.includes('ids=')).length, fullReads, 'only the changed item is read');
   // Only some pages held: a changed item past them stays unread, the count moves, the next page starts after them.
