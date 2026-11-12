@@ -3590,6 +3590,8 @@ def create_app(settings=None):
             c.execute("UPDATE tasks SET request_id=? WHERE id=?", (inherited_request or request_id, row["id"]))
         for url in body.links:
             H.task_link(c, who.actor, row["id"], url, mover=True)
+        # A bot's finding on a pipeline task's own pull request is that task's review verdict, not a person's task.
+        H.review_finding_route(c, who.actor, row["id"], row["owner_id"])
         # The parent it was filed under is a relation written here too, and reads back first.
         filed_under = TR.parent_of(c, row["id"])
         readback = TR.readback(c, row["id"], filed_under, "parent") if filed_under else []

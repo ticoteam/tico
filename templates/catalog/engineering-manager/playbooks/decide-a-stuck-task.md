@@ -20,8 +20,8 @@ outcome is one decision on the task with one line of reason.
      If a person asked for it, ask them instead.
    - Only a person can decide: **ask** them once, with `skills/write-the-stuck-task-question/SKILL.md`.
    - A bot or a tool is broken: **file** the fix for BotOps: `tico task file --parent <id> --owner botops "<what is broken>"`.
-   - A failing check on a task's own pull request goes back to that task's Builder, who fixes it in place; file a separate
-     task only for a broken bot, tool or shared infrastructure.
+   - A failing check or a review finding on a task's own pull request goes back to that task's Builder, who fixes it in
+     place; file a separate task only for a broken bot, tool or shared infrastructure, and never a person's task about it.
 4. Late with the owner still working (new commits, new page versions): the task is slow, not stuck. Leave the owner on
    it, and say so in one line: `tico task comment <id> "<what changed, why it stays>"`. That alone is not a decision, so
    pair it with a snooze to the date the owner named, or ask the owner's manager.
