@@ -1349,11 +1349,18 @@ def install(app, store, service):
             validate_identity(c, who)
             return who if app.state.auth.botops_manages(c, who, bot) else None
 
+    def itself(request, bot):
+        """A bot reading its own repository access (`tico bot repos <itself>`): which repositories it can use."""
+        who = request.state.identity
+        with store.read() as c:
+            validate_identity(c, who)
+        return who if who.role == 'bot' and who.actor == 'bot:' + bot else None
+
     @app.get('/api/v2/bots/{bot}/repositories')
     def bot_get(request: Request, bot: str):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get('id', bot)
-        who = botops(request, bot) or human(request)
+        who = botops(request, bot) or itself(request, bot) or human(request)
         with store.read() as c:
             if who.role != 'bot' and not app.state.auth.bot_access(c, who, bot)['see']:
                 raise Problem('forbidden', 'This bot is not visible to you', 403)

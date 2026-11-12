@@ -205,6 +205,28 @@ def test_a_request_goes_from_typed_to_released_with_two_sign_offs(co, webhooks):
     co.clean()
 
 
+def test_the_filed_task_names_its_repository_before_any_pr(co):
+    """A hosted company (Nov 11): the Engineering task the spec filed named no repository, so the Builder worked in
+    its own checkout, asked the Engineering Manager, who asked the person which repository to use. The filed task is
+    in the one repository In use from the start: the Builder's first turn is handed it, with the command that makes a
+    worktree of it, and nobody asks the person."""
+    _, engineering = to_build(co)
+    before = co.needs_you()
+    builder = co.handoff(engineering, "Build", "builder")
+    assert f"Repository: {REPO}. Work on it in a worktree: `tico task worktree add {REPO}`." in builder.wake, (
+        f"the Builder's first wake does not name the repository: {builder.wake[:600]}"
+    )
+    assert builder.attempt.get("github_repository") == REPO, "the Builder's first turn is not given the repository"
+    assert f"Repository: {REPO}" in builder.show(), "`tico task show` does not name the repository"
+    assert co.task(engineering)["repositories"] == [REPO]
+    # The Builder may read which repositories it can use.
+    assert REPO in builder.cli("bot", "repos", "builder")[1]
+    builder.end()
+    co.beat()
+    assert co.new_in_list(before) == [], "the person was asked something on the Builder's first turn"
+    co.clean()
+
+
 def test_a_new_commit_after_the_review_page_goes_back_to_the_same_reviewer(co):
     """The Builder pushes right after Reviewer 1 attached its page: the review of the old commit does not carry the PR
     on. The reviewer is woken at once, told the new commit, and its second page moves the task."""

@@ -60,6 +60,9 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
     # What the person said with the sign-off that let the task in here: theirs, for whoever acts on it next.
     lines.extend(stage_effects.notes_on_the_way_in(conn, task))
     shown = told(conn, task, to)
+    # The repository the work is in, so the bot never has to ask a person which one (a filed Engineering task).
+    if repos := stage_inputs.repository_line(stage_inputs.repositories(conn, str(task["id"]), shown)):
+        lines.append(repos)
     handed = stage_inputs.of(conn, task, shown, lambda filer: not _h().task_private(conn, filer))
     if handed:
         lines.append("From earlier stages (read each before you act):")

@@ -240,6 +240,10 @@ def task_text(task, actors=None):
         lines.append(f"Status: {task['status']}")
     if task.get("turn"):
         lines.append("Turn: " + turn_line(task["turn"], actors))
+    repos = [str(r) for r in task.get("repositories") or []]
+    if repos:
+        # Where the work is (backend/stage_inputs.repositories): `tico task worktree add <one>` makes a worktree of it.
+        lines.append(("Repository: " if len(repos) == 1 else "Repositories: ") + ", ".join(repos))
     late = task.get("late")
     if late:
         lines.append(f"Late since {late.get('since')}" + (", with a person" if late.get("level") == "person" else ""))

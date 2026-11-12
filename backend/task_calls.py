@@ -969,6 +969,8 @@ def task_view(
         if live and inputs
         else []
     )
+    # The repositories the work is in (a filed Engineering task's from the start), for `tico task show`.
+    repos = stage_inputs.repositories(conn, task_id, shown) if inputs else []
     snooze: Row | None = row.get("snooze")
     late = None
     if live and visit.get("late_told_at"):
@@ -990,6 +992,7 @@ def task_view(
         "waits": waits,
         "to_leave": to_leave,
         "inputs": handed,
+        "repositories": repos,
         "next": {"id": following["id"], "name": following["name"]} if following else None,
         "late": late,
         "snooze": {"until": snooze.get("until_at"), "by": snooze.get("by_id"), "why": snooze.get("why")}

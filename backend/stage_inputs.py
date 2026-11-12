@@ -68,6 +68,12 @@ _PR_KEYS = (
     "AND (tl.task_id=? OR tl.task_id IN (SELECT l.to_task_id FROM links l WHERE l.from_task_id=?)) "
     "ORDER BY tl.created_at, tl.id"
 )
+# Whether a task's pipeline works on code: a stage of it reads PRs. Its tasks are in the repositories In use.
+_CODE = (
+    "SELECT 1 FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id JOIN requirements r ON r.stage_id = s.id "
+    "WHERE t.id=? AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
+)
+_IN_USE = "SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0 ORDER BY full_name COLLATE NOCASE"
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
     "WHERE rc.commit_sha=? AND rc.included=1 ORDER BY r.published_at, r.tag"
@@ -274,11 +280,13 @@ def of(
     return out
 
 
-def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> str | None:
-    """The one GitHub repository a task's work is in, `owner/name`: the repository of every PR linked to it and to the
-    tasks it filed that `readable(task_id)` allows. The runner sets it as the turn's GH_REPO (runner-rs/src/env.rs), so
-    a bare `gh pr checks 46` reads it from a copy with no git remote too, and the gh shim picks its token. None when no
-    PR is linked, or the PRs are in more than one repository: the wake names each PR by its link then."""
+def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> list[str]:
+    """The GitHub repositories a task's work is in, `owner/name`: those of the PRs linked to it and to the tasks it
+    filed that `readable(task_id)` allows. With none linked, on a pipeline whose stages read PRs (Engineering), every
+    repository In use (docs/repositories.md), from the moment the task is filed: a Builder woken on a filed task once
+    worked in its own checkout and asked a person which repository to use. Empty otherwise."""
+    import sqlite3
+
     from .item_sources import github as G
 
     found: dict[str, str] = {}
@@ -287,7 +295,34 @@ def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str
         if allowed.setdefault(str(linked), readable(str(linked))):
             repo = G.split_key(str(key))[0]
             found.setdefault(repo.lower(), repo)
-    return next(iter(found.values())) if len(found) == 1 else None
+    if found:
+        return list(found.values())
+    if not conn.execute(_CODE, (task_id,)).fetchone():
+        return []
+    try:
+        return [str(row[0]) for row in conn.execute(_IN_USE).fetchall()]
+    except sqlite3.OperationalError:
+        return []  # no table: GitHub was never set up here
+
+
+def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> str | None:
+    """The one GitHub repository a task's work is in (`repositories`). The runner sets it as the turn's GH_REPO
+    (runner-rs/src/env.rs), so a bare `gh pr checks 46` reads it from a copy with no git remote too, and the gh shim
+    picks its token. None when there is none, or more than one: the wake names each PR by its link then."""
+    found = repositories(conn, task_id, readable)
+    return found[0] if len(found) == 1 else None
+
+
+def repository_line(repos: list[str]) -> str:
+    """The line a wake opens the work with: the repository and how to get a worktree of it, or "" with none."""
+    if not repos:
+        return ""
+    if len(repos) == 1:
+        return f"Repository: {repos[0]}. Work on it in a worktree: `tico task worktree add {repos[0]}`."
+    return (
+        f"Repositories: {', '.join(repos)}. Work in the one the spec names, else pick one: "
+        "`tico task worktree add <owner/name>`."
+    )
 
 
 def lines(conn: "sqlite3.Connection", entries: list[Row]) -> list[str]:
