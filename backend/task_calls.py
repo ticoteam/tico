@@ -630,8 +630,8 @@ def _may(
         if answer and answer["answer"] == "no":
             if viewer in (owner, holder):
                 out.append("again")
-        elif asked:
-            out += ["ok", "no"]
+        elif asked and standing.state == R.WAITING and not R.outside(standing.on):
+            out += ["ok", "no"]  # not while it is held on Jev or back with the owner (validate_gate.held)
     owners = R.owners_answer(requirement)
     if kind == "answer" and not standing.met and (works if owners else asked):
         out.append("answer")

@@ -72,6 +72,11 @@ def _standing(c, task_id, rid):
     return next(s for s in R.standings(c, row) if s.requirement["id"] == rid)
 
 
+def _may(c, row, rid):
+    """What the task page offers Ana on the ask."""
+    return next(r for r in H.task_view(c, row["id"], ANA)["to_leave"] if r["requirement_id"] == rid)["may"]
+
+
 def _on_person(c, task_id, person):
     return [w for w in W.of(c, E.task(c, task_id)) if w.state == W.PERSON and w.who == person]
 
@@ -124,11 +129,17 @@ def test_the_ok_shows_the_page_waits_on_jev_and_reaches_the_person_only_once_jev
     # A yes/no beside it is a free question: the card is the OK.
     with pytest.raises(H.Refused, match=re.escape(G.FIRST)):
         _ask(c, row, PM, "answer", ANA, "Does it pass?", choices=["yes", "no"])
+    # Nor from the task page: the person neither OKs it nor sends it back before Jev passed the page.
+    assert not {"ok", "no"} & set(_may(c, row, rid))
+    for value, notes in (("ok", None), ("no", "Looks clipped")):
+        with pytest.raises(H.Refused, match=G.HELD):
+            A.answer(c, row["id"], rid, ANA, value, notes)
     row = _jev(c, row)
     assert E.advance(c, row["id"]) is None  # Jev passing the page leaves the OK the bot asked
     asked = _standing(c, row["id"], rid)
     assert (asked.state, asked.on) == (R.WAITING, ANA)
     assert _on_person(c, row["id"], ANA)
+    assert set(_may(c, row, rid)) >= {"ok", "no"}
     A.answer(c, row["id"], rid, ANA, "ok")
     assert E.task(c, row["id"])["status"] == "done"
 
