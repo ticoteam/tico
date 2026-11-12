@@ -121,16 +121,16 @@ not add states.
 The state-machines audit (SM-01 to SM-09) found the machines below guarded by their state alone. Each row names what its
 fix adds; its race test is the example to follow.
 
-| Fix | Machine | Owner (writer) | Guard today | What the fix adds | Race test |
+| Fix | Machine | Owner (writer) | Guard before the fix | What the fix adds | Race test |
 |---|---|---|---|---|---|
-| SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | pending (SM-01) |
-| SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | pending (SM-02) |
-| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect, required at exchange and result | pending (SM-03) |
-| SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | pending (SM-04) |
-| SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | pending (SM-05) |
-| SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | pending (SM-07) |
+| SM-01 | statement upload preview and agent pairing (UI) | `ui/app` | none: the latest reply wins | a phase and a request revision; only the current revision may submit | `ui/tests/finance-statement-race-unit.cts`, `ui/tests/agent-pair-race-unit.cts` |
+| SM-02 | merge-queue act and undo | `source_actions.py` | the item's state | the undo checks the current visit's intent before it dequeues | `test_merge_queue_undo_intent.py::test_back_and_forward_while_the_queue_call_is_out_leaves_the_pr_queued` |
+| SM-03 | `google_connects.status` | `google_connect.py` | the person's row | an operation id per connect or disconnect, required at exchange and result | `test_google_connect.py::test_a_late_result_from_an_earlier_connect_does_not_finish_the_next_one` |
+| SM-04 | `automation_runs.status`, `webhook_sends.state` | `automations.py`, `webhook_delivery.py` | the state (`running`, `sending`) | a claim token; a reclaimed worker cannot settle | `test_automation_reclaimed_worker.py::test_an_old_automation_worker_cannot_save_while_the_new_claim_holds_the_run`, `test_webhook_reclaimed_worker.py` |
+| SM-05 | direct meeting-turn claims (`live_meeting_turns.status`) | `live_meetings.py` | the claim | a recoverable claim: returned on reconnect, or abandoned | `test_live_meeting_claims.py::test_a_lost_claim_answer_is_shown_to_its_bot_again_and_the_same_claim_is_returned` |
+| SM-07 | AI Gateway spending cap | `finance/gateway_sync.py` | the cap record | the key and destination the cap was set for | `test_finance_gateway_cap_target.py::test_a_reply_for_a_key_replaced_meanwhile_does_not_satisfy_the_new_key` |
 | SM-08 | desktop confirm before delete or revoke | desktop bridge, `ui/app` | none: the Promise reads as yes | an awaited `true` before every write | pending (SM-08) |
-| SM-09 | GitHub PR facts | `item_sources/github.py` | `updated_at` | an equal-time conflict is reread before it is final; only merged is final | pending (SM-09) |
+| SM-09 | GitHub PR facts | `item_sources/github.py` | `updated_at` | an equal-time conflict is reread before it is final; only merged is final | `test_github_equal_version.py::test_same_time_close_and_reopen_end_at_githubs_state_in_either_order` |
 
 ## Detail
 
@@ -248,8 +248,8 @@ Transitions (`backend/automations.py`):
 - `running` to `waiting` when a wait step sets `wake_at`.
 - `waiting` to `queued` or `held` when `wake_at` passes (`RUNNABLE` picks `held` if a guard hold is still active, else `queued`).
 - `running` to `ok`, `failed` or `empty` when the flow finishes; any state to `failed` on a fatal error.
-- A `running` row whose worker stopped is reclaimed by recovery. SM-04: the settle that ends the run checks the state
-  only, so the worker that lost the row can still settle it.
+- A `running` row whose worker stopped is reclaimed by recovery, which clears its `claim_token`. Every save and the
+  settle that ends the run carry the worker's token, so a worker that lost the row changes nothing and is told to stop.
 
 ### webhook_sends.state
 
@@ -269,8 +269,8 @@ Transitions (`backend/webhook_delivery.py`, `backend/webhooks.py`):
 - `sending` to `delivered`: 2xx.
 - `sending` to `canceled`: the receiver's abort.
 - `sending` to `failed`: retry budget used up (`retry_delay` returns nothing).
-- `sending` to `ready`: a retry is scheduled, or the claim is released or reclaimed. SM-04: as for automation runs, the
-  settle checks the state only.
+- `sending` to `ready`: a retry is scheduled, or the claim is released or reclaimed. As for automation runs, every
+  write about a send carries its claim's `claim_token`, so a reclaimed worker cannot settle it.
 - `ready` to `withheld`: rehearsal withhold (`withhold`).
 - `ready` or `sending` to `canceled`: endpoint deleted (`webhooks.py`).
 - `failed`, `canceled` or `delivered` to `ready`: a person retries the send by hand (`webhooks.py` refuses `ready`, `sending` and `withheld`).
