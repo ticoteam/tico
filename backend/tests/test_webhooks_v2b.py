@@ -239,6 +239,18 @@ def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_comp
     assert updated["filter"] == {"departments": [], "bots": [], "pipelines": []}
 
 
+def test_the_endpoint_editor_reads_its_department_choices_from_system_routines_and_each_one_saves(api, net):
+    # Settings > Webhooks lists Departments from GET /system-routines `task_rule_departments` (ui/app/settings-webhooks.ts).
+    routines = get(api, "system-routines")
+    choices = routines.get("task_rule_departments")
+    assert choices, "the route sends the department choices the endpoint editor lists"
+    assert all(set(d) == {"id", "name"} for d in choices)
+    assert [d["name"] for d in choices] == routines["departments"]
+    picked = [d["id"] for d in choices]
+    hook = make(api, events=["task.created"], filter={"departments": picked})
+    assert hook["filter"]["departments"] == picked  # every choice it lists is one the save accepts
+
+
 def test_replay_missing_queues_exactly_the_events_an_endpoint_lacks(api, net):
     first = make(api, events=["custom.*"])
     publish(api, "custom.a", "s1", {"n": 1}, "human:ana")
