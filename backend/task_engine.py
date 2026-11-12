@@ -1501,6 +1501,17 @@ def snooze(
     # The owner bot that cannot work its stage (`cannot_work`) does not set the task aside where nobody sees it: the
     # manager bot gets it, to give it to someone who can.
     unable = cannot_work(conn, task_id, row["pipeline_id"], row["stage"], by) if by == row.get("owner_id") else ""
+    if unable:
+        # A long snooze dodges both the snooze count and Late, so the manager is told now, with why. The task stays
+        # with the manager, so Health's Tasks reading counts it "with a manager" until someone who can build has it.
+        from . import never_stuck
+
+        tried = f"{unable}, and it tried to snooze the task" + (f" ({why})" if why else "") + "."
+        _event(conn, task_id, by, "snooze_refused", None, None, why, {"owner_cannot_work": unable})
+        if never_stuck.to_manager(conn, task_id, f"{tried} Reassign it to a builder."):
+            out = _task(conn, task_id)
+            out["note"] = f"{unable}. The manager has it now, to give it to someone who can."
+            return out
     if unable or (is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES):
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
@@ -1508,8 +1519,8 @@ def snooze(
         # The manager bot has it now: what was still queued for a bot with no turn would start runs nobody asked for.
         # A bot named on an OK or an answer that still waits keeps its wake.
         _drop_stale(conn, task_id)
-        said: Row = {"snoozes": visit.get("bot_snoozes"), **({"owner_cannot_work": unable} if unable else {})}
-        _event(conn, task_id, by, "snooze_refused", None, None, why, said)
+        if not unable:
+            _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
         out = _task(conn, task_id)
         out["note"] = (
             f"{unable}. The manager has it now, to give it to someone who can."

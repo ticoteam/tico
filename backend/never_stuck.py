@@ -110,6 +110,18 @@ def _manager(conn: "sqlite3.Connection", row: Row, seen: dict[str, str | None]) 
     return manager if _usable(conn, manager, seen) and _reads(conn, manager, row) else None
 
 
+def to_manager(conn: "sqlite3.Connection", task_id: str, why: str) -> bool:
+    """Hand an open task to its pipeline's manager bot now, its first try woken at once with `why` (as the ladder's
+    `_to_manager`), rather than on the next pass. False when no manager bot can take it: the ladder goes on as it is."""
+    row = E.task(conn, task_id)
+    manager = _manager(conn, row, {}) if row else None
+    if not row or not manager or manager == row.get("owner_id"):
+        return False
+    done = {"woken": 0, "to_manager": 0, "to_person": 0}
+    _to_manager(conn, row, manager, why, _h().now(), done)
+    return True
+
+
 # ----------------------------------------------------------------------------- the pass
 def check(
     conn: "sqlite3.Connection", now: str | None = None, failures: list[tuple[str, Exception]] | None = None

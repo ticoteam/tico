@@ -500,6 +500,17 @@ def test_a_bot_that_cannot_push_does_not_snooze_its_engineering_task_out_of_sigh
     )
     assert out["visit"]["level"] == "manager"
     assert "snooze_refused" in X.events(c, eng["id"])
+    # A long snooze dodges the snooze count and Late: the Engineering manager is woken now, told why, not on a later
+    # pass, and Health's Tasks reading counts the task with a manager until someone who can build has it.
+    wakes = _queued_wakes(c, eng["id"])
+    assert [bot for bot, _ in wakes] == [EPM], wakes
+    assert wakes[0][1].startswith(
+        "pm cannot work On deck: it has no write access to acme/app, and it tried to snooze the task "
+        "(Needs the Builder). Reassign it to a builder."
+    ), wakes[0][1]
+    from backend import health
+
+    assert health.never_stuck_reading(c)["tasks"]["manager"] == [eng["id"]]
     E.reassign(c, eng["id"], "bot:builder", ANA, "Builder takes it", out["version"])
     row = E.task(c, eng["id"])
     assert E.snooze(c, eng["id"], "bot:builder", "Waiting for #12 to merge", None, row["version"]).get("snooze")
