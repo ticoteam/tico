@@ -667,3 +667,35 @@ def test_a_query_field_named_path_reaches_the_query_string(api, door):
     _, _, attempt = setup_attempt(api)
     answer = door(attempt["token"]).get("file-approvals", path="reports/pipeline.md", digest="0" * 64)
     assert answer["approved"] is False and answer["digest"] == "0" * 64
+
+
+def test_a_generated_operation_id_survives_a_lost_answer_and_an_error(door, monkeypatch):
+    """A write sent without an operation id gets one before it leaves; when the answer is lost or is an error, the
+    caller is told that same id, so a retry can reuse the server's key instead of repeating the write."""
+    import backend.mcp as M
+
+    sent = []
+
+    async def committed_then_lost(scope, receive, send):
+        sent.append(dict(scope["headers"]).get(b"idempotency-key", b"").decode())
+        if scope["path"].endswith("/slow"):
+            await asyncio.sleep(5)  # committed, but the answer never arrives in time
+        await send({"type": "http.response.start", "status": 500, "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": b'{"error": {"code": "boom", "detail": "Failed"}}'})
+
+    monkeypatch.setattr(M, "INTERNAL_TIMEOUT_S", 0.2)
+    monkeypatch.setattr(M, "FUTURE_MARGIN_S", 0.1)
+    bot = door("unused")
+    bot.app = committed_then_lost
+
+    with pytest.raises(ApiProblem) as lost:
+        bot.post("things/slow", {"name": "one"})
+    assert sent[-1] and lost.value.operation_id == sent[-1]
+
+    with pytest.raises(ApiProblem) as failed:
+        bot.post("things/fail", {"name": "two"})
+    assert sent[-1] and failed.value.operation_id == sent[-1]
+
+    with pytest.raises(ApiProblem) as given:  # the caller's own id is kept
+        bot.post("things/slow", {"name": "three"}, key="op-mine")
+    assert sent[-1] == "op-mine" and given.value.operation_id == "op-mine"
