@@ -135,6 +135,28 @@ def test_a_conflict_after_the_earlier_task_merged_sends_it_back_to_rebase_onto_t
         assert f"rebase it onto {b6_ref}" in body and "Fixes 2" in body
 
 
+def test_an_earlier_task_with_one_closed_and_one_merged_pr_has_merged(company):
+    """B6 opened PR 3, closed it unmerged and merged PR 1 instead: B6 has merged, so B7 is queued. Counting the closed
+    PR would hold B7 forever."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        engineering(c)
+        b6, b7 = new(c, 1, 3), new(c, 2)
+        TR.relate(c, X.ANA, b7, b6, "after")
+        gh.open_pr(REPO, 1)
+        gh.open_pr(REPO, 3)
+        gh.close(REPO, 3)
+        seen(c, gh, 3)
+        seen(c, gh, 1)
+        green(c, gh, 2)
+        assert MO.waits_for(c, b7)["id"] == b6 and effects(c, b7) == []  # PR 1 is still open
+    gh.merge(REPO, 1)
+    MQ.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert MO.merged(c, E.task(c, b6)) and MO.waits_for(c, b7) is None
+        assert effects(c, b7) == [("act", "owed")]
+
+
 def test_an_earlier_task_closed_without_merging_ends_the_order_and_it_is_the_owner_s_turn_once(c):
     gh = FakeGitHub()
     b6, b7 = pair(c)
