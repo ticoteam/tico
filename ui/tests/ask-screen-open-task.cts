@@ -15,7 +15,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open, fixtures, needsOf} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 // The page's own opener (ui/app/task-modal.ts), as list rows and board cards call it.
-declare function taskModalOpen(id: string): Promise<void>;
+declare function taskModalOpen(id: string, d?: unknown, opts?: {thread?: boolean; ask?: boolean; direct?: boolean}): Promise<void>;
 
 const card = (page: Page) => page.locator('#need-card[open]');
 const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title');
@@ -54,6 +54,16 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await card(page).waitFor({timeout: 5000});
         assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
         await card(page).locator('[data-dc="close"]').click();
+        // A pipeline board's card on a phone opens at the conversation asking its owner (tasks-page.ts): still the ask.
+        await page.evaluate(() => { void taskModalOpen('t-2', undefined, {thread: true, ask: true}); });
+        await card(page).waitFor({timeout: 5000});
+        assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
+        await card(page).locator('[data-dc="close"]').click();
+        // The task's conversation asked for by name (a bot's chat, taskThreadShow) opens as it is.
+        await page.evaluate(() => { void taskModalOpen('t-2', undefined, {thread: true}); });
+        await page.locator('#task-modal[open]').waitFor({timeout: 5000});
+        assert.equal(await card(page).count(), 0, 'the conversation, not the ask');
+        await page.keyboard.press('Escape');
         // Not waiting on Ana: the task page, as today.
         await page.evaluate(() => { void taskModalOpen('t-4'); });
         await taskPage(page).waitFor({timeout: 5000});
