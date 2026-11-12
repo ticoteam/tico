@@ -131,7 +131,7 @@ def make_view(api):
     return made, secret
 
 
-VIEW = "pipeline=product&status=open&snoozed=hide&sort=queue"
+VIEW = "pipeline=product&status=open&snoozed=all&sort=queue"
 
 
 def cases_for(rows):
