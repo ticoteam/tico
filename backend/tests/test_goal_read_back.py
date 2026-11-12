@@ -84,7 +84,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert text.startswith("I'll save this goal:\n**Get 100 companies to try Tico** · owner ")
     assert "supports “Developers and small companies keep using Tico”" in text
     assert "measure “Companies that tried Tico” (new: higher is better, weekly), target 100 by Nov 28" in text
-    assert text.endswith("Reply yes to save exactly this; any other reply saves nothing.")
+    assert text.endswith("Shall I save it?")
     # Tico wrote it, as the Assistant's reply in the owner's chat; the turn's closing text is not posted after it.
     said = room_messages(api)
     assert (said[-1]["id"], said[-1]["sender_id"]) == (back["message_id"], "bot:assistant")
@@ -131,125 +131,230 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert (status["saved"], status["agreed"], status["link"]) == (True, True, made["read_back"]["link"])
 
 
-def test_any_reply_but_a_yes_saves_nothing(api):
+def test_a_plan_of_28_goals_is_read_back_once_and_one_yes_saves_all_28(api):
+    # Spec one-yes-per-request, criterion 1: the whole plan at once, one yes, every change saved, no second read-back.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set goals for all my owner bots")
+    plan = [{"kind": "goal_create", "title": f"Owner goal {i}", "owner": "ops"} for i in range(1, 29)]
+    back = read_back(api, attempt, *plan)
+    assert len(back["changes"]) == 28
+    assert back["text"].startswith("I'll save these 28 changes:\n1. ")
+    assert back["text"].endswith("Shall I save all 28?")
+    attempt = reply(api, r, attempt, "yes")
+    for ch in back["changes"]:
+        save(api, attempt, ch["steps"][0])
+    titles = {g["title"] for g in get(api, "goals?all=true")["goals"]}
+    assert {f"Owner goal {i}" for i in range(1, 29)} <= titles
+    # One plan, one read-back: nothing else of Tico's in the chat after the yes.
+    reads = [m for m in room_messages(api) if m["body"].startswith("I'll save")]
+    assert [m["id"] for m in reads] == [back["message_id"]]
+
+
+def test_agreement_in_the_owners_own_words_saves(api):
+    # Criterion 2: any reply that clearly agrees; the Assistant judges the words, Tico no longer lists them.
     strategy_bot(api)
     r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
-    step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
-    for words in ("yes but make it 50", "wait"):
+    for words in ("sure, go for it", "do it", "No problem, save it", "y"):
+        step = read_back(api, attempt, {**NEW_GOAL, "title": words})["changes"][0]["steps"][0]
         attempt = reply(api, r, attempt, words)
-        refused = save(api, attempt, step, expected=403)["error"]
-        assert refused["code"] == "not_agreed" and "nothing was saved" in refused["detail"]
-        attempt = reply(api, r, attempt, "Set it again")
-        step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
-    assert [g for g in get(api, "goals?all=true")["goals"] if g["title"] == NEW_GOAL["title"]] == []
+        assert save(api, attempt, step)["goal"]["title"] == words, words
 
 
-def test_the_owners_words_tico_reads_as_yes(api):
+def test_the_owners_words_by_number_still_limit_what_is_saved():
     six = set(range(1, 7))
-    for words in (
-        "yes",
-        "Yes!",
-        "yep",
-        "yeah",
-        "ok",
-        "Okay",
-        "go ahead",
-        "save it",
-        "yes to all",
-        "ok to both",
-        "Yes please",
-        "ok, thanks",
-    ):
+    for words in ("yes", "sure, go for it", "ok, thanks", "yes but make it 50", "go"):
         assert GR.agreed(words, 6) == six, words
     assert GR.agreed("yes to 1 and 3", 6) == {1, 3}
     assert GR.agreed("yes to 1, 3 and 5, no to 2", 6) == {1, 3, 5}
     assert GR.agreed("yes to #2", 6) == {2}
     assert GR.agreed("yes except 2", 6) == {1, 3, 4, 5, 6}
     assert GR.agreed("yes to all but 2 and 4", 6) == {1, 3, 5, 6}
-    for words in (
-        "yes but make it 50",
-        "wait",
-        "no",
-        "yes to 7",
-        "yes to 1, no to 1",
-        "yes except 1, 2, 3, 4, 5, 6",
-        "sure, and add a deadline",
-        "",
-        "yes to 0",
-        "go ahead and change the owner too",
-        # Wider than the spec's plain yes: refused, and the owner says yes again.
-        "sure",
-        "y",
-        "go",
-        "save",
-        "save them",
-        "do it",
-        "please do",
-        "confirm",
-        "correct",
-        "that's right",
-        "yes to everything",
-        "ok all of them",
-    ):
+    # A number the plan does not have is not a yes: the Assistant asks again.
+    for words in ("yes to 7", "yes to 1, no to 1", "yes except 1, 2, 3, 4, 5, 6", "yes to 0"):
         assert GR.agreed(words, 6) is None, words
 
 
-def test_a_save_after_other_words_or_outside_thirty_minutes_is_not_agreed(api):
+def test_a_question_between_the_plan_and_the_yes_keeps_the_plan(api):
+    # Criterion 3: a question, its answer, a notice in between: the later yes saves the plan without a new read-back.
     strategy_bot(api)
     r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
     back = read_back(api, attempt, NEW_GOAL)
     step = back["changes"][0]["steps"][0]
-    # Anything the owner wrote after the read-back, even before a yes, takes it back.
-    finish(api, r, attempt)
+    attempt = reply(api, r, attempt, "what does weekly mean here?")
+    finish(api, r, attempt, "It is counted every Monday.")
     with api.app.state.store.transaction() as c:
         room = H.conversation(c, get(api, "assistant")["room_id"])
         H._write_message(
-            c, "human:ana", "bot:assistant", "hmm, the owner", room, "say", {"assistant": True}, None, None
+            c, H.KEEPER, "human:ana", "Ops finished a task", room, "notice", {"assistant": True}, None, None
         )
-    assert say(api, "yes")
+    assert say(api, "great, go ahead")
     attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-    assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
-    # A notice, or the Assistant's own message, between the read-back and the yes: the yes answers that, not the
-    # list.
-    for who, kind in ((H.KEEPER, "notice"), ("bot:assistant", "say")):
-        attempt = reply(api, r, attempt, "Again")
-        step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
-        finish(api, r, attempt)
-        with api.app.state.store.transaction() as c:
-            H._write_message(
-                c, who, "human:ana", "Want a daily digest of this chat?", room, kind, {"assistant": True}, None, None
-            )
-        assert say(api, "yes")
-        attempt = post(api, "jobs/claim", {}, token=r["token"])["attempt"]
-        assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed", who
-    # And so does anything after the yes.
-    attempt = reply(api, r, attempt, "Again")
-    step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+    assert save(api, attempt, step)["read_back"]["saved"] is True
+    assert [m["id"] for m in room_messages(api) if m["body"].startswith("I'll save")] == [back["message_id"]]
+
+
+def test_a_change_asked_for_replaces_the_plan_and_only_the_changed_plan_saves(api):
+    # Criterion 4: nothing is saved until the owner agrees to the changed plan; the old plan no longer saves.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
+    old = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+    attempt = reply(api, r, attempt, "make it 50 companies")
+    changed = {**NEW_GOAL, "title": "Get 50 companies to try Tico"}
+    new = read_back(api, attempt, changed)["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
+    refused = save(api, attempt, old, expected=403)["error"]
+    assert refused["code"] == "not_agreed"
+    assert save(api, attempt, new)["goal"]["title"] == "Get 50 companies to try Tico"
+    # A plan read back after the yes replaces the one the yes answered.
+    attempt = reply(api, r, attempt, "and one for Support")
+    first = read_back(api, attempt, {**NEW_GOAL, "title": "Answer support in a day"})["changes"][0]["steps"][0]
+    attempt = reply(api, r, attempt, "yes")
+    read_back(api, attempt, {**NEW_GOAL, "title": "Answer support in an hour"})
+    refused = save(api, attempt, first, expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "newer read-back" in refused["detail"]
+    titles = {g["title"] for g in get(api, "goals?all=true")["goals"]}
+    assert NEW_GOAL["title"] not in titles and "Answer support in a day" not in titles
+
+
+def test_after_the_yes_thanks_changes_nothing_and_stop_halts_the_rest(api):
+    # Criterion 5: what is agreed is saved; only a stop halts it, and the read-back says what was and wasn't saved.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set three goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2, 3)]
+    back = read_back(api, attempt, *plan)
+    steps = [ch["steps"][0] for ch in back["changes"]]
+    attempt = reply(api, r, attempt, "yes")
+    save(api, attempt, steps[0])
     with api.app.state.store.transaction() as c:
-        H._write_message(c, "human:ana", "bot:assistant", "wait, no", room, "say", {"assistant": True}, None, None)
-    assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
+        room = H.conversation(c, get(api, "assistant")["room_id"])
+        H._write_message(c, "human:ana", "bot:assistant", "thanks!", room, "say", {"assistant": True}, None, None)
+    save(api, attempt, steps[1])
+    with api.app.state.store.transaction() as c:
+        H._write_message(c, "human:ana", "bot:assistant", "stop", room, "say", {"assistant": True}, None, None)
+    refused = save(api, attempt, steps[2], expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "stop" in refused["detail"]
+    status = get(api, "goals/read-back/" + back["message_id"], attempt["token"])["changes"]
+    assert [s["saved"] for s in status] == [True, True, False]
+    assert "stop" in status[2]["reason"]
+    titles = {g["title"] for g in get(api, "goals?all=true")["goals"]}
+    assert {"Ops goal 1", "Ops goal 2"} <= titles and "Ops goal 3" not in titles
 
 
-def window(api, minutes):
+def test_the_stop_words_halt_and_a_yes_that_opens_with_no_does_not():
+    for words in (
+        "stop",
+        "Stop!",
+        "wait",
+        "hold on",
+        "cancel that",
+        "no",
+        "don't save the rest",
+        "never mind",
+        # A stop anywhere in the message, as a voice transcript gives it.
+        "please stop",
+        "ok stop",
+        "actually, wait",
+        "hang on",
+        "hold up",
+        "that is wrong, stop",
+    ):
+        assert GR.halts(words), words
+    for words in (
+        "thanks",
+        "no problem",
+        "no worries, thanks",
+        "great",
+        "what about Support?",
+        "Now the next one",
+        # "no" and "don't" inside an agreement are not a stop; only at the start of a reply.
+        "yes to 1 and 3, no to 2",
+        "yes, no changes",
+        "looks good, no objections",
+        "sure, I don't mind",
+        "go ahead, no need to ask again",
+        "yes please, can't wait",
+        "thanks, no more for now",
+    ):
+        assert not GR.halts(words), words
+
+
+def test_agreements_that_say_no_or_dont_inside_them_save(api):
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set three goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2, 3)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes to 1 and 3, no to 2")
+    save(api, attempt, steps[0])
+    save(api, attempt, steps[2])
+    assert save(api, attempt, steps[1], expected=403)["error"]["code"] == "not_agreed"
+    for words in ("yes, no changes", "sure, I don't mind"):
+        attempt = reply(api, r, attempt, "and one more")
+        step = read_back(api, attempt, {**NEW_GOAL, "title": words})["changes"][0]["steps"][0]
+        attempt = reply(api, r, attempt, words)
+        assert save(api, attempt, step)["goal"]["title"] == words, words
+
+
+def test_thanks_no_more_after_the_yes_keeps_saving(api):
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set two goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes")
+    save(api, attempt, steps[0])
+    with api.app.state.store.transaction() as c:
+        room = H.conversation(c, get(api, "assistant")["room_id"])
+        H._write_message(
+            c, "human:ana", "bot:assistant", "thanks, no more for now", room, "say", {"assistant": True}, None, None
+        )
+    save(api, attempt, steps[1])
+
+
+def test_a_stop_cited_as_the_yes_saves_nothing(api):
+    # A message that would halt the saves after the yes is not a yes either.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
+    step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+    for words in ("wait", "ok stop", "no, make it 50"):
+        attempt = reply(api, r, attempt, words)
+        refused = save(api, attempt, step, expected=403)["error"]
+        assert refused["code"] == "not_agreed", words
+    assert [g for g in get(api, "goals?all=true")["goals"] if g["title"] == NEW_GOAL["title"]] == []
+
+
+def test_after_a_yes_by_number_only_a_yes_by_number_saves_more_of_that_plan(api):
+    # A later "thanks" or "ok" cited as agreement does not widen a yes to some: the Assistant reads back what is left.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set three goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2, 3)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes to 1 and 3")
+    save(api, attempt, steps[0])
+    save(api, attempt, steps[2])
+    attempt = reply(api, r, attempt, "ok thanks")
+    refused = save(api, attempt, steps[1], expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "by number" in refused["detail"]
+    attempt = reply(api, r, attempt, "yes to 2")
+    save(api, attempt, steps[1])
+
+
+def test_a_plan_stands_past_thirty_minutes(api):
     strategy_bot(api)
     r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
     asked_for = turn_message(api, attempt)
     back = read_back(api, attempt, NEW_GOAL)
+    backdate(api, 120, asked_for, back["message_id"])
     attempt = reply(api, r, attempt, "yes")
-    backdate(api, minutes, asked_for, back["message_id"])
-    return attempt, back["changes"][0]["steps"][0]
+    assert save(api, attempt, back["changes"][0]["steps"][0])["goal"]["title"] == NEW_GOAL["title"]
 
 
-def test_a_yes_to_a_read_back_29_minutes_old_saves(api):
-    attempt, step = window(api, 29)
-    assert save(api, attempt, step)["goal"]["title"] == NEW_GOAL["title"]
-
-
-def test_a_yes_to_a_read_back_31_minutes_old_is_not_agreed(api):
-    attempt, step = window(api, 31)
-    refused = save(api, attempt, step, expected=403)["error"]
-    assert refused["code"] == "not_agreed" and "30 minutes" in refused["detail"]
+def test_only_the_owners_reply_after_the_plan_saves(api):
+    # Stays: Tico still needs the owner's own message after the plan, and saves only what the plan shows.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
+    step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+    # The turn that read the plan back cites the request, which came before it: not agreed.
+    assert save(api, attempt, step, expected=403)["error"]["code"] == "not_agreed"
+    assert [g for g in get(api, "goals?all=true")["goals"] if g["title"] == NEW_GOAL["title"]] == []
 
 
 def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api):
@@ -350,7 +455,7 @@ def test_yes_to_1_and_3_of_six_saves_only_those_and_says_why_not_for_the_rest(ap
         "4. Accept the suggestion on **Win ten customers**: Title was “Win ten customers”, now "
         "“Win ten paying customers”"
     )
-    assert back["text"].endswith("any other reply saves nothing.")
+    assert back["text"].endswith("Shall I save all 6?")
     steps = [ch["steps"][0] for ch in back["changes"]]
     attempt = reply(api, r, attempt, "yes to 1 and 3")
     save(api, attempt, steps[0])
@@ -474,7 +579,10 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
     )["error"]
     assert "Change 1 can't be saved" in refused["detail"]
     read_back(
-        api, attempt, *[{"kind": "goal_create", "title": f"Goal {i}", "owner": "ops"} for i in range(21)], expected=422
+        api,
+        attempt,
+        *[{"kind": "goal_create", "title": f"Goal {i}", "owner": "ops"} for i in range(GR.MOST + 1)],
+        expected=422,
     )
 
 
@@ -536,7 +644,7 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     assert hubcli.main(['goal', 'read-back', json.dumps(changes)]) == 0
     back = json.loads(capsys.readouterr().out)
     assert back['message_id'] == room_messages(api)[-1]['id']
-    assert back['text'].endswith('Reply yes to save exactly this; any other reply saves nothing.')
+    assert back['text'].endswith('Shall I save both?')
     attempt = reply(api, r, attempt, 'yes')
     # No citation is not authorization, even during the yes turn.
     assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First']) == 2

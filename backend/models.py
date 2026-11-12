@@ -734,10 +734,11 @@ class LearnedEdit(Contract):
 
 
 class GoalReadBack(Contract):
-    """Up to 20 changes the owner's Assistant reads back in their chat (backend/goal_read_back.py): each one an object
-    with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields."""
+    """The whole plan the owner's Assistant reads back in their chat (backend/goal_read_back.py): each change an object
+    with a `kind` (goal_create, goal_update, measure_add, target_set, measure_remove, suggestion) and its fields. The
+    bound is against runaway input, not a plan size (goal_read_back.MOST)."""
 
-    changes: list[dict] = Field(min_length=1, max_length=20)
+    changes: list[dict] = Field(min_length=1, max_length=500)
 
 
 class GoalWhy(Contract):

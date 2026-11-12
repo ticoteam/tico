@@ -15,7 +15,7 @@
    ]
   ],
   "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 20 change objects\"\n}\n",
+  "stdout": "{\n  \"error\": \"ValueError: changes must be a JSON array of 1 to 500 change objects\"\n}\n",
   "stderr": "",
   "exit": 1
  },
