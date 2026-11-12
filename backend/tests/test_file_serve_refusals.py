@@ -51,7 +51,7 @@ def published(api, attempt, name="weekly.html", **data):
 
 
 def test_each_refusal_logs_its_check_and_answers_the_same_404(api, caplog, monkeypatch):
-    _, _, ops = setup_attempt(api)
+    machine, _, ops = setup_attempt(api)
     fid = published(api, ops)
     assert version(api, fid, 1).status_code == 200
 
@@ -70,6 +70,16 @@ def test_each_refusal_logs_its_check_and_answers_the_same_404(api, caplog, monke
     assert (line["attempt_state"], line["attempt_running"]) == ("leased", True)
     # Cara may read the run itself, so the line also says the run is not what fenced her: the page's scope did.
     assert line["attempt_readable"] is True
+    # Once the run has ended, the same refusal says so: a live-run refusal and a later one read apart.
+    post(api, f"attempts/{ops['id']}/started", {"thread_id": "t"}, machine["token"])
+    post(
+        api,
+        f"attempts/{ops['id']}/complete",
+        {"outcome": "completed", "text": "Published.", "last_seq": 0},
+        machine["token"],
+    )
+    line = refused(api, caplog, fid, 1, REQUESTER, "blob_fence")
+    assert (line["attempt"], line["attempt_state"], line["attempt_running"]) == (ops["id"], "completed", False)
 
     # Not a page: the file's own visibility refuses it (a bot whose files only Ana may read).
     upload, number = store_file(api, "A private synthetic note.", title="Private note", bot="finance")
@@ -144,11 +154,14 @@ def test_a_page_published_inside_a_live_run_reads_at_once_during_and_after_the_r
         fid = published(api, first)
         # Read at once, while the run that published it is still running.
         assert version(api, fid, 1, reader).status_code == 200, refusals(caplog)
+        # The bot reads its own page input while its run is live.
+        assert version(api, fid, 1, first["token"]).status_code == 200, refusals(caplog)
         # A second version from the same live run reads too.
         assert (
             published(api, first, data=b"<html><body><h1>Acme weekly review</h1><p>Revised.</p></body></html>") == fid
         )
         assert version(api, fid, 2, reader).status_code == 200, refusals(caplog)
+        assert version(api, fid, 2, first["token"]).status_code == 200, refusals(caplog)
 
         # The run ends and hands its unread input back to the queue.
         post(
