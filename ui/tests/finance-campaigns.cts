@@ -86,6 +86,7 @@ async function pick(page: import('playwright').Page, f: ReturnType<typeof fake>,
   await page.locator(sel).selectOption(value);
   for (const end = Date.now() + t(5000); f.state.writes.length === before && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
   assert.equal(f.state.writes.length, before + 1, `${id}: one owner write for ${value || 'blank'}`);
+  // Without this wait the next pick can land on the picker the reload is about to replace, and its change is lost.
   await page.waitForFunction(([sel, value]) => { const el = document.querySelector(sel ?? '') as HTMLSelectElement | null; return !!el && !el.disabled && el.value === value; }, [sel, value]);
   return f.state.writes.at(-1)!.body;
 }
