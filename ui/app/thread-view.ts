@@ -237,6 +237,17 @@ interface ThvView extends ThvConv {
   flashTimer?: ReturnType<typeof setTimeout>;
   pressQuiet: number;   // 0 until a long press
   olderRead?: boolean;
+  // What a live event changed and the next frame draws (thvLater); null once drawn.
+  later?: ThvLater | null;
+  // The list's markup above its status rows, as last drawn: a status-only draw replaces only what follows it.
+  listRows?: string;
+}
+// The parts of a view a change touches: the header, the message rows, the bots' status rows at the list's end, the composer.
+type ThvPart = 'head' | 'list' | 'status' | 'composer';
+interface ThvLater {
+  parts: Set<ThvPart>;
+  stick: boolean;   // any change in the frame asked to stay at the bottom
+  read: boolean;    // send read marks once the messages are drawn
 }
 // One row of the drawn list: a message, a fold of hidden or earlier ones, or a collapsed sub-thread's link.
 interface ThvRow {
@@ -878,7 +889,15 @@ const thvLineHTML = (view: ThvView, m: ThvMessage) => sourceLineHTML(m, {cls: 't
 // so aria-controls names an element either way.
 const thvUpdateLineHTML = (req: string, panel: string, open: boolean) => `<div class="th-upd"><button type="button" class="th-upd-btn" data-th-update="${esc(req)}" aria-expanded="${open}" aria-controls="${panel}">› Update generated</button></div>`;
 
-function thvListHTML(view: ThvView) {
+// What the message rows read from the thread itself (thvMsgActsHTML, thvMoreHTML).
+const thvRowsKey = (view: ThvView) => `${thvCanPost(view)}|${!!view.thread?.earlier}`;
+// The list is its rows (thvRowsHTML), then the bots' status rows (thvTailHTML), so a status change redraws only those.
+function thvTailHTML(view: ThvView, rows: string) {
+  if (['loading', 'gone', 'error'].includes(view.state)) return '';
+  const status = (view.botStatus || []).map(b => thvStatusHTML(view, b)).join('');
+  return status || rows ? status : `<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`;
+}
+function thvRowsHTML(view: ThvView) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
@@ -928,26 +947,43 @@ function thvListHTML(view: ThvView) {
     i = end - 1;
   }
   for (const p of view.pending) out.push(thvPendingHTML(view, p));
-  for (const b of view.botStatus || []) out.push(thvStatusHTML(view, b));
-  if (!out.length) out.push(`<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`);
   return out.join('');
 }
 const thvAtBottom = (view: ThvView) => { const b = view.el?.querySelector('.thv-scroll'); return !b || b.scrollHeight - b.scrollTop - b.clientHeight < 60; };
-function thvDraw(view: ThvView, {stick = false} = {}): void {
+const THV_ALL: ThvPart[] = ['head', 'list', 'status', 'composer'];
+// Draw a view now: what someone just did shows at once. A draw a live event left for the next frame is folded in, so it
+// does not run again. `parts` is what changed (all of it unless said); the message list is built only when 'list' is.
+function thvDraw(view: ThvView, {stick = false, parts = THV_ALL}: {stick?: boolean; parts?: Iterable<ThvPart>} = {}): void {
+  const later = view.later, want = new Set(parts);
+  view.later = null;
+  if (later) { for (const p of later.parts) want.add(p); stick ||= later.stick; }
   if (view.gone) return;
   if (!view.host.isConnected) { threadUnmount(view); return; }
-  const head = view.opts.actsHost?.isConnected ? view.opts.actsHost : view.el.querySelector<HTMLElement>('.thv-head');
-  if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
-  if (head === view.opts.actsHost) { head!.dataset.thv = String(view.key); view.el.querySelector('.thv-head')?.setAttribute('hidden', ''); }
+  if (want.has('head')) {
+    const head = view.opts.actsHost?.isConnected ? view.opts.actsHost : view.el.querySelector<HTMLElement>('.thv-head');
+    if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
+    if (head === view.opts.actsHost) { head!.dataset.thv = String(view.key); view.el.querySelector('.thv-head')?.setAttribute('hidden', ''); }
+  }
   const list = view.el.querySelector('.thv-list') as HTMLElement, box = view.el.querySelector('.thv-scroll') as HTMLElement;
+  const rows = want.has('list') || want.has('status'), keep = rows && (stick || thvAtBottom(view));
+  // Only the status rows changed: the rows above them stay as they are, unread and unbuilt.
+  if (want.has('status') && !want.has('list') && view.listRows !== undefined && patchHTMLTail(list, view.listRows, thvTailHTML(view, view.listRows), visualSwap) !== null) {
+    if (!THV_TICK && list.querySelector('[data-th-since]')) THV_TICK = setInterval(thvTick, 1000);
+  } else if (rows) thvListDraw(view, list, box);
+  if (want.has('composer')) thvComposerDraw(view);
+  if (keep) box.scrollTop = box.scrollHeight;
+  if (later?.read) thvMarkRead(view);
+}
+function thvListDraw(view: ThvView, list: HTMLElement, box: HTMLElement) {
   if (view.opts.compactEmpty) {
     const blank = view.state === 'empty' && !view.pending.length, card = view.opts.hideGone === true ? view.host : view.opts.hideGone;
     view.el.classList.toggle('thv-blank', blank);
     if (card && ['empty', 'ready'].includes(view.state)) card.hidden = blank && !thvCanPost(view);
   }
-  const keep = stick || thvAtBottom(view);
   // Cards both trees share keep their node, as in a chat (ui/app/visual-cards.ts).
-  patchHTML(list, thvListHTML(view), visualSwap);
+  const rows = thvRowsHTML(view);
+  view.listRows = rows;
+  patchHTML(list, rows + thvTailHTML(view, rows), visualSwap);
   const reload = () => thvRefresh(view);
   if (list.querySelector('[data-action-host]')) void window.assistantChat?.cards(list, {get, post, esc, toast, reload});
   if (list.querySelector('[data-credential-host]')) void window.credentialCards?.mount(list, {get, post, esc, toast, reload});
@@ -955,10 +991,25 @@ function thvDraw(view: ThvView, {stick = false} = {}): void {
   chatThumbsLoad?.(list);
   const unread = list.querySelector('.th-new');
   (view.el.querySelector('.thv-unread') as HTMLElement).hidden = !unread || thvVisible(box, unread);
-  thvComposerDraw(view);
   fbSync();
   if (!THV_TICK && list.querySelector('[data-th-since]')) THV_TICK = setInterval(thvTick, 1000);
-  if (keep) box.scrollTop = box.scrollHeight;
+}
+// A live event changed a view: its data is already updated, in the order events came; the drawing waits for the next
+// frame, once per view however many events came, and only for the parts they touched. A view closed or off the page by
+// then is not drawn. A tab in the background draws on its first frame back.
+let THV_FRAME = 0;
+function thvLater(view: ThvView, parts: ThvPart[], {stick = false, read = false} = {}) {
+  if (view.gone) return;
+  view.later ||= {parts: new Set(), stick: false, read: false};
+  const later = view.later;
+  for (const p of parts) later.parts.add(p);
+  later.stick ||= stick;
+  later.read ||= read;
+  if (!THV_FRAME) THV_FRAME = requestAnimationFrame(thvFrame);
+}
+function thvFrame() {
+  THV_FRAME = 0;
+  for (const view of [...THV_VIEWS]) if (view.later) thvDraw(view, {parts: []});
 }
 const thvVisible = (box: Element, el: Element) => { const a = box.getBoundingClientRect(), b = el.getBoundingClientRect(); return b.bottom > a.top && b.top < a.bottom; };
 
@@ -966,6 +1017,8 @@ const thvVisible = (box: Element, el: Element) => { const a = box.getBoundingCli
 // Up to the last message drawn, per thread drawn: the thread on screen and every sub-thread inline in it. A read mark is one
 // number, so a sub-thread whose collapsed "N more" still holds something unread stays where it is until that is opened.
 function thvMarkRead(view: ThvView) {
+  // Messages a frame has yet to draw are not read: that draw sends the marks.
+  if (view.later) { view.later.read = true; return; }
   if (document.hidden || view.gone || !view.id || !['ready', 'empty'].includes(view.state) || !view.el.getClientRects().length) return;
   const max = new Map(), held = new Set(view.messages.filter(m => m.collapsed && m.unread).map(m => m.thread_id));
   for (const m of view.messages) {
@@ -1036,20 +1089,25 @@ function threadViewsLive(topic: string, d: ThvMessageEvent & ThvLiveEvent) {
       // The bots' status rows, patched as they are (a server with `bot_status`).
       if (d.thread_id === (view.thread?.root_id || view.id) && (d.kind === 'bot_status' || Array.isArray(d.bots))) {
         view.botStatus = (d.bots || []).slice(0, 5);
-        thvDraw(view);
+        thvLater(view, ['status']);
         continue;
       }
       // Who a message asked, known just after it lands.
       if (d.kind === 'routed' && d.message_id) {
         const m = view.messages.find(x => x.id === d.message_id);
-        if (m) { m.routed = d.routed; thvDraw(view); }
+        if (m) { m.routed = d.routed; thvLater(view, ['list']); }
         continue;
       }
-      if (d.thread_id === view.id && d.thread) { view.thread = {...view.thread, ...d.thread}; thvDraw(view); }
+      if (d.thread_id === view.id && d.thread) {
+        // A rename redraws the header and the composer's line; the rows only when what they show changed (Reply, Earlier).
+        const was = thvRowsKey(view);
+        view.thread = {...view.thread, ...d.thread};
+        thvLater(view, thvRowsKey(view) === was ? ['head', 'composer'] : THV_ALL);
+      }
       // A pin from another tab, or a manager's for everyone: the header's pin follows (`pinned` is this viewer's state).
       else if (d.thread_id === view.id && d.kind === 'pinned' && view.thread?.me) {
         view.thread = {...view.thread, pinned_for_everyone: d.pinned_for_everyone ?? view.thread.pinned_for_everyone, me: {...view.thread.me, pinned: !!d.pinned}};
-        thvDraw(view);
+        thvLater(view, ['head']);
       }
       if (d.thread_id === view.id && String(d.kind || '').startsWith('call.')) liveSoon('call:' + view.key, () => callLoad(view), 200);
       // Who may read changed: read again.
@@ -1057,7 +1115,8 @@ function threadViewsLive(topic: string, d: ThvMessageEvent & ThvLiveEvent) {
       if (d.thread_id === view.id && ['audience', 'members'].includes(d.kind!)) liveSoon('thv:' + view.key, () => thvRefresh(view), 150);
       continue;
     }
-    if (topic === 'messages' && thvApplyMessage(view, d)) { thvDraw(view); thvMarkRead(view); }
+    // The title and the composer's line name the thread from its messages; the status rows can lose a bot that replied.
+    if (topic === 'messages' && thvApplyMessage(view, d)) thvLater(view, THV_ALL, {read: true});
   }
 }
 liveOn('messages', (d: ThvMessageEvent & {goal_id?: string}) => {
