@@ -76,6 +76,33 @@ def test_every_write_is_refused_and_changes_nothing(api):
         assert c.execute("SELECT title FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == "Leave me alone"
 
 
+def test_reads_that_would_make_a_thread_make_nothing(api):
+    """Opening a teammate's Home or a DM makes the thread on first use for a person or a bot; a view only reads."""
+    _, _, attempt = setup_attempt(api)
+    turned_on(api)
+    token = opened(api, attempt)["token"]
+    with api.app.state.store.read() as c:
+        before = (
+            c.execute("SELECT count(*) FROM conversations").fetchone()[0],
+            c.execute("SELECT count(*) FROM thread_members").fetchone()[0],
+        )
+    for path in (
+        "/api/v2/threads/dm?with=human:ana",
+        "/api/v2/threads/home/human:cara",
+        "/api/v2/threads/home/bot:ops",
+    ):
+        r = api.get(path, headers=bearer(token))
+        assert r.status_code == 404, (path, r.text)
+    with api.app.state.store.read() as c:
+        after = (
+            c.execute("SELECT count(*) FROM conversations").fetchone()[0],
+            c.execute("SELECT count(*) FROM thread_members").fetchone()[0],
+        )
+    assert after == before
+    # The bot's own token still makes its DM, so the view is what stops it.
+    assert api.get("/api/v2/threads/dm?with=human:ana", headers=bearer(attempt["token"])).status_code == 200
+
+
 def test_reads_that_show_a_token_or_credential_are_refused(api):
     _, _, attempt = setup_attempt(api)
     turned_on(api)
