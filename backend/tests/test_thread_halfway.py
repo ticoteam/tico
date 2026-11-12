@@ -5,7 +5,7 @@ on and why, live and only to its readers. Fictional people only: ana (owner), be
 
 from backend.tests.slug_ids import bot_ids_are_their_slugs  # noqa: F401  (each bot's id is its slug)
 from backend import events as E
-from backend import queue_refusals, thread_bot_status, threads
+from backend import queue_refusals, step_briefs, thread_bot_status, threads
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixture, helpers)
 from backend.tests.helpers.thread_events import read_as, who
@@ -388,6 +388,7 @@ def test_a_thought_after_a_tool_reads_as_thinking():
 
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE attempt_events(attempt_id TEXT, seq INTEGER, kind TEXT, payload TEXT, created_at TEXT)")
+    c.executescript(step_briefs.SCHEMA)
 
     def add(seq, kind, payload):
         c.execute("INSERT INTO attempt_events VALUES('a', ?, ?, ?, '2026-11-04T00:00:00.000Z')", (seq, kind, payload))
