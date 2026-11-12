@@ -11,9 +11,9 @@ interface ModalSessionDetail { primary?: boolean; bot?: string; thread_id?: stri
 interface ModalMilestone { kind: string; label: string; met?: boolean; url?: string | null; sentence: string; note?: string | null; }
 interface ModalDeferred { state: string; resume?: unknown; run?: string | null; at?: string | null; words?: string | null; }
 // The model a task's runs use (`run_model`), one row of GET /v2/models, and what a Runs on form has picked.
-interface ModalRunModel { model?: string; harness?: string; reasoning_effort?: string; }
+interface ModalRunModel { model?: string; harness?: string; reasoning_effort?: string; compact_at?: number | null; }
 interface ModalModelRow { id: string; label?: string; harnesses?: string[]; efforts?: string[]; default_effort?: string; context_tokens?: number | null; deprecated?: boolean; meeting?: boolean; }
-interface ModalRunPick { model: string; harness: string; effort: string; }
+interface ModalRunPick { model: string; harness: string; effort: string; compact: number | null; }
 interface ModalTask extends TaskRow {
   links?: ModalLink[];
   children?: unknown[];
@@ -439,13 +439,15 @@ function taskRunCatalog() {
   return TASK_RUN_LOADING;
 }
 const taskRunOpts = (list: [string, string][], val: string) => list.map(([k, label]) => `<option value="${esc(k)}"${k === val ? ' selected' : ''}>${esc(label)}</option>`).join('');
-// The choice a form starts on: the task's own model, harness and effort, or none (the bot's task model).
-const taskRunPick = (run: ModalRunModel | null | undefined): ModalRunPick => ({model: run?.model || '', harness: run?.harness || '', effort: run?.reasoning_effort || ''});
+// The choice a form starts on: the task's own model, harness, effort and window, or none (the bot's task model).
+const taskRunPick = (run: ModalRunModel | null | undefined): ModalRunPick => ({model: run?.model || '', harness: run?.harness || '',
+  effort: run?.reasoning_effort || '', compact: run?.compact_at || null});
 function taskRunWords(run: ModalRunModel | null | undefined, rows: ModalModelRow[] | null) {
-  if (!run?.model) return "The bot's task model";
+  const compact = run?.compact_at ? `compacts at ${compactWords(run.compact_at)}` : '';
+  if (!run?.model) return ["The bot's task model", compact].filter(Boolean).join(' · ');
   const row = (rows || []).find(m => m.id === run.model);
   return [row?.label || run.model, (row?.harnesses || []).length > 1 ? harnessWords(run.harness) : '', run.reasoning_effort,
-    modelContextWords(row?.context_tokens)].filter(Boolean).join(' · ');
+    modelContextWords(row?.context_tokens), compact].filter(Boolean).join(' · ');
 }
 // Only whoever the server says may set the task's model gets the form (`can_set_run_model`, the answer POST
 // /v2/tasks/{id}/model gives); anyone else reads what it runs on.
@@ -459,6 +461,7 @@ function taskRunModelBody(run: ModalRunModel | null | undefined, rows: ModalMode
     <label><span>Model</span><select data-run-model>${taskRunOpts([['', "The bot's task model"], ...rows.map((m): [string, string] => [m.id, [m.label || m.id, modelContextWords(m.context_tokens)].filter(Boolean).join(' · ')])], pick.model)}</select></label>
     ${harnesses.length ? `<label><span>Harness</span><select data-run-harness>${taskRunOpts(harnesses.map((h): [string, string] => [h, harnessWords(h) || h]), pick.harness)}</select></label>` : ''}
     ${row?.efforts?.length ? `<label><span>Effort</span><select data-run-effort>${taskRunOpts(row.efforts.map((e): [string, string] => [e, e]), pick.effort)}</select></label>` : ''}
+    ${compactsOn(pick.harness || row?.harnesses?.[0]) ? `<label><span>Compact</span><select data-run-compact>${compactOptions(pick.compact, row?.context_tokens)}</select></label>` : ''}
     <button type="submit" class="ghost" data-run-model-apply disabled>Apply</button></form>`;
 }
 // Shown on a bot's task once GET /v2/tasks/{id} has answered (list rows leave out run_model).
@@ -472,8 +475,8 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
   const sec = $('[data-task-run-model]', d);
   if (!sec) return;
   const id = String(task.id), run = task.run_model || null, state = {pick: taskRunPick(run)}, may = taskRunMay(task);
-  const same = () => state.pick.model === (run?.model || '') && (!state.pick.model || (state.pick.harness === (run?.harness || '')
-    && state.pick.effort === (run?.reasoning_effort || '')));
+  const same = () => state.pick.model === (run?.model || '') && (state.pick.compact || null) === (run?.compact_at || null)
+    && (!state.pick.model || (state.pick.harness === (run?.harness || '') && state.pick.effort === (run?.reasoning_effort || '')));
   const paint = () => {
     sec.innerHTML = taskRunModelBody(run, TASK_RUN_ROWS, state.pick, may);
     const apply = sec.querySelector('[data-run-model-apply]'); if (apply) apply.disabled = same();
@@ -484,13 +487,17 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
     if (!(t instanceof HTMLSelectElement)) return;
     if (t.matches('[data-run-model]')) {
       const row = (TASK_RUN_ROWS || []).find(m => m.id === t.value);
-      state.pick = !row ? taskRunPick(null) : row.id === run?.model ? taskRunPick(run)
-        : {model: row.id, harness: row.harnesses?.[0] || '', effort: row.default_effort || row.efforts?.[0] || ''};
+      // The window picked stays, lowered to the largest size the new model holds (spec scope 8).
+      const compact = state.pick.compact, window = row?.context_tokens || 0;
+      const fit = compact && window && compact > window ? (COMPACT_SIZES.filter(([size]) => size <= window).pop()?.[0] || null) : compact;
+      state.pick = !row ? {...taskRunPick(null), compact} : row.id === run?.model ? taskRunPick(run)
+        : {model: row.id, harness: row.harnesses?.[0] || '', effort: row.default_effort || row.efforts?.[0] || '', compact: fit};
       paint(); sec.querySelector('[data-run-model]')?.focus();
       return;
     }
     if (t.matches('[data-run-harness]')) state.pick.harness = t.value;
     if (t.matches('[data-run-effort]')) state.pick.effort = t.value;
+    if (t.matches('[data-run-compact]')) state.pick.compact = Number(t.value) || null;
     sec.querySelector('[data-run-model-apply]').disabled = same();
   };
   sec.onsubmit = async (ev: SubmitEvent) => {
@@ -498,8 +505,10 @@ function taskRunModelBind(d: ModalDialog, task: ModalTask) {
     const apply = sec.querySelector('[data-run-model-apply]');
     if (!apply || apply.disabled) return;
     apply.disabled = true;
-    const {model, harness, effort} = state.pick;
-    const body = model ? Object.fromEntries(Object.entries({model, harness, effort}).filter(([, v]) => v)) : {model: null};
+    const {model, harness, effort, compact} = state.pick;
+    // No model keeps the bot's; a window alone is still the task's own ("Same as bot 150K"), and null is the bot's.
+    const body = {...(model ? Object.fromEntries(Object.entries({model, harness, effort}).filter(([, v]) => v)) : {model: null}),
+      compact_at: compact};
     try {
       const saved = await post(`/v2/tasks/${encodeURIComponent(id)}/model`, body);
       if (saved.warning) toast(saved.warning);

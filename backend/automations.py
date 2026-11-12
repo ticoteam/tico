@@ -739,12 +739,12 @@ def _step_actions(steps):
         yield from _step_actions((step.get("otherwise") or {}).get("steps"))
 
 
-RUN_MODEL_KEYS = ("model", "effort", "harness")
+RUN_MODEL_KEYS = ("model", "effort", "harness", "compact_at")
 
 
 def _run_model_steps(steps):
-    """The bot_turn steps that stamp a model on the task they open (`model`, `effort`, `harness`), nested steps
-    included."""
+    """The bot_turn steps that stamp a model on the task they open (`model`, `effort`, `harness`, `compact_at`), nested
+    steps included."""
     for step in steps or []:
         if step.get("type") == "bot_turn" and any(step.get(key) for key in RUN_MODEL_KEYS):
             yield step
@@ -754,8 +754,15 @@ def _run_model_steps(steps):
 
 
 def _stamp(step):
-    """What one stamping step sets on its task: (step id, bot, model, effort, harness)."""
-    return (step.get("id"), step.get("bot"), step.get("model"), step.get("effort"), step.get("harness"))
+    """What one stamping step sets on its task: (step id, bot, model, effort, harness, compact_at)."""
+    return (
+        step.get("id"),
+        step.get("bot"),
+        step.get("model"),
+        step.get("effort"),
+        step.get("harness"),
+        step.get("compact_at"),
+    )
 
 
 def _stamps(flow):
@@ -774,7 +781,9 @@ def _checked_run_models(flow, kept=frozenset()):
             continue
         where = f"Step {step.get('id')}"
         if not step.get("model"):
-            raise Problem("invalid", f"{where} needs a model to pick an effort or harness for it", 422)
+            if step.get("effort") or step.get("harness"):
+                raise Problem("invalid", f"{where} needs a model to pick an effort or harness for it", 422)
+            continue  # a window alone: its task keeps the bot's model
         try:
             task_models.choice_of(step["model"], step.get("effort"), step.get("harness"))
         except Problem as exc:

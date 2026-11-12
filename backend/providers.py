@@ -493,14 +493,23 @@ def compact_default(model):
 
 
 def with_compact_default(config):
-    """A turn's `config` with its model's default compaction size when it carries none of its own, and a saved size
+    """A turn's `config` with its model's default compaction size when it carries none of its own, a saved size
     lowered to fit the model it runs on (a bot moved to a smaller model by an agent or the API keeps its size until
-    then)."""
+    then), and its fallback's: the fallback's own size, else the turn's ("Same as bot"), lowered to fit the fallback
+    model's window."""
     saved = config.get("compact_at")
     if isinstance(saved, int) and not isinstance(saved, bool) and saved > 0:
         fitted = fit_compact_at(saved, (MODEL_BY_ID.get(config.get("model") or "") or {}).get("context_tokens"))
-        return config if fitted == saved else {**config, "compact_at": fitted}
-    return {**config, "compact_at": compact_default(config.get("model"))}
+        out = config if fitted == saved else {**config, "compact_at": fitted}
+    else:
+        out = {**config, "compact_at": compact_default(config.get("model"))}
+    fallback = out.get("fallback")
+    if isinstance(fallback, dict) and fallback.get("model"):
+        window = (MODEL_BY_ID.get(str(fallback["model"])) or {}).get("context_tokens")
+        own = fallback.get("compact_at")
+        size = own if isinstance(own, int) and not isinstance(own, bool) and own > 0 else out["compact_at"]
+        out = {**out, "fallback": {**fallback, "compact_at": fit_compact_at(size, window)}}
+    return out
 
 
 # What a model costs at the provider's public list price, in USD per 1M tokens: (input, cached input,

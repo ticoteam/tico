@@ -903,7 +903,7 @@ RULE_TASK_TABLES_SCHEMA = (
 TASK_RUN_MODELS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_run_models (
   task_id TEXT PRIMARY KEY REFERENCES tasks(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
-  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT);
+  harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT, compact_at INTEGER);
 """
 
 # Browser exits (backend/browser_exit.py): a computer's owner shares its internet with chosen bots under a daily byte

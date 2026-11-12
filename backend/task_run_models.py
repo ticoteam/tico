@@ -12,21 +12,30 @@ from .harnesses import runtime_of
 
 
 def of(c, task_id):
-    """The task's own choice {harness, runtime, model, reasoning_effort, set_by, set_at}, or None when its runs use the
-    bot's task model."""
+    """The task's own choice {harness, runtime, model, reasoning_effort, compact_at, set_by, set_at}, or None when its
+    runs use the bot's task model. An empty `model` is a window alone (`compact_at`): its runs keep the bot's model."""
     if not task_id or not H._has_table(c, "task_run_models"):
         return None
     return H._one(
         c,
-        "SELECT harness,runtime,model,effort AS reasoning_effort,set_by,set_at FROM task_run_models WHERE task_id=?",
+        "SELECT harness,runtime,model,effort AS reasoning_effort,compact_at,set_by,set_at FROM task_run_models "
+        "WHERE task_id=?",
         (task_id,),
     )
 
 
-def stamped(model, effort="", harness=""):
+def window(compact_at):
+    """A choice that sets only where the task's runs compact: they keep the bot's model."""
+    return {"harness": "", "runtime": "", "model": "", "reasoning_effort": "", "compact_at": compact_at}
+
+
+def stamped(model, effort="", harness="", compact_at=None):
     """A routine step's choice as the save kept it, not checked again: a model retired since is not run on, and the turn
     falls back saying why (task_models.why_not). Its effort is the one named, else the model's default, as
-    task_models.choice_of gives it; its harness is the one named, else the model's first."""
+    task_models.choice_of gives it; its harness is the one named, else the model's first. With no model it is only
+    its window (`compact_at`)."""
+    if not model:
+        return window(compact_at)
     row = providers.MODEL_BY_ID.get(model) or {}
     harness = str(harness or "").strip().lower() or str(next(iter(row.get("harnesses") or ()), "") or "")
     effort = str(effort or "").strip().lower() or str(row.get("default_effort") or "")
@@ -35,6 +44,7 @@ def stamped(model, effort="", harness=""):
         "runtime": runtime_of(harness) or str(row.get("runtime") or ""),
         "model": model,
         "reasoning_effort": effort,
+        "compact_at": compact_at,
     }
 
 
@@ -42,7 +52,10 @@ def _label(choice):
     if not choice:
         return ""
     effort = choice.get("reasoning_effort") or ""
-    return f"{choice.get('model') or ''}{f' ({effort})' if effort else ''}"
+    size = choice.get("compact_at")
+    window_said = (f"{size // 1_000_000}M" if size % 1_000_000 == 0 else f"{size // 1000}k") if size else ""
+    words = [f"{choice.get('model') or ''}{f' ({effort})' if effort else ''}", f"compact {window_said}" if size else ""]
+    return ", ".join(w for w in words if w)
 
 
 def set_choice(c, actor, task_id, choice, note=""):
@@ -53,16 +66,18 @@ def set_choice(c, actor, task_id, choice, note=""):
         c.execute("DELETE FROM task_run_models WHERE task_id=?", (task_id,))
     else:
         c.execute(
-            "INSERT INTO task_run_models(task_id,runtime,model,harness,effort,set_by,set_at) "
-            "VALUES(?,?,?,?,?,?,?) "
+            "INSERT INTO task_run_models(task_id,runtime,model,harness,effort,compact_at,set_by,set_at) "
+            "VALUES(?,?,?,?,?,?,?,?) "
             "ON CONFLICT(task_id) DO UPDATE SET runtime=excluded.runtime,model=excluded.model,"
-            "harness=excluded.harness,effort=excluded.effort,set_by=excluded.set_by,set_at=excluded.set_at",
+            "harness=excluded.harness,effort=excluded.effort,compact_at=excluded.compact_at,"
+            "set_by=excluded.set_by,set_at=excluded.set_at",
             (
                 task_id,
                 choice["runtime"],
                 choice["model"],
                 choice["harness"],
                 choice["reasoning_effort"],
+                choice.get("compact_at") or None,
                 actor,
                 H.now(),
             ),

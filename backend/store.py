@@ -2172,6 +2172,9 @@ class Store:
                 # A queued message a person sent with Stop and redirect (backend/execution.py stop): it is claimed
                 # before the bot's other queued work once the stopped turn ends. Unversioned: an older release never reads it.
                 H.add_column(c, "jobs", "redirect", "INTEGER NOT NULL DEFAULT 0")
+                # Where one task's runs compact (backend/task_run_models.py); NULL is the bot's. Unversioned: an older
+                # release never reads it.
+                H.add_column(c, "task_run_models", "compact_at", "INTEGER")
                 # At most one active attempt per bot and lane (attempts.lane, clients/sessions.py lane): a task-keyed turn
                 # runs in its own lane beside the bot's other tasks, everything else in `main`.
                 c.execute("DROP INDEX IF EXISTS one_active_attempt_per_bot")
