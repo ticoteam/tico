@@ -294,6 +294,7 @@ interface TaskPagesSlot extends HTMLDivElement {
 }
 // The task's dialog, which holds its section (tpEl) and the release of its live handlers (tpOff).
 interface TaskPagesHost extends HTMLDialogElement { tpEl?: TaskPagesSlot | null; tpOff?: (() => void) | null; }
+const taskMakeDraftKey = (id: string) => 'tico.task.make-page.' + id;
 // A live event the task's pages react to: a files change on the task, or a run of the page being made.
 interface TaskPagesLiveEvent { kind?: string; kinds?: string[]; id?: unknown; conversation_id?: string; }
 // A pin on a task's place: its page is the page as GET /api/v2/places/{place} lists it, with the replaced and archived flags.
@@ -314,6 +315,8 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
     <form class="tp-make" hidden>${ldotHTML({state: 'still', size: 20})}<input type="text" aria-label="Describe the page" placeholder="Describe the page" maxlength="8000" required><button type="submit" class="primary">Make page</button></form>
     <p class="tp-error err" role="alert" hidden></p><div class="tp-making" role="status" hidden></div><div class="tp-pages"></div>`;
   const make = $('.tp-make', slot), prompt = $('input', make), error = $('.tp-error', slot);
+  try { prompt.value = localStorage.getItem(taskMakeDraftKey(id)) || ''; } catch { /* storage may be unavailable */ }
+  prompt.oninput = () => { try { if (prompt.value) localStorage.setItem(taskMakeDraftKey(id), prompt.value); else localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ } };
   make.onsubmit = async (ev: Event) => {
     ev.preventDefault();
     if (slot.tpSending || ['making', 'update_required'].includes(slot.tpMaking?.state) || !prompt.value.trim()) return;
@@ -323,6 +326,7 @@ function taskPagesAdopt(d: TaskPagesHost, task: {id?: unknown}) {
       if (d.tpEl !== slot) return;
       if (r.held) throw new Error('Not sent');
       make.reset();
+      try { localStorage.removeItem(taskMakeDraftKey(id)); } catch { /* storage may be unavailable */ }
       taskPageMakeDraw(d, {state: 'making', conversation_id: r.message.conversation_id});
       await taskPageMakeLoad(d);
     } catch (e) { if (d.tpEl === slot) { error.textContent = errorMessage(e, ''); error.hidden = false; } }
