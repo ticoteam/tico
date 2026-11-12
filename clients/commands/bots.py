@@ -630,15 +630,38 @@ def bot_release(api, args):
     return _as_person(api).post(f"bots/{args['bot']}/release", {}, key=_key(args))
 
 
+# Where a bot's conversation compacts, in tokens: the sizes the server takes (backend/providers.py COMPACT_SIZES).
+COMPACT_SIZES = (
+    100_000,
+    150_000,
+    200_000,
+    250_000,
+    300_000,
+    400_000,
+    500_000,
+    600_000,
+    700_000,
+    800_000,
+    900_000,
+    1_000_000,
+)
+
+
 @tool(
     "tico_bot_model",
-    "Show the models a bot may run on, or change its model, as the person who asked you. A change waits for a "
-    "run in progress to end. A manager bot may change its direct report's model.",
+    "Show the models a bot may run on, or change its model or where its conversation compacts (`compact_at`), as "
+    "the person who asked you. A model change waits for a run in progress to end. A manager bot may change its "
+    "direct report's model.",
     {
         "bot": _s("The bot's slug"),
         "model": _s("A model id or name from the list; leave out to list them"),
         "effort": _s("Reasoning effort that model supports"),
         "harness": _s("A harness from that model's harnesses list"),
+        "compact_at": {
+            "type": "integer",
+            "enum": list(COMPACT_SIZES),
+            "description": "Where the bot's conversation compacts, in tokens; leave out to keep it",
+        },
         "on_behalf_of": ON_BEHALF_OF,
     },
     required=("bot",),
@@ -648,7 +671,7 @@ def bot_model(api, args):
     who = _as_person(api, args.get("on_behalf_of"))
     catalog = who.get("models")
     current = who.get(f"bots/{args['bot']}")
-    if not any(args.get(k) for k in ("model", "harness", "effort")):
+    if not any(args.get(k) for k in ("model", "harness", "effort", "compact_at")):
         enabled = set(catalog.get("enabled_providers") or [])
         return {
             "models": [
@@ -656,9 +679,25 @@ def bot_model(api, args):
                 for m in catalog.get("models", [])
                 if not m.get("deprecated") and (not enabled or m.get("provider") in enabled)
             ],
-            **{k: v for k, v in current.items() if k in ("harness", "effort")},
+            **{k: v for k, v in current.items() if k in ("harness", "effort", "compact_at")},
             "current": current.get("model"),
+            "compact_sizes": list(COMPACT_SIZES),
         }
+    out = None
+    if any(args.get(k) for k in ("model", "harness", "effort")):
+        out = _set_bot_model(who, catalog, current, args)
+    if args.get("compact_at"):
+        revision = (out or {}).get("revision") or who.get(f"bots/{args['bot']}")["revision"]
+        saved = who.post(
+            f"bots/{args['bot']}/compact-at",
+            {"compact_at": args["compact_at"], "expected_revision": revision},
+            key=_key(args, ":compact"),
+        )
+        out = {**(out or {}), "compact_at": saved["compact_at"], "revision": saved["revision"]}
+    return out
+
+
+def _set_bot_model(who, catalog, current, args):
     model = _model_id(
         catalog, args.get("model") or current.get("model") or (catalog.get("default") or {}).get("model") or ""
     )

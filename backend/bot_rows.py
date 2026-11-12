@@ -7,6 +7,7 @@ list. Health splits the same queue over every job (`health.queue_counts`)."""
 
 from . import task_privacy as privacy
 from . import read_cache
+from . import providers
 from .harnesses import is_external, resolve_harness
 from .shared_bots import _json, source_of
 from .store import H
@@ -226,6 +227,12 @@ class BotRows:
         """shared_bots.declared, from the rows read."""
         row = self.configs.get(slug)
         return _json(row["config"]) if row else {}
+
+    def model(self, c, settings, declared):
+        """The model a bot with config `declared` runs on (providers.bot_choice), the company's choice read once."""
+        if not hasattr(self, "_providers"):
+            self._providers = providers.load(c, settings)
+        return providers.bot_choice(c, settings, declared, self._providers)[1]
 
     def human(self, pid):
         """H.human, from the rows read."""
