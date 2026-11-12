@@ -2299,6 +2299,12 @@ class Store:
                     ("tasks_queue_cover", "tasks(rank, created_at, id, owner_id, requester_id, private, readers)"),
                     ("tasks_owner_status_cover", "tasks(owner_id, status, id, requester_id, private, readers)"),
                     ("tasks_requester_status_cover", "tasks(requester_id, status, id, owner_id, private, readers)"),
+                    # One person's Needs you (waiting_on.candidates; migration 20261112080000), for the same reason.
+                    (
+                        "tasks_open_pipeline",
+                        "tasks(id, owner_id, requester_id, private, readers, pipeline_id, stage_id) "
+                        "WHERE pipeline_id IS NOT NULL AND status='open'",
+                    ),
                     # A person's view of a bot's settings changes (settings_admin.history): the manager
                     # bots' changes, found by seek and in id order within a timestamp. It needs the `via`
                     # column, added above.
