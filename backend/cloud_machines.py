@@ -178,6 +178,7 @@ SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked,
 SIGNIN_ASK = 45  # the page asks every few seconds: a want not asked for again this long is over
 SIGNIN_START = 5 * 60  # a machine not up this long after the first ask is not coming: the page stops waiting
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
+DRAINED_WANT = "drained-job:"  # a drained bot's waiting turn (`bot_want`): wakes its machine, never runs there yet
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 UPDATE_RETRY = 6 * 3600  # a runner tries a failed update again this long after it failed (runner-rs follow.rs)
 UPDATE_AGAIN = ":again"  # ends the want of a stopped machine's one more start to try a failed update again
@@ -1282,7 +1283,8 @@ def wake_for(current, found):
             return rest(want), False
     if update and not spent(update):
         return rest(update), False
-    return None, bool(wants)
+    # A drained bot's turn is not expected to run where it was woken for: it is waiting, not stuck.
+    return None, any(not w.startswith(DRAINED_WANT) for w in wants)
 
 
 def runner_updating(c, runner_id, at):
@@ -1316,8 +1318,9 @@ def bot_want(c, settings, bot, runner_id, at, always_on=False):
     if c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone():
         # Drained, it takes no work now, but a move (above) and a waiting turn still start its machine: the machine
         # reports the bot's repository then, and is up for the resume. Else only Always on keeps the machine on.
+        # Its key is its own (DRAINED_WANT): the wake spent on it is never the one the resume needs for `job:<id>`.
         if newest:
-            return True, "job:" + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
+            return True, DRAINED_WANT + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
         return always_on, None, None, 0
     if newest and runner_id:
         # Performance holds belong to start admission, not this wake: only a running machine can refresh its samples.
@@ -1842,7 +1845,8 @@ class Manager:
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
         if key != SHARED:
             with self.store.read() as c:
-                # A drain for a move with nothing left to move to (its machine's computer is gone) is lifted here too.
+                # `bind` lifts a drain for a move on every path but a turn still out ("busy"), so a row with one is
+                # bound again here, including one with nothing left to move to (its machine's computer is gone).
                 unbound = unplaced(c, key) or bool((row(c, key) or {}).get("move_drain"))
             if unbound:  # a write only when there is one to make
                 with self.store.transaction() as c:

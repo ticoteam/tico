@@ -2624,6 +2624,24 @@ def test_a_drained_bots_waiting_turn_still_starts_its_stopped_machine(cloud):
     assert cloud.tick(10) == ["start"]
 
 
+def test_a_turn_that_waited_through_a_drain_still_starts_the_machine_after_the_resume(cloud):
+    enrolled(cloud)
+    idle(cloud)
+    cloud.tick(400)
+    assert control(cloud, "drain").status_code == 200
+    work(cloud, text="Waiting for the resume")
+    cloud.hq.calls.clear()
+    # Drained: started for the waiting turn, idles out with nothing it may run, and stops. Not stuck: nothing could run.
+    assert cloud.tick(10) == ["start"]
+    cloud.tick(400)
+    cloud.tick(10)
+    assert cloud.row()["state"] == "stopped" and cloud.row()["problem"] != "stuck"
+    assert control(cloud, "resume").status_code == 200
+    cloud.hq.calls.clear()
+    # The wake spent while drained is not the one the resume needs.
+    assert cloud.tick(10) == ["start"]
+
+
 def test_a_size_or_always_on_change_on_a_bot_awaiting_its_move_is_saved_and_says_nothing(cloud, monkeypatch):
     own = enrolled(cloud)
     shared_enrolled(cloud, "finance")
