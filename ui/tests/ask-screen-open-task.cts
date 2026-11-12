@@ -64,6 +64,9 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await page.locator('#task-modal[open]').waitFor({timeout: 5000});
         assert.equal(await card(page).count(), 0, 'the conversation, not the ask');
         await page.keyboard.press('Escape');
+        // The dialog's close event comes a moment after it closes, and a close by hand cancels an open still on its way
+        // (task-modal.ts): open the next task once that close is handled.
+        await page.waitForFunction(() => !document.body.classList.contains('task-modal-open'));
         // Not waiting on Ana: the task page, as today.
         await page.evaluate(() => { void taskModalOpen('t-4'); });
         await taskPage(page).waitFor({timeout: 5000});
