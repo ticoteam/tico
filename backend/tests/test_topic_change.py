@@ -390,6 +390,64 @@ CHANGES = {
 }
 
 
+@pytest.mark.parametrize("change", sorted(CHANGES))
+def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, change, monkeypatch):
+    api, _, conversation, model, _ = chat
+    # The budget is how long a send may wait, which this test does not measure. On a loaded runner the reads before
+    # Decide can run past BUDGET, and a check cut short there never asks, so the budget must not decide the ordering.
+    monkeypatch.setattr(T, "BUDGET", 30)
+    before = session_state(api, conversation)
+    model.hold = threading.Event()
+    sent = {}
+    sender = threading.Thread(target=lambda: sent.update(post(api, "chat/ops", {"text": UNRELATED})))
+    sender.start()
+    try:
+        # Decide is asked only after the chat was read, so a change made once it is asked is one it did not see.
+        assert model.asked.wait(10), "the check is asking Decide"
+        with api.app.state.store.transaction() as c:
+            CHANGES[change](api, c, conversation)
+    finally:
+        model.hold.set()  # a confident new topic, about the chat as it was
+    sender.join(5)
+    assert "topic_changed" not in (sent.get("refs") or {}), "no divider"
+    expected = {**before, "epoch": 1, "thread": False} if change == "cleared" else before
+    assert session_state(api, conversation) == expected, "no clear beyond what happened meanwhile"
+    with api.app.state.store.read() as c:
+        kept = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='chat.topic_kept'")]
+        changed = c.execute("SELECT count(*) FROM events WHERE action='chat.topic_changed'").fetchone()[0]
+    assert kept == [{"why": {"cleared": "changed", "message": "changed"}.get(change, change)}] and changed == 0
+    assert [r["clear"] for r in checks(api)] == [True], "the audit keeps the decision; topic_kept says it was refused"
+
+
+def test_overlapping_new_topic_sends_clear_once_and_keep_the_first_message(chat, monkeypatch):
+    api, machine, conversation, model, _ = chat
+    # Both sends must be asking Decide before either is answered; the budget is not what this test measures, so on a
+    # loaded runner it must not cut the first check short while the second is still starting.
+    monkeypatch.setattr(T, "BUDGET", 30)
+    model.hold = threading.Event()
+    sent = []
+    senders = [
+        threading.Thread(target=lambda t=t: sent.append(post(api, "chat/ops", {"text": t})))
+        for t in (UNRELATED, "Plan the offsite agenda")
+    ]
+    for sender in senders:
+        sender.start()
+        deadline = time.monotonic() + 10.0
+        while len(model.calls) < senders.index(sender) + 1 and time.monotonic() < deadline:
+            time.sleep(0.01)
+    assert len(model.calls) == 2, "both sends are asking Decide about the same chat"
+    model.hold.set()
+    for sender in senders:
+        sender.join(5)
+    assert len(sent) == 2
+    assert sum(bool((m.get("refs") or {}).get("topic_changed")) for m in sent) == 1, "one divider"
+    assert session_state(api, conversation)["epoch"] == 1, "cleared once"
+    turn = claim(api, machine)
+    assert sorted(m["body"] for m in turn["history"]) == sorted(m["body"] for m in sent), (
+        "both new messages are after the clear"
+    )
+
+
 def test_a_clear_between_admission_and_history_is_not_cleared_again(chat, monkeypatch):
     """A Clear that commits after the gate admitted the old three-turn session but before history and the marker are
     read: the check reads the chat as admitted, so its decision no longer matches and nothing is cleared twice."""
