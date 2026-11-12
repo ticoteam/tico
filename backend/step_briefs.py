@@ -12,6 +12,9 @@ of the payload; a smaller event is cheap to decode and gets none.
 A brief only ever describes the payload it was made from: rewriting an event's payload (a scrubbed credential, a held
 reply wiped, a revoked page) or deleting the event drops its brief, and a row with no brief is read from its payload,
 as one written before briefs existed is. So a brief can be missing, never stale.
+
+A tool's label is kept as `tool_label` made it when the event arrived: after a release that changes the wording, a run
+already going shows the old label for that call until its next one.
 """
 
 import hashlib

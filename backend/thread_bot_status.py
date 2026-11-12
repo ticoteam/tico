@@ -270,7 +270,10 @@ def _last_piece(c, attempt_id, rows):
 
 def _digest(c, attempt_id, events):
     """The stripped digest of a reply piece's text from its [(seq, info)] events, reading again only the big events of
-    a piece typed across several."""
+    a piece typed across several.
+
+    That re-read is the one place the status line can decode more than 64 KiB: a piece typed across several big
+    deltas, ended by a tool call and then repeated by a closing message. Streamed deltas are small, so it stays rare."""
     from . import step_briefs
 
     if len(events) == 1:
