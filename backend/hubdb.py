@@ -5015,6 +5015,10 @@ def task_comment(
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     if is_human(actor) and (wake if delegate is None else delegate):
         delegate_woken(conn, task_id, actor, msg)
+    if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
+        from . import task_engine
+
+        task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
         msg = message(conn, msg['id'])
@@ -5038,11 +5042,23 @@ def comment_way_refs(way, defer_for=None):
 def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
     pending for it) acts on the task with party rights for 24 hours."""
+    until = shift(now(), hours=24)
+    for recipient, mid in _woken_bots(conn, msg):
+        conn.execute(
+            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
+            "VALUES(?,?,?,?,?)",
+            (task_id, recipient, person, mid, until),
+        )
+
+
+def _woken_bots(conn, msg):
+    """The bots a message wakes, each with the message that starts its run: the bot it is written to, unless it is
+    quiet, and each bot a steer or queue delivery is pending for."""
     woken = []
     refs = _json(msg.get("refs"), {}) or {}
     if is_bot(msg.get("recipient_id")) and not refs.get("quiet"):
         woken.append((msg["recipient_id"], msg["id"]))
-    woken += [
+    return woken + [
         (r["recipient"], r["carrier_id"])
         for r in _rows(
             conn.execute(
@@ -5052,13 +5068,6 @@ def delegate_woken(conn, task_id, person, msg):
             )
         )
     ]
-    until = shift(now(), hours=24)
-    for recipient, mid in woken:
-        conn.execute(
-            "INSERT OR IGNORE INTO task_delegations(task_id,delegate,requested_by,message_id,expires_at) "
-            "VALUES(?,?,?,?,?)",
-            (task_id, recipient, person, mid, until),
-        )
 
 
 def jobs_mark(conn):

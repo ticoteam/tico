@@ -45,16 +45,17 @@ def place(c, slug):
     c.execute("INSERT OR REPLACE INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, "r1", H.now()))
 
 
-def ran(c, task_id, actor, state="completed", at=None, runner="r1"):
+def ran(c, task_id, actor, state="completed", at=None, runner="r1", comments=False):
     """The bot's queued wakes for a task have had their run: each job gets one run that ended in `state` at `at`, each
-    started in order (task_wakes.started), on the computer `runner`."""
+    started in order (task_wakes.started), on the computer `runner`. With `comments`, so has each queued message on
+    the task a person wrote to it."""
     from backend import task_wakes
 
     at = at or H.now()
     rows = c.execute(
         "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
-        "WHERE j.state='queued' AND j.bot_id=? AND m.wake_key LIKE ?",
-        (H.actor_id(actor), task_id + ":%"),
+        "WHERE j.state='queued' AND j.bot_id=? AND (m.wake_key LIKE ? OR (? AND json_extract(m.refs, '$.task') = ?))",
+        (H.actor_id(actor), task_id + ":%", comments, task_id),
     ).fetchall()
     for job_id, message_id in rows:
         run = H.new_id()

@@ -460,7 +460,9 @@ Every 10 s, for each open task: what is missing, who has it, and are they on it?
    repeats.
 
 At any of the three steps: if the task changed, the count goes back to zero and the check asks again whose turn it
-is.
+is. While the owner bot has it, a person's comment that wakes the bot also puts the count back to zero: the run it
+starts is the first of a new count, so a bot that says "I'll carry on" and stops is woken again 2 min later. A comment
+the Assistant or BotOps writes for a person does not.
 
 ### What the check does for each kind of wait
 
