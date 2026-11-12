@@ -788,7 +788,7 @@ def listed(c):
     )
     ctx = _listing(c) if subs else None
     views = [view(c, s, ctx) for s in subs]
-    if not views:
+    if ctx is None:
         return views
     from types import SimpleNamespace
 
