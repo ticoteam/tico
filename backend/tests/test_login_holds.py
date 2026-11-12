@@ -95,16 +95,16 @@ def test_a_hold_survives_a_runner_restart_and_a_lost_probe_is_retried_as_the_sam
     again = claim(api, machine)
     assert again and again["job_id"] == probe["job_id"]
     assert claim(api, machine) is None
-    # It hits the limit again: the second in a row holds an hour.
+    # It hits the limit again: the second in a row holds 50 minutes, inside the hour the bot's session stays cached.
     limit(api, machine, again, errors=("Quota exceeded. Check your plan and billing details.",))
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, machine["runner_id"], "", "fake")
-        assert hold["streak"] == 2 and hold["until"].startswith("2026-10-19T03:17:00")
+        assert hold["streak"] == 2 and hold["until"].startswith("2026-10-19T03:07:00")
         assert "API quota or billing limit" in H.status(c, "ops")["focus"]
     # Health names the provider whose login is held, not just the bot's own.
     issue = next(i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i.get("bot") == "ops")
     assert issue["detail"].startswith(
-        "Primary fake API quota or billing limit; queued work waits until 2026-10-19 03:17 UTC"
+        "Primary fake API quota or billing limit; queued work waits until 2026-10-19 03:07 UTC"
     )
 
 

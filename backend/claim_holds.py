@@ -2,7 +2,7 @@
 
 The claim evaluates each candidate job and prepares the one it hands out (execution.Execution.claim). An error in
 either belongs to that job alone: the claim rolls back that job's writes, logs the traceback once, and holds the job
-here. A held run is retried on its own: its wait starts at a minute and doubles with each failed try, up to an hour,
+here. A held run is retried on its own: its wait starts at a minute and doubles with each failed try, up to 50 minutes,
 and the first claim after the wait releases it to the queue (release_due). A run that starts is no longer held
 (started); one that fails again is held again with a longer wait. The bot's operator gets one Needs-you item for all
 its held runs, the job's task a note, and Health a finding. Releasing the bot (bot_stops.release, POST
@@ -17,13 +17,14 @@ poll.
 import json
 import logging
 
+from .prompt_cache import CACHE_WARM_S
 from .store import H
 
 log = logging.getLogger(__name__)
 
 REASON = "Couldn't start: an error while preparing this run"
 RETRY_FIRST = 60  # seconds a held run waits before its first retry; doubles for each failed try in a row
-RETRY_MAX = 3600  # and never longer than this
+RETRY_MAX = CACHE_WARM_S  # and never longer than this, so a retry finds the bot's session still cached
 CHECK = "claim_check:"  # the service_health row of a bot whose claim check is failing
 CHECK_RETRY_FIRST = 60  # seconds a bot whose check raised is passed over before the check runs again
 CHECK_RETRY_MAX = 300  # doubled for each failed check in a row, and never longer than this
@@ -86,7 +87,7 @@ def _needs_you(c, settings, bot):
         f"Couldn't start a queued run for {name}",
         f"Tico could not start a queued run for {name}: an error happened while its claim prepared it. The run is "
         "held, and Tico retries it on its own: the wait starts at a minute and doubles with each failed try, up to "
-        "an hour, so it starts once the cause is fixed. The server log has the traceback, and Health names the "
+        "50 minutes, so it starts once the cause is fixed. The server log has the traceback, and Health names the "
         f"held runs. To retry them now, fix the cause and release {name} (tico bot release {bot}); a run that fails "
         "again is held again.",
     )

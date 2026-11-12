@@ -11,7 +11,7 @@ are on it:
 
 - Everything is met and there is room: the task moves.
 - A bot's turn: nothing while the bot has a live run or a wake queued for the task. Otherwise the ladder: the bot is
-  woken again 2 minutes after it stopped, then 15 minutes, then 1 hour. After 3 tries with no change the pipeline's
+  woken again 2 minutes after it stopped, then 15 minutes, then 50 minutes. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
   person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`).
@@ -34,6 +34,7 @@ from . import batch_work, hubdb_core, merge_order, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
+from .prompt_cache import CACHE_WARM_S
 
 if TYPE_CHECKING:
     import sqlite3
@@ -49,8 +50,8 @@ storage_error: Callable[[BaseException], bool] = _batch.storage_error
 SYSTEM: str = E.SYSTEM
 
 # Seconds a bot is left alone after it stopped, before try 1, try 2 and try 3. After try 3 the task goes up a level
-# once the first gap has passed.
-GAPS = (E.FIRST_TRY_S, 900, 3600)
+# once the first gap has passed. The third comes back while the bot's session is still cached (backend/prompt_cache.py).
+GAPS = (E.FIRST_TRY_S, 900, CACHE_WARM_S)
 TRIES = len(GAPS)
 # Bot runs one visit may start between two changes: the owner's start and 3 tries, then the manager bot's 3 tries.
 # Every run on the task counts, whoever it was for and whatever woke it (R1). The ladder holds to them, and the claim

@@ -2,7 +2,7 @@
 
 The claim checks each candidate job and prepares the one it hands out (backend/execution.py). An error in a job's own
 checks or start belongs to that job: its writes are rolled back, its traceback is logged once, and the job is held
-(backend/claim_holds.py) for a wait that doubles with each failed try, up to an hour. An error in a bot's own check (its
+(backend/claim_holds.py) for a wait that doubles with each failed try, up to 50 minutes. An error in a bot's own check (its
 budget or back-off) passes that bot over for the rest of the claim and holds none of its runs; Health names the check
 until one of its runs starts. A claim holds at most CLAIM_HOLDS jobs. A team's default and a storage error fail it.
 """
@@ -496,14 +496,14 @@ def test_a_provider_wide_start_error_holds_each_run_and_they_come_back_after_the
     assert all(not job["held"] for bot in ("ops", "cpo") for job in jobs_of(api, bot))
 
 
-def test_a_held_run_is_retried_after_each_wait_and_a_failure_doubles_the_next_one_up_to_an_hour(api, monkeypatch):
+def test_a_held_run_is_retried_after_each_wait_and_a_failure_doubles_the_next_one_up_to_50_minutes(api, monkeypatch):
     """A held run is retried when its wait ends. Each failed try renews its hold with a wait twice as long as the last,
-    from a minute to an hour, under the one Needs-you item its first hold filed."""
+    from a minute to 50 minutes (inside the hour the bot's session stays cached), under the one Needs-you item its first hold filed."""
     machine, task_id = held_refresh(api, monkeypatch)
     [job] = task_jobs(api, task_id)
     item = job["hold_task_id"]
     assert hold_of(api, job["id"])["hold_streak"] == 1
-    for streak, wait in zip(range(2, 9), (120, 240, 480, 960, 1920, 3600, 3600)):
+    for streak, wait in zip(range(2, 9), (120, 240, 480, 960, 1920, 3000, 3000)):
         wait_ends(api, monkeypatch, job["id"])
         when = H.now()
         assert claim(api, machine) is None
