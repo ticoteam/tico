@@ -107,8 +107,8 @@ def candidates(c, who, since=None, until=None):
     if since or until:
         index, day = "meetings_recorded_day", f"({RECORDED_DAY})"
         bounds = [f"{day}{op}?" for bound, op in ((since, ">="), (until, "<=")) if bound]
-        # Both OR terms must stay answerable from meetings_recorded_day: under INDEXED BY a clause the index cannot
-        # serve is an error ("no query solution") on every dated search, not a slower plan.
+        # Both OR terms must stay answerable from meetings_recorded_day: a clause the index cannot seek turns the
+        # plan into a silent scan of the whole index, every meeting's metadata parsed, with the same results.
         where.append(f"(({' AND '.join(bounds)}) OR {day} IS NULL)")
         args += [bound.isoformat() for bound in (since, until) if bound]
     attached = "0"

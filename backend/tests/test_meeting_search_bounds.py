@@ -145,7 +145,10 @@ def test_candidates_walk_the_newest_index_and_the_day_index_without_sorting_the_
         with store.read() as c:
             plan = " | ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + query))
         assert f"USING INDEX {index}" in plan, plan
-        assert index != "meetings_newest" or "TEMP B-TREE" not in plan, plan
+        if index == "meetings_newest":
+            assert "TEMP B-TREE" not in plan, plan
+        else:  # a seek on the day; a drifted expression or an extra OR term plans as a silent SCAN of the index
+            assert f"SEARCH m USING INDEX {index}" in plan and "SCAN m" not in plan, plan
 
 
 def test_the_day_index_is_on_the_expression_the_search_queries():
