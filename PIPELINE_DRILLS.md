@@ -6,3 +6,4 @@
 - drill B3: In development hands the work to Engineering and waits for it to land.
 - drill B4: On deck holds work until Build has room.
 - drill B5: Build ends when a pull request is open and its checks pass.
+- drill B7: Merge hands the pull request to the merge queue and waits for it to land.
