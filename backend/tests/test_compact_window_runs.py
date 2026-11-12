@@ -167,3 +167,20 @@ def test_the_bots_window_is_kept_for_a_task_without_one(api):
         BS.write(c, "ops", config)
     filed(api, model="claude-haiku-5-5", effort="low")
     assert claim(api, machine)["config"]["compact_at"] == 800_000
+
+
+def test_an_existing_hub_gets_the_run_window_column_and_keeps_its_rows():
+    import importlib
+    import sqlite3
+
+    migration = importlib.import_module("backend.migrations.20261112200448_task_run_models_compact_at")
+    conn = sqlite3.connect(":memory:")
+    migration.up(conn)  # a new file has no table yet: hubdb's CREATE carries the column
+    conn.execute(
+        "CREATE TABLE task_run_models(task_id TEXT PRIMARY KEY, runtime TEXT NOT NULL, model TEXT NOT NULL, "
+        "harness TEXT NOT NULL, effort TEXT NOT NULL DEFAULT '', set_by TEXT, set_at TEXT)"
+    )
+    conn.execute("INSERT INTO task_run_models VALUES('t1','claude','claude-haiku-5-5','claude','low','ana','t')")
+    migration.up(conn)
+    migration.up(conn)  # a second run changes nothing
+    assert conn.execute("SELECT model, compact_at FROM task_run_models").fetchall() == [("claude-haiku-5-5", None)]
