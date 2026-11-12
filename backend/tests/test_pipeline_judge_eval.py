@@ -266,15 +266,16 @@ def test_the_rc4_pages_and_their_traps_are_judged_with_the_shipped_rubrics_and_t
 
 def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut():
     """The six Fixes 2 pages from the Nov 12 stress run that a person OK'd (Jev said 0.13 to 0.70 on them), and the bad
-    ones: no check output, one reviewer left out, and a real first page that answered Review 2 only. Each is judged with
-    the shipped Fixes 2 rubric beside its PR's newest commit, and the page names that commit."""
+    ones: no check output, one reviewer left out, a failed check at the newest commit, and a real first page that
+    answered Review 2 only. Each is judged with the shipped Fixes 2 rubric beside its PR's newest commit, and the page
+    names that commit."""
     from backend.pipeline_settings import FIXES_2_RUBRIC
 
     cases = run.chosen(run.load(), "nov12-*")
     good = [c for c in cases if c["expected"] == "met"]
     bad = [c for c in cases if c["expected"] != "met"]
     assert len(good) == 6 and all(c.get("live_p", 1) < 0.75 for c in good)
-    assert {c["trap"] for c in bad} >= {"no_check_output", "reviewer_left_out"}
+    assert {c["trap"] for c in bad} >= {"no_check_output", "reviewer_left_out", "check_failed"}
     assert all(c["expected"] == "not_met" for c in bad)
     for case in cases:
         state = adapter.state_for(case)
@@ -283,6 +284,10 @@ def test_the_nov12_fixes_2_pages_are_judged_with_the_shipped_rubric_good_and_cut
         assert head[:9] in state["attachment"]["text"], case["id"]
     no_reviewer = next(c for c in bad if c["trap"] == "reviewer_left_out")["attachment"]["text"]
     assert "Reviewer 1" in no_reviewer and "Reviewer 2" not in no_reviewer
+    # A red check differs from CI still running: the rubric that lets the second through must say so of the first.
+    red = [c for c in bad if c["trap"] == "check_failed"]
+    assert len(red) >= 2 and all("fail" in c["attachment"]["text"] for c in red)
+    assert "but not failed" in FIXES_2_RUBRIC and "reports a check failed at the newest commit" in FIXES_2_RUBRIC
 
 
 def test_the_growth_pages_are_judged_with_the_shipped_rubrics_good_and_cut():

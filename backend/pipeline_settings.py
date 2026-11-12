@@ -157,17 +157,21 @@ REVIEW_RUBRIC = (
 # decision left to the person (keep the change, a target missed), a commit made after the reviews that Reviewer 2 reads
 # before the person is asked, and no line restating the work its title and spec already name. Naming each brought those
 # pages to 0.73 to 0.93 (the lowest, I08, says nothing of the change but its PR). "A line that only says it passed is
-# not output" and "leaves any of them out" keep a page with no check output or without one reviewer under 0.3.
+# not output" and "leaves any of them out" keep a page with no check output or without one reviewer under 0.3. Running
+# is fine but "not failed", said both in the checks part and in the does-not-meet sentence: with the running clause
+# alone a page reporting a red check scored 0.85 to 0.88; said once, either the red pages stayed unsure (about 0.55) or
+# a good page with CI running fell to 0.55 to 0.75. Said twice, red pages 0.03 to 0.13, good pages 0.73 to 0.93.
 FIXES_2_RUBRIC = (
-    "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR is "
-    "enough); output from how it was checked (test counts or command output; a line that only says it passed is not "
-    "output); the checks at the newest commit, passing or not finished when the page was written (some running or "
-    "re-running); and what Reviewer 1 and Reviewer 2 each found on the commit they reviewed, or that they found nothing "
-    "to fix. Only these four count. A page that leaves any of them out, such as one reviewer's findings, does not meet "
-    "it. A page with all four meets it even when it reports a target missed, asks the person to decide something "
-    "(whether to keep the change, a spec question), lists what was not checked, or says commits were made after the "
-    "reviews and a reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed "
-    "since the reviews when it names the work or its PR."
+    "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR "
+    "is enough); output from how it was checked (test counts or command output; a line that only says it passed is "
+    "not output); the checks at the newest commit: passing, or still running or re-running when the page was written "
+    "(fine, Tico waits for them), but not failed; and what Reviewer 1 and Reviewer 2 each found on the commit they "
+    "reviewed, or that they found nothing to fix. Only these four count. A page that leaves any of them out, such as "
+    "one reviewer's findings, or that reports a check failed at the newest commit, does not meet it. A page with all "
+    "four meets it even when it reports a target missed, asks the person to decide something (whether to keep the "
+    "change, a spec question), lists what was not checked, or says commits were made after the reviews and a "
+    "reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed since the "
+    "reviews when it names the work or its PR."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
 # and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
