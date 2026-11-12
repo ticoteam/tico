@@ -370,8 +370,9 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
 def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row) -> int:
     """A new commit on a PR whose review page was for an older one: the page no longer counts ("New commits since the
     review"), so the stage's owner bot is woken now, once per commit, instead of by the two-minute wake for an owner
-    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. Returns
-    how many wakes were added."""
+    that stopped. A bot still in its run on the task is not woken: it sees the new commit when it attaches. On a stage
+    where a person OKs a page that is not a review, the bot asked to review the new commits is woken too
+    (task_wakes.review_new). Returns how many wakes were added."""
     from .. import task_requirements as R
     from .. import task_wakes
 
@@ -393,6 +394,10 @@ def review_again(conn: "sqlite3.Connection", task_ids: list[str], metadata: Row)
         body = task_wakes.body(conn, row, lead, to=str(owner))
         key = f"{task_id}:{visit['id']}:review_again:{ref}:{head}"
         if task_wakes.add(conn, row, str(owner), visit, body, wake_key=key):
+            added += 1
+    for task_id in task_ids:
+        # Before a person OKs a page that is not a review (Fixes 2): the new commit is the last reviewer's to read.
+        if task_wakes.review_new(conn, task_id):
             added += 1
     return added
 
@@ -838,8 +843,8 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
 #   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
 #   (`tico task move <task> --to "Fixes 2"`), where the Builder owns it again. A commit pushed in Merge keeps the task in
-#   Merge: nothing sends it back through Review; the merge queue's checks are the gate. The manager hears of the new
-#   commit once (`changed_after_ok`, C22).
+#   Merge, but only a person queues it again at that commit: a bot sends the task back to Fixes 2, where the new commits
+#   are reviewed and OK'd again (`SENT_BACK_FOR_NEW`). The manager hears of the new commit once (`changed_after_ok`).
 # - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
 #   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
 #   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
@@ -857,6 +862,10 @@ WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
+# Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
+SENT_BACK_FOR_NEW = (
+    "{ref} has commits since the person's OK. Move the task back to Fixes 2, where they are reviewed and OK'd again."
+)
 
 
 def removed_wake_key(task_id: str, visit_id: str, ref: str, removed_at: str) -> str:
@@ -937,7 +946,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     is owed again. Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
     running") or failing ("Checks failed on <ref>: <names>"), and when the caller may not; `task_changed` (a bot's
-    stale `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person."""
+    stale `seen_version`), `task_ended`. Who may: the stage owner, the pipeline's manager, any person. A bot may not
+    queue a PR whose newest commit is not the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK
+    was for that one."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row:
@@ -972,6 +983,11 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         refuse("task_requirement", "Nothing was taken out of the merge queue")
     for link in again:
         metadata, ref = link["metadata"], link["ref"]
+        first = effects(conn, visit_id, ref)
+        if not E.is_human(by) and first and first[0].get("pinned") not in (None, metadata["head_sha"]):
+            # The person OK'd the commit the task came into Merge with: a newer one is not OK'd and no bot reviewed
+            # it. Only a person queues it as it is now; otherwise it goes back to Fixes 2.
+            refuse("task_requirement", SENT_BACK_FOR_NEW.format(ref=ref))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":

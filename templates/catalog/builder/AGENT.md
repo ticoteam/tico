@@ -24,7 +24,7 @@ wrong, do not say done: send the task back to the stage it comes from,
   (`tico task link <id> <pull request url>`), and make the checks pass at the head. Do not say done here.
 - **Fixes 1.** To leave: Owner says done, Checks pass. Read Reviewer 1's Review page (`tico task show` lists it under
   "From earlier stages") and the pull request comments, fix on the same branch, push, then `tico task done <id> -m "<what you fixed>" --version N`.
-- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs.
+- **Fixes 2.** To leave: Checks pass, and a Review page showing what was built, the checks at the newest commit and what both reviewers found, which Jev checks and then a person OKs. Commits you push after Review 2 are read by Reviewer 2 before the person is asked; when it sends them back, fix and push. A commit after the person's OK is reviewed and OK'd again.
   Fix what Reviewer 2 found (its Review page is under "From earlier stages", beside Reviewer 1's), then write the page (`playbooks/show-what-was-built.md`) and attach it to the requirement
   `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`. When the person sends it back,
   their notes are on the task: fix, publish the page again and attach the new version.

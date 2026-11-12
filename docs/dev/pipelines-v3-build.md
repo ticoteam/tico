@@ -598,10 +598,20 @@ page          no page attached                          not_met  owner   No page
               met, no person                             met              Jev passed it
 ```
 
-A page a person OKs that is not `at_head` (Fixes 2's Review page) also says, before the OK, when a linked PR's newest
-commit is not one a met Review page (`at_head`, Jev passed or OK'd) was attached at: "New commits since the reviews
-(now at <sha>): not reviewed by a bot." (`task_requirements.unreviewed`, from `item_versions` and the PR's head; Tico
-keeps no commit count). The bot's wake on that stage says it too. A waiting page's `since` is when that version was
+A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
+bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
+newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
+at <sha>): read only them, against what the reviews found and the spec. OK them or send them back, and say what you
+read." That bot answers on the page (`tico task answer <id> <requirement> ok|no -m ...`, notes required either way):
+the answer keeps the commits it was given at (`answers.heads`). Its OK makes those commits reviewed, and the person's
+ask then starts "<bot> reviewed the commits since the reviews: <notes>." Its no is `not_met` on the owner: "<bot>
+sent back the new commits: <notes>". A round is one set of commits it answered at; after `DELTA_ROUNDS` (2) rounds in
+a visit, or with no such bot, the person is asked with "New commits since the reviews (now at <sha>): not reviewed by
+a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits, and counts only while they
+are still the newest: after a new commit it is gone, the ask starts "New commits since <name>'s OK.", and the new
+commits go through the same review. Answers from before `heads` was kept stand. The Builder's wake says "not
+reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
 asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
 `tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push
 past.
