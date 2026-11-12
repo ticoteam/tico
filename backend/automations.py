@@ -2651,6 +2651,7 @@ class Hub:
         # link here would keep every app and its thread pools alive with it.
         self._app, self.store, self.settings = weakref.ref(app), store, store.settings
         self.lock = threading.Lock()
+        self.worker = None  # the queue's drain worker (backend/drains.py) while the server runs one
 
     @property
     def app(self):
@@ -2685,17 +2686,35 @@ class Hub:
             )
             return pick
 
-    def drain(self, limit=200):
-        """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever."""
+    def drain(self, limit=200, budget=None):
+        """Advance queued runs, then Workspace mail; each pass is bounded so one request never drains forever. With a
+        `budget` (backend/drains.py), no new run is claimed once it is spent, and the mail gets a budget of its own."""
+        from . import drains
+
         done = 0
-        while done < limit:
+        while done < limit and drains.left(budget):
             rid = self.claim()
             if not rid:
                 break
             self.go(rid)
             done += 1
-        drain_workspace_mail(self.store)
+        mail = budget.again() if budget else None
+        drain_workspace_mail(self.store, budget=mail)
+        if mail and mail.spent:
+            budget.spent = True  # work is left for the next pass
         return done
+
+    def drain_now(self, wait=None):
+        """A drain asked for now (the doorbell, a manual run). With the server's worker running it wakes the worker
+        (one more pass after the one in progress, never a second beside it) and, given `wait` seconds, waits for that
+        pass to end; without one it drains here, as before."""
+        worker = self.worker
+        if worker is None:
+            return self.drain()
+        ticket = worker.wake()
+        if wait:
+            worker.wait(ticket, wait)
+        return None
 
     def go(self, rid):
         with self.store.read() as c:
@@ -2999,7 +3018,7 @@ def _workspace_mail(store, row):
         return {"ok": True, "detail": "left for you" if row["action"] == "leave" else f"labelled {name}"}
 
 
-def drain_workspace_mail(store, limit=200):
+def drain_workspace_mail(store, limit=200, budget=None):
     """A bounded pass after run writes and on scheduler ticks, including retries and recovered leases.
 
     Each row is tried at most once per pass. Candidates include chained rows; their predecessor is checked at the
@@ -3024,8 +3043,12 @@ def drain_workspace_mail(store, limit=200):
                 picked.add(row["id"])
                 if len(candidates) >= limit:
                     break
+    from . import drains
+
     done = 0
     for mid in candidates:
+        if not drains.left(budget):
+            break  # the rest waits for the next pass
         row = _claim_workspace_mail(store, mid)
         if row is None:
             continue
@@ -3057,9 +3080,10 @@ def drain_workspace_mail(store, limit=200):
     return done
 
 
-def tick(store, at=None):
+def tick(store, at=None, drain=True):
     """The scheduler's pass: due schedules fire, batch waits whose time came and answered turns go back in the
-    queue, runs cut off go back in it to go on from their last save, and the queue is drained."""
+    queue, runs cut off and Gmail actions whose lease ran out go back in it, and the queue is drained (`drain`; the
+    server's scheduler leaves that to its drain worker, backend/drains.py)."""
     hub = getattr(store, "automations", None)
     from . import redesign_migration
 
@@ -3160,6 +3184,20 @@ def tick(store, at=None):
             state = json.loads(run["saved_state"] or "{}")
             if (state.get("waiting_since") or run["started_at"]) < cutoff:
                 _fail(c, run["id"], state, now, "nothing answered for a day")
+        # A Gmail action the server's own drain claimed and never reported (its worker stuck or stopped) goes back in
+        # the queue when its lease runs out, here on the loop, whatever the worker is doing; a late result from that
+        # worker finds the lease gone and is dropped (drain_workspace_mail).
+        for row in c.execute(
+            "SELECT * FROM automation_mail_actions WHERE state='claimed' AND claimed_by=? AND claimed_at<=?",
+            (SERVER_MAIL, H.shift(now, minutes=-MAIL_LEASE_MINUTES)),
+        ).fetchall():
+            result = json.loads(row["result"] or "{}")
+            if row["attempts"] >= MAIL_TRIES:
+                _mail_report(c, row, "failed", {**result, "ok": False, "detail": f"no result after {MAIL_TRIES} tries"})
+            elif _requeue(c, row) == "canceled":
+                _mail_report(c, row, "canceled", {**result, "ok": False, "detail": "canceled: the run failed"})
+            else:
+                _mail_report(c, row, "queued", result)
         # A hold whose turn never ended (its job lost) stops counting after a day; the sweep is on record.
         for hold in c.execute(
             "SELECT * FROM automation_holds WHERE created_at<?", (H.shift(now, hours=-HOLD_STALE_HOURS),)
@@ -3177,7 +3215,7 @@ def tick(store, at=None):
                     "held_since": hold["created_at"],
                 },
             )
-    return hub.drain() if hub else 0
+    return hub.drain() if hub and drain else 0
 
 
 def _due_day(value):
@@ -3566,7 +3604,10 @@ def install(app, store, auth, mutate):
         response = await call_next(request)
         if store.automation_bell.is_set():
             store.automation_bell.clear()
-            await asyncio.to_thread(hub.drain)
+            if hub.worker is not None:
+                hub.worker.wake()  # off the response: the worker's next pass takes it (backend/drains.py)
+            else:
+                await asyncio.to_thread(hub.drain)
         return response
 
     def _push_addresses(c, aid):
@@ -3901,7 +3942,9 @@ def install(app, store, auth, mutate):
         if done.get("dropped"):
             return done
         rid = done["run"]
-        hub.drain()
+        from . import drains
+
+        hub.drain_now(wait=drains.MANUAL_WAIT)  # answers once the run has gone as far as it can now
         with store.read() as c:
             return {"run": run_view(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())}
 
