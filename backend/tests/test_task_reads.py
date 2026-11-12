@@ -2,6 +2,8 @@
 what changed and what left, never naming a task the reader could not have seen; a stale cursor
 resets; an unchanged full read is a 304."""
 
+import base64
+import json
 import time
 import uuid
 
@@ -301,6 +303,15 @@ def test_every_filter_the_list_takes_still_answers(api):
         "stage": made.get("stage_id") or "engineering-build",
         "waiting_on": "ben",
         "pushed_past": "false",
+        "search": "agenda",
+        "owners": "human:ben",
+        "stages": made.get("stage_id") or "general-todo",
+        "requesters": "human:ana",
+        "labels": "area-a",
+        "turn": "human:ben",
+        "due": "any",
+        "late": "false",
+        "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
         "on_behalf_of": "default",
     }
     assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}

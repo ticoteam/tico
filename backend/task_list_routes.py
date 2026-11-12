@@ -45,6 +45,15 @@ LIST_FILTERS = frozenset(
         "stage",
         "waiting_on",
         "pushed_past",
+        "search",
+        "owners",
+        "stages",
+        "requesters",
+        "labels",
+        "turn",
+        "due",
+        "late",
+        "after",
     }
 )
 _LIST_PASSED = frozenset({"on_behalf_of"})
