@@ -2,6 +2,7 @@
 // scripts are compiled with esbuild's transform and run in one vm context, with the few shared globals they read stubbed:
 // - the pipeline view's hook draws columns, the list and the phone's tabs from the tasks the page gives it, with each
 //   stage's count out of its limit, and a stage header that opens settings only for whoever may change the pipeline;
+// - against a limit the count is the tasks that hold a slot; those waiting only on a person (`on_person`) show beside it;
 // - a refused move reads as the engine said it: a push past asks why, anything else is the engine's line;
 // - Company › Factories orders a factory's pipelines by where they file, joins them with an arrow, and puts pipelines in
 //   no factory under Other with no count;
@@ -88,6 +89,27 @@ if (!view) throw new Error('the view sets its hook on the page');
   assert.equal((phone.match(/role="tab"/g) || []).length, 3, 'a tab per stage');
   assert.match(phone, /class="pv-tab on" data-pv-tab="ideas"/, 'the first stage with tasks shows first');
   assert.match(phone, /pv-is-phone/);
+}
+
+// ---- a limited stage counts bot work; tasks waiting only on a person's OK hold no slot and are counted beside it
+{
+  const waiting = Array.from({length: 15}, (_, i) => task(`w${i}`, `Spec ${i}`, 'spec', {pipeline_id: 'spec20', on_person: true,
+    turn: {state: 'person', who: 'human:chris', line: 'OK the spec', ask: true}}));
+  const working = Array.from({length: 5}, (_, i) => task(`b${i}`, `Draft ${i}`, 'spec', {pipeline_id: 'spec20'}));
+  const twenty = rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec', {task_limit: 20}), stage('dev', 'In development')]});
+  const html = view.html(twenty, [...waiting, ...working], opts());
+  assert.match(html, /<span class="pv-stage-name">Spec<\/span><span class="pv-stage-n tnum">5\/20<\/span><span class="pv-stage-person tnum">15 wait on a person<\/span>/,
+    'Spec 5/20, then 15 wait on a person');
+  assert.equal((html.match(/class="tk-card"/g) || []).length, 20, 'every task is still drawn');
+  const list = view.html(twenty, [...waiting, ...working], opts({layout: 'list'}));
+  assert.match(list, /5\/20<\/span><span class="pv-stage-person tnum">15 wait on a person/);
+  const phone = view.html(twenty, [...waiting, ...working], opts({phone: true}));
+  assert.match(phone, /data-pv-tab="spec"[^>]*>Spec <span class="tnum">5\/20<\/span>/, 'the phone tab counts bot work too');
+  assert.match(phone, /<\/div><span class="pv-stage-person tnum">15 wait on a person<\/span>/, 'and the stage shown says how many wait on a person');
+  const one = view.html(twenty, [waiting[0], ...working], opts());
+  assert.match(one, /5\/20<\/span><span class="pv-stage-person tnum">1 waits on a person<\/span>/);
+  const open = view.html(rec({id: 'spec20', stages: [stage('ideas', 'Ideas', {by_hand: true}), stage('spec', 'Spec')]}), [...waiting, ...working], opts());
+  assert.match(open, /<span class="pv-stage-n tnum">20<\/span><\/button>/, 'without a limit every task counts and no pill is drawn');
 }
 
 // ---- a refused move

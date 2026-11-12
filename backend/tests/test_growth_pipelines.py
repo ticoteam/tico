@@ -143,7 +143,7 @@ def test_a_bot_starts_its_own_idea_when_building_has_room_and_is_told_plainly_wh
         moved = _move(c, idea["id"], BUILDING, OWNER)
         assert (moved["stage_id"], moved["owner_id"]) == (BUILDING, OWNER)
     with pytest.raises(
-        H.Refused, match=r"^task_stage_full: No room in Building\. It holds 6: move it again when one leaves\.$"
+        H.Refused, match=r"^task_stage_full: No room in Building\. It holds 6 a bot is working on: move it again when one leaves\.$"
     ):
         _move(c, ideas[6]["id"], BUILDING, OWNER)
     assert E.task(c, ideas[6]["id"])["stage_id"] == IDEAS

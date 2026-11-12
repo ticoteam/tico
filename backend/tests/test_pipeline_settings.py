@@ -429,6 +429,8 @@ def test_a_removed_requirement_lets_a_waiting_task_move_in_the_same_step(c):
 
 def test_a_raised_limit_lets_the_oldest_waiting_task_in(c):
     record = _ops()
+    # Sign off's owner has work there too: a task waiting only on Ben's OK would hold no slot (task_engine.has_room).
+    _stage(record, 1)["requirements"].append(_stage(record)["requirements"][0])
     _stage(record)["requirements"] = []
     _stage(record, 1)["task_limit"] = 1
     saved = PS.save(c, ANA, record)

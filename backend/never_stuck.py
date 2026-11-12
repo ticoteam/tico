@@ -202,7 +202,9 @@ _FIRST_WAITING = (
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     "ORDER BY v.entered_at, v.id LIMIT 1"
 )
-_FREED = "SELECT id FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
+_FREED = (
+    "SELECT id, left_at FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
+)
 
 
 # A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
@@ -238,9 +240,20 @@ def _requests(conn: "sqlite3.Connection") -> int:
 
 
 def room_key(stage_id: str, freed_by: str | None) -> str:
-    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it), and one
-    for the room a stage has before any task ever left it."""
+    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it, or the task
+    whose turn became a person's and when: `freed`), and one for the room a stage has before any task ever left it."""
     return f"room:{stage_id}:{freed_by or 'start'}"
+
+
+def freed(conn: "sqlite3.Connection", stage_id: str) -> str | None:
+    """What freed the stage's newest slot: the visit that left it last, or a task in it whose turn became a person's
+    since (`waiting_on.slots`), as "<task id>@<when>". None before any slot was ever freed."""
+    left = conn.execute(_FREED, (stage_id,)).fetchone()
+    newest: tuple[str, str] | None = (str(left[1]), str(left[0])) if left else None
+    for task_id, since in W.slots(conn, stage_id).on_person:
+        if newest is None or since > newest[0]:
+            newest = (since, f"{task_id}@{since}")
+    return newest[1] if newest else None
 
 
 def _room(conn: "sqlite3.Connection") -> int:
@@ -255,8 +268,7 @@ def _room(conn: "sqlite3.Connection") -> int:
         nxt = E.stage(conn, str(after))
         if not nxt or not E.has_room(conn, nxt):
             continue
-        freed = conn.execute(_FREED, (after,)).fetchone()
-        wake_key = room_key(str(after), str(freed[0]) if freed else None)
+        wake_key = room_key(str(after), freed(conn, str(after)))
         first = conn.execute(_FIRST_WAITING, (by_hand,)).fetchone()
         row = E.task(conn, str(first[0])) if first else None
         if not row or not row.get("visit"):
@@ -1018,21 +1030,35 @@ def _rule_5(conn: "sqlite3.Connection") -> list[str]:
 
 def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     """A forward move never overfills a stage. Counted: the open tasks that came into a limited stage by a forward move
-    since the stage's settings last changed and were never snoozed there. A task that came back, was reopened or had a
-    snooze end may sit one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's
-    slot (task_engine.rides_with_filer)."""
-    return _lines(
-        conn,
-        "SELECT s.id, COUNT(*), s.task_limit FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
+    since the stage's settings last changed, were never snoozed there and hold a slot now (`waiting_on.slots`: a task
+    waiting only on a person's OK or answer holds none). A task that came back, was reopened or had a snooze end may sit
+    one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's slot
+    (task_engine.rides_with_filer). So may one a person answered on this visit, or whose ask was withdrawn: its turn
+    went back to a bot after it gave up its slot, and it keeps its place, as after Back."""
+    found = conn.execute(
+        "SELECT s.id, s.task_limit, t.id FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
         "AND t.pipeline_id IS NOT NULL JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
         "WHERE s.kind='work' AND s.task_limit > 0 AND v.entered_how IN ('met', 'pushed_past') "
         "AND v.entered_at >= s.updated_at "
         "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.visit_id = v.id) "
         "AND NOT EXISTS (SELECT 1 FROM links l JOIN visits f ON f.id = l.visit_id "
         "WHERE l.to_task_id = t.id AND f.stage_id = s.id) "
-        "GROUP BY s.id HAVING COUNT(*) > s.task_limit",
-        "6: stage {0} holds {1} tasks that moved forward into it, over its limit of {2}",
-    )
+        "AND NOT EXISTS (SELECT 1 FROM answers a WHERE a.visit_id = v.id AND a.by_id LIKE 'human:%') "
+        "AND NOT EXISTS (SELECT 1 FROM requirements r WHERE r.visit_id = v.id AND r.withdrawn_at IS NOT NULL) "
+        "ORDER BY s.id"
+    ).fetchall()
+    stages: dict[str, tuple[int, list[str]]] = {}
+    for stage_id, limit, task_id in found:
+        stages.setdefault(str(stage_id), (int(limit), []))[1].append(str(task_id))
+    out: list[str] = []
+    for stage_id, (limit, came) in stages.items():
+        if len(came) <= limit:
+            continue
+        person = {task_id for task_id, _ in W.slots(conn, stage_id).on_person}
+        count = len([task_id for task_id in came if task_id not in person])
+        if count > limit:
+            out.append(Break(f"6: stage {stage_id} holds {count} tasks that moved forward into it, over its limit of {limit}", []))
+    return out
 
 
 def _rule_7(conn: "sqlite3.Connection") -> list[str]:

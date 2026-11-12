@@ -239,20 +239,26 @@ def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) ->
 
 
 def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
-    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit. For
-    `task_row`, it also has room when the task that filed it is there (`rides_with_filer`): the stage may then hold one
-    over its limit, and takes no other task until it is under again."""
+    """A stage has room when it has no limit, or fewer of its tasks hold a slot than its limit. A task holds a slot
+    while it is open and not snoozed, unless it waits only on a person's OK or answer (`waiting_on.slots`): bots keep
+    working while people review. For `task_row`, it also has room when the task that filed it is there
+    (`rides_with_filer`): the stage may then hold one over its limit, and takes no other task until it is under
+    again."""
     limit = stage_row.get("task_limit")
     if stage_row["kind"] != "work" or not limit:
         return True
     if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
-    held = conn.execute(
+    everyone = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
         "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)",
         (stage_row["id"],),
     ).fetchone()[0]
-    return held + extra < limit
+    if everyone + extra < limit:
+        return True  # room even if every task held a slot: no task's waits are read
+    from . import waiting_on
+
+    return waiting_on.slots(conn, str(stage_row["id"])).held + extra < limit
 
 
 def next_stage(conn: "sqlite3.Connection", task_row: Row) -> Row | None:
@@ -858,7 +864,7 @@ def move(
             # person's request that moves on by itself (`not_held_by_hand`).
             held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
             then_what = (
-                f"It holds {target['task_limit']}: move it again when one leaves."
+                f"It holds {target['task_limit']} a bot is working on: move it again when one leaves."
                 if held_here
                 else "The task moves in when there is room."
             )
