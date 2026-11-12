@@ -5,7 +5,7 @@
 //  - You: Needs you under Answer, Review and Do, each row the sentence asked; a question with two choices answers in
 //    place and leaves (not on a phone); search narrows the rows, and Escape clears it; nothing scrolls sideways on a phone;
 //  - the view button lists You and every pipeline still in use (a retired one is not offered); picking one puts it in
-//    the address and reads its open tasks, snoozed ones left out;
+//    the address and reads its open tasks, snoozed ones too, drawn last in their stage and dimmed;
 //  - the archive: Snoozed, Done and Closed each read their own tasks, and a row opens the task in its window; a
 //    pipeline's archive reads and keeps that pipeline's tasks only, a live task of another pipeline left out;
 //  - a pipeline over one page (500 open tasks) or an archive over 200: More reads the next page from where the rows held
@@ -386,10 +386,13 @@ async function views(browser: Browser) {
   await page.locator('#task-filter-pop [data-scope="ops"]').click();
   await page.waitForFunction(() => /pipeline=ops/.test(location.hash) && !TASKS_ST.loading);
   const read = reads.at(-1)!.searchParams;
-  assert.deepEqual([read.get('status'), read.get('snoozed')], ['open', 'hide'], 'a pipeline reads its open tasks, snoozed ones left out');
+  assert.deepEqual([read.get('status'), read.get('snoozed')], ['open', 'all'], 'a pipeline reads its open tasks, snoozed ones too');
   assert.equal((await page.locator('#task-scope').innerText()).trim(), 'Operations');
   await page.locator('#task-body', {hasText: 'Book the team offsite'}).waitFor();
-  assert.equal(await page.locator('#task-body', {hasText: 'Renew the domain'}).count(), 0);
+  // The snoozed task stays in its stage, last there and dimmed (task-pipelines.ts; pipeline-snoozed.cts checks the rest).
+  const asleep = page.locator('#task-body .pv-snoozed[data-task="t-5"]');
+  await asleep.waitFor();
+  assert.ok(await asleep.evaluate(el => !el.nextElementSibling), 'the snoozed task is last in its stage');
   assert.deepEqual(errors, []);
   await page.close();
   console.log('the view button: You and the pipelines in use; a pipeline in the address: ok');
@@ -462,8 +465,9 @@ async function pages(browser: Browser) {
     await more(page).waitFor({state: 'hidden'});
     assert.equal(reads.at(-1)!.searchParams.get('offset'), null);
     assert.deepEqual(JSON.parse(Buffer.from(reads.at(-1)!.searchParams.get('after')!, 'base64url').toString()).at(-1), 'p-499');
-    assert.equal(await held(page), 519, 'every open task but the one taken out');
-    assert.equal(new Set(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id))).size, 519, 'none twice');
+    // 519 errands and the snoozed fixture (t-5): a pipeline holds its snoozed tasks too.
+    assert.equal(await held(page), 520, 'every open task but the one taken out');
+    assert.equal(new Set(await page.evaluate(() => TASKS_ST.tasks.map(t => t.id))).size, 520, 'none twice');
     assert.deepEqual(errors, []);
     await page.close();
   }
