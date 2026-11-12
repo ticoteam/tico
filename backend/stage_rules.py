@@ -238,9 +238,19 @@ def get(conn: Any, rule_id: str) -> dict[str, Any] | None:
 
 # ----------------------------------------------------------------------------- teams
 def _manager_group(conn: Any, pipeline_id: str) -> str:
+    """The pipeline's team: its manager's group. A manager in the built-in group (the General Manager standing in
+    for a pipeline with no manager of its own) names no team, so the group named after the pipeline stands in, and
+    without one the rule does not hold."""
+    from . import groups as _groups_mod
+
+    groups: Any = _groups_mod
     row = conn.execute("SELECT manager_id FROM pipelines WHERE id=?", (pipeline_id,)).fetchone()
     manager = row[0] if row else None
-    return _group_of(conn, manager)[0] if manager else ""
+    gid = _group_of(conn, manager)[0] if manager else ""
+    if gid and gid != groups.BUILT_IN:
+        return gid
+    every: Any = groups._roster(conn).get("org_groups") or {}
+    return pipeline_id if pipeline_id and pipeline_id in every else ""
 
 
 def _group_of(conn: Any, actor: str | None) -> tuple[str, list[str]]:
