@@ -168,12 +168,16 @@ def play(api, mode, seconds):
     return beats, rests, passes, waits[0], time.monotonic() - t0
 
 
-def delays(beats, end):
+def delays(beats, end, stuck):
+    """Each deferred run's delay; one due after the last beat counts only while a pass was still running (stuck)."""
     out = []
     due = 3.7
     while due < end:
         after = [b for b in beats if b >= due]
-        out.append((after[0] - due, False) if after else (end - due, True))
+        if after:
+            out.append((after[0] - due, False))
+        elif stuck:
+            out.append((end - due, True))
         due += INTERVAL
     return out
 
@@ -199,7 +203,7 @@ def test_due_times_keep_their_beat(api, monkeypatch, mode, delay):
     if stuck:
         end = SECONDS
         beats = [b for b in beats if b < end]
-    d = delays(beats, end)
+    d = delays(beats, end, stuck)
     late = [x for x, _ in d]
     by = {}
     for name, ms, _n in passes:
