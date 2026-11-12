@@ -8,30 +8,27 @@
 @media (prefers-color-scheme:light){:root[data-theme="system"]{--cv-s:42%;--cv-l:89%;--cv-fl:26%;--cv-bl:46%}}
 
 /* ----------------------------------------------------------------- the row */
-/* Two lines in one row: "Calendar" with the next event at the right, and under them the day bar, lined up with the label. */
-.cal-row{position:relative;flex-wrap:wrap}
-.cal-row>.nav-link{flex:1;min-width:0}
-.cal-bar{position:relative;flex:0 0 calc(100% - 46px);height:12px;margin:-5px 10px 4px 36px;display:none}
-/* its line is kept from the first paint where this browser last saw calendars (ui/theme.ts marks html.nav-cal) */
-.cal-row.cal-on .cal-bar,html.nav-cal .cal-bar{display:block}
-/* the track: working hours */
-.cal-bar::before{content:"";position:absolute;left:0;right:0;top:50%;height:6px;margin-top:-3px;border-radius:3px;background:var(--line)}
-.cal-blk{position:absolute;top:50%;height:6px;margin-top:-3px;min-width:3px;padding:0;border:0;border-radius:2px;background:var(--accent-quiet);cursor:pointer;transition:height var(--dur,.12s),margin var(--dur,.12s)}
-.cal-blk.past{opacity:.36}
-.cal-blk:hover,.cal-blk.sel{height:10px;margin-top:-5px;background:var(--accent)}
-.cal-blk:focus-visible{outline:var(--focus-ring);outline-offset:1px}
-.cal-now{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;border-radius:1px;background:var(--ink);pointer-events:none}
-.cal-bub{position:absolute;top:calc(100% + 6px);z-index:30;display:flex;flex-direction:column;gap:1px;max-width:220px;padding:6px 9px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 6px 18px rgba(0,0,0,.22);font-size:var(--t-sm);white-space:nowrap}
-.cal-bub::before{content:"";position:absolute;top:-5px;left:calc(var(--tip,50%) - 5px);width:8px;height:8px;border-left:1px solid var(--line);border-top:1px solid var(--line);background:var(--surface);transform:rotate(45deg)}
-.cal-bub a{color:var(--ink);font-weight:600;overflow:hidden;text-overflow:ellipsis}
-.cal-bub a:hover{color:var(--accent);text-decoration:underline}
-.cal-bub span{color:var(--muted)}
-.cal-next{position:absolute;right:10px;top:0;height:32px;max-width:calc(100% - 128px);min-width:0;display:none;align-items:center;pointer-events:none}
+/* One line: "Calendar", then at the right the next event as plain text, in the link's ink, between ‹ and ›. The name gives
+   way first ("…"); the time and the arrows always show. */
+.cal-row>.nav-link{flex:none;padding-right:4px}
+.cal-next{flex:1;min-width:0;display:none;align-items:center;justify-content:flex-end}
 .cal-row.cal-on .cal-next{display:flex}
-.cal-nx{display:flex;gap:4px;min-width:0;max-width:100%;font-size:11.5px;color:var(--muted);white-space:nowrap;pointer-events:auto}
+.cal-nx{display:flex;gap:3px;min-width:0;padding:0 2px;font-size:var(--t-sm);color:var(--ink);white-space:nowrap}
 .cal-nx .cal-nm{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .cal-nx .cal-tm{flex:none;font-variant-numeric:tabular-nums}
 a.cal-nx:hover{color:var(--accent);text-decoration:underline}
+.cal-nx.cal-none{display:block;padding:0;overflow:hidden;text-overflow:ellipsis}
+.cal-step{flex:none;display:inline-flex;align-items:center;justify-content:center;width:14px;height:24px;padding:0;border:0;border-radius:4px;background:none;color:var(--ink);font:inherit;font-size:var(--t-md);line-height:1;cursor:pointer}
+.cal-step:hover{background:var(--surface2)}
+.cal-step:focus-visible{outline:var(--focus-ring);outline-offset:-1px}
+/* A step slides the new event in from the side it came from. */
+.cal-nx.cal-in-r{animation:cal-in-r var(--dur,.16s) ease-out}
+.cal-nx.cal-in-l{animation:cal-in-l var(--dur,.16s) ease-out}
+@keyframes cal-in-r{from{opacity:0;transform:translateX(10px)}}
+@keyframes cal-in-l{from{opacity:0;transform:translateX(-10px)}}
+@media (prefers-reduced-motion:reduce){.cal-nx.cal-in-r,.cal-nx.cal-in-l{animation:none}}
+/* A phone's side menu is wide: arrows big enough for a thumb. */
+@media (max-width:760px){.cal-step{width:28px;height:32px}}
 .cal-recorder-link{display:none}
 
 /* ----------------------------------------------------------------- the page */

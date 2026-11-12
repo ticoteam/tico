@@ -156,9 +156,9 @@
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome"><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks<span class="nav-badge" data-needs-badge hidden></span></a>
-    <!-- Calendar: the link, then today's events over working hours with a now line, and the next event (ui/app/calendar-row.ts
-         fills the bar and the text; a server without calendars leaves just the link). -->
-    <div class="nav-row cal-row" id="nav-calendar"><a class="nav-link" href="#/calendar" data-nav="calendar"><span class="nav-icon" aria-hidden="true">calendar_month</span>Calendar</a><span class="cal-bar" data-cal-bar></span><span class="cal-next" data-cal-next></span></div>
+    <!-- Calendar: the link, then the next event with ‹ › to step through the week (ui/app/calendar-row.ts fills the text; a
+         server without calendars leaves just the link). -->
+    <div class="nav-row cal-row" id="nav-calendar"><a class="nav-link" href="#/calendar" data-nav="calendar"><span class="nav-icon" aria-hidden="true">calendar_month</span>Calendar</a><span class="cal-next" data-cal-next></span></div>
     <!-- Threads: the rail and Catch up (ui/app/thread-rail.ts); its count is what Catch up has left. Always there from the
          first paint; only a server without threads (its read answers 404) takes it away (threads.js threadsSideRender). -->
     <a class="nav-link" id="nav-threads" href="#/threads" data-nav="threads"><span class="nav-icon"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M9 4L7 20M17 4l-2 16M4 9h16M3 15h16"/></svg></span>Threads<span class="nav-badge" hidden></span></a>

@@ -78,8 +78,6 @@ try { performance.mark('tico:head'); } catch { /* no User Timing */ }
   // Contacts is on the Team header, so its page leaves Library as it is (redesign.ts rdInLibrary).
   const inLibrary = ['#/docs', '#/meetings', '#/tools', '#/library'].some(under) && !under('#/library/contacts') && !under('#/library/directory');
   root.classList.toggle('nav-lib-shut', read('tico.nav.library') !== 'open' && !inLibrary);
-  // The Calendar row's day bar, where this server last answered with calendars (ui/app/calendar-row.ts calRowKeep).
-  root.classList.toggle('nav-cal', read('tico.nav.calendar') === 'on');
   // The Team section folded here (ui/app/sidebar.ts renderNavSections).
   let folded = [];
   try { folded = JSON.parse(read('hub.nav.collapsed') || '[]'); } catch { /* unreadable: nothing folded */ }
