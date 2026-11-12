@@ -366,7 +366,7 @@ async function pageDiffDraw(state: PageFullState) {
     const [a, b] = await Promise.all([from, state.shown].map(async v => pageText(await (await viewFile(p.file_id, p.title + '.html', v)).blob.text())));
     if (PG !== state || state.diff !== from || !out.isConnected) return;
     out.removeAttribute('aria-busy');
-    out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a, b);
+    out.innerHTML = a === b ? '<p class="muted pg-pad">No text changes</p>' : tfDiffHTML(a ?? '', b ?? '');   // strict index access types a destructured list item as possibly undefined
   } catch (e) { if (out.isConnected) { out.removeAttribute('aria-busy'); out.innerHTML = `<p class="muted pg-pad">${esc(errorMessage(e, ''))}</p>`; } }
 }
 // The diff's header: What's changed?, the version to compare from, → the one on screen, and Close.
