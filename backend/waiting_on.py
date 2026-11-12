@@ -582,9 +582,8 @@ def slots(conn: "sqlite3.Connection", stage_id: str) -> Slots:
             waits = of(conn, row, seen, standings) if any(not s.met for s in standings) else []
             if waits and on_person(conn, row, waits, seen):
                 # The newest ask names the freed slot's room wake; the visit's start keeps the key whole without one.
-                since = max(str(wait.since or "") for wait in waits) or str(
-                    (row.get("visit") or {}).get("entered_at") or ""
-                )
+                visit: dict[str, Any] = row.get("visit") or {}
+                since = max(str(wait.since or "") for wait in waits) or str(visit.get("entered_at") or "")
                 person.append((task_id, since))
             else:
                 held += 1
