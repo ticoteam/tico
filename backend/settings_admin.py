@@ -636,6 +636,8 @@ class SettingsAdmin:
             ),
             "model_managed_by": "cloud",
         }
+        if body.compact_at:
+            config["compact_at"] = body.compact_at
         if folder:
             config["folder"] = folder
         profiles.apply(config, profiles.DOER, {})

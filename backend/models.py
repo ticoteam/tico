@@ -1893,6 +1893,12 @@ class ReportOrder(Contract):
     reports: list[ID] = Field(min_length=1, max_length=200)
 
 
+# Where a bot's conversation compacts, in tokens: the twelve sizes offered (backend/providers.py COMPACT_SIZES).
+CompactAt = Literal[
+    100_000, 150_000, 200_000, 250_000, 300_000, 400_000, 500_000, 600_000, 700_000, 800_000, 900_000, 1_000_000
+]
+
+
 class BotDefinitionCreate(Contract):
     private_tasks_default: StrictBool = False
     slug: Slug | None = None  # left out, picked from the display name
@@ -1906,6 +1912,8 @@ class BotDefinitionCreate(Contract):
     model: str = Field(default="", max_length=200)
     effort: str = Field(default="", max_length=200)
     harness: ID | None = None
+    # Where its conversation compacts; left out, it follows its model's default (backend/providers.py compact_default).
+    compact_at: CompactAt | None = None
     operator: ID | None = None
     # Who the bot works for (shared-room members). Left out, that is its operator; who may use it is
     # its access (docs/permissions.md), which starts Open.
