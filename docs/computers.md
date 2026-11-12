@@ -296,6 +296,23 @@ changes.
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
 while a turn runs on a subscription, another bot's turn on the same computer could read it.
 
+#### Bots' models follow the plans
+
+When a Claude or ChatGPT plan is added, connected or reconnected, or one is removed or **Needs reconnect**, each bot made
+from a template moves to its role's model for the plans that work now (`backend/plan_models.py` `SETS`). A start does the
+same, so a company that had a plan before this keeps up. With no plan, nothing moves. An API key is not a plan.
+
+| Role | Claude only | ChatGPT only | Both |
+| --- | --- | --- | --- |
+| Builder, Reviewer 1, managers, the Assistant, every other role | Opus 5.5, medium | GPT-6.1 Sol, high | Opus 5.5, medium |
+| Reviewer 2 | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Sol, high |
+| Librarian, Rules, Updates, Automations and Finance Owners | Haiku 5.5, extra high | GPT-6.1 Terra, medium | GPT-6.1 Terra, medium |
+
+A model the catalog does not offer yet is replaced by the set's first offered model on the same tool. A bot whose model a
+person changed (Settings, the model picker, a manager bot or the Assistant) keeps it; undoing that change gives it back to
+the plans. Each move is a `bot.model_changed` event with `why: plans`. Decision models (pipeline judges, Decide) stay on
+the Gateway. On Tico Cloud, setup's **Done** waits for a plan or key.
+
 ### Bots sharing one ChatGPT sign-in run side by side
 
 Codex bots on one Computer using the same ChatGPT sign-in run turns at the same time, just as Claude bots do. This applies to every bot on the Computer's login and to separate tasks of the same bot. They share the plan's usage allowance; that allowance is the limit, and a busy login does not make another turn wait. When the allowance runs out, the usual usage-limit and fallback rules apply ([how it works](how-it-works.md#one-turn-per-chatgpt-login)). Bots on an OpenAI API key also run side by side. Tico uses the original login in its own home and never copies a login file into another bot's home: copies can rotate apart during token refresh.

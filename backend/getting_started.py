@@ -10,7 +10,7 @@ Those live in the person's `preferences` row, so each person has their own.
 import json
 import sqlite3
 
-from . import model_login, providers
+from . import cloud_machines, model_login, providers
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
@@ -141,6 +141,15 @@ def _plan_signed_in(c):
     return False
 
 
+def _saved_plan_or_key(c):
+    """Whether the company has a Claude or ChatGPT plan or an API key saved that does not need reconnecting."""
+    return (
+        H._has_table(c, "model_subscriptions")
+        and c.execute("SELECT 1 FROM model_subscriptions WHERE status<>'needs_reconnect' LIMIT 1").fetchone()
+        is not None
+    )
+
+
 def built_in(settings):
     """The bots every install starts with: the four a person talks to, the General Manager (docs/general-manager.md), the
     Finance Owner (docs/bookkeeper.md), the Design Owner, the Updates and Automations Owners, and the Rules Owner, which
@@ -226,6 +235,7 @@ def checklist(c, who, settings, github):
     ).fetchone()
     installed = bool(github and github["installation_id"])
     waiting = _next_bot(c, settings)
+    cloud = cloud_machines.cloud_company(c, settings)
     items = [
         _item("signed_in", "Signed in", True, ""),
         _item(
@@ -249,14 +259,17 @@ def checklist(c, who, settings, github):
             "devices" if wanted else "models",
             login=_login_target(runners, wanted, c),
         ),
+        # On Tico Cloud a plan or key is required: the bots have no other model of the company's own to run on.
         _item(
             "subscription",
             "Add a Claude or ChatGPT subscription",
-            _plan_signed_in(c),
-            "Recommended. Use your own subscription for your own bots, within the provider's terms.",
+            _plan_signed_in(c) or (cloud and _saved_plan_or_key(c)),
+            "Use your own subscription for your own bots, within the provider's terms."
+            if cloud
+            else "Recommended. Use your own subscription for your own bots, within the provider's terms.",
             "#/settings",
             "models",
-            optional=True,
+            optional=not cloud,
         ),
         _item(
             "github",

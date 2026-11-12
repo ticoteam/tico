@@ -169,3 +169,18 @@ def test_the_step_never_blocks_setup_and_can_be_set_aside(api):
     assert body["done"] == before + 1  # a skipped step is settled, like the GitHub one
     assert plan_step(api)["skipped"] is True and plan_step(api)["done"] is False
     post(api, "getting-started/state", {"skip": "model"}, token=OWNER, expected=422)  # required steps are not skippable
+
+
+def test_on_tico_cloud_a_plan_or_key_is_required_and_a_saved_one_counts(api):
+    from backend import cloud_access
+    from backend.tests.helpers.cloud_access import signals
+
+    cloud_access.apply(api.app.state.store, cloud_access.parse(signals("open")))
+    setup(api)
+    subs.company(api)
+    row = plan_step(api)
+    assert (row["done"], row["optional"]) == (False, False)
+    post(api, "getting-started/state", {"skip": "subscription"}, token=OWNER)
+    assert plan_step(api)["skipped"] is False  # not set aside on Tico Cloud
+    subs.add(api, "anthropic_key", "sk-ant-api-" + "c" * 24, name="Company API")  # on no computer yet
+    assert plan_step(api)["done"] is True
