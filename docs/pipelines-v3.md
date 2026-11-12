@@ -405,6 +405,10 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
   the Heartbeat.
 - Pushing past does not push past the limit. Change the limit instead.
 - Back, Reopen and unsnooze can leave a stage one over its limit. It takes no new task until it is under again.
+- A sub-task needs no room in the stage of the task that filed it, while that task is still on the visit that filed it:
+  the filer waits on it, so it comes in on the filer's slot. The stage may then sit over its limit, as after Back.
+  *Changed Nov 12: on Tico Team a Build task waited on a fix it had filed, and the fix waited for room in that full
+  Build.*
 
 ### Snooze
 
@@ -539,7 +543,8 @@ A wait on the outside world, such as a vendor, is a snooze to a date. It is the 
 
 ### Rules that hold at all times
 
-1. Every open task has at least one named wait.
+1. Every open task has at least one named wait, and none waits on a task it filed that waits for room in the stage the
+   filer holds.
 2. Every bot's turn has a live run, a queued wake, a next try time, or has gone up a level.
 3. Every person's turn shows exactly once in that person's Needs you. The list is a read, so there is nothing to create
    or withdraw.
