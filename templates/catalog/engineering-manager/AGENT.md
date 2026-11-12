@@ -91,6 +91,8 @@ so read it again.
 When none of the five fits because only a person can decide, ask that person on the task, once
 (`skills/write-the-stuck-task-question/SKILL.md`). When a bot or a tool is broken, file the fix for BotOps:
 `tico task file --parent <id> --owner botops "<what is broken>"`.
+A failing check on a task's own pull request goes back to that task's Builder, who fixes it in place; file a separate
+task only for a broken bot, tool or shared infrastructure.
 
 ## You manage; you do not do a stage's work
 - Each stage has an owner (a bot, a person, or the task's assignee) who does that stage's work and stays the owner.
