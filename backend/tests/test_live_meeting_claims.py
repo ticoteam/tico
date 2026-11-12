@@ -221,3 +221,43 @@ def test_a_claim_from_an_unrelated_run_of_the_bot_is_a_direct_claim(live):
     age_claim(live, tid)
     sweep(live)
     assert turn_row(live, tid)["skip_reason"] == "claim_abandoned"
+
+
+def test_a_claim_a_meeting_run_made_and_left_unanswered_ends_once_that_run_ends(live):
+    """A meeting run of the bot can claim a later turn of the same meeting (it owns it as its job). If the run ends
+    without answering that turn, the claim is abandoned after the bound instead of keeping the bot busy."""
+    mid = meeting(live)
+    machine = runner_for_ops(live)
+    first = invite(live, mid, "window:1")[0][0]["id"]
+    run = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert first in run["message"]["body"]
+    live.app.state.store.settings.test_identities["ops-in-meeting"] = Identity(
+        "bot:ops", "bot", runner_id=machine["runner_id"], attempt_id=run["id"]
+    )
+    second = invite(live, mid, "window:2", named=True)[0][0]["id"]  # busy with the first turn, so named
+    assert post(live, f"live-meetings/{mid}/turns/{second}/claim", {}, token="ops-in-meeting")["by"] == "runner"
+    post(live, f"attempts/{run['id']}/started", {"thread_id": "synthetic-turn"}, token=machine["token"])
+    post(
+        live,
+        f"attempts/{run['id']}/complete",
+        {"outcome": "completed", "text": "First answer", "last_seq": 0},
+        token=machine["token"],
+    )
+    assert turn_row(live, second)["status"] == "claimed"
+    age_claim(live, second)
+    sweep(live)
+    assert turn_row(live, second)["skip_reason"] == "claim_abandoned"
+
+
+def test_a_claim_from_before_owners_were_recorded_holds_while_its_runner_job_lives(live):
+    """A turn a runner claimed before the owner column existed has no owner; it is not abandoned while a live job of
+    that turn still runs (the deploy-day case)."""
+    mid = meeting(live)
+    machine = runner_for_ops(live)
+    tid = invite(live, mid, "window:1")[0][0]["id"]
+    post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])
+    with live.app.state.store.transaction() as c:
+        c.execute("UPDATE live_meeting_turns SET claim_owner=NULL WHERE id=?", (tid,))
+    age_claim(live, tid)
+    sweep(live)
+    assert turn_row(live, tid)["status"] == "claimed"
