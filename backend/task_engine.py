@@ -1195,10 +1195,10 @@ PROGRESS_SQL = (
 def progress_mark(conn: "sqlite3.Connection", visit_id: str, standings: Sequence[R.Standing] | None = None) -> str:
     """What the never-stuck check compares to tell a task that changed from one that did not: the answers, added
     requirements and filed tasks of this visit, and where each requirement stands (so a PR that opened or a check that
-    finished is a change). A comment is not a change. Nor is a snooze or its end: setting a task aside earns no more
-    runs. Nor is the task's version: it says the row changed since someone looked, and a field edit (a new title, a
-    label) raises it. A move and a reassign start the ladder again themselves. `standings` saves reading them again
-    when the caller has them."""
+    finished is a change). A comment is not a change (a person's that wakes the owner bot restarts the ladder itself:
+    `person_spoke`). Nor is a snooze or its end: setting a task aside earns no more runs. Nor is the task's version: it
+    says the row changed since someone looked, and a field edit (a new title, a label) raises it. A move and a reassign
+    start the ladder again themselves. `standings` saves reading them again when the caller has them."""
     from . import read_cache
 
     found = cast("Any", read_cache).one(conn, PROGRESS_SQL, (visit_id,))  # a pass reads them for many (never_stuck)
@@ -1238,6 +1238,25 @@ def changed(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
     row = task(conn, task_id)
     if row and row["status"] == "open":
         _reset_ladder(conn, row["visit"], _h().now(), by)
+
+
+def person_spoke(conn: "sqlite3.Connection", task_id: str, by: str) -> None:
+    """A person wrote to the task's owner bot while the owner has it (a comment that wakes the bot): the ladder starts
+    again, as when an answer comes. The run the comment starts is the first of the new count, so if it stops before
+    the task is finished the bot is woken again after the first gap: never left for the hour a third try waits, and
+    never handed straight to the manager for runs spent before the person spoke. A person's own words or their token
+    count; the Assistant or BotOps acting for them do not (`hubdb.VIA`), since a bot that could restart the ladder could
+    keep a task going round it for ever. A task a person or the manager bot has keeps its level: Try again is the way
+    back from a person."""
+    H = _h()
+    if not is_human(by) or H.VIA.get():
+        return
+    row = task(conn, task_id)
+    if not row or row["status"] != "open" or row.get("snooze") or not row.get("visit"):
+        return
+    if (row["visit"].get("level") or "owner") != "owner":
+        return
+    _reset_ladder(conn, row["visit"], H.now(), by)
 
 
 def try_again(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:

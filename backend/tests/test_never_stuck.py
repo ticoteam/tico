@@ -540,6 +540,54 @@ def test_an_answer_wakes_the_bot_that_asked_and_the_count_starts_again(c, genera
     assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
 
 
+@pytest.mark.parametrize("via", [None, "token"])
+def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_that_stops_early_is_tried_soon(
+    c, general, later, via
+):
+    """The drill: two tries spent, a person writes to the bot, its run ends with "I'll install the test dependencies
+    and continue". The next look is the first gap away, not the hour a third try waits, and it is the bot's own try,
+    not a hand-over to the manager bot for runs spent before the person spoke."""
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    for n in (1, 2):
+        X.ran(c, task_id, BUILDER)
+        assert later(seconds=(120, 900)[n - 1]) == {"woken": 1} and _ladder(c, task_id) == ("owner", n)
+    X.ran(c, task_id, BUILDER)
+    later(minutes=20)
+    mark = H.BY_TOKEN.set(True) if via else None
+    try:
+        H.task_comment(c, ANA, task_id, "pytest is there now, carry on")
+    finally:
+        if mark:
+            H.BY_TOKEN.reset(mark)
+    assert _ladder(c, task_id) == ("owner", 0)
+    assert X.ran(c, task_id, BUILDER, comments=True) == 1  # it said it would carry on, and stopped
+    assert later(seconds=119) == {}
+    assert later(seconds=1) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    assert _said(c, task_id, BUILDER)[-1] == "You stopped before this task was finished. Try 1 of 3."
+
+
+@pytest.mark.parametrize("who", ["assistant", "quiet", "person_level"])
+def test_a_comment_the_assistant_writes_or_one_that_wakes_no_bot_or_on_a_persons_task_keeps_the_count(
+    c, general, later, who
+):
+    task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    X.ran(c, task_id, BUILDER)
+    assert later(seconds=120) == {"woken": 1} and _ladder(c, task_id) == ("owner", 1)
+    X.ran(c, task_id, BUILDER)
+    if who == "person_level":
+        c.execute(
+            "UPDATE visits SET level='person', person_id=?, tries=3, next_try_at=NULL WHERE task_id=?", (ANA, task_id)
+        )
+    before = _ladder(c, task_id)
+    mark = H.VIA.set("assistant") if who == "assistant" else None
+    try:
+        H.task_comment(c, ANA, task_id, "A note for later", wake=who != "quiet")
+    finally:
+        if mark:
+            H.VIA.reset(mark)
+    assert _ladder(c, task_id) == before
+
+
 def test_a_bot_named_for_an_ok_is_on_the_same_ladder(c, general, later):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=ANA)["id"]
     E.add_requirement(c, task_id, ANA, "answer", REVIEWER, "OK the wording")
