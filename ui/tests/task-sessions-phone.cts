@@ -77,6 +77,15 @@ async function run(viewport: Viewport, shot: string) {
       assert.ok(gap >= 4, `row ${i + 1}: Copy and Remove have space between them (${gap} px)`);
       // The icons stay their size: the tap area is padding.
       assert.ok(((await row.locator('button.tcopy svg').boundingBox())!).width <= 12, 'the copy icon is not enlarged');
+      // The whole 40x40 takes the tap: the row's rounded, clipped end must not cut off a corner (a tap 2 px in from each).
+      for (const [name, sel] of [['Copy', 'button.tcopy'], ['Remove', 'button.x']] as const) {
+        const missed = await row.locator(sel).evaluate(btn => {
+          const r = btn.getBoundingClientRect();
+          return [[r.left + 2, r.top + 2], [r.right - 2, r.top + 2], [r.left + 2, r.bottom - 2], [r.right - 2, r.bottom - 2]]
+            .filter(([x, y]) => !btn.contains(document.elementFromPoint(x!, y!))).length;
+        });
+        assert.equal(missed, 0, `row ${i + 1}: every corner of ${name}'s tap area takes the tap`);
+      }
     }
     if (shot) await page.screenshot({path: shot});
 
