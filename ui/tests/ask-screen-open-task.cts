@@ -13,6 +13,8 @@ import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open, fixtures} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+// The page's own opener (ui/app/task-modal.ts), as list rows and board cards call it.
+declare function taskModalOpen(id: string): Promise<void>;
 
 const card = (page: Page) => page.locator('#need-card[open]');
 const taskPage = (page: Page) => page.locator('#task-modal[open] .tmodal-title');
