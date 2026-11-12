@@ -1091,7 +1091,7 @@ def hire(auth, onboarding, c, who, seat_id, body):
     if body.model:
         if body.model not in {m["id"] for m in _models(c, onboarding)}:
             raise Problem("model", "Choose one of your team's current models", 422)
-        model, effort = body.model, ""
+        model, effort = body.model, body.effort
     else:
         suggested = _suggested(c, onboarding, card)
         model, effort = suggested["model"], suggested["effort"]
@@ -1126,6 +1126,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
             template=card["template"],
             model=model,
             effort=effort,
+            harness=body.harness if body.model else None,
+            compact_at=body.compact_at if body.model else None,
             owners=[H.actor_id(who.actor)],
             runner_id=body.runner_id or None,
         ),

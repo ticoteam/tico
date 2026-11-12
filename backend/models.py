@@ -1976,6 +1976,10 @@ class SeatHire(Contract):
     model: Annotated[str, Field(max_length=200)] = ""
     name: Annotated[str, Field(max_length=100)] = ""
     runner_id: ID | None = None
+    # With `model`: the harness and effort picked with it, and where its conversation compacts (left out, the model's default).
+    harness: ID | None = None
+    effort: Annotated[str, Field(max_length=200)] = ""
+    compact_at: CompactAt | None = None
 
 
 class BotArchive(Contract):
