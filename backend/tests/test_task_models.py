@@ -13,6 +13,16 @@ from backend.tests.helpers.check_models import company, finish, heartbeat
 from backend import bot_settings as BS
 from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model, task_turn
 
+
+@pytest.fixture
+def held_terra(monkeypatch):
+    """gpt-6.1-terra held again, as it was under Dev 693, so the held-row rules keep a real row to test against. Product
+    opened it on Codex (2026-11-11), but the hold itself still applies to any row marked held."""
+    from backend import providers
+
+    monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "held", True)
+    monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "deprecated", True)
+
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
 
@@ -206,7 +216,7 @@ def test_a_retired_or_switched_off_task_model_falls_back_too(api):
     assert "to be enabled" in get(api, "tasks/" + task["id"])["runs"][0]["ran_on"]["task_model"]["note"]
 
 
-def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallback_note(api):
+def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallback_note(api, held_terra):
     """Ruling 3 (Dev 693): a saved held default keeps running. A bot whose task model was saved as gpt-6.1-terra before
     the hold runs its tasks on it, and the run says nothing fell back. A held row that is not the saved default stays
     refused as a pick."""
@@ -251,7 +261,7 @@ def test_a_saved_held_terra_task_model_runs_as_the_saved_default_with_no_fallbac
         )
 
 
-def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_save(api, monkeypatch):
+def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_save(api, monkeypatch, held_terra):
     """Dev 693 (Engineering Lead's ruling on the Terra PR): a save that sends no model, or the saved one again, keeps
     the saved held task model. For that model a field the save leaves out is kept, and a context length sent as null
     clears it. A harness with no model is refused. A save that picks another held model is refused, and so is a fresh
@@ -311,7 +321,7 @@ def test_a_saved_held_terra_task_model_stays_on_an_effort_context_or_same_model_
     assert set_task_model(api, None)["task_model"] is None
 
 
-def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_replaced(api):
+def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_replaced(api, held_terra):
     """Undo of a save on the saved held model (Dev 693) restores the record it replaced: the effort, and a context
     length that was unset as well as one that was set (the undo names every field, so null restores null)."""
     ops_on_sonnet(api)
@@ -366,7 +376,7 @@ def test_undoing_a_held_terra_save_restores_the_effort_and_context_length_it_rep
         ({}, None),
     ],
 )
-def test_a_save_that_names_no_model_keeps_the_saved_held_model(api, body, changed):
+def test_a_save_that_names_no_model_keeps_the_saved_held_model(api, body, changed, held_terra):
     """Dev 693 (Engineering Lead's ruling): a save that names no model keeps the saved held model, and only the field
     the save names may change. A save that changes nothing is refused as unchanged (409), a context length sent as null
     clears only the context length, and a null effort keeps the held effort. An explicit null for the whole task model
