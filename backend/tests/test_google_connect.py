@@ -103,8 +103,9 @@ def test_the_mail_computer_finishes_it_and_the_code_is_cleared(app):
         assert google_connect.pending(c, machine["runner_id"], named=True)  # the owner's computer publishes
     assert get(app, "runners/connectors", machine["token"])["connectors"] == ["mail"]
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
+    assert claimed["id"].startswith("gc_")  # this connect, not the person: /exchange and /result answer only it
     assert claimed == {
-        "id": "cara",
+        "id": claimed["id"],
         "action": "connect",
         "mailbox": "cara@acme.example",
         "client_id": CLIENT,
@@ -263,8 +264,8 @@ def test_only_a_computer_holding_a_grant_from_this_server_may_refresh(app, monke
     assert stored == {"grant_hash": google_connect.fingerprint("1//grant"), "pending_hash": None}
     google.calls.clear()
     post(app, "mail/google/disconnect", {}, "cara-test")
-    post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])
-    post(app, "connectors/mail/google/cara/result", {"status": "disconnected"}, machine["token"])
+    claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+    post(app, f"connectors/mail/google/{claimed['id']}/result", {"status": "disconnected"}, machine["token"])
     assert refresh(app, machine["token"]).status_code == 403  # disconnected: nothing left to refresh
     assert row(app)["grant_hash"] is None
     assert google.calls == []
@@ -533,7 +534,7 @@ def test_disconnect_is_queued_for_the_computer_without_the_client(app):
     assert seen["status"] == "disconnecting"
     machine = runner(app)
     claimed = post(app, "connectors/mail/google/claim", {}, machine["token"])["connect"]
-    assert claimed == {"id": "cara", "action": "disconnect", "mailbox": "cara@acme.example"}
+    assert claimed == {"id": claimed["id"], "action": "disconnect", "mailbox": "cara@acme.example"}
     r = app.post(
         f"/api/v2/connectors/mail/google/{claimed['id']}/result",
         json={"status": "connected"},
@@ -567,7 +568,7 @@ def test_disconnect_and_reconnect_go_only_to_the_computer_holding_the_grant(app)
     assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, server["token"])["connect"] is None
     claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, mac["token"])["connect"]
     assert claimed["action"] == "disconnect"
-    post(app, "connectors/mail/google/cara/result", {"status": "disconnected"}, mac["token"])
+    post(app, f"connectors/mail/google/{claimed['id']}/result", {"status": "disconnected"}, mac["token"])
     assert row(app)["holder"] is None
     # A reconnect also goes to the holder, and a failed one leaves the earlier grant's holder in place.
     connected(app, mac)
@@ -575,8 +576,166 @@ def test_disconnect_and_reconnect_go_only_to_the_computer_holding_the_grant(app)
     back(app, state=query["state"], code="c-2")
     assert post(app, "connectors/mail/google/claim", {"holds_mail": True}, server["token"])["connect"] is None
     claimed = post(app, "connectors/mail/google/claim", {"holds_mail": True}, mac["token"])["connect"]
-    post(app, "connectors/mail/google/cara/result", {"status": "failed", "kind": "identity_mismatch"}, mac["token"])
+    post(
+        app,
+        f"connectors/mail/google/{claimed['id']}/result",
+        {"status": "failed", "kind": "identity_mismatch"},
+        mac["token"],
+    )
     assert row(app)["holder"] == mac["runner_id"]
+
+
+# Each connect or disconnect is its own operation (SM-03): the claim names it, and /exchange and /result answer only it.
+# An answer from an earlier operation, even on the same computer, is a conflict that changes nothing.
+
+
+def claim(app, machine):
+    return post(app, "connectors/mail/google/claim", {"holds_mail": True}, machine["token"])["connect"]
+
+
+def signed_in(app, machine, code):
+    """A connect started, back from Google with `code`, and claimed by `machine`."""
+    _, query = start(app)
+    back(app, state=query["state"], code=code)
+    return claim(app, machine)
+
+
+def answer(app, machine, claimed, body):
+    return app.post(
+        f"/api/v2/connectors/mail/google/{claimed['id']}/result", json=body, headers=headers(machine["token"])
+    )
+
+
+def exchange(app, machine, claimed):
+    return app.post(
+        f"/api/v2/connectors/mail/google/{claimed['id']}/exchange", json={}, headers=headers(machine["token"])
+    )
+
+
+def grant(refresh_token):
+    return {"access_token": "ya29." + refresh_token, "expires_in": 3599, "refresh_token": refresh_token}
+
+
+def test_each_connect_and_disconnect_is_claimed_under_its_own_id(app):
+    machine = runner(app)
+    first = signed_in(app, machine, "c-A")
+    second = signed_in(app, machine, "c-B")
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    third = claim(app, machine)
+    ids = {first["id"], second["id"], third["id"]}
+    assert len(ids) == 3 and "cara" not in ids
+
+
+def test_a_late_result_from_an_earlier_connect_does_not_finish_the_next_one(app, monkeypatch):
+    machine = runner(app)
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(grant("1//A")))
+    a = signed_in(app, machine, "c-A")
+    assert exchange(app, machine, a).status_code == 200
+    # A's result is delayed. The person connects again, and the same computer claims it.
+    b = signed_in(app, machine, "c-B")
+    before = row(app)
+    assert before["pending_hash"] is None  # A's grant is not left waiting for B's answer
+    r = answer(app, machine, a, {"status": "connected", "can": ["read"]})
+    assert r.status_code == 409 and r.json()["error"]["code"] == "stale"
+    assert row(app) == before  # still B's: finishing, B's code kept, no grant
+    assert before["status"] == "finishing" and before["code"] == "c-B" and before["grant_hash"] is None
+    google = FakeGoogle(grant("1//B"))
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert exchange(app, machine, b).status_code == 200 and google.calls[0]["code"] == "c-B"
+    assert answer(app, machine, b, {"status": "connected", "can": ["read"]}).status_code == 200
+    assert row(app)["grant_hash"] == google_connect.fingerprint("1//B")
+
+
+def test_a_delayed_exchange_from_an_earlier_connect_spends_nothing(app, monkeypatch):
+    google = FakeGoogle(grant("1//B"))
+    monkeypatch.setattr(google_connect, "post_token", google)
+    machine = runner(app)
+    a = signed_in(app, machine, "c-A")
+    b = signed_in(app, machine, "c-B")
+    r = exchange(app, machine, a)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "stale" and google.calls == []
+    assert row(app)["code"] == "c-B"  # B's code is still there for B
+    assert exchange(app, machine, b).status_code == 200 and google.calls[0]["code"] == "c-B"
+
+
+class ConnectsAgainMeanwhile(FakeGoogle):
+    """Google answers the exchange only after the person has started another connect."""
+
+    def __init__(self, app, answer):
+        super().__init__(answer)
+        self.app = app
+
+    def __call__(self, fields, uri=google_connect.TOKEN_URI):
+        if uri == google_connect.TOKEN_URI and not self.calls:
+            _, query = start(self.app)
+            back(self.app, state=query["state"], code="c-B")
+        return super().__call__(fields, uri)
+
+
+def test_an_exchange_answered_after_its_connect_was_replaced_is_not_passed_on_or_kept(app, monkeypatch, caplog):
+    machine, _ = holding(app, monkeypatch)  # a grant connected earlier, "1//grant"
+    a = signed_in(app, machine, "c-A")
+    google = ConnectsAgainMeanwhile(app, grant("1//late"))
+    monkeypatch.setattr(google_connect, "post_token", google)
+    with caplog.at_level("WARNING", logger="backend.google_connect"):
+        r = exchange(app, machine, a)
+    assert r.status_code == 409 and r.json()["error"]["code"] == "stale"
+    assert "1//late" not in r.text and "ya29" not in r.text  # the computer gets nothing to keep
+    # Not revoked at Google: one client and one person share one grant there, so a revoke would end the kept one too.
+    assert google.uris == [google_connect.TOKEN_URI]
+    stored = row(app)
+    assert stored["status"] == "ready" and stored["code"] == "c-B" and stored["pending_hash"] is None
+    assert stored["grant_hash"] == google_connect.fingerprint("1//grant")
+    assert "stale_exchange" in caplog.text and a["id"] in caplog.text and "1//late" not in caplog.text
+
+
+def test_a_failed_replacement_keeps_the_grant_connected_before_it(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)  # "1//grant" connected
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(grant("1//A")))
+    a = signed_in(app, machine, "c-A")
+    assert exchange(app, machine, a).status_code == 200
+    b = signed_in(app, machine, "c-B")
+    assert answer(app, machine, a, {"status": "connected", "can": ["read"]}).status_code == 409
+    assert answer(app, machine, b, {"status": "failed", "kind": "identity_mismatch"}).status_code == 200
+    monkeypatch.setattr(google_connect, "post_token", google)
+    assert refresh(app, machine["token"]).status_code == 200
+    assert refresh(app, machine["token"], refresh_token="1//A").status_code == 403
+    stored = row(app)
+    assert stored["holder"] == machine["runner_id"] and stored["pending_hash"] is None
+
+
+def test_repeated_disconnects_on_one_computer_each_answer_only_their_own(app, monkeypatch):
+    machine, _ = holding(app, monkeypatch)
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    first = claim(app, machine)
+    post(app, "mail/google/disconnect", {}, "cara-test")
+    second = claim(app, machine)
+    assert first["action"] == second["action"] == "disconnect" and first["id"] != second["id"]
+    before = row(app)
+    r = answer(app, machine, first, {"status": "failed", "kind": "not_here"})
+    assert r.status_code == 409 and row(app) == before
+    assert answer(app, machine, second, {"status": "disconnected"}).status_code == 200
+    assert row(app)["status"] == "disconnected" and row(app)["grant_hash"] is None
+
+
+def test_a_repeated_result_gets_the_recorded_answer_and_changes_nothing(app, monkeypatch):
+    machine = runner(app)
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(grant("1//A")))
+    a = signed_in(app, machine, "c-A")
+    exchange(app, machine, a)
+    first = answer(app, machine, a, {"status": "connected", "can": ["read"]})
+    assert first.status_code == 200
+    with app.app.state.store.read() as c:
+        events = c.execute("SELECT count(*) FROM events WHERE action='mail.google.connected'").fetchone()[0]
+    settled = row(app)
+    again = answer(app, machine, a, {"status": "connected", "can": ["read"]})
+    assert again.status_code == 200 and again.json() == first.json()
+    assert row(app) == settled
+    with app.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM events WHERE action='mail.google.connected'").fetchone()[0] == events
+    # A different answer for the same operation is not a repeat.
+    other = answer(app, machine, a, {"status": "failed", "kind": "network"})
+    assert other.status_code == 409 and row(app) == settled
 
 
 def test_a_first_connect_goes_to_the_computer_that_already_holds_mail(app):
@@ -660,6 +819,19 @@ def test_a_sign_in_nobody_finishes_expires(app):
     assert back(app, state=query["state"], code="c-1") == google_connect.INBOX
     seen = get(app, "mail/google", "cara-test")
     assert seen["kind"] == "expired" and row(app)["verifier"] is None
+
+
+def test_a_claim_its_computer_never_answers_expires_without_leaving_its_grant_waiting(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)  # "1//grant" connected
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(grant("1//A")))
+    a = signed_in(app, machine, "c-A")
+    assert exchange(app, machine, a).status_code == 200
+    with app.app.state.store.transaction() as c:
+        c.execute("UPDATE google_connects SET started_at=? WHERE person_id='cara'", (time.time() - 3600,))
+    assert get(app, "mail/google", "cara-test")["kind"] == "unknown"
+    stored = row(app)
+    assert stored["pending_hash"] is None and stored["pending_scopes"] is None
+    assert stored["grant_hash"] == google_connect.fingerprint("1//grant")  # the grant connected before stays
 
 
 def test_admin_policy_at_refresh_reaches_health_as_the_admin_s():
@@ -801,3 +973,53 @@ def test_a_calendar_write_refused_before_google_is_posted_failed_not_unknown(tmp
     path, body = hub.results[0]
     assert path == "connectors/calendar/actions/act-1/result" and body["status"] == "failed"
     assert "refused" in body["error"]
+
+
+def test_the_migration_gives_each_existing_connect_its_own_operation_id():
+    import importlib
+    import sqlite3
+
+    migration = importlib.import_module("backend.migrations.20261112160353_add_operation_to_google_connects")
+    conn = sqlite3.connect(":memory:")
+    migration.up(conn)  # a new file has no table yet: the module's CREATE carries the columns
+    conn.execute(
+        "CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
+    )
+    for person, status in (("cara", "disconnecting"), ("ben", "connected")):
+        conn.execute("INSERT INTO google_connects VALUES(?,?,?,'t','t')", (person, person + "@acme.example", status))
+    migration.up(conn)
+    ids = [r[0] for r in conn.execute("SELECT operation_id FROM google_connects WHERE answered IS NULL")]
+    assert len(set(ids)) == 2 and all(i.startswith("gc_") for i in ids)
+    migration.up(conn)  # a second run keeps the ids
+    assert [r[0] for r in conn.execute("SELECT operation_id FROM google_connects")] == ids
+
+
+class StaleHub(Hub):
+    """The server refuses the first result: the person connected again before it arrived."""
+
+    def post(self, path, body):
+        from clients.tico import APIError
+
+        answer = super().post(path, body)
+        if path.endswith("/result") and len(self.results) == 1:
+            raise APIError("stale", "This Google connect was replaced", 409)
+        return answer
+
+
+def test_a_result_refused_as_stale_does_not_stop_the_computer_taking_the_next_connect(tmp_path):
+    mail_script(tmp_path, "echo '{\"status\": \"connected\", \"can\": [\"read\"]}'\n")
+    queue = [
+        {"id": op, "action": "connect", "mailbox": "cara@acme.example", "client_id": CLIENT, "broker": "server"}
+        for op in ("gc_a", "gc_b")
+    ]
+    hub = StaleHub(queue)
+    publisher = ConnectorPublisher(
+        {"url": "http://localhost:8765", "token": "runner-token", "projects_dir": str(tmp_path)}, client=hub
+    )
+    publisher.script = tmp_path / "hub/scripts/mail.sh"
+    assert publisher.google_connect_tick() == 2
+    assert [path for path, _ in hub.results] == [
+        "connectors/mail/google/gc_a/result",
+        "connectors/mail/google/gc_b/result",
+    ]

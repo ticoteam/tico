@@ -407,7 +407,10 @@ Values:
 Transitions (`backend/google_connect.py`): (none) to `signing_in` on start; `signing_in` to `ready` on callback (clears
 `oauth_state`); `ready` to `finishing`; `finishing` to `connected` or `failed`; `connected` or `ready` to `disconnecting`;
 `disconnecting` to `revoking`; `revoking` to `disconnected` or `failed`. A row stuck in `signing_in`, `ready`, `finishing`
-or `revoking` past its time limit is reset by a sweep.
+or `revoking` past its time limit is reset by a sweep. Each start (connect or disconnect) sets a new `operation_id` and
+clears the pending grant; the claim, `/exchange` and `/result` name that operation, and every write after the claim is
+conditional on it, so an answer for an earlier operation changes nothing. `answered` records the computer's result for
+the current operation, and a repeat of it is answered the same way.
 
 Enforcement: CHECK. NOT NULL, no default.
 

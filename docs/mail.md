@@ -651,7 +651,11 @@ it on the computers' behalf. The computer that holds the grant sends its refresh
 for one service's scopes, never more than the grant holds, and returns only an hour-long access token and its expiry. It keeps no token
 and logs none: only each grant's SHA-256 fingerprint, which can refresh nothing, so it refreshes only the grant it
 issued for that mailbox and that computer. The sign-in's one-time code is exchanged the same way (`/exchange`, once, by the computer that
-claimed it), so the grant on the computer has a client id and no secret. Only a computer that holds a Connect Google
+claimed it), so the grant on the computer has a client id and no secret. Each connect or disconnect has its own id,
+which the claim hands to the computer (`id`, never the person): `/exchange` and `/result` are addressed by it, so an
+answer for a connect the person has since replaced is refused (`stale`, 409) and changes nothing. A grant Google gives
+such a replaced exchange is not passed on or recorded, so the server never refreshes it; the grant connected before
+stays until a new connect finishes. The same result sent again gets the same answer. Only a computer that holds a Connect Google
 grant from this server may ask, one service at a time. A grant from Tico's shared app, or one made before scopes were
 recorded, holds only the read scopes (`gmail.readonly` and the calendar read scopes). A grant the company's own app made
 also holds `gmail.modify` and `calendar.events` if Google gave them. The
