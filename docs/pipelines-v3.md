@@ -193,7 +193,10 @@ An ask is not a seventh part. It is a requirement with a person on it. See [Reac
 - **A person's request moves on:** a switch on a by-hand stage only (`requests_move_on`), off by default. When on, a
   person's request (a task a person filed that no task filed) on its first visit is not held: it moves on when the
   next stage has room, oldest first. Moved back into the stage, or snoozed there, it is held like any other. On in
-  Product's Ideas; off in Growth's and Success's Ideas and in Monitoring's Watching.
+  Product's Ideas; off in Growth's and Success's Ideas and in Monitoring's Watching. With the switch on, work handed
+  over to the owner bot (filed there by a bot that is not the owner as its requester, or moved back there by such a
+  bot) is the owner's turn: "Move to Spec, or snooze to park it", due 24 hours after it entered, with one wake. Past
+  that it is Late and the manager bot is woken once. An owner's own ideas rest as before.
 - **On enter:** nothing, "file a linked task into pipeline X", or "queue the PRs to merge". There are no other actions. A
   stage that files a task always has Linked work done among its requirements.
 - **Expected time** and **limit** (how many tasks fit). The first stage of a pipeline has no limit.
@@ -353,7 +356,8 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - Starts: It enters a stage that tasks leave by hand. Where a person's request moves on, one on its first visit is
      not held: it is in state 8.
    - Ends: Someone picks it, closes it or snoozes it.
-   - If not: Nothing. It is a place to wait.
+   - If not: Nothing. It is a place to wait. Work handed over to the owner bot where a person's request moves on is the
+     owner's turn instead (state 4), due in 24 hours; then Late, and the manager bot is woken once.
 
 Two labels can sit on top of any state: **Late** and **Pushed past**. Two states end a task: **Done** and **Closed**.
 
@@ -756,7 +760,8 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
 
 - **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
   no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
-  oldest first.
+  oldest first. Work a bot hands over (Bug Triage files a bug, or moves one back) is the Product Owner's turn, due in
+  24 hours; past that it is Late and the Product Manager is woken once.
 - **Spec.** Owner: Product Owner. To leave: a Spec page with the goal, the scope (in and out) and acceptance criteria
   someone can check. Jev checks it, then **a person OKs it** (people only: no bot
   OKs it or pushes past it). Limit 2. Expected time: 2 days.
