@@ -79,15 +79,20 @@ def checkout_version(root: Path | None = None, git=None) -> str:
         found = ""
     if not found:
         try:
+            # Every tag on HEAD, not `git describe`'s one pick: a release tag beside another tag still counts, and when
+            # an rc is promoted on the same commit the final release wins.
             res = (git or subprocess.run)(
-                ["git", "-C", str(root), "describe", "--tags", "--exact-match", "HEAD"],
+                ["git", "-C", str(root), "tag", "--points-at", "HEAD"],
                 capture_output=True,
                 text=True,
                 timeout=10,
             )
-            found = res.stdout.strip() if res.returncode == 0 else ""
+            tags = res.stdout.split() if res.returncode == 0 else []
         except (OSError, subprocess.SubprocessError):
-            found = ""
+            tags = []
+        releases = sorted(t for t in tags if cloudinit.VERSION_RE.match(t))
+        finals = [t for t in releases if "-" not in t]
+        found = (finals or releases or [""])[-1]
     found = found if not found or found.startswith("v") else "v" + found
     return found if cloudinit.VERSION_RE.match(found) else ""
 
@@ -960,7 +965,7 @@ def run(args, io: IO, deps: Deps) -> int:
     gather_identity(io, args, s, dry)
     gather_backup(io, args, s, dry)
     s.updater = not args.no_updater
-    s.compose_ref = args.compose_ref
+    s.compose_ref = args.compose_ref or "main"
 
     io.say("\nLooking up who serves DNS for the domain ...")
     zone = dnsmod.detect_zone(s.dns(), deps.resolver)
@@ -1002,8 +1007,11 @@ def run(args, io: IO, deps: Deps) -> int:
     # kept when no flag names one.
     version = args.tico_version or (s.tag if s.tag not in ("", "latest") else deps.checkout_version())
     if version and s.target not in cloudmod.PROVIDERS:
-        # local and AWS pin the images and fetch compose.yaml from the release, never `latest` or main
-        s.tag = s.compose_ref = version
+        # local and AWS pin the images and fetch compose.yaml from the release, never `latest` or main; a --compose-ref
+        # given without --tico-version still names where compose.yaml comes from
+        s.tag = version
+        if args.tico_version or not args.compose_ref:
+            s.compose_ref = version
     if s.target == "local":
         if s.front_door == "caddy":
             Asker(io, args, s, dry).get(

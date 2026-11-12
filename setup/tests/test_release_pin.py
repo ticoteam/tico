@@ -13,11 +13,11 @@ from pathlib import Path
 
 import pytest
 
-from setup import cli, contract, runner_setup, wizard
+from setup import cli, contract, runner_setup, state, wizard
 from setup.cloud import Cli
 from setup.tests import fakes
 from setup.tests.fakes import CaptureIO
-from setup.tests.helpers.preview_flags import CREATE, env, world  # noqa: F401 (env: its secrets, autouse)
+from setup.tests.helpers.preview_flags import CREATE, DOMAIN, env, world  # noqa: F401 (env: its secrets, autouse)
 
 RC = "v0.6.0-rc.18"
 STABLE = "v0.5.216"
@@ -44,7 +44,18 @@ def git(stdout="", code=0, calls=None):
 def test_a_checkout_at_a_release_tag_is_that_release(tmp_path):
     calls = []
     assert wizard.checkout_version(tmp_path, git(RC + "\n", calls=calls)) == RC
-    assert calls == [["git", "-C", str(tmp_path), "describe", "--tags", "--exact-match", "HEAD"]]
+    assert calls == [["git", "-C", str(tmp_path), "tag", "--points-at", "HEAD"]]
+
+
+@pytest.mark.parametrize(
+    "tags, release",
+    [
+        (f"nightly\n{RC}\n", RC),  # another tag on the same commit does not hide the release
+        ("v0.6.0-rc.18\nv0.6.0\n", "v0.6.0"),  # an rc promoted on the same commit: the final release
+    ],
+)
+def test_every_tag_on_head_is_read(tmp_path, tags, release):
+    assert wizard.checkout_version(tmp_path, git(tags)) == release
 
 
 def test_the_install_bundles_version_file_names_the_release_without_asking_git(tmp_path):
@@ -55,7 +66,8 @@ def test_the_install_bundles_version_file_names_the_release_without_asking_git(t
 @pytest.mark.parametrize(
     "run",
     [
-        git("", code=128),  # main, a branch, a commit between releases: no tag at HEAD
+        git(""),  # main, a branch, a commit between releases: no tag at HEAD
+        git("", code=128),  # not a git checkout
         git("nightly\n"),  # a tag that is not a release
         lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("git")),  # no git installed
         lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("git", 10)),
@@ -103,6 +115,13 @@ def test_another_release_named_by_tico_version_brings_its_own_compose_not_the_ch
     assert f"TICO_TAG={STABLE}" in env_text
     assert embedded_compose(user_data) is None
     assert f"curl -fsSL {contract.compose_url(STABLE)} -o " in user_data
+
+
+def test_a_compose_ref_given_without_tico_version_still_names_where_compose_comes_from():
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    user_data, env_text = aws("--compose-ref", sha)
+    assert f"TICO_TAG={RC}" in env_text
+    assert state.load(DOMAIN)[0]["compose_ref"] == sha
 
 
 def test_naming_the_checkouts_own_release_keeps_its_compose():

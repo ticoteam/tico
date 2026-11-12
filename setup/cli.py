@@ -222,7 +222,7 @@ def parser() -> argparse.ArgumentParser:
         "--no-updater", action="store_true", help="leave out the one-click updater (it holds the Docker socket)"
     )
     p.add_argument(
-        "--compose-ref", default="main", help="git ref to download compose.yaml from when not run inside a checkout"
+        "--compose-ref", help="git ref to download compose.yaml from when not run inside a checkout (default main)"
     )
     p.add_argument("--dns-timeout", type=float, default=20, help="minutes to wait for DNS to go live (default 20)")
     p.add_argument("--skip-dns-wait", action="store_true")

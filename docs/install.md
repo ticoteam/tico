@@ -389,7 +389,8 @@ Credentials: `TICO_OIDC_CLIENT_SECRET`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_TUNN
 `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`). `python3 -m setup --help` lists all of them.
 Without `--tico-version`, `python3 -m setup` installs the release it is part of: the install bundle's, or the release
 tag a git checkout is at (so a `v0.6.0-rc.18` checkout installs that release candidate, not GitHub's latest stable).
-A release other than the checkout's brings its own `compose.yaml`. `python3 -m setup runner` installs the release the
+A release other than the checkout's brings its own `compose.yaml`. A re-run keeps the release an earlier run installed:
+checking out a newer tag does not upgrade by itself; pass `--tico-version` for that. `python3 -m setup runner` installs the release the
 server reports at `/healthz` unless `--runner-tag` names one.
 
 To connect an already enrolled company Inbox, set `TICO_INBOUND_KEY` in the installer's environment; setup does not issue
