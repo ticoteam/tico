@@ -7,6 +7,7 @@ Synthetic rows only (backend/tests/helpers/engine.py).
 
 import pytest
 
+from backend import task_calls
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.tests.helpers import engine as X
@@ -33,6 +34,16 @@ def c(company):
         people = {f"human:{found[0]}" for found in conn.execute("SELECT id FROM humans").fetchall()}
         for person in sorted(people | set(every)):
             assert W.needs(conn, person) == every.get(person, []), person
+        # Needs you shows each ask with its entry alone (task_calls.ask_entry): the one the task's whole view gives.
+        open_ids = [found[0] for found in conn.execute("SELECT id FROM tasks WHERE status='open' ORDER BY id")]
+        for person in sorted(people | set(every)):
+            for task_id in open_ids:
+                view = task_calls.task_view(conn, task_id, person) or {}
+                entries = {}
+                for entry in view.get("to_leave") or ():
+                    entries.setdefault(entry["requirement_id"], entry)
+                for requirement_id, entry in entries.items():
+                    assert task_calls.ask_entry(conn, task_id, requirement_id, person) == entry, (person, task_id)
 
 
 def _same_for_everyone(c):

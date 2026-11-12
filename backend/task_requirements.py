@@ -192,7 +192,9 @@ def _by(conn: "sqlite3.Connection", sql: str, column: str, keys: list[str]) -> d
 
 def _cached(conn: "sqlite3.Connection", what: str, sql: str, column: str, key: str) -> list[Row]:
     """The rows of `sql` for one key, read once in a snapshot (or seeded by `prime`)."""
-    return read_cache.value(conn, (what, key), lambda: _by(conn, sql, column, [key])[key])
+    # Stored rows hold only plain values, so a shallow copy of each is a full one; the snapshot keeps its own.
+    found = read_cache.value(conn, (what, key), lambda: _by(conn, sql, column, [key])[key], shared=True)
+    return [dict(row) for row in found]
 
 
 def prime(conn: "sqlite3.Connection", tasks: Iterable[Row]) -> None:
@@ -940,6 +942,13 @@ def standings(conn: "sqlite3.Connection", task: Row) -> list[Standing]:
     visit = task.get("visit")
     if not visit:
         return []
+    # Worked out once per task in a snapshot: Needs you asks for the same task's standings for its list, its brief and
+    # its ask. A Standing is never changed after it is made; a write starts the snapshot's values again (read_cache).
+    key = ("standings", task["id"], visit["id"], task.get("version"))
+    return list(read_cache.value(conn, key, lambda: _standings(conn, task, visit), shared=True))
+
+
+def _standings(conn: "sqlite3.Connection", task: Row, visit: Row) -> list[Standing]:
     answers = newest_answers(conn, visit["id"])
     out = [standing(conn, task, r, answers.get(r["id"])) for r in for_visit(conn, visit)]
     from . import pr_conflicts

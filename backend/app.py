@@ -451,6 +451,9 @@ def create_app(settings=None):
         # pool and clears the shared slot only while that slot is still its own.
         auth_pool = ThreadPoolExecutor(max_workers=16, thread_name_prefix="tico-auth")
         app.state.auth_pool = auth_pool
+        from . import needs_lane
+
+        lane = needs_lane.start(app)  # Needs you's own build threads (backend/needs_lane.py)
         try:
             yield
         finally:
@@ -458,6 +461,7 @@ def create_app(settings=None):
             if app.state.auth_pool is auth_pool:
                 app.state.auth_pool = None
             auth_pool.shutdown(wait=False, cancel_futures=True)
+            needs_lane.stop(app, lane)
             stop.set()
             if start_jobs_task:
                 await start_jobs_task  # short, and each in its own transaction: let it finish
@@ -699,6 +703,7 @@ def create_app(settings=None):
     from .timing import Timing
 
     app.state.auth_pool = None  # the lifespan's own, while it runs; outside it sign-in uses the loop's default pool
+    app.state.needs_lane = None  # the same for Needs you's builds (backend/needs_lane.py)
     app.state.timing = Timing()
     app.state.timing.recorder = recorder
     app.state.flight = recorder
