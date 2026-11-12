@@ -281,7 +281,7 @@ async function modelsTab(browser: Browser) {
     r.querySelector('.subs-count .tnum')!.textContent,
     [...(r.querySelector('.subs-use')!.querySelectorAll('.subs-usage-w, .tnum, .subs-usage:not(:has(.tnum)), .pill') as unknown as Element[])].map(e => e.textContent).join(' ')]));
   assert.deepEqual(rows, [
-    ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
+    ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', 'Computer offline: Cloud · Video Owner · Bring it online.'],
     ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
     ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Sign in again'],
@@ -289,6 +289,7 @@ async function modelsTab(browser: Browser) {
     ['Claude Max (Dee)', 'Claude plan', '', '1', 'Computer offline: Cloud · Video Owner · Bring it online.']]);
   assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
   assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
+  assert.match(await pane.locator('[data-subs-row=s1] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
   assert.match(await pane.locator('[data-subs-row=s6] .subs-use').innerText(), /Computer offline: Cloud · Video Owner · Bring it online/);
   // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
   assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
