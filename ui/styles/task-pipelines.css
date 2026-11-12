@@ -18,6 +18,12 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-col{flex:1 1 0;min-width:200px;max-width:480px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;background:var(--surface2)}
 .pv-col-head{padding:2px 4px}
 .pv-col-body{display:flex;flex-direction:column;gap:6px;min-height:24px}
+/* A snoozed task, last in its stage: dimmed, with a moon mark and the day it wakes (or On ice). */
+.pv-snoozed{color:var(--muted)}
+.tk-card.pv-snoozed{background:none;border-style:dashed}
+.pv-snoozed .tk-title{opacity:.75}
+.pv-sleep{color:var(--muted)}
+.tk-card .pv-wake{min-width:0}
 
 /* The list: a group per stage. */
 .pv-group{margin:0 0 10px}

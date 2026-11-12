@@ -226,12 +226,12 @@ function tasksKept(state: TasksPageState) {
 // (Chris, Nov 3: whole-list reads per event cost 1.5 GB/h). Full reads: the page's first, a change of view, pull to
 // refresh, and the stream's `reset`. Otherwise the 2-minute refresh, a tab back from sleep, a bulk change and this
 // tab's own writes catch up with a changed_after delta from the cursor the last read gave.
-/** The view's server filters: the archive's (of the pipeline in view, if any), or the pipeline's open tasks; You is
- * Needs you's. */
+/** The view's server filters: the archive's (of the pipeline in view, if any), or the pipeline's open tasks, snoozed
+ * ones too (task-pipelines.ts draws them last in their stage); You is Needs you's. */
 function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   const of = state.pipeline ? {pipeline: state.pipeline} : {};
   if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of, ...state.narrow};
-  if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of, ...state.narrow};
+  if (state.pipeline) return {status: 'open', snoozed: 'all', ...of, ...state.narrow};
   return null;
 }
 /** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
@@ -267,7 +267,7 @@ function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.readKey && !taskFilterMatch(t, state.q, state.filters)) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
-  return !!state.pipeline && t.status === 'open' && !t.snoozed;
+  return !!state.pipeline && t.status === 'open';
 }
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
  * the pipeline's open tasks. */
