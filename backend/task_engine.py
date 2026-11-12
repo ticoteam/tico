@@ -1114,8 +1114,10 @@ def _may_wake_owner(row: Row) -> bool:
 
 
 def _no_parent_wake(why: str, parent_id: str, filed_id: str) -> None:
-    """A filed task ended and nobody is woken on the task that filed it: the category and both ids, for the logs."""
-    LOG.info("parent wake skipped: %s parent=%s filed=%s", why, parent_id, filed_id)
+    """A filed task ended and nobody is woken on the task that filed it: the category and both ids, for the logs. A
+    person-owned parent (`no_bot_owner`) is the normal case there, so it logs at DEBUG."""
+    level = logging.DEBUG if why == "no_bot_owner" else logging.INFO
+    LOG.log(level, "parent wake skipped: %s parent=%s filed=%s", why, parent_id, filed_id)
 
 
 def tell_owner(
