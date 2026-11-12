@@ -1072,6 +1072,48 @@ def run_limit_minutes(c, attempt_id):
     return None
 
 
+def harness_died(c, attempt_id):
+    """How the run's harness process ended under it ('Process exited (exit code 0)', killed, crashed or out of memory),
+    as its computer reported (a `process_exit` event, runner-rs execute.rs), else None. Never a Stop, a restart or clean
+    stop of the computer, or a time limit: those keep their own rules. As in diagnostics, the newest terminal cause wins."""
+    row = c.execute("SELECT state,stop_requested_at FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    if not row or row['state'] not in ('interrupted', 'failed') or row['stop_requested_at']:
+        return None
+    if restart_reported(c, attempt_id):
+        return None
+    for event in c.execute(
+        "SELECT payload FROM attempt_events WHERE attempt_id=? "
+        "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50",
+        (attempt_id,),
+    ):
+        p = json.loads(event['payload'])
+        if p.get('end_reason'):
+            return None
+        if p.get('runner_error'):
+            continue
+        if p.get('process_exit') and isinstance(p.get('exit_code'), int):
+            code = p['exit_code']
+            if p.get('oom_killed') is True:
+                return 'it ran out of memory'
+            return f'its process stopped (signal {-code})' if code < 0 else f'its process exited (code {code})'
+    return None
+
+
+def harness_deaths(c, job):
+    """Count consecutive started attempts of this job, including folded inputs, whose harness died, up to 2."""
+    deaths = 0
+    for row in c.execute(
+        "SELECT id FROM attempts WHERE started_at IS NOT NULL AND (job_id=? OR id IN "
+        "(SELECT attempt_id FROM attempt_inputs WHERE message_id=?)) "
+        "ORDER BY started_at DESC,created_at DESC,rowid DESC LIMIT 2",
+        (job['id'], job['message_id']),
+    ):
+        if harness_died(c, row['id']) is None:
+            break
+        deaths += 1
+    return deaths
+
+
 def run_limit_cuts(c, job):
     """Count consecutive started attempts of this job, including folded inputs, up to the hold cap."""
     cuts = 0
@@ -1149,6 +1191,8 @@ def retry_facts(c, job, started, finished):
     # A run its own time limit cut was not cut by the update, whenever it ended.
     update = None if timeout else cut_by_update(c, job['attempt_id'])
     restart = restart_reported(c, job['attempt_id'])
+    # Its harness process died under it (killed or crashed): not the bot's choice, so it resumes once (auto_reconcile).
+    died = None if timeout or update else harness_died(c, job['attempt_id'])
     attempt = c.execute('SELECT state,thread_id,runner_id FROM attempts WHERE id=?', (job['attempt_id'],)).fetchone()
     computer = (
         c.execute('SELECT capabilities FROM runners_with_state WHERE id=?', (attempt['runner_id'],)).fetchone()
@@ -1201,6 +1245,8 @@ def retry_facts(c, job, started, finished):
         'lease_lost': lease_lost,
         'timeout': timeout,
         'limit_cuts': run_limit_cuts(c, job) if timeout else 0,
+        'died': died,
+        'deaths': harness_deaths(c, job) if died else 0,
         'outside': outside,
         'ok_kinds': sorted({str(subject).split(':', 1)[0] for subject in used}),
         # Explicit restart/time-limit policy holds only named irreversible effects or used OKs. A silent
@@ -7987,6 +8033,12 @@ class Execution:
                 )
                 if named:
                     reason += f' It recorded {named}; check this outside action before resuming.'
+            elif facts['died'] and facts['deaths'] >= 2:
+                stopped = 'twice'
+                reason = (
+                    f"The run was cut off twice in a row ({facts['died']}). Check what is already done before "
+                    "running it again."
+                )
             elif facts['restart'] and (facts['outside'] or facts['consumed']):
                 stopped = 'changed'
                 named = ', '.join(
@@ -8110,6 +8162,38 @@ class Execution:
         ).fetchone()
         result = self._decide(c, row, body.run_id, body.decision, note, who.actor, deferred=bool(busy))
         return result
+
+    def run_now_held(self, c, who, task):
+        """Run now on a bot's task whose run stopped partway and waits for a choice: pressing it is the choice. The
+        operator or BotOps who pressed it runs that run again, accepting it may repeat what it already did, so the task's
+        work is not left fenced behind it (unfenced_sql) while Run now answers that a run is already waiting. A choice a
+        person already saved stands. How many runs it resumed; a Problem that says who decides when the caller may not."""
+        bot = H.actor_id(task['owner_id'])
+        rows = c.execute(
+            "SELECT j.*, a.started_at, a.finished_at FROM jobs j JOIN messages m ON m.id=j.message_id "
+            "JOIN conversations cv ON cv.id=m.conversation_id LEFT JOIN attempts a ON a.id=j.attempt_id "
+            f"WHERE j.bot_id=? AND j.state='uncertain' AND j.attempt_id IS NOT NULL AND {H.MESSAGE_TASK_SQL}=? "
+            "AND NOT EXISTS(SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id "
+            "AND r.actor<>?) ORDER BY j.created_at",
+            (bot, task['id'], H.KEEPER),
+        ).fetchall()
+        if not rows:
+            return 0
+        if not self.reviewer(c, who, bot):
+            raise Problem(
+                "held", "Its last run stopped partway. Its operator or BotOps decides whether to run it again.", 409
+            )
+        by = owner_name(c, who.actor) or who.actor
+        for row in rows:
+            facts = retry_facts(c, row, row['started_at'], row['finished_at'])
+            busy = c.execute(
+                "SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') AND lane="
+                "coalesce((SELECT lane FROM attempts WHERE id=?),'main')",
+                (bot, row['attempt_id']),
+            ).fetchone()
+            note = self._cut_off_note(row, facts, by=by)
+            self._decide(c, row, row['attempt_id'], 'resume', note, who.actor, deferred=bool(busy), cause='run_now')
+        return len(rows)
 
     def _finish_recovery_review(self, c, bot):
         """The review owns saving choices, not waiting for their lanes to become idle."""
@@ -8370,6 +8454,11 @@ class Execution:
         merge, publish, send or payment requires review. Its note gives the interruption time and asks it to check
         existing effects first. Lost leases without that report retain the conservative rule.
 
+        A run whose harness process died under it (killed, crashed or out of memory: harness_died) was not cut off by
+        the bot's choice: it resumes at once, once, whatever it used, with a note that asks it to check what is already
+        done (branch, PR, comments) and names any outside action or used OK. A second cut-off in a row is held for its
+        operator or BotOps. Run now on its task resumes it too, as the operator's or BotOps's choice (run_now_held).
+
         A run a quarantine stopped is judged the same way (quarantine_stops.requeues): it resumes once the quarantine
         lifts, unless a used OK, a fallback's unknown work or a named outside action holds it. Its note says it
         was stopped by a quarantine and asks it to check what it already did first. A run the quarantine held before
@@ -8509,6 +8598,7 @@ class Execution:
                     and not facts['restart']
                     and not facts['timeout']
                     and not facts['update']
+                    and not facts['died']
                     and not (safe and started <= 1)
                 ):
                     continue  # the usual wait: a person may look first
@@ -8614,6 +8704,22 @@ class Execution:
                         )
                     )
                     continue
+                if facts['died'] and facts['deaths'] <= 1:
+                    # Its harness process died under the turn (killed or crashed), not by the bot's choice: it runs again
+                    # once, at once, told to check what is already done. A second cut-off in a row is held below.
+                    decided.append(
+                        self._decide(
+                            c,
+                            row,
+                            row['attempt_id'],
+                            'resume',
+                            self._cut_off_note(row, facts),
+                            H.KEEPER,
+                            action='job.auto_reconcile',
+                            cause='died',
+                        )
+                    )
+                    continue
                 # A try resumed after a held run was left unreviewed is not judged as "stopped twice": if it is held
                 # again it waits out HELD_REVIEW_HOURS like any held run, then ends quietly (_held_choice).
                 resumed_held = self._held_resumed(c, row)
@@ -8642,7 +8748,7 @@ class Execution:
                         c, row['bot_id'], 'idle', 'Resuming is held after a second lost lease; waiting for the computer'
                     )
                     continue
-                if started > 1 and not facts['timeout'] and not resumed_held:
+                if started > 1 and not facts['timeout'] and not facts['died'] and not resumed_held:
                     # Stopped twice the same way: not bad luck. Let it go and hand the cause to BotOps.
                     note = (
                         "Dismissed automatically: this request stopped partway twice, so it is not retried "
@@ -8684,10 +8790,13 @@ class Execution:
                         )
                     )
                     continue
-                if not safe or limit_cap or resumed_held:
+                died_twice = bool(facts['died'])  # a first cut-off resumed above
+                if not safe or limit_cap or resumed_held or died_twice:
                     why = (
                         'cut by the run time limit twice in a row'
                         if limit_cap
+                        else 'cut off twice in a row: its harness process stopped'
+                        if died_twice
                         else 'Review required before repeating possible effects.'
                     )
                     if held_expired:
@@ -8751,7 +8860,7 @@ class Execution:
                                 named or acted,
                                 again=bool(held),
                                 reason=('was ' + why + (f"; recorded {', '.join(named)}" if named else ''))
-                                if limit_cap
+                                if limit_cap or died_twice
                                 else None,
                             )
                         else:
@@ -8885,6 +8994,27 @@ class Execution:
                 "effect before doing it again."
                 if named
                 else "No used OK or named irreversible outside action was recorded."
+            )
+        )
+
+    @staticmethod
+    def _cut_off_note(row, facts, by=None):
+        """The note a run cut off under the bot gets when it runs again: when and how, and to check what is already done
+        before acting again, naming any outside action or used OK. `by`: the person who ran it again."""
+        named = [
+            *facts['outside'],
+            *(['used OK (' + ', '.join(facts['ok_kinds']) + ')'] if facts['consumed'] else []),
+        ]
+        at = (row['finished_at'] or H.now())[11:16]
+        how = f": {facts['died']}" if facts.get('died') else ''
+        return (
+            f"Your last turn was cut off at {at} UTC{how}. "
+            + (f"{by} pressed Run now to run it again. " if by else '')
+            + "Check what is already done (branch, PR, comments) before acting again, then continue. "
+            + (
+                f"Before it stopped, it recorded {', '.join(named)}: verify whether that already took effect first."
+                if named
+                else "No used OK or named outside action was recorded."
             )
         )
 

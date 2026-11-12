@@ -121,6 +121,9 @@ Values (`JOB_STATES`):
 - `completed`: answered.
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
+  A run whose harness process was killed or crashed resumes once by itself; a second in a row waits for its operator
+  or BotOps. Until someone chooses, its task's wait line, Needs you and Health say it waits on a person, and **Run
+  now** on the task (by its operator or BotOps) runs it again.
 - `canceled`: stopped before it finished (a person stopped it, the task closed, a duplicate wake
   replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 0002.
 
