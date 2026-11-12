@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from .. import item_metadata as IM
+from .. import merge_order as MO
 from .. import source_actions as SA
 from . import github_release as GR
 
@@ -546,6 +547,9 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
     if after["state"] in ("merged", "closed") and (not before or before.get("state") != after["state"]):
         named_pr_done(conn, repo, number, str(after["state"]))
     _nudge(conn, tasks)
+    if after["state"] == "merged" and (not before or before.get("state") != "merged"):
+        # A task that goes after one of these is queued now, or its owner told (merge_order.release).
+        MO.released_on_merge(conn, tasks, _engine().SYSTEM)
     if before and before.get("head_sha") and after.get("head_sha") != before["head_sha"] and after["state"] == "open":
         review_again(conn, tasks, after)
     return 1
@@ -1095,6 +1099,10 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   queues it again; when it changes others, a bot sends the task back to Fixes 2, where Reviewer 2 reads the new
 #   commits and the person's OK stands on its OK (`SENT_BACK_FOR_NEW`, task_requirements._after_ok). A person may queue
 #   it as it is. The manager hears of the new commit once (`changed_after_ok`).
+# - A task that goes after another one (backend/merge_order.py) is not queued while that one is open and has not
+#   merged: `queue` and `metadata_changed` ask `merge_order.stops_queue`, `requeue` refuses a bot (`HELD_FOR`) and
+#   queues for a person; `merge_order.release` queues it when the earlier task merges or moves on, and a conflict then
+#   names the task to rebase onto (`SENT_BACK_AFTER`).
 # - The task is closed or sent back while a PR is queued: `pull` owes the `undo`
 #   (`undo:github.queue:<visit>:<ref>@<head sha>`), carried out with `dequeuePullRequest` (auto-merge off), and
 #   `tico/merge-ok` on that head turns to failure. The undo is moot while an open visit (the task's next one, or
@@ -1140,6 +1148,15 @@ SENT_BACK_FOR_CONFLICT = (
 # twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
 FAILED_CHECKS = frozenset(removal_words(reason) for reason in ("failed_checks", "checks_failed"))
 COMPARING = "Tico is still reading what {ref}'s new commits change. Try again in a minute."
+# The same send-back for a task that goes after another one (backend/merge_order.py), once that one merged: the Builder
+# rebases onto it.
+SENT_BACK_AFTER = (
+    "{ref} conflicts with its base branch now that {earlier}, which it goes after, has merged, so it is not queued. "
+    'Move the task back to Fixes 2 for the Builder to rebase it onto {earlier}: `tico task move {task} "Fixes 2" -m '
+    '"{ref} conflicts now that {earlier} merged: rebase it onto {earlier}" --version N`.'
+)
+# Why a bot may not queue a task that goes after another one still open (merge_order.held). A person may.
+HELD_FOR = "Waits for {earlier} to merge. A person may queue it anyway."
 
 
 def removed_wake_key(task_id: str, visit_id: str, ref: str, removed_at: str) -> str:
@@ -1203,6 +1220,8 @@ def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
     visit = task.get("visit")
     if not visit or not queues_prs(task.get("stage")):
         return []
+    if MO.stops_queue(conn, task):
+        return []  # it goes after a task that has not merged (merge_order.release queues it then), or one that closed
     owed = [_owe_queue(conn, str(visit["id"]), link) for link in prs_of(conn, str(task["id"]))]
     return [e for e in owed if e]
 
@@ -1243,7 +1262,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest commit changes other
     lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one. A rebase
     that changes the same lines (`same_changes`) it may; while Tico has not read what the new commit changes yet, it is
-    asked to try again (`COMPARING`)."""
+    asked to try again (`COMPARING`). A task that goes after one that has not merged (merge_order.held) is refused to a
+    bot (`HELD_FOR`) and queued for the first time for a person ("Queued before #40 merged" in its history); one whose
+    earlier task closed without merging is queued for the first time for whoever may queue it."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row:
@@ -1262,6 +1283,12 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         refuse("task_requirement", "Only the stage owner, the pipeline's manager or a person can queue it again")
     if not queues_prs(row.get("stage")):
         refuse("task_stage", f"{row['stage']['name']} doesn't queue PRs")
+    # It goes after a task that has not merged (merge_order.held): a bot waits; a person may queue it anyway, and its
+    # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
+    earlier = MO.held(conn, row)
+    if earlier and not E.is_human(by):
+        refuse("task_requirement", HELD_FOR.format(earlier=MO.ref(earlier)))
+    first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
     for link in prs_of(conn, task_id):
@@ -1272,7 +1299,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         last = newest(conn, visit_id, ref)
         if last and last["state"] == "owed":
             continue  # already queuing again
-        if metadata["queue_state"] == "removed" or (last and last["state"] == "failed"):
+        if metadata["queue_state"] == "removed" or (last and last["state"] == "failed") or (first and not last):
             again.append({**link, "ref": ref})
     if not again:
         refuse("task_requirement", "Nothing was taken out of the merge queue")
@@ -1290,7 +1317,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             if not same:
                 refuse("task_requirement", SENT_BACK_FOR_NEW.format(ref=ref))
         if conflicts(conn, task_id, str(link["repo"]), int(link["number"])):
-            refuse("task_requirement", SENT_BACK_FOR_CONFLICT.format(ref=ref, task=task_id))
+            refuse("task_requirement", MO.conflict_line(conn, row, ref))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
@@ -1317,7 +1344,11 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         ref, head = link["ref"], str(link["metadata"]["head_sha"])
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
-        E._event(conn, task_id, by, "pr_queued", None, ref, "Queue again", {"ref": ref, "head": head, "again": True})
+        if earlier:
+            note, data = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier)), {"before_merged": earlier["id"]}
+        else:
+            note, data = "Queue again", {}
+        E._event(conn, task_id, by, "pr_queued", None, ref, note, {"ref": ref, "head": head, "again": True, **data})
     conn.execute("UPDATE tasks SET version=?, updated_at=? WHERE id=?", (int(row.get("version") or 0) + 1, ts, task_id))
     E.changed(conn, task_id, by)
     return owed
@@ -1406,7 +1437,7 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
                 f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
             )
         elif metadata.get("removed_reason") == CONFLICTS:
-            lead = f"GitHub took {ref} out of the merge queue. {SENT_BACK_FOR_CONFLICT.format(ref=ref, task=task_id)}"
+            lead = f"GitHub took {ref} out of the merge queue. {MO.conflict_line(conn, row, ref)}"
         else:
             lead = (
                 f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
@@ -1633,7 +1664,7 @@ def metadata_changed(conn: "sqlite3.Connection", task_ids: list[str], after: Row
     ref = pr_ref(repo, number)
     for row in _on_queueing_stage(conn, task_ids):
         visit_id = str(row["visit"]["id"])
-        if not effects(conn, visit_id, ref):
+        if not effects(conn, visit_id, ref) and not MO.stops_queue(conn, row):
             _owe_queue(conn, visit_id, {"repo": repo, "number": number, "metadata": after})
         head = after.get("head_sha")
         if before and before.get("head_sha") and head and head != before["head_sha"] and after["state"] == "open":
@@ -1751,7 +1782,7 @@ def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
         ref = pr_ref(*_pr_of(effect))
         E.changed(conn, str(row["id"]), E.SYSTEM)
         if reason == CONFLICTS:
-            text = SENT_BACK_FOR_CONFLICT.format(ref=ref, task=row["id"])
+            text = MO.conflict_line(conn, row, ref)
         else:
             text = (
                 f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
@@ -2094,6 +2125,13 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if effect:
         return Standing(requirement, WAITING, SOURCE, "In the merge queue")
     if queues:
+        earlier = MO.held(conn, task)
+        if earlier:
+            # It goes after a task that has not merged: merge_order's own standing is its turn; this says why.
+            return Standing(requirement, WAITING, SOURCE, f"Not queued until {MO.ref(earlier)} merges")
+        closed = MO.closed_before(conn, task)
+        if closed:
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 

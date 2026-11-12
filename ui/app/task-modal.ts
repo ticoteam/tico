@@ -534,9 +534,22 @@ function taskMilestoneHTML(t: ModalTask) {
       ? `<a href="${esc(w.url)}" target="_blank" rel="noopener">${esc(text)}</a>` : esc(text)}${chipNoteHTML(w.note)}</span>`;
   }).join('')}</div></div>`;
 }
+// The order to merge in (backend/merge_order.py): "After #40 · Merge" on the later task, "Before #42 · Build" on the
+// earlier one. Read-only lines: an order is set and taken off with `tico task after`, not here.
+function taskOrderHTML(t: ModalTask) {
+  return ([['out', 'After'], ['in', 'Before']] as const).map(([dir, label]) => {
+    const rows = taskRels(t, 'after', dir);
+    if (!rows.length) return '';
+    return `<div class="trel task-order"><span class="trel-k">${label}</span><div class="tlinks">${rows.map(k => {
+      const ref = k.number ? `#${k.number}` : '';
+      const where = k.status === 'open' ? k.stage || '' : k.status;
+      return `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${esc(ref)} ${esc(clipLine(k.title, 60))}</button>${where ? ` · <span class="tchip-note">${esc(where)}</span>` : ''}</span>`;
+    }).join('')}</div></div>`;
+  }).join('');
+}
 function taskRelHTML(t: ModalTask) {
   const groups = TASK_REL_GROUPS.map(([kind, dir, label]): [string, string, string, TaskRelRow[]] => [kind, dir, label, taskRels(t, kind, dir)]).filter(g => g[3].length);
-  const milestones = taskMilestoneHTML(t);
+  const milestones = taskMilestoneHTML(t) + taskOrderHTML(t);
   return `<section class="tsec task-related${groups.length || milestones ? '' : ' tsec-empty'}"><h3 class="rail-h">Related<button type="button" class="prop-add" data-related-add aria-haspopup="menu" aria-label="Relate a task" title="Relate a task">${TL_ICON.plus}</button></h3>
     ${groups.map(([kind, dir, label, rows]) => `<div class="trel"><span class="trel-k">${esc(label)}</span><div class="tlinks">${rows.map(k => `<span class="tlink task"><button type="button" class="linkish" data-open-task="${esc(k.id)}" aria-label="Open ${esc(k.title)}">${taskStatusText(k)} ${esc(clipLine(k.title, 70))}</button><button type="button" class="x" data-drop-rel="${esc(kind)} ${esc(dir)} ${esc(k.id)}" aria-label="Remove ${esc(label.toLowerCase())}: ${esc(k.title)}">×</button></span>`).join('')}</div></div>`).join('')}${milestones}</section>`;
 }

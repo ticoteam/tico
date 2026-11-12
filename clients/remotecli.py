@@ -800,6 +800,7 @@ def run(args, who=None):
                 "visibility",
                 "public_title",
                 "public_summary",
+                "after",
             ):
                 fields[field] = getattr(args, field, None)
             return unwrap(hubtools.task_create(client, {k: v for k, v in fields.items() if v is not None}))

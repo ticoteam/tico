@@ -971,7 +971,11 @@ def _standings(conn: "sqlite3.Connection", task: Row, visit: Row) -> list[Standi
     # A PR that conflicts with its base branch before Merge: the bot that built it rebases it first, or after a
     # person's answer the stage waits on (pr_conflicts).
     conflict = pr_conflicts.standing(conn, task, out)
-    return [conflict, *out] if conflict else out
+    from . import merge_order
+
+    # A task that goes after another one in a stage that queues PRs: held until that one merges (merge_order).
+    order = merge_order.standing(conn, task)
+    return [s for s in (order, conflict) if s] + out
 
 
 def unmet(conn: "sqlite3.Connection", task: Row) -> list[Standing]:

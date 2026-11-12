@@ -1017,6 +1017,11 @@ def move(
         _ended(conn, moved, by)
     if pushed:
         _tell_manager(conn, moved, f"Pushed past {', '.join(p['name'] for p in pushed)}: {why}", "pushed_past")
+    if moved["status"] != "open" or kind == "forward":
+        # A task that goes after this one may be held on it in Merge: queued now, or its owner told (merge_order).
+        from . import merge_order
+
+        merge_order.release(conn, task_id, SYSTEM)
     # What a move causes beyond the task's own row: the events, a routine's day, stopping work on a closed task
     # (backend/task_effects.py). Last, and for every move, so nothing that moves a task can leave them out.
     task_effects.moved(conn, row, moved, kind, by, why, revision)
