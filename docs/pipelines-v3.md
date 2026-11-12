@@ -292,7 +292,9 @@ Every move records who, when and why, and raises the task's version. A move made
 - The on-enter action happens once per visit. Coming back to the stage later is a new visit.
 - The owner is woken once, with what is missing.
 - Moving back or closing undoes the action: PRs leave the merge queue, and tasks filed in that visit close with a note. A
-  filed task whose PR already merged finishes its release.
+  filed task whose PR already merged finishes its release. An undo is the visit's, not the PR's: it is skipped while an
+  open visit (the task's next one, or another task's) still wants the same PR queued at the same head, and one that
+  took such a PR out anyway queues it again.
 
 ### What a requirement can say
 

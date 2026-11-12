@@ -12,13 +12,17 @@
   when the source answers no, the action is `failed` and the source module says what that means (`gave_up`).
 - `undo` (the task closed or went back): an `act` still owed is moot, as nothing was done yet; one done owes its `undo`.
   An `act` the source carried out after it went moot owes its `undo` then.
+- An `undo` belongs to its visit, not to the item: before it is carried out, the source says whether another open
+  visit (this task's next one, or another task's) still wants the same item at the same version (`undo_moot`); then the
+  undo is moot and no call is made. One that reached the source anyway is reconciled by the source (`recorded`).
 
 States: owed, done, failed, moot. A source module (backend/item_sources) that acts names them in `ACTIONS` and has
 `entered(conn, task, by, action)`, `carry_out(client, effect)`
 (the call, no transaction held: returns what the source said, `{"ok": bool, "reason"?, "how"?}`), `done_already(conn,
 effect)` (True: no call is made; the action is done, unless the source settled it otherwise itself), `recorded(conn,
 effect, said, state, version)` and `gave_up(conn, effect, reason)`. It may have `look_first(store, client, effect)`, a
-read before `done_already` with no transaction held, so that it decides on what the source says now.
+read before `done_already` with no transaction held, so that it decides on what the source says now, and
+`undo_moot(conn, effect)` (True: an `undo` takes back what an open visit still wants; it is moot, no call is made).
 
 Every function takes the caller's open write transaction and never commits, except `run`.
 """
@@ -236,6 +240,13 @@ def run(store: Any, clients: dict[str, Any], now: str | None = None) -> int:
                 if module.done_already(conn, effect):
                     count += 1 if _done(conn, effect) else 0
                     continue
+        else:
+            moot = getattr(module, "undo_moot", None)
+            if moot is not None:
+                with store.transaction() as conn:
+                    if moot(conn, effect):
+                        _moot(conn, effect)
+                        continue
         version: int = module.version_now()
         try:
             said: Row = module.carry_out(client, effect)
@@ -254,6 +265,13 @@ def _done(conn: "sqlite3.Connection", effect: Row) -> bool:
             "UPDATE effects SET state='done', last_error=NULL, next_try_at=NULL, updated_at=? WHERE id=? AND state='owed'",
             (_h().now(), effect["id"]),
         ).rowcount
+    )
+
+
+def _moot(conn: "sqlite3.Connection", effect: Row) -> None:
+    conn.execute(
+        "UPDATE effects SET state='moot', next_try_at=NULL, updated_at=? WHERE id=? AND state='owed'",
+        (_h().now(), effect["id"]),
     )
 
 
