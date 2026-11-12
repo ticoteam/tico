@@ -5,6 +5,7 @@
       "human:ana": "Ana"
     },
     "cursor": "<volatile>",
+    "next_after": null,
     "next_offset": null,
     "tasks": [
       {
