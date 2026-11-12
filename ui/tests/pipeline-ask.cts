@@ -94,6 +94,8 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       // The stage's holder, picked: the message goes to its direct chat with the board.
       await page.locator('#task-ask [data-pa-to="stage"]').click();
       assert.equal(await placeholder(page), 'Ask Writer…');
+      await page.evaluate(() => window.scrollTo(0, 40));
+      const scrolled = await page.evaluate(() => window.scrollY);
       await page.locator('#task-ask .pa-text').fill('Which of these is closest to ready?');
       await page.locator('#task-ask .pa-send').click();
       const sheet = page.locator('dialog.pa-sheet[open]');
@@ -107,11 +109,20 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.equal((await sheet.locator('.th-board').textContent())?.replace(/\s+/g, ' ').trim(), 'Product › Spec · 3 tasks', 'one card under the message');
       assert.equal(await sheet.locator('.pm-tabs, .pm-body, .pm-tab').count(), 0, 'the chat alone: no Log, no Tasks');
       assert.equal(await page.locator('#task-ask .pa-text').inputValue(), '', 'the box is empty once sent');
+      // The chat fills the sheet: its box sits at the bottom, inside the screen's edges.
+      await page.waitForFunction(() => { const a = document.querySelector('dialog.pa-sheet')?.getAnimations({subtree: true}) ?? []; return a.every(x => x.playState !== 'running'); });
+      const box = await sheet.locator('.thv-composer').evaluate(el => el.getBoundingClientRect().toJSON() as DOMRect);
+      const panel = await sheet.evaluate(el => el.getBoundingClientRect().toJSON() as DOMRect);
+      const width = await page.evaluate(() => window.innerWidth);
+      assert.ok(panel.bottom - box.bottom >= 0 && panel.bottom - box.bottom <= 24, `the box is at the sheet's bottom: ${box.bottom} of ${panel.bottom}`);
+      assert.ok(box.left >= 4 && box.right <= width - 4, `the box is inside the screen: ${box.left}–${box.right} of ${width}`);
 
       // ✕: the board as it was.
       await sheet.locator('[data-pa-close]').click();
       await page.locator('dialog.pa-sheet').waitFor({state: 'detached'});
       assert.equal(await page.locator('#task-body .pv-tab.on').getAttribute('data-pv-tab'), 'spec', 'the same tab');
+      assert.equal(await page.evaluate(() => window.scrollY), scrolled, 'the same scroll position');
+      assert.ok(!(await page.locator('#task-ask .pa-text').evaluate(el => el === document.activeElement)), 'a tap on ✕ raises no keyboard');
 
       // A search narrows what goes with the next message.
       sent.length = 0;
@@ -125,6 +136,7 @@ const rect = (page: Page, sel: string) => page.locator(sel).first().evaluate(el 
       assert.ok(sent.some(s => s.body.members?.[0] === 'bot:pm'), 'the manager this time');
       await page.keyboard.press('Escape');
       await page.locator('dialog.pa-sheet').waitFor({state: 'detached'});
+      assert.ok(await page.locator('#task-ask .pa-text').evaluate(el => el === document.activeElement), 'after Escape the bar has the focus');
       await page.evaluate(() => { const q = document.querySelector<HTMLInputElement>('#task-q')!; q.value = ''; q.dispatchEvent(new Event('input')); });
 
       // Build is held by whoever the task is for: no second button. Review is held by the manager: it shows once.

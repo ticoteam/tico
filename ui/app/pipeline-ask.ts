@@ -18,7 +18,9 @@ interface PaBoard { pipeline_id: string; pipeline: string; stage_id: string; sta
 interface PaState { host: HTMLElement; rec: PipelineRec; stage: string; to: PaTo; small: boolean; lastY: number }
 
 let PA: PaState | null = null;
-let PA_SHEET: {dialog: HTMLDialogElement; chat: ThvView | null} | null = null;
+// `byKey`: Escape put the sheet away, so the bar takes the focus back; after ✕ or a swipe it does not, since on a phone
+// that would raise the keyboard over the board the person just went back to.
+let PA_SHEET: {dialog: HTMLDialogElement; chat: ThvView | null; byKey: boolean} | null = null;
 const PA_MAX_IDS = 50;
 const PA_STAGE_HOLDER = /^(bot|human):./;
 
@@ -154,8 +156,9 @@ function paSheetOpen(who: string): ThvView | null {
     + `<button type="button" class="ghost pa-x" data-pa-close aria-label="Close" title="Close">✕</button></header>`
     + `<div class="pa-chat"></div>`;
   document.body.append(dialog);
-  const sheet: {dialog: HTMLDialogElement; chat: ThvView | null} = {dialog, chat: null};
+  const sheet: {dialog: HTMLDialogElement; chat: ThvView | null; byKey: boolean} = {dialog, chat: null, byKey: false};
   PA_SHEET = sheet;
+  dialog.addEventListener('cancel', () => { sheet.byKey = true; });
   dialog.addEventListener('close', () => { if (PA_SHEET === sheet) paSheetClose(); });
   dialog.addEventListener('click', ev => { if (eventElement(ev)?.closest('[data-pa-close]')) dialog.close(); });
   // A swipe down on the sheet's head puts it away.
@@ -169,11 +172,12 @@ function paSheetOpen(who: string): ThvView | null {
   }, {passive: true});
   dialog.showModal();
   const host = dialog.querySelector<HTMLElement>('.pa-chat');
-  sheet.chat = host ? threadMount(host, {dm: who, card: true, header: false}) : null;
+  // Not a card: the chat fills the sheet, with its box at the bottom.
+  sheet.chat = host ? threadMount(host, {dm: who, header: false}) : null;
   return sheet.chat;
 }
 
-/** The sheet is put away: its chat goes with it, and the bar has the focus back. */
+/** The sheet is put away: its chat goes with it, and after Escape the bar has the focus back. */
 function paSheetClose(): void {
   const sheet = PA_SHEET;
   if (!sheet) return;
@@ -181,7 +185,7 @@ function paSheetClose(): void {
   threadUnmount(sheet.chat);
   if (sheet.dialog.open) sheet.dialog.close();
   sheet.dialog.remove();
-  PA?.host.querySelector<HTMLTextAreaElement>('.pa-text')?.focus({preventScroll: true});
+  if (sheet.byKey) PA?.host.querySelector<HTMLTextAreaElement>('.pa-text')?.focus({preventScroll: true});
 }
 
 /** Sends the words to the bot's direct chat with the board they were asked from, and shows the chat over the board. */
