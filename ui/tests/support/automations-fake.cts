@@ -155,6 +155,8 @@ export interface OpenAutomationsOptions {
   system?: boolean;
   maintenance?: boolean;
   heartbeat?: boolean;
+  // A script's own routes, set before the page loads: they answer first, and route.fallback() hands a path back here.
+  routes?: ((page: Page) => Promise<void>) | null;
 }
 
 export interface AutomationsPage {
@@ -387,7 +389,7 @@ function listenRuns(now = Date.now()): Run[] {
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
 // tweak(fx) changes the fixture copy before the page reads it. proposal: a bot's pending version on the inbox one.
 async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/automations', viewer = 'dana', tweak = null, draft = false,
-                                         proposal = false, system = false, maintenance = false, heartbeat = false}: OpenAutomationsOptions = {}): Promise<AutomationsPage> {
+                                         proposal = false, system = false, maintenance = false, heartbeat = false, routes = null}: OpenAutomationsOptions = {}): Promise<AutomationsPage> {
   const fx = clone(fixture<AutomationsFixture>(FIXTURE));
   const proposalFx = fx.proposal as Proposal;
   if (system) fx.automations.push(clone(SYSTEM));
@@ -745,6 +747,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     }
     return json(unrouted(p));
   });
+  await routes?.(page);
   await page.goto('http://tico-ui.test/' + hash);
   // Hold an automation's GET, Maintenance's PATCH or the Heartbeat's PUT until release() (fail: then answer 500).
   const hold = (id: string, fail = false) => {

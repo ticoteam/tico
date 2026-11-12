@@ -71,3 +71,8 @@
   .lst-lim{display:none}
   .lst-run{grid-template-columns:minmax(0,1fr);gap:10px}
 }
+/* The owner's chat (page-chat.css): the page's second column while open; a listening's editor takes its place. */
+.au-lst.pgc-open:not(.ed-open) .au-body{grid-template-columns:minmax(0,1fr) var(--pgc-w,340px)}
+.au-lst.ed-open .au-pgc{display:none}
+.au-lst .au-chat{display:inline-flex;margin-left:6px}
+.au-lst .au-chat:empty{display:none}

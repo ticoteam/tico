@@ -65,7 +65,7 @@ function threadsFake({bot, me = 'human:ana', messages = [], home = [], sent = []
       const post = body as ThreadsPost | null;
       sent.push(post as ThreadsPost);
       return {message: {id: 'sent-' + sent.length, seq: 1000 + sent.length, depth: 0, thread_id: p.split('/')[4],
-        sender_id: me, body: post?.text || '', created_at: iso()}};
+        sender_id: me, body: post?.text || '', created_at: iso(), ...(post?.refs ? {refs: post.refs} : {})}};
     }
     if (p === '/api/v2/rule-holds' && method === 'GET') return {holds: [], next_cursor: null};
     return undefined;

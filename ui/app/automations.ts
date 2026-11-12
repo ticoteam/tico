@@ -58,6 +58,7 @@ function automationsStop() {
   if (!AU) return;
   if (AU.list && !AU.listError && !AU.lst) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range, maint: AU.maint, heart: AU.heart};
   clearTimeout(AU.hbPoll ?? undefined);
+  if (AU.lst) pageChatLeave();
   AU = null;
 }
 
@@ -233,7 +234,7 @@ function auShell() {
   $('#main').innerHTML = `<div class="au${lst ? ' au-lst' : ''}" id="au-root">
     <header class="au-ph"><div class="au-hrow"><h1>${lst ? 'Listening' : 'Automations'}</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div></div><span class="au-sp"></span>
       <div class="au-hrow"><button type="button" class="au-fbtn" data-filters aria-label="Filters" aria-expanded="false">${filterIcon(18)}<span class="au-fbn" hidden></span></button><span class="au-newbox"><button class="primary add-ctl au-new" type="button" ${lst ? 'aria-label="New listening"' : 'aria-label="New automation" aria-haspopup="menu" aria-expanded="false"'}>${TL_ICON.plus}</button>
-      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></div></header>
+      <div class="au-newm" role="menu" hidden><button type="button" role="menuitem" data-new="inbox"><span class="nav-icon" aria-hidden="true">mail</span>New inbox</button>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span>${lst ? '<span class="au-chat"></span>' : ''}</div></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="${lst ? 'Search listening' : 'Search automations'}"></div>
@@ -245,6 +246,7 @@ function auShell() {
           <button type="button" role="tab" data-tab="runs" aria-selected="false">Runs</button></div><span class="au-sp"></span><span class="au-sels"></span></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
       <aside class="au-side"><div class="au-ed" hidden></div></aside>
+      ${lst ? '<aside class="au-pgc" hidden></aside>' : ''}
       <div class="au-scrim" hidden></div>
     </div>
   </div>`;
@@ -266,6 +268,9 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target instanceof HTMLElement && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
+  // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (listening.css).
+  if (lst) void pageChatMount({page: 'listening', label: 'Listening', root, button: root.querySelector('.au-chat'), panel: root.querySelector('.au-pgc'),
+    item: () => AU?.root === root && AU.lst && AU.cur && AU.id ? {kind: 'automation', id: AU.id, name: String(AU.cur.name || '').trim() || 'Untitled'} : null});
 }
 
 // + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.

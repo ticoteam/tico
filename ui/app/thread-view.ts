@@ -39,6 +39,7 @@ interface ThvUpdateRef {
   day?: string;
 }
 interface ThvRefs {
+  from_page?: PageChatFrom;
   update?: ThvUpdateRef | (string & ThvUpdateRef) | null;
   update_request?: unknown;
   card?: string;
@@ -178,6 +179,7 @@ interface ThvOpts {
   members?: boolean;
   back?: string;
   empty?: string;
+  from?: () => PageChatFrom | null;  // a page's chat (page-chat.ts): each message names the page and what is open on it
 }
 // The composer of a bot's Home or DM or a thread: what pill.js, slash-commands.js and chat-goal.js read off it.
 interface ThvComposer {
@@ -743,6 +745,19 @@ function thvRoutedHTML(m: ThvMessage) {
   return `<div class="th-routed">${names.length ? esc('Asked ' + names.join(', ')) : 'No bot asked'}</div>`;
 }
 
+// Under a message written from a page's chat (page-chat.ts): "From Listening › Reddit: AI teammates", a link to the
+// page, and to what was open on it when the page can open it.
+const THV_FROM_PAGES: Record<string, (item?: PageChatItem) => string> = {
+  listening: item => LISTENING + (item?.kind === 'automation' && item.id ? '/' + encodeURIComponent(item.id) : ''),
+};
+function thvFromHTML(m: ThvMessage) {
+  const f = m.refs?.from_page;
+  if (!f || typeof f !== 'object' || !f.label) return '';
+  const href = THV_FROM_PAGES[f.page]?.(f.item);
+  const words = esc('From ' + f.label) + (f.item?.name ? ' › ' + esc(f.item.name) : '');
+  return `<div class="th-from">${href ? `<a href="${esc(href)}">${words}</a>` : words}</div>`;
+}
+
 // ---- one message
 const thvRunOf = (m: ThvMessage) => thvBot(m.sender_id) && !!(m.run?.steps || m.run?.did?.length || m.refs?.turn_id);
 const thvClock = (iso: string | undefined) => { const d = new Date(iso || ''); return isNaN(Number(d)) ? '' : d.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}); };
@@ -796,7 +811,7 @@ function thvMsgHTML(view: ThvView, m: ThvMessage, cont = false) {
     : relay ? avatar(assistantBot(), 32) : actorAvatar(m.sender_id, 32);
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}">
     <div class="th-av">${av}</div>
-    <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvBoardHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
+    <div class="th-main">${head}${quote}${run}${body}${m.deleted ? '' : thvFilesHTML(m) + thvBoardHTML(m) + thvFromHTML(m) + thvReactionsHTML(m) + fbRowHTML(fb, m.body)}${thvRoutedHTML(m)}</div>
     ${m.deleted ? '' : thvMsgActsHTML(view, m)}
   </div>`;
 }
@@ -1568,12 +1583,14 @@ async function thvSend(view: ThvView, {text, files = [], lib = [], way = null, r
   const p: ThvPending = {key: 'p' + (++THV_N), text, files, lib, replyTo: replyTo?.id || '', quote: replyTo ? thvQuoteFrom(replyTo) : null, state: 'checking'};
   view.pending.push(p);
   thvDraw(view, {stick: true});
-  const refs = lib.length || more ? {...more, ...(lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : {})} : null;
+  const from = view.opts.from?.() || null;
+  const refs = lib.length || more || from ? {...more, ...(lib.length ? {files: lib.map(f => ({id: f.id, title: f.title}))} : {}), ...(from ? {from_page: from} : {})} : null;
   const body = {text, ...(refs ? {refs} : {}), ...(replyTo ? {in_reply_to: replyTo.id} : {}), ...(way || {})};
   try {
     let r: (ThvSendReply & ThvThread) | undefined;
-    // An upload goes to a thread, so a first message with files makes the DM before it sends; so does one with refs,
-    // which only a post to the thread keeps (POST /v2/threads/dm takes the first message's words alone).
+    // An upload goes to a thread, so a first message with files makes the DM before it sends; so does one with refs
+    // (a page's chat names its page there), which only a post to the thread keeps (POST /v2/threads/dm takes the
+    // first message's words alone).
     if (!view.id && view.opts.dm && (files.length || refs)) {
       const made: ThvThread & {thread?: ThvThread} = await post('/v2/threads/dm', {members: [view.opts.dm]});
       const t = made?.thread || made;

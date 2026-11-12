@@ -304,7 +304,8 @@ function pageSettings() {
         </div>` : ''}
         <p class="settings-cell-note" id="settings-visuals">${settingsVisualsLine()}</p>
         ${S.me?.role === 'owner' ? '<div id="settings-bot-reports"></div>' : ''}</section>
-      <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>` : ''}
+      <section class="card" id="settings-company"><header><h2>Tico company</h2></header><div id="set-company"></div></section>
+      <section class="card" id="settings-page-owners"><header><h2>Page owners</h2></header><div id="set-page-owners"></div></section>` : ''}
       <section class="card" id="settings-assistant-pane"><header><h2>${esc(assistantName())}</h2><div class="row">
         <a class="ghost" href="${ASSISTANT}">Open chat</a>
         ${settingsCanManageBot(botRow(assistantBot())) ? `<a class="ghost" href="#/bot/${encodeURIComponent(assistantBot())}/more">Bot settings</a>` : ''}
@@ -479,7 +480,7 @@ function settingsShow(tab: string) {
         // The owner's one click when the team has no Assistant (ui/assistant.ts): restore it or add it.
         owner && window.assistantChat?.settingsStrip($('#settings-assistant'), {get, post, esc, toast, after: async () => { await refresh(true); renderSettingsBots(); }}),
         privacy && owner && renderSettingsPrivacy(), storage && owner && renderSettingsStorage(),
-        company && settingsIsAdmin() && renderSettingsCompany(), owner && renderSettingsBotReports(),
+        company && settingsIsAdmin() && renderSettingsCompany(), settingsIsAdmin() && renderSettingsPageOwners(), owner && renderSettingsBotReports(),
         !formBusy($('#settings-notifications')) && settingsNotificationsRender()])
         .then(() => SETTINGS_REVEAL !== SETTINGS_REPOS_CARD && settingsReveal(SETTINGS_REVEAL));
       // Repositories reads GitHub's list: drawn on its own once General has painted, so it never holds that up,
@@ -562,6 +563,30 @@ async function renderSettingsBotReports() {
     try { await put('/v2/access/rules', {bot_reports_direct: box.checked}); toast('Saved'); void renderSettingsBotReports(); }
     catch (e) { box.checked = !box.checked; settingsFieldError(box, errorMessage(e, 'Something went wrong.')); }
   };
+}
+// Settings > General > Page owners: the bot each page's Chat opens (backend/page_owners.py, ui/app/page-chat.ts).
+// Owners and admins; the page follows at its next load. No owner: the page has no Chat.
+async function renderSettingsPageOwners() {
+  const host = $('#set-page-owners');
+  if (!host || formBusy(host)) return;
+  let pages: Record<string, {bot?: string | null; name?: string}>;
+  try { pages = (await get<{pages?: Record<string, {bot?: string | null; name?: string}>}>('/v2/page-owners', {fresh: true})).pages || {}; }
+  catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
+  if (!host.isConnected || formBusy(host)) return;
+  const bots = S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))
+    .sort((a, b) => String(a.display_name || a.slug).localeCompare(String(b.display_name || b.slug)));
+  host.innerHTML = Object.entries(pages).map(([page, row]) => {
+    const now = String(row.bot || '').replace(/^bot:/, '');
+    const options = ['<option value="">No owner</option>', ...bots.map(e => `<option value="${esc(e.id)}"${e.id === now ? ' selected' : ''}>${esc(e.display_name || e.slug || e.id)}</option>`)];
+    return `<label class="people-line"><span>${esc(row.name || page)}</span><select data-page-owner="${esc(page)}" aria-label="${esc((row.name || page) + ' owner')}">${options.join('')}</select></label>`;
+  }).join('') + '<p class="settings-cell-note">The bot you chat with from the page. No owner, no Chat.</p>';
+  for (const select of host.querySelectorAll<HTMLSelectElement>('[data-page-owner]')) {
+    select.onchange = async () => {
+      const page = select.dataset.pageOwner || '';
+      try { await put('/v2/page-owners/' + encodeURIComponent(page), {bot: select.value || null}); toast('Saved'); }
+      catch (e) { settingsFieldError(select, errorMessage(e, 'Something went wrong.')); void renderSettingsPageOwners(); }
+    };
+  }
 }
 // Settings > General > Privacy: usage counting and explicit consent for Gateway suggestions (PRIVACY.md).
 async function renderSettingsPrivacy() {
