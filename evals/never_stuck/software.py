@@ -273,7 +273,7 @@ class SoftRig(Rig):
         ]
 
     def room_wakes(self, bot: str) -> list[str]:
-        """C10's "Spec has room" wakes for a bot: their keys."""
+        """Any "Spec has room" wake for a bot, by its old `room:` key: there should be none (C10 tells nobody)."""
         return [
             str(r[0])
             for r in self.w.read(

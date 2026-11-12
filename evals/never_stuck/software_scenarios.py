@@ -314,7 +314,7 @@ def push_past_pr_merged(r: SoftRig) -> None:
     expect(r.gh.state(1)["queue_state"] == "none", f"the PR stayed queued: {r.gh.state(1)}")
 
 
-@case("spec-full", "A third idea into Spec at its limit of 2 waits; a freed slot wakes the PM once", covers=(20,))
+@case("spec-full", "A third idea into Spec at its limit of 2 waits; a freed slot tells nobody", covers=(20,))
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
@@ -334,8 +334,8 @@ def spec_full(r: SoftRig) -> None:
     r.check()
     r.later(hours=2)
     woken = r.room_wakes(PM)
-    expect(len(woken) == 1, f"the PM was woken {len(woken)} times when Spec had room: {woken}")
-    expect(r.stage_of(third) == "Ideas", "the idea left Ideas without a hand")
+    expect(not woken, f"the PM was told {len(woken)} times that Spec had room: {woken}")  # no "has room" notice (C10)
+    expect(r.stage_of(third) == "Ideas", "the PM's own idea left Ideas without a person picking it")
 
 
 @case("close-product-while-queued", "Close the Product task while its PR is queued: the PR is pulled", covers=(24, 31))

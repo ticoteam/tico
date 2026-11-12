@@ -1,6 +1,6 @@
 """The Product and Engineering presets (docs/pipelines-v3.md "Default pipelines", contract §5, §10 items 1 and 2): who
 fills each role (backend/pipeline_seats.py), when they are made and retired (pipeline_settings.ensure_presets), the
-handoff In development files (backend/stage_effects.py), C10's one wake when Spec has room (never_stuck), and
+handoff In development files (backend/stage_effects.py), C10 (nobody is told when Spec has room, never_stuck), and
 company_import.new_company passing over untouched presets.
 
 Synthetic rows only (backend/tests/helpers/engine.py): the fictional company, where Ana owns it, and a few bots.
@@ -607,41 +607,39 @@ def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
 
 
 # ----------------------------------------------------------------------------- C10
-def test_the_product_manager_is_woken_once_when_spec_has_room(c):
+def _room_messages(c):
+    return c.execute(
+        "SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%' OR body LIKE '%has room.%'"
+    ).fetchone()[0]
+
+
+def test_the_product_manager_is_not_told_when_spec_has_room(c):
+    """C10 (spec "Spec has room: move it, don't send a notice"): its own briefs rest in Ideas, and nobody is told when
+    Spec has room, whether it had room from the start or a slot frees."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
     ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
-    first = N.room_key("product-spec", None)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
-    assert [tuple(r) for r in rows] == [(first, "bot:pm")]
     N.check(c)
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    assert _room_messages(c) == 0
     for idea in ideas[:2]:
         E.move(c, idea["id"], "product-spec", ANA)
-    N.check(c)  # Spec is full: nothing
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    N.check(c)
     E.move(c, ideas[0]["id"], "product-ideas", ANA, "Not ready")
-    left = c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (ideas[0]["id"],)).fetchone()[
-        0
-    ]
     N.check(c)
     N.check(c)
-    keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]
-    assert keys == [first, N.room_key("product-spec", left)]
+    assert _room_messages(c) == 0
+    assert [E.task(c, idea["id"])["stage_id"] for idea in ideas] == ["product-ideas", "product-spec"] + [
+        "product-ideas"
+    ] * 2
     assert N.rules_hold(c) == []
 
 
-def _left_spec(c, task_id):
-    return c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (task_id,)).fetchone()[0]
-
-
-def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_freed_slot(c):
+def test_an_assignee_owned_ideas_tells_nobody_when_spec_has_room(c):
     """C10 when a customer points Product's Ideas at "the task's assignee" (one Product Owner per area): a request moved
-    back into Ideas is held by hand, so its own owner is woken once when Spec has room, once per freed slot. Growth's
-    Ideas, whose requests do not move on, still wakes nobody (test_growth_pipelines.py)."""
+    back into Ideas is held by hand, and its owner is not told when Spec has room, however many slots free."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
@@ -653,7 +651,6 @@ def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_free
     N.check(c)  # a person's request: it moves on into Spec by itself
     assert E.task(c, bug["id"])["stage_id"] == "product-spec"
     E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
-    first = N.room_key("product-spec", _left_spec(c, bug["id"]))
     row = E.task(c, bug["id"])
     assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
     (held,) = W.of(c, row)
@@ -661,11 +658,8 @@ def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_free
     X.settled(c)
     N.check(c)
     N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id, body FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
-    assert [(r[0], r[1]) for r in rows] == [(first, area)]
-    assert rows[0][2].startswith("Spec has room.")
-    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: the wake only tells
-    # A slot frees: one more wake, to the owner of the task that has waited longest.
+    assert _room_messages(c) == 0
+    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: someone moves it
     other = X.new_task(c, ANA, "Export to CSV", "product", assignee=area)
     X.settled(c)
     N.check(c)
@@ -673,8 +667,7 @@ def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_free
     E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
     N.check(c)
     N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")
-    assert [tuple(r) for r in rows] == [(first, area), (N.room_key("product-spec", _left_spec(c, other["id"])), area)]
+    assert _room_messages(c) == 0
     assert N.rules_hold(c) == []
 
 

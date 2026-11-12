@@ -227,10 +227,10 @@ turn (`waiting_on.turn`) through `task_wakes.add`; write one `history_events` ro
 A stage with no requirements passes a task straight on when the next stage has room, unless the stage is by hand. The
 never-stuck check does it, on its next pass. A by-hand stage holds every task, unless it has `requests_move_on` (Product's
 Ideas): then a person's request on its first visit (`task_engine.not_held_by_hand`) is moved on by the check when the
-next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
-stage owned by each task's assignee when `requests_move_on` is off (Growth's Ideas, Watching): every task there rests.
-With it on (Product's Ideas pointed at the assignee, one Product Owner per area), C10 wakes the owner of the task that
-has waited longest there.
+next stage has room, oldest first (`never_stuck._requests`). C10: nothing is written about room, for any by-hand
+stage in any pipeline; the moved task's owner is woken by its turn in the next stage, as after any move. Every other
+task in a by-hand stage rests until someone moves it. (The "has room" wake, keyed `room:<stage>:<freed by>`, was
+removed Nov 12; migration `drop_queued_room_notices` canceled the ones still queued.)
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -655,8 +655,8 @@ With many PRs the first unmet one, in link order, gives the line.
 
 ### Choices made while building
 
-- **Room in Spec (C10)** wakes the owner of Ideas once, which is the Product Manager bot in the preset. A person's
-  request in Ideas takes the room first, by itself (G5, Nov 10).
+- **Room in Spec (C10)** wakes nobody. A person's request in Ideas takes the room by itself (G5, Nov 10); a bot's
+  own idea waits for a person (Nov 12: the "has room" wake was removed).
 - **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
   manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
