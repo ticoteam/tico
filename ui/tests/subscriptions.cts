@@ -890,6 +890,33 @@ async function sheetScreens(browser: Browser) {
   console.log('sheet states fit: ok');
 }
 
+// A phone (390 px): each plan's reason and its one action sit under the plan's name, inside the screen, with no sideways
+// scroll to find them (validation of #3370 found the Usage column off-screen to the right). Desktop keeps its columns.
+async function phoneReasons(browser: Browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
+  await modelsReady(page);
+  const width = 390;
+  for (const [id, reason] of [['s1', /Computer offline: Cloud · Video Owner · Bring it online/], ['s4', /Sign-in expired\s*Sign in again/],
+    ['s6', /Computer offline: Cloud · Video Owner · Bring it online/]] as [string, RegExp][]) {
+    const row = page.locator(`[data-subs-row=${id}]`);
+    await row.scrollIntoViewIfNeeded();
+    const name = (await row.locator('.subs-name').boundingBox())!, use = (await row.locator('.subs-use').boundingBox())!;
+    assert.ok(name.x >= 0 && name.x + name.width <= width, `${id}: the plan's name is on screen`);
+    assert.ok(use.x >= 0 && use.x + use.width <= width, `${id}: the reason is on screen (x ${Math.round(use.x)}, right ${Math.round(use.x + use.width)})`);
+    assert.ok(use.y >= name.y + name.height - 1, `${id}: the reason sits under the plan's name`);
+    assert.match(await row.locator('.subs-use').innerText(), reason);
+  }
+  // The sign-in action is a button a thumb can reach on the screen, and it opens the sign-in sheet.
+  const again = page.locator('[data-subs-row=s4] [data-subs-reconnect]');
+  const box = (await again.boundingBox())!;
+  assert.ok(box.x >= 0 && box.x + box.width <= width, 'Sign in again is on screen');
+  await again.click();
+  await sheet(page).waitFor();
+  assert.deepEqual(errors, []);
+  await page.close();
+  console.log('phone reasons under the name: ok');
+}
+
 async function screens(browser: Browser) {
   for (const theme of ['dark', 'light']) {
     for (const [kind, viewport] of [['desktop', {width: 1280, height: 860}], ['phone', {width: 390, height: 844}]] as [string, {width: number; height: number}][]) {
@@ -920,6 +947,6 @@ async function screens(browser: Browser) {
   const browser = await chromium.launch({headless: true, channel: (process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined) as string});
   try {
     await navigation(browser); await modelsTab(browser); await addSubscription(browser); await connectPlan(browser); await rowMenu(browser);
-    await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await screens(browser);
+    await computersTable(browser); await gatewayOffAndMember(browser); await oldServer(browser); await botEditor(browser); await sheetScreens(browser); await phoneReasons(browser); await screens(browser);
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
