@@ -23,6 +23,7 @@ def held_terra(monkeypatch):
     monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "held", True)
     monkeypatch.setitem(providers.MODEL_BY_ID["gpt-6.1-terra"], "deprecated", True)
 
+
 HAIKU = {"harness": "claude", "model": "claude-haiku-5-5", "effort": "low"}
 HAIKU_RAN = {"model": "claude-haiku-5-5", "runtime": "claude", "harness": "claude", "effort": "low", "billing": "api"}
 

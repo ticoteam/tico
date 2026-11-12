@@ -147,7 +147,11 @@ def test_the_gateway_still_holds_terra_so_a_live_hq_tier_for_it_stays_hidden(mon
     assert P.MODEL_BY_ID["gpt-6.1-terra"]["provider"] == "openai"
     assert P.complete_choice(["tico", "openai"], model="gpt-6.1-terra") == ("codex", "gpt-6.1-terra")
     assert "gpt-6.1-terra" not in [r["id"] for r in P.provider_models("tico")]
-    tier = {"id": "tico-low", "current": 1, "versions": [{"version": 1, "id": "tico-low-1.0", "model": "GPT-6.1 Terra"}]}
+    tier = {
+        "id": "tico-low",
+        "current": 1,
+        "versions": [{"version": 1, "id": "tico-low-1.0", "model": "GPT-6.1 Terra"}],
+    }
     assert P.gateway_tiers.live_row(tier) is None
 
 
