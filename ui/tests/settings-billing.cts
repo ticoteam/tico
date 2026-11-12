@@ -2,7 +2,7 @@ import type {Route} from 'playwright';
 // Settings > Billing against a fake server: the owner's balance and one status line, credits with past ones (and what
 // expired) behind "Show past credits", a day opening into hours with "<$0.01" under a cent, the month's statement with
 // its CSV link, and "Talk to us to add credit" opening the booking link with no card form; the empty state and the
-// record-only line; a member has no Billing tab and never asks for it; no sideways scroll on a phone. Every request is
+// record-only line; no gateway key or a refused one naming Settings › Models with a link to the Tico Gateway card; a member has no Billing tab and never asks for it; no sideways scroll on a phone. Every request is
 // intercepted. TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
@@ -39,7 +39,7 @@ declare function settingsShow(tab: string): void;
         {product: 'gateway', sku: 'tico-medium-1.0:input', amount_micros: 1_250_000},
         {product: 'gateway', sku: 'tico-low-1.0:output', amount_micros: 3}]}],
       statement};
-    let billing: {state: string; month?: string; usage?: {period: string; total_micros: number; lines: unknown[]}[]; statement?: {month?: string; [k: string]: unknown}; [k: string]: unknown} = full, role = 'owner', hoursDown = true;
+    let billing: {state: string; month?: string; usage?: {period: string; total_micros: number; lines: unknown[]}[]; statement?: {month?: string; [k: string]: unknown}; [k: string]: unknown} = full, role = 'owner', hoursDown = true, hoursState = '';
     const slow: Record<string, number> = {};                                       // month -> ms its answer waits
     const asked: string[] = [];
     await page.route('**/*', (route: Route) => {
@@ -59,6 +59,7 @@ declare function settingsShow(tab: string): void;
         asked.push(p + url.search);
         if (p === '/api/v2/billing/usage') {
           if (hoursDown) { hoursDown = false; return json({state: 'unreachable'}); }   // the first read fails
+          if (hoursState) return json({state: hoursState});
           return json({state: 'ok', day: '2026-11-02', hours: [
             {period: '2026-11-02T09', total_micros: 1_250_003, lines: billing.usage![0]!.lines}]});
         }
@@ -147,6 +148,28 @@ declare function settingsShow(tab: string): void;
     await page.evaluate(() => renderSettingsBilling());
     assert.match(await host.innerText(), /No credit yet/);
     assert.equal(await host.locator('[data-billing-talk]').getAttribute('href'), 'https://cal.acme.example/tico');
+    // no gateway key, or HQ refused it: each says why, names Settings › Models (where the Tico Gateway card is, not
+    // Computers) and links to the card the way the settings catalogue does; the day's hours say the same
+    const recovery: [string, string][] = [
+      ['no_gateway', 'Billing shows here once this install is connected to the Tico Gateway (Settings › Models).'],
+      ['refused', 'Tico HQ did not accept this install’s gateway key. Check it on the Tico Gateway card in Settings › Models.']];
+    for (const [state, line] of recovery) {
+      billing = {state};
+      await page.evaluate(() => renderSettingsBilling());
+      assert.equal(await host.innerText(), line);
+      assert.equal(await host.locator('a[data-billing-gateway]').getAttribute('href'), '#/settings/models/settings-gateway-card');
+      billing = full; hoursState = state;
+      await page.evaluate(() => renderSettingsBilling());
+      await day.locator('summary').click();
+      await day.locator('[data-billing-hours]').getByText(line).waitFor();
+      assert.equal(await day.locator('[data-billing-hours] a[data-billing-gateway]').getAttribute('href'), '#/settings/models/settings-gateway-card');
+    }
+    hoursState = '';
+    // following the link opens Models with the Tico Gateway card in view
+    await day.locator('[data-billing-hours] a[data-billing-gateway]').click();
+    await page.waitForFunction(() => SETTINGS_TAB === 'models');
+    await page.locator('#settings-gateway-card').waitFor();
+    assert(await page.locator('#settings-gateway-card').isVisible(), 'the Tico Gateway card shows');
     // a member: no Billing tab, and the page never asks for billing
     role = 'human';
     const before = asked.length;
@@ -159,6 +182,6 @@ declare function settingsShow(tab: string): void;
     assert.equal(await page.locator('#settings-billing').count(), 0);
     assert.equal(asked.length, before);
     assert.deepEqual(errors, []);
-    console.log('PASS: Settings > Billing, owner and admins only, status lines, past credits, hours, statement and CSV, empty state, phone');
+    console.log('PASS: Settings > Billing, owner and admins only, status lines, past credits, hours, statement and CSV, empty state, gateway recovery link, phone');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
