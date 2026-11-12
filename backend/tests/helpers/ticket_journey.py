@@ -14,7 +14,7 @@ import re
 import sys
 import uuid
 
-from backend import never_stuck, page_verdicts
+from backend import idea_checks, never_stuck, page_verdicts
 from backend import source_actions as SA
 from backend.item_sources import github as GS
 from backend.store import H
@@ -304,6 +304,7 @@ class Company:
             GS.refresh(store, self.github)
             SA.run(store, {"github": self.github})
             page_verdicts.run(store, H.now())
+            idea_checks.run(store, H.now())  # Jev's duplicate check on ideas filed into Product's Ideas
             with store.transaction() as c:
                 never_stuck.check(c)
 

@@ -147,13 +147,20 @@ def seen(path):
 def intended(before):
     """The company as this release means to leave it: the one change an update makes on purpose. The Finance Owner sees
     the books by default, so the owner's open "Let the Finance Owner see the books" to-do is closed for them
-    (backend/bookkeeper.py grant_view) and leaves their Needs you."""
+    (backend/bookkeeper.py grant_view) and leaves their Needs you. Product's Ideas is no longer a stage tasks leave by
+    hand: an idea moves on to Spec by itself (migration ideas_say_it_once, docs/tasks.md "Product's Ideas"). Only a
+    stage still in the preset's shape is changed."""
     from backend.bookkeeper import VIEW_TITLE
 
     after = copy.deepcopy(before)
     for task in after["tasks"].values():
         if task["title"] == VIEW_TITLE and task["status"] == "open":
             task.update(status="closed", stage=task["stage"].rsplit("-", 1)[0] + "-closed", asks=[])
+    product = after.get("pipelines", {}).get("product")
+    if product:
+        product["stages"] = [
+            (name, kind, owner, 0 if name == "Ideas" else by_hand) for name, kind, owner, by_hand in product["stages"]
+        ]
     return after
 
 
