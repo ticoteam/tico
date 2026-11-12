@@ -39,7 +39,6 @@ interface Hub { url: string; state: string; token: string; facts: Record<string,
 
 // "rule | element" (a prefix is enough) -> the states it happens in and what it is.
 const ALL = ['no-computer', 'no-credit', 'setup-halfway', 'sign-off', 'bot-waiting'];
-const SET_UP = ALL.filter(state => state !== 'setup-halfway');
 const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Dead ends, reported to the lead on Nov 11 (rc.8 issue hunt, track F).
   '3 | span "BotOps has no computer"': {states: ['no-computer', 'no-credit'],
