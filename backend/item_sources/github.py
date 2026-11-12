@@ -499,8 +499,9 @@ def _nudge(conn: "sqlite3.Connection", task_ids: list[str]) -> None:
 
 def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, version: int) -> int:
     """`save_pr`, then what changed metadata causes: a queue removal's one wake, the Merge stage's own reactions
-    (metadata_changed, and the news that ends a bot's snooze there: finished checks, a merge) and a nudge of every
-    open task that links the PR. 1 when the metadata was saved, else 0."""
+    (metadata_changed, and the news that ends a bot's snooze there: finished checks, a merge), the end of a bot's
+    snooze that names this PR once it merges or closes (`named_pr_done`), and a nudge of every open task that links
+    the PR. 1 when the metadata was saved, else 0."""
     before = pr(conn, repo, number)
     if not save_pr(conn, repo, number, metadata, version):
         return 0
@@ -516,6 +517,8 @@ def save_and_settle(conn: "sqlite3.Connection", repo: str, number: int, metadata
         for row in _on_queueing_stage(conn, tasks):
             # A snoozed task does not move on: the merge ends a bot's snooze, so the nudge moves it.
             _end_bot_snooze(conn, row, f"{pr_ref(repo, number)} merged")
+    if after["state"] in ("merged", "closed") and (not before or before.get("state") != after["state"]):
+        named_pr_done(conn, repo, number, str(after["state"]))
     _nudge(conn, tasks)
     if before and before.get("head_sha") and after.get("head_sha") != before["head_sha"] and after["state"] == "open":
         review_again(conn, tasks, after)
@@ -1067,11 +1070,13 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   `tico/merge-ok` on that head turns to failure. A PR GitHub merged first stays merged ("merged anyway" note to the
 #   manager, keyed `<task>:<visit>:merged_anyway:<ref>`).
 # - History: `pr_queued` (asked again, and GitHub accepted), `pr_dequeued`, `pr_queue_removed`.
-# - A bot's snooze on the stage waits for GitHub, never for a clock time it guessed: it ends, as SYSTEM, and whoever has
-#   the turn is woken once (`snooze_news`, keyed `<task>:<visit>:merge_news:<what>`) when the checks on the newest
-#   commit of the task's PR finish, the PR starts or stops conflicting (backend/github.py), GitHub takes it out of the
-#   queue (`removed`, whose own wake it is) or merges it (the task then moves on), or the PR's base branch moves
-#   (`base_moved`). A person's snooze is never ended this way.
+# - A bot's snooze waits for GitHub, never for a clock time it guessed: it ends, as SYSTEM, and whoever has the turn is
+#   woken once (`snooze_news`, keyed `<task>:<visit>:merge_news:<what>`). On any stage of a pipeline: when the checks on
+#   the newest commit of the task's PR finish, the PR starts or stops conflicting (backend/github.py; before Merge a
+#   conflict's wake is pr_conflicts'), or a PR the snooze's reason names ("waiting for #3417") merges or closes
+#   (`named_pr_done`). On this stage also when GitHub takes the PR out of the queue (`removed`, whose own wake it is) or
+#   merges it (the task then moves on), or the PR's base branch moves (`base_moved`; elsewhere every merge into main
+#   would be noise). A person's snooze is never ended this way.
 #
 # The actions are `effects` rows (owed, done, failed, moot) of source `github`, action `queue`, item type `pr`.
 # Every function takes the caller's open write transaction and never commits, except `run`.
@@ -1083,9 +1088,10 @@ WAKE_REMOVED = "queue_removed"  # the stage owner's one wake per removal
 WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
-WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze on the Merge stage (`snooze_news`)
+WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze (`snooze_news`); the name predates other stages
 CHECKS_DONE = ("success", "failure", "skipped")
-PR_NUMBER = re.compile(r"(?<![\w/])#(\d+)\b")  # "#3417" in a snooze's reason: a PR it waits on
+# "#3417" or "owner/repo#3417" in a snooze's reason: a PR it waits on. A bare number is in the task's own repository.
+PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
 # Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
 SENT_BACK_FOR_NEW = (
@@ -1382,23 +1388,24 @@ def _end_bot_snooze(conn: "sqlite3.Connection", row: Row, why: str) -> bool:
     return True
 
 
-def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str) -> bool:
-    """GitHub news a bot's snooze on a stage that queues PRs may wait on (`what`, unique per event: the PR, its commit,
-    the new state). The snooze ends, as SYSTEM, and whoever has the turn is woken once with `lead`, instead of sleeping
-    to the clock time the bot guessed. Nothing happens to a person's snooze, a task on another stage, news that woke
-    the task already in this visit (a sweep that reads it again; a snooze set since waits for other news), or while
-    nobody but GitHub has the turn (the PR is in the merge queue). True when the task was woken."""
+def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str, same: tuple[str, ...] = ()) -> bool:
+    """GitHub news a bot's snooze on a pipeline stage may wait on (`what`, unique per event: the PR, its commit, the new
+    state). The snooze ends, as SYSTEM, and whoever has the turn is woken once with `lead`, instead of sleeping to the
+    clock time the bot guessed. The bot's snooze count in the stage stays as it was. Nothing happens to a person's
+    snooze, a task outside a pipeline, news that woke the task already in this visit (a sweep that reads it again; a
+    snooze set since waits for other news; `same` names other news that is this news, told another way), or while nobody
+    but GitHub has the turn (the PR is in the merge queue). True when the task was woken."""
     from .. import task_wakes
 
     E = _engine()
     row: Row | None = E.task(conn, task_id)
-    if not row or row["status"] != "open" or not row.get("visit") or not queues_prs(row.get("stage")):
+    if not row or row["status"] != "open" or not row.get("visit"):
         return False
     snoozed: Row = row.get("snooze") or {}
     if not E.is_bot(snoozed.get("by_id")):
         return False
-    key = f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{what}"
-    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
+    key, *others = (f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{w}" for w in (what, *same))
+    if any(conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (k,)).fetchone() for k in (key, *others)):
         return False
     if not E._turn_of(conn, {**row, "snooze": None})[0]:
         return False
@@ -1433,7 +1440,13 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
 
 def mergeable_news(conn: "sqlite3.Connection", task_id: str, ref: str, head: str, mergeable: str) -> bool:
     """GitHub says a task's PR now conflicts with its base branch, or merges cleanly again (backend/github.py reads
-    it): `snooze_news`, once per PR, commit and state."""
+    it): `snooze_news`, once per PR, commit and state. Before the Merge stage a new conflict is pr_conflicts' to tell (it
+    says how to rebase): a bot's snooze only ends here, so that wake is not held behind it, and this returns False."""
+    if mergeable == "conflict" and not queues_now(conn, task_id):
+        row: Row | None = _engine().task(conn, task_id)
+        if row and row.get("visit"):
+            _end_bot_snooze(conn, row, f"{ref} conflicts with its base branch now.")
+        return False
     if mergeable == "conflict":
         lead = f"{ref} conflicts with its base branch now."
     else:
@@ -1451,10 +1464,13 @@ def base_moved(
     merged_number: int | None = None,
 ) -> int:
     """`branch` of `repo` moved to `sha` (a merge into it, the merge queue's, a push; backend/github.py `base_moved`),
-    `merged_number` the PR that merged when that is known. For each task a bot snoozed whose open PR is based on it:
-    `snooze_news`, once per task and base commit. Not while a PR of the task is in the queue or its checks run (their
-    own news wakes it). A snooze whose reason names other PRs ("waiting for #3417 to merge") waits for one of those to
-    merge, not for any move. Returns how many were woken."""
+    `merged_number` the PR that merged when that is known. For each task a bot snoozed on the Merge stage whose open PR
+    is based on it: `snooze_news`, once per task and base commit. Not while a PR of the task is in the queue or its
+    checks run (their own news wakes it), and not on another stage, where every merge into main would wake it. A snooze
+    whose reason names other PRs ("waiting for #3417 to merge") waits for one of those (`named_pr_done`), not for any
+    move. Returns how many were woken."""
+    if merged_number is not None:
+        named_pr_done(conn, repo, int(merged_number), "merged")
     if not repo or not branch or not (sha or merged_number):
         return 0
     found = conn.execute(
@@ -1466,6 +1482,8 @@ def base_moved(
     ).fetchall()
     woken = 0
     for (task_id,) in found:
+        if not queues_now(conn, str(task_id)):
+            continue
         own = prs_of(conn, str(task_id))
         numbers = {int(p["number"]) for p in own if str(p["repo"]).lower() == repo.lower()}
         if merged_number is not None and int(merged_number) in numbers:
@@ -1474,12 +1492,47 @@ def base_moved(
         if any(f["queue_state"] in QUEUED or f["checks_state"] == "pending" for f in facts):
             continue
         snoozed = conn.execute("SELECT why FROM snoozes WHERE task_id=? AND ended_at IS NULL", (task_id,)).fetchone()
-        named = {int(n) for n in PR_NUMBER.findall(str((snoozed and snoozed[0]) or ""))} - numbers
-        if named and (merged_number is None or int(merged_number) not in named):
+        if named_prs(conn, str(task_id), str((snoozed and snoozed[0]) or "")):
             continue
         what = f"base:{repo.lower()}:{branch}:{sha or '#' + str(merged_number)}"
         merged = f"{repo}#{merged_number} merged into {branch}." if merged_number is not None else ""
-        woken += snooze_news(conn, str(task_id), what, merged or f"{branch} moved to {sha[:12]}.")
+        # The merge may have woken it already as the PR its earlier snooze named (`named_pr_done`).
+        same = (f"named:{repo.lower()}#{int(merged_number)}:merged",) if merged_number is not None else ()
+        woken += snooze_news(conn, str(task_id), what, merged or f"{branch} moved to {sha[:12]}.", same)
+    return woken
+
+
+def named_prs(conn: "sqlite3.Connection", task_id: str, why: str) -> set[tuple[str, int]]:
+    """The PRs a snooze's reason names, other than the task's own: {(repo, number)}, lower-case repo. A bare "#3417" is
+    in each repository the task has a PR in, or in any ("") when it has none."""
+    own = prs_of(conn, task_id)
+    mine = {(str(p["repo"]).lower(), int(p["number"])) for p in own}
+    repos = {repo for repo, _ in mine} or {""}
+    out: set[tuple[str, int]] = set()
+    for repo, number in PR_NAMED.findall(why):
+        out |= {(repo.lower(), int(number))} if repo else {(r, int(number)) for r in repos}
+    return out - mine
+
+
+def named_pr_done(conn: "sqlite3.Connection", repo: str, number: int, state: str) -> int:
+    """`repo`#`number` merged or was closed without merging (`state`). Each open pipeline task a bot snoozed with a
+    reason naming it ("waiting for #3417 to land") gets `snooze_news`, on any stage, once per PR and state. Returns how
+    many were woken."""
+    if not repo or state not in ("merged", "closed"):
+        return 0
+    found = conn.execute(
+        "SELECT z.task_id, z.why FROM snoozes z JOIN tasks t ON t.id = z.task_id "
+        "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status='open' AND t.pipeline_id IS NOT NULL "
+        "AND z.why LIKE ? ORDER BY z.task_id",
+        (f"%#{int(number)}%",),
+    ).fetchall()
+    ref = pr_ref(repo, number)
+    lead = f"{ref} merged." if state == "merged" else f"{ref} was closed without merging."
+    woken = 0
+    for task_id, why in found:
+        names = named_prs(conn, str(task_id), str(why or ""))
+        if (repo.lower(), int(number)) in names or ("", int(number)) in names:
+            woken += snooze_news(conn, str(task_id), f"named:{repo.lower()}#{int(number)}:{state}", lead)
     return woken
 
 
