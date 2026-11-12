@@ -6,10 +6,13 @@ type, item key). A task reaches its items through its `task_links` rows that nam
 `item_key`). The source's module (backend/item_sources) says what `fields` hold and reads them.
 
 - Newest wins. `metadata_version` is when the read or webhook that saw the metadata began, in ms. A save with an older
-  version than the row's changes nothing, so a slow read can't undo a webhook that came after it began.
+  version than the row's changes nothing, so a slow read can't undo a webhook that came after it began. Two saves at
+  the same version that say different things cannot be ordered (two webhooks GitHub stamped in the same second may
+  arrive either way round): the second is saved and the item is marked due in the same write, so the next pass reads
+  the source and the saved metadata ends at what it says.
 - `read_at` is the last word from the source. `due_at` asks for a full read on the next pass whatever the item's age
-  (`mark_due`); a save clears it. `final_at`: the item can no longer change what a task waits on (a merged or closed
-  PR), so it is not read again (a webhook still brings a change).
+  (`mark_due`); a save clears it, except the tied save above. `final_at`: the item can never change again (a merged
+  PR), so it is not read again. An item that can still change (a closed PR can be reopened) is never final.
 
 Every function takes the caller's open write transaction and never commits, except `refresh`.
 """
@@ -69,18 +72,24 @@ def save(
     title: str | None = None,
 ) -> bool:
     """Save what the source said of an item, as seen by a read or webhook that began at `version`. `fields` replaces the
-    saved fields (the source merges first). False, and nothing written, when the saved metadata is newer."""
+    saved fields (the source merges first). False, and nothing written, when the saved metadata is newer. Saved at the
+    same version as different fields, the item is also marked due: which of the two is newer is unknown, so the next
+    pass reads the source (`due_reads`)."""
     H = _h()
     now = H.now()
     old = get(conn, source, item_type, key)
     if old and int(old["metadata_version"]) > version:
         return False
-    values = (title, json.dumps(fields), version, now, (old or {}).get("final_at") or now if final else None, now)
+    text = json.dumps(fields)
+    tied = bool(old) and int(old["metadata_version"]) == version and old["fields"] != json.loads(text)
+    if tied:
+        LOG.info("equal_version_conflict %s %s %s at %s: read again on the next pass", source, item_type, key, version)
+    values = (title, text, version, now, (old or {}).get("final_at") or now if final else None, now)
     if old:
         conn.execute(
-            "UPDATE item_metadata SET title=COALESCE(?, title), fields=?, metadata_version=?, read_at=?, due_at=NULL, "
-            "final_at=?, updated_at=? WHERE id=?",
-            (*values, old["id"]),
+            "UPDATE item_metadata SET title=COALESCE(?, title), fields=?, metadata_version=?, read_at=?, final_at=?, "
+            "updated_at=?, due_at=? WHERE id=?",
+            (*values, now if tied else None, old["id"]),
         )
     else:
         conn.execute(
