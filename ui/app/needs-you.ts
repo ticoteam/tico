@@ -21,7 +21,12 @@ function needsStageCounts(): Map<string, number> {
 const needsStageCount = (stage: string): number => needsStageCounts().get(stage) || 0;
 /** Every page of Needs you, read before a stage's review walks it (a stage's items can be past the first page). */
 async function needsReadAll(): Promise<void> {
-  for (let i = 0; i < 40 && !needsAll(); i++) if (!await v2NeedsMore() && !needsAll()) break;
+  // A page refused because a whole re-read started meanwhile (a live event) is read again from that re-read, twice at
+  // most, so a walk does not start on part of the list.
+  for (let i = 0, missed = 0; i < 40 && !needsAll(); i++) {
+    if (await v2NeedsMore() || needsAll()) continue;
+    if (++missed > 2 || !await v2NeedsRead()) break;
+  }
 }
 /** One item of Needs you by id, or null. */
 const needsItem = (id: unknown): NeedsEntry | null => needsHeld().find(it => String(it.id) === String(id)) || null;

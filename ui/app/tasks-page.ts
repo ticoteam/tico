@@ -380,7 +380,13 @@ function tasksEventsPut(state: TasksPageState, events: LiveTaskEvent[]): void {
 function tasksNeedsLive(): void {
   const state = TASKS_ST;
   if (!state || !isTasksRoute(S.route) || state.archive || state.loading) return;
-  if (state.pipeline) { tasksRender(state); return; }   // a stage's ▶ and its count
+  if (state.pipeline) {   // a stage's ▶ and its count; the phone's stage tabs keep where they were scrolled to
+    const left = document.querySelector('.pv-tabs')?.scrollLeft || 0;
+    tasksRender(state);
+    const tabs = document.querySelector('.pv-tabs');
+    if (tabs) tabs.scrollLeft = left;
+    return;
+  }
   state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
   tasksRender(state);
 }
@@ -486,7 +492,7 @@ function needsRowHTML(it: NeedsEntry): string {
     + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
 /** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
-    stage's review (decide.ts). None until two walks differ from the whole list's. */
+    stage's review (decide.ts). None until a stage of a pipeline in view has items. */
 function tasksStageChipsHTML(state: TasksPageState): string {
   const counts = needsStageCounts(), total = decideCount();
   const chips: [string, string, number][] = [];

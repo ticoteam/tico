@@ -147,7 +147,7 @@ async function deepLink(browser: Browser) {
   console.log('#/decide?stage=: the stage\'s review, or its pipeline saying nothing waits: ok');
 }
 
-// Every visible control under `root` with a hit area under 44 px, and how far the page scrolls sideways.
+// Every visible control under `root` with a hit area under 44 px either way, and how far the page scrolls sideways.
 function smallTargets(page: Page, root: string) {
   return page.evaluate(sel => {
     const out: string[] = [];
@@ -156,7 +156,7 @@ function smallTargets(page: Page, root: string) {
       const r = (el.matches('input[type="checkbox"], input[type="radio"]') && el.closest('label') || el).getBoundingClientRect(), cs = getComputedStyle(el);
       if (r.width <= 2 || r.height <= 2 || cs.visibility === 'hidden' || el.closest('[hidden], .dc-bar') || el.matches('textarea')) continue;
       if (el.closest('.pv-tabs') && (r.right < 0 || r.left > innerWidth)) continue;   // a tab scrolled out of the row
-      if (r.height < 43.5) out.push(`${el.tagName.toLowerCase()}.${[...el.classList].join('.')}[${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 24)}] ${Math.round(r.width)}×${Math.round(r.height)}`);
+      if (Math.min(r.width, r.height) < 43.5) out.push(`${el.tagName.toLowerCase()}.${[...el.classList].join('.')}[${(el.getAttribute('aria-label') || el.textContent || '').trim().slice(0, 24)}] ${Math.round(r.width)}×${Math.round(r.height)}`);
     }
     return {small: out, sideways: document.documentElement.scrollWidth - innerWidth};
   }, root);

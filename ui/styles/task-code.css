@@ -66,6 +66,7 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 @media (max-width:760px){
   .prop{grid-template-columns:96px minmax(0,1fr);min-height:44px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
   .prop-v{height:44px;font-size:var(--t-md)}
+  .prop-check{min-width:44px;justify-content:center}
   .prop-x,.prop-add{width:44px;height:44px}
   .prop-vwrap .roadmap-size{height:44px}
 }

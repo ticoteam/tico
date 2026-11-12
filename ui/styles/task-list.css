@@ -435,14 +435,18 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tl-head .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
   .tl-head.s-fold .tl-search:not(:focus-within){box-shadow:none}
   .tl-head .tl-search input{height:44px}
-  .tl-pair button{min-width:40px}
+  /* the icon buttons and the folded search are 30 px wide above; a thumb needs 44 both ways */
+  .tl-head{--add-w:44px}
+  .tl-ib{width:44px}
+  .tl-head .tl-search:not(:focus-within){width:44px}
+  .tl-pair button{min-width:44px}
   .tl-pair{height:auto;min-height:44px;box-sizing:border-box}
   .tl-pair button{min-height:44px}
   /* a phone shows a pipeline one stage at a time whatever the layout: list or columns changes nothing there */
   .tl-head #task-layout{display:none}
   .tl-bar{--ctl:44px}
   .tl-chip{height:44px}
-  .tl-chip-x{width:40px}
+  .tl-chip-x{width:44px}
   .tl-ghead{height:44px}
   .tl-gtoggle,.tl-gact{height:44px}
   .tl-gact{width:44px}
