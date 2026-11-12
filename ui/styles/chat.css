@@ -407,6 +407,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
 #main.bot-chat-layout:not(.bot-split-layout) .asst-top{margin:6px 0 var(--s3)}
 /* A phone keeps a bot's messages close together; the space opens up only where the speaker changes. */
 @media (max-width:760px){
+  #main .asst-learned{display:inline-flex;min-height:40px;align-items:center}
   #pane-chat .conv-run.chat{padding:2px 0}
   #pane-chat .conv-run.chat .bubble{margin:3px 0}
   #pane-chat .conv-run.chat.from-me,#pane-chat .conv-run.chat.from-me+.conv-run.chat:not(.from-me){padding-top:10px}
