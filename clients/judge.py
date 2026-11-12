@@ -106,14 +106,15 @@ _REGISTRY_DIR_FD = os.open in os.supports_dir_fd and os.stat in os.supports_dir_
 
 # What one call may carry. TypeSafe takes up to 255 options and 10 levels, and Jev 1.13 reads
 # 32k tokens of state plus the longest question (64k for the whole call); the limits here are
-# that budget at roughly four characters a token, so an oversized call is refused before it is
-# sent. Jev has no limit on how many questions one call asks, and neither does Tico: Jev charges
+# that budget at roughly four characters a token, less about 6% for text that takes more tokens
+# per character (code, JSON, non-Latin scripts), so an oversized call is split or refused before
+# it is sent. Jev has no limit on how many questions one call asks, and neither does Tico: Jev charges
 # for what it reads, so every question about one state goes in one call (`split` makes more only
 # when the questions do not fit beside the state). The rest are ours.
 MAX_OPTIONS = 255
 MIN_LEVELS, MAX_LEVELS = 2, 10
 MAX_STATE_CHARS = 120_000
-MAX_CALL_CHARS = 256_000  # the state and every question, as sent
+MAX_CALL_CHARS = 240_000  # the state and every question, as sent
 MAX_INSTRUCTIONS = 8_000
 MAX_LABEL = 80
 TIMEOUT = 20
