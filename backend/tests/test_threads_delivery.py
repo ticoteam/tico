@@ -580,7 +580,8 @@ def test_a_busy_root_never_keeps_later_roots_waiting_run_after_run(api, monkeypa
         thread_retention.sweep(store)
     for thread_id in quiet:
         assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", thread_id) == []
-    assert rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", busy)
+    # the busy root took its batch too, and keeps the rest for its next turn
+    assert len(rows(api, "SELECT 1 FROM messages WHERE conversation_id=? AND deleted_at IS NULL", busy)) == 10
 
 
 def test_a_purge_sends_no_tombstone_and_nothing_not_yet_sent_to_an_outside_destination(api):
