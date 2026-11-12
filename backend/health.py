@@ -2358,8 +2358,8 @@ def _named_lines(lines, most=5):
 def _fallback_lines(c, settings, on, carrying):
     """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
     each row as `line`; and the summary for Health: those lines, or one line when every bot whose turns carry
-    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, with a line for
-    any other bot in `on`."""
+    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, naming those
+    bots (at most five), with a line for any other bot in `on`."""
     from .shared_bots import follow
 
     if not on:
@@ -2398,8 +2398,16 @@ def _fallback_lines(c, settings, on, carrying):
         models = sorted({_ran_on_words(row) for row in group})
         unsigned = sorted({row["waiting_for_sign_in"] for row in group})
         names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
+        # Name the bots counted: a bot whose turns ran on what it is set to carries no `waiting_for_sign_in`, so the
+        # group is not every bot on the team.
+        who, more = [_bot_name(c, row["bot"]) for row in group[:5]], len(group) - 5
+        who = (
+            ", ".join(who[:-1]) + " and " + who[-1]
+            if more <= 0
+            else ", ".join(who) + f" and {more} more bot{'s' if more != 1 else ''}"
+        )
         summary = (
-            f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
+            f"{who} run on {' or '.join(models)}, not the models they are set to: their computers have no {names} "
             "subscription."
         )
         rest = _named_lines([row["line"] for row in on if row["bot"] not in carrying])
