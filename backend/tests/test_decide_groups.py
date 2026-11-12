@@ -136,3 +136,44 @@ def test_the_grouped_call_names_each_item_in_its_questions_and_keeps_their_wordi
     text = questions["item2__fit"]["instructions"]
     assert text.startswith("About item2 only") and text.endswith(QUESTIONS["fit"]["instructions"])
     J.validate(state, questions, "x")
+
+
+class Hub:
+    """The hub's decisions route as the real client reads it (`J.through_hub`): one item's answers left out of a
+    grouped call, every answer present otherwise."""
+
+    def __init__(self, drop):
+        self.drop, self.bodies = drop, []
+
+    def post(self, path, body):
+        self.bodies.append(body)
+        state, questions = body["state"], body["questions"]
+        parts = DG.split(state, questions)
+        if parts is None:
+            return {"model": "jev", "answers": {q: {"noul": state["score"]} for q in questions}}
+        answers = {
+            key: {"noul": one["score"]} for _, one, mine in parts if one["n"] != self.drop for key in mine.values()
+        }
+        return {"model": "jev", "answers": answers}
+
+
+def test_through_the_real_client_one_missing_answer_asks_only_that_item_again():
+    """AC-9 with the real transport, which checks the whole answer map: within a grouped call it keeps the answers that
+    are there, so the nine answered items keep theirs and only the tenth is asked again."""
+    hub = Hub(drop=3)
+    client = J.through_hub(hub)
+
+    def metered(state, questions, label=None):  # the server's meter adds what each call cost
+        return {**client(state, questions, label), "cost_usd": 0.1 if DG.split(state, questions) else 0.01}
+
+    replies, _ = DG.ask(metered, items(10), "x")
+    assert len(hub.bodies) == 2 and hub.bodies[1]["state"]["n"] == 3
+    assert nouls(replies) == [n / 100 for n in range(10)]
+    assert replies[3]["cost_usd"] == pytest.approx(0.01 + 0.01), "its share of the grouped call and its own call"
+    assert sum(r["cost_usd"] for r in replies) == pytest.approx(0.1 + 0.01)
+
+
+def test_outside_a_grouped_call_the_client_still_refuses_a_missing_answer():
+    with pytest.raises(J.JudgeError) as refused:
+        J.check_answers({}, QUESTIONS)
+    assert refused.value.code == "shape"

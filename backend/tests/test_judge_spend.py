@@ -188,6 +188,7 @@ class Paid:
 def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypatch):
     """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
     from backend import learnings as L
+    from backend import listening as listening_module
     from backend.listening import run_pass
     from backend.tests.helpers.automation_runs import sql
     from backend.tests.helpers.listening import FakeJudge as Listener, item, listening, save, source_id
@@ -208,9 +209,12 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
     save(api, source_id(api, made["id"]), [item(n, f"A post about standups, number {n} [r0]") for n in range(12)])
     jev = Paid(0.6, Listener())
     spend(api, -0.6)  # back to $0.50, so the pass starts
+    monkeypatch.setattr(listening_module, "GROUP", listening_module.DG.MOST)
     run_pass(store, None, jev)
     rows = sql(api, "SELECT status, count(*) AS n FROM listening_items GROUP BY status")
     assert {r["status"]: r["n"] for r in rows} == {"kept": 10, "new": 2} and len(jev.calls) == 1
+    # The posts the cap stopped are free for the next pass at once, not after the claim times out.
+    assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
     with store.read() as c:
         assert B.spent_this_month(c) == pytest.approx(1.1)
 

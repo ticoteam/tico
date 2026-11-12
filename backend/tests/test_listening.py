@@ -310,7 +310,8 @@ def test_posts_waiting_on_a_listening_that_is_off_still_expire(api):
     assert statuses(api, aid) == {"expired": 1}
 
 
-def test_two_passes_at_once_score_no_post_twice(api):
+def test_two_passes_at_once_score_no_post_twice(api, monkeypatch):
+    monkeypatch.setattr(L, "GROUP", L.DG.MOST)
     aid, source = started(api, rules=[KEEP])
     saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(5)])
     store = api.app.state.store

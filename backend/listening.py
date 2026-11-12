@@ -52,7 +52,9 @@ MAX_SCORE = 50  # items scored in one pass
 CLAIM_MINUTES = 10  # a claim older than this is free again: its pass was cut off
 MAX_TRIES = 3
 MAX_ERRORS = 3  # failed posts in one pass before the rest wait for the next
-GROUP = DG.MOST  # posts asked about in one call (backend/decide_groups.py); 1 asks one post per call
+# Posts asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 YES = 0.75  # a rule holds at this score
 COPY_DAYS = 30  # the copy check's window
 COPY_COMPARISONS = 2_000
@@ -753,9 +755,9 @@ def score(store, row, flow, now, primary=None, left=None):
                         _decided(c, item["id"], now, status, tag, value, float(reply.get("cost_usd") or 0), claimed=now)
                         out["scored"] += 1
             if stop or not still:
-                release([waiting[n][1] for n in range(run[-1] + 1, len(waiting))] + ordered[rest:])
-                if not still:
-                    release([waiting[n][1] for n in run])
+                # This call's own posts too: one stopped by the spend cap (no try counted) or not written is free at
+                # once, not after CLAIM_MINUTES. A post already decided is no longer `new`, so it is left as it is.
+                release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
                 return False
         return True
 

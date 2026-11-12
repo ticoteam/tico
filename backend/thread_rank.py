@@ -29,7 +29,9 @@ DEFAULT = 5  # a thread no pass has ranked yet
 NOISE = 1  # this level and below never list in Important
 RUN_SECONDS = 300
 CALLS_PER_PASS = 20  # threads a pass ranks at most
-GROUP = DG.MOST  # threads asked about in one call (backend/decide_groups.py); 1 asks one thread per call
+# Threads asked about in one call (backend/decide_groups.py). One until the replay through real Jev shows grouped
+# verdicts match the ones given alone (no more than 2 in 100 changed); then DG.MOST.
+GROUP = 1
 CALLS_PER_HOUR = 40
 DAILY_SHARE = 0.8  # ranking stops once the server's Decide calls today reach this share of the daily cap
 RERANK_SECONDS = 3600  # a thread is ranked again at most this often

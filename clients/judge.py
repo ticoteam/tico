@@ -448,30 +448,56 @@ def check_evidence(value):
     return {"summary": value["summary"][:EVIDENCE_SUMMARY], "findings": findings}
 
 
+_PARTIAL = contextvars.ContextVar("tico_judge_partial", default=False)
+
+
+@contextlib.contextmanager
+def partial_answers():
+    """Within it, `check_answers` keeps the answers that are there and in shape and leaves the rest out, instead of
+    refusing the whole map. A call about several items (backend/decide_groups.py) checks each item's answers itself,
+    so one item's missing answer is that item's, not the call's: the others keep theirs and it alone is asked again."""
+    token = _PARTIAL.set(True)
+    try:
+        yield
+    finally:
+        _PARTIAL.reset(token)
+
+
 def check_answers(answers, questions):
     """Every question answered, in its type's shape; anything else is `JudgeError("shape")`. Returns the answers rebuilt
     from what each type answers (`_project`): only the questions asked, only their fields, so nothing else a provider
-    sent (an extra answer, an extra field, text) reaches the caller."""
+    sent (an extra answer, an extra field, text) reaches the caller. Within `partial_answers` a missing or malformed
+    answer is left out rather than refused."""
     if not isinstance(answers, dict):
         raise JudgeError("shape", "answers is not a map")
+    kept = {}
     for qid, q in questions.items():
-        a = answers.get(qid)
-        if not isinstance(a, dict):
-            raise JudgeError("shape", f"{qid}: no answer")
-        kind = q["type"]
-        if kind == "choice":
-            if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
-                raise JudgeError("shape", f"{qid}: choice is not one of the options")
-            if not _bounded(a.get("confidence"), 0, 1):
-                raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
-        if kind == "score":
-            if not _bounded(a.get("score"), 0, len(q["criteria"]) - 1):
-                raise JudgeError("shape", f"{qid}: score is outside its levels")
-            if not _bounded(a.get("confidence"), 0, 1):
-                raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
-        if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
-            raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
-    return {qid: _project(answers[qid], q) for qid, q in questions.items()}
+        try:
+            _check_answer(answers.get(qid), q, qid)
+        except JudgeError:
+            if _PARTIAL.get():
+                continue
+            raise
+        kept[qid] = q
+    return {qid: _project(answers[qid], q) for qid, q in kept.items()}
+
+
+def _check_answer(a, q, qid):
+    if not isinstance(a, dict):
+        raise JudgeError("shape", f"{qid}: no answer")
+    kind = q["type"]
+    if kind == "choice":
+        if not isinstance(a.get("choice"), str) or a["choice"] not in q["criteria"]:
+            raise JudgeError("shape", f"{qid}: choice is not one of the options")
+        if not _bounded(a.get("confidence"), 0, 1):
+            raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
+    if kind == "score":
+        if not _bounded(a.get("score"), 0, len(q["criteria"]) - 1):
+            raise JudgeError("shape", f"{qid}: score is outside its levels")
+        if not _bounded(a.get("confidence"), 0, 1):
+            raise JudgeError("shape", f"{qid}: confidence is not in [0,1]")
+    if kind == "noul" and not _bounded(a.get("noul"), 0, 1):
+        raise JudgeError("shape", f"{qid}: noul is not in [0,1]")
 
 
 def _project(answer, question):

@@ -13,9 +13,10 @@ kept at one item per call (`size=1`) asks as it did before grouping.
 
 What comes back:
 - every answer is read back under its own item's names only, so an item never gets another item's answer;
-- an item whose answers are missing or malformed is asked again on its own (`retry`); when the grouped call itself
-  comes back unreadable (`shape`, which a transport raises when any one answer is missing), each item is asked again
-  on its own;
+- an item whose answers are missing or malformed is asked again on its own, carrying its share of the grouped call's
+  cost besides its own call's; the grouped call is made within `J.partial_answers`, so a transport keeps the answers
+  that are there rather than refusing the whole map for one missing answer. A grouped answer that cannot be read at
+  all (`shape`) asks each item again on its own;
 - any other failure of the grouped call (a timeout, the spend cap, a refused key) is each item's failure, as if its
   own call had failed: the pass handles it per item as it always did (a try, a wait, or a person);
 - an item the contract refuses on its own (`J.validate`) gets that refusal and is sent in no call.
@@ -199,7 +200,9 @@ def ask_run(
             error, sent = exc, False
         if sent:
             try:
-                result = dict(engine(state, questions, label) or {})
+                # Each item's answers are checked below, on their own: one missing answer is not the whole call's.
+                with _J.partial_answers():
+                    result = dict(engine(state, questions, label) or {})
             except Exception as exc:  # noqa: BLE001 - the group's failure is each item's, below
                 error = exc
         code: Any = getattr(error, "code", None)
@@ -232,7 +235,10 @@ def ask_run(
                 call.answers.append(own)
                 replies[n] = {**meta, "answers": own, "cost_usd": share, "grouped": len(fine)}
             for n in again:
-                replies[n] = _alone(engine, items[n], label, where[n], calls)
+                reply = _alone(engine, items[n], label, where[n], calls)
+                if isinstance(reply, dict):  # its share of the grouped call was paid too
+                    reply = {**reply, "cost_usd": round(float(reply.get("cost_usd") or 0) + share, 6)}
+                replies[n] = reply
             if not call.items:  # every item asked again: the call still happened and was paid
                 call.items = [where[n] for n in fine]
                 call.answers = [{} for _ in fine]

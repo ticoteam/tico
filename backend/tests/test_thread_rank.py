@@ -181,8 +181,9 @@ def test_a_level_that_moves_tells_the_lists(api):
     assert ranked() == 1, "the same level is no change"
 
 
-def test_ten_threads_are_ranked_in_one_call_and_audited_as_one(api):
+def test_ten_threads_are_ranked_in_one_call_and_audited_as_one(api, monkeypatch):
     """AC-8 for thread ranking: ten small threads, one call, each thread its own level."""
+    monkeypatch.setattr(TR, "GROUP", DG.MOST)
     store = api.app.state.store
     made = [new_thread(api, title=f"Topic {n}", members=("human:ben",), body=f"Note {n}") for n in range(10)]
     model = FakeDecide(level=7)
