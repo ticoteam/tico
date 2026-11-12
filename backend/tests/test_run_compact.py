@@ -151,3 +151,22 @@ def test_a_reply_of_a_bot_under_org_rules_is_sent_and_read_by_nobody_until_deliv
 
 def test_the_stream_takes_output_full_or_compact_only(api):
     assert api.get("/api/v2/events?output=everything", headers=headers()).status_code == 422
+
+
+def test_a_compact_stream_behind_on_large_outputs_catches_up_in_one_read(api):
+    """A compact stream is sent none of a step's payload, so one read is not cut to READ_BYTES of stored output."""
+    r, msg, aid, after = started_run(api)
+    write(api, r, aid, *[(n, "tool", {"output": "v" * 100_000}) for n in range(1, 6)])
+    compact, _, more = read_once(api, "ana-test", after, True, None, E.BATCH)
+    assert [d["output"]["seq"] for _, d, _ in compact if "output" in d] == [1, 2, 3, 4, 5] and not more
+    full, _, more = read_once(api, "ana-test", after, False, None, E.BATCH)
+    assert more and len([d for _, d, _ in full if "output" in d]) < 5  # the whole steps still wait for later reads
+
+
+def test_a_compact_step_counts_its_size_in_utf8_bytes(api):
+    r, msg, aid, after = started_run(api)
+    write(api, r, aid, (1, "tool", {"output": "é" * 1000}))
+    [small] = [d for _, d, _ in read(api, "ana-test", after, True)[0] if "output" in d]
+    with api.app.state.store.read() as c:
+        stored = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? AND seq=1", (aid,)).fetchone()[0]
+    assert small["output"]["bytes"] == len(stored.encode()) > len(stored)

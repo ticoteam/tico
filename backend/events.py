@@ -2556,7 +2556,11 @@ def _step_output(event, compact, shown):
     """A run step as a `runs` event's `output`: the whole stored step, or its compact signal (still truthy). `shown` is
     what `_step_shown` gave for it."""
     if compact:
-        return {**{key: event[key] for key in COMPACT_STEP}, "bytes": len(event["payload"] or ""), "compact": True}
+        return {
+            **{key: event[key] for key in COMPACT_STEP},
+            "bytes": len((event["payload"] or "").encode()),
+            "compact": True,
+        }
     (decoded,) = shown
     event = dict(event)
     stored = event.pop("payload")
@@ -2820,14 +2824,15 @@ class _Snapshot:
         return _change_rows(self.c, clauses, args, limit)
 
 
-def _within_budget(c, rows):
+def _within_budget(c, rows, compact_runs=False):
     """The leading `rows` whose events one read can send, decided before any is checked or built, so a reader behind
     on large run outputs has only what READ_BYTES carries prepared, not the whole batch on every read. A run output
     counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
     or task still relies on read_in's final byte cut. The first row always goes, however large; a row
-    this viewer may not see still counts, as its size is known before its check."""
+    this viewer may not see still counts, as its size is known before its check. A stream that asks for compact run
+    steps is sent none of a step's payload, so no step is sized for it."""
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
-    if not outputs:
+    if not outputs or compact_runs:
         return rows
     sizes, looked, spent = {}, 0, 0
     for n, row in enumerate(rows):
@@ -2965,7 +2970,7 @@ def read_in(
         who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places
     )
     more = len(rows) >= limit
-    kept = _within_budget(c, rows)
+    kept = _within_budget(c, rows, compact_runs)
     if len(kept) < len(rows):  # the rest are neither checked nor built here: the next read starts at them
         rows, more = kept, True
     cursor = rows[-1]["seq"] if more else newest

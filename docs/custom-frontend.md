@@ -292,8 +292,8 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
 - **Small run steps.** `output=compact` sends each run step's `output` as `{"id", "attempt_id", "seq", "kind",
   "created_at", "bytes", "compact": true}` instead of its contents, however large the step (Tico's own pages ask for it).
   Read a step whole when you need it: `GET /api/v2/runs/{run_id}/steps/{seq}` gives `{"output": ...}`, the step as the
-  stream would have sent it, or `404` if the stream would not have sent it to you. Without `output` (or with
-  `output=full`) the stream sends each step whole, as above.
+  stream would have sent it, or `404` if the stream would not have sent it to you; a bot's token gets `403`. Without
+  `output` (or with `output=full`) the stream sends each step whole, as above.
 - **A live reply.** On a `messages` or `runs` event for the open thread, read `GET /api/v2/conversations/{id}/snapshot`
   again (one read at a time; fold a burst into one). Its `execution.text` is **the reply so far** while
   `execution.state` is `leased` or `running`; when the run completes, the final message is in `messages`. `execution.parts`
