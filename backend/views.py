@@ -23,6 +23,7 @@ from . import changelog as CL
 from . import releases
 from . import visuals
 from . import app_delivery, login_holds, needs_lane, providers, runner_versions, runs
+from .runs import LIVE as LIVE_RUN_STATES
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import bot_rows, bot_stops, run_triggers
@@ -2466,6 +2467,8 @@ def install_views(app, store, auth, mutate, task_view):
         started, finished = H.parse_ts(turn.get("started_at")), H.parse_ts(turn.get("finished_at"))
         duration = max(0, round((finished - started).total_seconds())) if started and finished else None
         success = turn.get("exit") == "completed"
+        # A live run (runs.LIVE) has no result yet: no exit code and no finished time, not a failure ending at its start.
+        live = turn.get("state") in LIVE_RUN_STATES
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
         return {
@@ -2480,8 +2483,8 @@ def install_views(app, store, auth, mutate, task_view):
                 k: turn.get(k)
                 for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")
             },
-            "finished_at": turn.get("finished_at") or turn.get("started_at"),
-            "exit": 0 if success else 1,
+            "finished_at": None if live else turn.get("finished_at") or turn.get("started_at"),
+            "exit": None if live else 0 if success else 1,
             "duration_s": duration,
             "output_tokens": turn.get("output_tokens"),
             "cost_usd": turn.get("est_cost_usd"),

@@ -65,7 +65,6 @@ interface RanOn {
 /** One run as the Runs and Access tables read it (GET runs, ui/app/task-runs.ts). */
 interface RunRow {
   id?: string | null;
-  run?: string | null;
   employee?: string | null;
   state?: string;
   outcome?: string | null;
@@ -85,6 +84,9 @@ const ranOn = (made: RanOn | null | undefined, effort = true): string => [...new
 const ranOnNote = (made: RanOn | null | undefined): string => ((made || {}).task_model || {}).note || '';
 // A run that failed or whose lease ran out (run.state, docs/status-and-state.md Runs): its reason shows with it.
 const runUnfinished = (r: RunRow): boolean => typeof r.state === 'string' && ['failed', 'expired'].includes(r.state);
+// A run still going (runs.LIVE: leased, running, input): GET /runs gives it no exit and no finished time yet.
+const runLive = (r: RunRow): boolean => typeof r.state === 'string' && ['leased', 'running', 'input'].includes(r.state);
+const RUN_LIVE_PILL = '<span class="pill in-progress">Running</span>';
 // A failed run offers Report this: Support opens with it attached (ui/support.ts).
 function runsReportHTML(r: RunRow, icon = false) {
   if (!window.supportOn?.() || !window.reportThisHTML) return '';
@@ -96,11 +98,11 @@ function runsTable(list: RunRow[], showEmp = true) {
   if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="scroll"><table><tr>${showEmp ? '<th>Bot</th>' : ''}<th>Finished</th><th>Result</th><th>Duration</th><th>Cost</th><th>Model</th><th>Picked up</th><th></th></tr>
   ${list.map(r => `<tr>${showEmp ? `<td>${empChip(r.employee)}</td>` : ''}
-    <td class="muted tnum">${ago(r.finished_at)}</td><td>${runUnfinished(r) ? `<span class="pill fail">${esc(r.outcome)} run</span><div class="mono muted">${esc(r.id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
+    <td class="muted tnum">${ago(r.finished_at)}</td><td>${runLive(r) ? RUN_LIVE_PILL : runUnfinished(r) ? `<span class="pill fail">${esc(r.outcome)} run</span><div class="mono muted">${esc(r.id)}</div>${r.failure_reason ? `<div class="muted">${esc(r.failure_reason)}</div>` : ''}${runsReportHTML(r)}` : r.exit === 0 ? '<span class="pill ok">Done</span>' : `<span class="pill fail">${esc(r.outcome || `exit ${r.exit}`)}</span>${runsReportHTML(r)}`}</td>
     <td class="tnum">${r.duration_s != null ? Math.round(r.duration_s/60) + 'm ' + (r.duration_s%60) + 's' : ''}</td>
     <td class="tnum">${r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : (r.output_tokens != null ? r.output_tokens.toLocaleString() + ' tokens out' : '')}</td>
     <td class="mono muted" title="${esc(ranOnNote(r.ran_on) || 'the model that actually ran it, which a fallback changes')}">${esc(ranOn(r.ran_on))}${(r.ran_on?.task_model || {}).source === 'fallback' ? ` <span class="pill waiting" title="${esc(ranOnNote(r.ran_on))}">task model off</span>` : ''}</td>
-    <td>${r.fallback ? `<span class="pill waiting" title="ran on the fallback harness after the primary was unavailable">${esc(r.fallback)}</span>` : r.resumed ? 'Where it left off' : 'From the start'}</td><td><a href="${API}/runs/${r.run}/log" target="_blank" rel="noopener">Log</a></td></tr>`).join('')}</table></div>`;
+    <td>${r.fallback ? `<span class="pill waiting" title="ran on the fallback harness after the primary was unavailable">${esc(r.fallback)}</span>` : r.resumed ? 'Where it left off' : 'From the start'}</td><td><a href="${API}/runs/${encodeURIComponent(r.id || '')}/log" target="_blank" rel="noopener">Log</a></td></tr>`).join('')}</table></div>`;
 }
 
 // ----------------------------------------------------------------- access card

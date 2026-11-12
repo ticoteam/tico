@@ -201,7 +201,6 @@ async function settingsLogCsv(button: HTMLButtonElement, filters: URLSearchParam
 // One run as GET /runs lists it (backend/runs.py): the bot's own Runs card keeps runsTable (ui/app/issues.ts).
 interface HistoryRun {
   id?: string | null;
-  run: string;
   employee: string;
   state: string;
   exit: number | null;
@@ -236,20 +235,20 @@ function settingsRunsHTML(list: HistoryRun[]) {
   if (!list.length) return `<div class="empty">No runs yet.</div>`;
   return `<div class="runs-list"><div class="run-row run-head"><span>Bot</span><span>Result</span><span>Model</span><span>Took</span><span>Cost</span><span>Finished</span><span></span></div>
     ${list.map(r => {
-      const unfinished = runUnfinished(r), ok = !unfinished && r.exit === 0;
+      const live = runLive(r), unfinished = runUnfinished(r), ok = !unfinished && r.exit === 0;
       // A failed or expired run reads its outcome alone; its id is in the pill's tooltip.
       const result = ok ? 'Done' : r.outcome || `exit ${r.exit}`;
       const why = unfinished ? r.failure_reason || '' : '';
       const cost = r.cost_usd != null ? '$' + r.cost_usd.toFixed(2) : r.output_tokens != null ? `${settingsRunTokens.format(r.output_tokens)} out` : '';
       return `<div class="run-row">
         <span class="run-bot">${empChip(r.employee)}</span>
-        <span class="run-result"><span class="pill ${ok ? 'ok' : 'fail'}"${unfinished ? ` title="${esc(`Run ${r.id || ''}`.trim())}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r, true)}</span>
+        <span class="run-result">${live ? RUN_LIVE_PILL : `<span class="pill ${ok ? 'ok' : 'fail'}"${unfinished ? ` title="${esc(`Run ${r.id || ''}`.trim())}"` : ''}>${esc(result)}</span>${ok ? '' : runsReportHTML(r, true)}`}</span>
         <span class="run-model">${why ? `<span class="run-why" title="${esc(why)}">${esc(why)}</span>` : ''}<span class="mono" title="The model that did the work; a fallback changes it">${esc(ranOn(r.ran_on))}</span>${r.fallback
           ? `<span class="pill waiting" title="Ran on the fallback after the primary was unavailable">${esc(r.fallback)}</span>` : ''}${r.resumed ? '<span class="run-tag" title="Picked up where it left off">resumed</span>' : ''}</span>
         <span class="run-took tnum">${settingsRunTook(r.duration_s)}</span>
         <span class="run-cost tnum">${cost}</span>
         <span class="run-when tnum" title="${esc(fmt(r.finished_at))}">${esc(ago(r.finished_at))}</span>
-        <a class="run-log" href="${API}/runs/${encodeURIComponent(r.run)}/log" target="_blank" rel="noopener">Log</a></div>`;
+        <a class="run-log" href="${API}/runs/${encodeURIComponent(r.id || '')}/log" target="_blank" rel="noopener">Log</a></div>`;
     }).join('')}</div>`;
 }
 async function renderSettingsRuns() {

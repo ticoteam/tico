@@ -250,6 +250,23 @@ def test_run_windows_include_failed_runs_and_hide_private_rooms(api):
     assert "expired attempt" in issue["text"] and "last 24 hours" in issue["text"]
 
 
+def test_runs_list_shows_a_live_run_as_unfinished(api):
+    # A run still going has no result yet: GET /api/runs gives it no exit code and no finished time, so the Runs lists
+    # do not draw it as a failure that ended when it started.
+    r, _, attempt = setup_attempt(api)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "live-turn"}, token=r["token"])
+    for state in ("running", "leased", "input"):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET state=? WHERE id=?", (state, attempt["id"]))
+        run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["id"] == attempt["id"])
+        assert (run["state"], run["exit"], run["finished_at"]) == (state, None, None)
+    # Once it ends, it reads as before: a failure is exit 1 with its finished time.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='failed',finished_at=? WHERE id=?", (H.now(), attempt["id"]))
+    run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["id"] == attempt["id"])
+    assert run["state"] == "failed" and run["exit"] == 1 and run["finished_at"]
+
+
 def test_busy_bot_stays_out_of_claims_after_lease_expiry(api):
     r, _, first = setup_attempt(api)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "live-turn"}, token=r["token"])
