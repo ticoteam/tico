@@ -241,10 +241,54 @@ def test_after_the_yes_thanks_changes_nothing_and_stop_halts_the_rest(api):
 
 
 def test_the_stop_words_halt_and_a_yes_that_opens_with_no_does_not():
-    for words in ("stop", "Stop!", "wait", "hold on", "cancel that", "no", "don't save the rest", "never mind"):
+    for words in (
+        "stop",
+        "Stop!",
+        "wait",
+        "hold on",
+        "cancel that",
+        "no",
+        "don't save the rest",
+        "never mind",
+        # A stop anywhere in the message, as a voice transcript gives it.
+        "please stop",
+        "ok stop",
+        "actually, wait",
+        "hang on",
+        "hold up",
+        "that is wrong, stop",
+    ):
         assert GR.halts(words), words
-    for words in ("thanks", "no problem", "no worries, thanks", "great", "what about Support?"):
+    for words in ("thanks", "no problem", "no worries, thanks", "great", "what about Support?", "Now the next one"):
         assert not GR.halts(words), words
+
+
+def test_a_stop_cited_as_the_yes_saves_nothing(api):
+    # A message that would halt the saves after the yes is not a yes either.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set a goal for Ops")
+    step = read_back(api, attempt, NEW_GOAL)["changes"][0]["steps"][0]
+    for words in ("wait", "ok stop", "no, make it 50"):
+        attempt = reply(api, r, attempt, words)
+        refused = save(api, attempt, step, expected=403)["error"]
+        assert refused["code"] == "not_agreed", words
+    assert [g for g in get(api, "goals?all=true")["goals"] if g["title"] == NEW_GOAL["title"]] == []
+
+
+def test_after_a_yes_by_number_only_a_yes_by_number_saves_more_of_that_plan(api):
+    # A later "thanks" or "ok" cited as agreement does not widen a yes to some: the Assistant reads back what is left.
+    strategy_bot(api)
+    r, attempt = turn(api, "assistant", "ana-test", "Set three goals for Ops")
+    plan = [{"kind": "goal_create", "title": f"Ops goal {i}", "owner": "ops"} for i in (1, 2, 3)]
+    steps = [ch["steps"][0] for ch in read_back(api, attempt, *plan)["changes"]]
+    attempt = reply(api, r, attempt, "yes to 1 and 3")
+    save(api, attempt, steps[0])
+    save(api, attempt, steps[2])
+    attempt = reply(api, r, attempt, "ok thanks")
+    refused = save(api, attempt, steps[1], expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "by number" in refused["detail"]
+    attempt = reply(api, r, attempt, "yes to 2")
+    save(api, attempt, steps[1])
 
 
 def test_a_plan_stands_past_thirty_minutes(api):

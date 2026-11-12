@@ -78,6 +78,9 @@ saves all of it:
 - **Yes to 1 and 3** saves only changes 1 and 3.
 - **Yes except 2** saves every change but number 2.
 
+After a yes to some, the Assistant reads back what is left before it saves any more of it. A reply that stops or changes
+the plan, such as "wait" or "no, make it 50", is never taken as the yes.
+
 A question or a "thanks" before your yes keeps the plan: the Assistant answers, and your later yes saves it without
 reading it back again. Asking for a change makes a new read-back, which replaces the old one; nothing is saved until you
 agree to the changed plan. The plan does not expire. Once you agree, everything agreed is saved and the Assistant replies

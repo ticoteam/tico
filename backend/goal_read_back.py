@@ -173,7 +173,7 @@ def agreed(words, count):
 
 def halts(words):
     """Whether the owner's message after their yes stops the saves not yet made (`_STOP`)."""
-    return bool(_STOP.match(" ".join(str(words or "").split())))
+    return bool(_STOP.search(" ".join(str(words or "").split())))
 
 
 def not_agreed(detail):
@@ -236,6 +236,22 @@ def answered(c, who, cited):
         raise not_agreed("The owner's message is not a reply to a goal read-back")
     if _newest_read_back(c, room, who.task_actor, at, after=True):
         raise not_agreed("A newer read-back replaced the one the owner agreed to")
+    if halts(msg.get("body")):
+        raise not_agreed("The owner's reply stops or changes the plan; it is not a yes")
+    numbered = lambda body: bool(SOME.fullmatch(body) or EXCEPT.fullmatch(body))
+    words = " ".join(str(msg.get("body") or "").split())
+    if not numbered(words):
+        back_at = str(back["created_at"])
+        for said in c.execute(
+            "SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND created_at<? "
+            "AND id<>? AND deleted_at IS NULL",
+            (room, who.actor, back_at, at, cited),
+        ):
+            if numbered(" ".join(str(said["body"] or "").split())):
+                raise not_agreed(
+                    "The owner said yes to some of this read-back by number; read back what is left and save on "
+                    "their yes to it"
+                )
     for later in c.execute(
         "SELECT body FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>? AND id<>? "
         "AND deleted_at IS NULL ORDER BY created_at",
@@ -270,11 +286,11 @@ _BARE_NO = re.compile(
 )
 
 
-# A stop from the owner after their yes: a safe failure when read too widely (the Assistant asks), so it is broad. A
-# reply that opens with "no" but means yes ("no problem", "no worries") is not one.
+# A stop from the owner, anywhere in their message ("ok stop", "actually, wait"): a safe failure when read too widely
+# (the Assistant reads back what is left), so it is broad. "No problem" and "no worries" are not one.
 _STOP = re.compile(
-    rf"\s*(?!{_NO_YES})(?:stop|halt|cancel|abort|pause|wait|hold\s+(?:on|off|it)|never\s*mind|nevermind|"
-    r"no|nope|nah|don'?t|do not)\b",
+    rf"\b(?!{_NO_YES})(?:stop|halt|cancel|abort|pause|wait|hold\s+(?:on|off|it|up)|hang\s+on|never\s*mind|"
+    r"nevermind|no|nope|nah|don'?t|do not)\b",
     re.I,
 )
 
