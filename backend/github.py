@@ -488,6 +488,10 @@ def base_moved(c, repo, branch, sha="", *, default_branch="", merged_number=None
         detail["recheck"] = {"sha": sha, "at": now, "due": now, "tries": 0}
         c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         marked += 1
+    from .item_sources import github as GS
+
+    # A bot snoozed on the Merge stage may wait for this move ("until #3417 merges"): it is woken now.
+    GS.base_moved(c, repo, branch, sha, default_branch=default_branch, merged_number=merged_number)
     return marked
 
 
@@ -768,6 +772,9 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             _queue_event(detail, action, payload, pr, detail.get("head_sha") or "")
         conflict_head = detail.get("head_sha") or "unknown"
         conflict_wake = mergeable == "conflict" and detail.get("conflict_head") != conflict_head
+        # A commit that starts conflicting, or stops at the same commit (its base moved again): news on the Merge stage,
+        # where it ends a bot's snooze (item_sources/github.py `mergeable_news`). Clean after a new commit is the push's.
+        mergeable_moved = conflict_wake or (mergeable == "clean" and detail.get("conflict_head") == conflict_head)
         if mergeable == "conflict":
             detail["conflict_head"] = conflict_head
         elif mergeable == "clean":
@@ -816,6 +823,12 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             )
         if wake_once:
             queue_wake(c, task, detail["wake_once_fired"]["item"])
+        if mergeable_moved and match:
+            from .item_sources import github as GS
+
+            ref = GS.pr_ref(f"{match.group(1)}/{match.group(2)}", int(match.group(3)))
+            if GS.mergeable_news(c, task["id"], ref, str(detail.get("head_sha") or ""), mergeable):
+                conflict_wake = False  # that wake says it: no second one from the burst
         if conflict_wake and match:
             from . import pr_conflicts
 

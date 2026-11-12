@@ -16,6 +16,7 @@ from backend import never_stuck as NS
 from backend import task_engine as E
 from backend.item_sources import github as F
 from backend import task_requirements as R
+from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.fake_github import FakeGitHub
@@ -1339,3 +1340,129 @@ def test_a_task_restored_from_the_trash_lands_before_merge(c):
     assert task_delete.delete_tasks(c, [task_id], apply=True, keep_work=True)["applied"]
     assert task_delete.restore_tasks(c, [task_id], X.ANA)["restored"]
     assert stage(c, task_id) == "Build" and effects(c, task_id) == []
+
+
+# ----------------------------------------------------------------------------- a snooze on Merge waits for GitHub
+def dropped(company, gh):
+    """A task in Merge whose PR GitHub took out of the queue, with green checks: the Release Owner's turn, its removal
+    wake had its run."""
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, "It conflicts with its base branch")
+    with company.transaction() as c:
+        seen(c, gh)
+        X.settled(c)
+    return task_id
+
+
+def snoozed(c, task_id, why, by=RM):
+    E.snooze(c, task_id, by, why, later(90), seen_version=E.task(c, task_id)["version"])
+
+
+def news(c, task_id):
+    """(wake key, body) of each wake that GitHub news on the Merge stage gave the Release Owner."""
+    return [(k, b) for k, b in owner_wakes(c, task_id, RM) if f":{MQ.WAKE_NEWS}:" in k]
+
+
+def test_checks_finishing_on_the_prs_newest_commit_end_a_bots_snooze_once(company):
+    """Tico Team, Nov 11: after rebasing its PR the Release Owner snoozed 25 minutes "re-queue once checks pass"; the
+    checks took 6. Their end ends a bot's snooze on Merge and wakes it once; reading them again wakes nobody."""
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "re-queue once checks pass")
+        assert news(c, task_id) == []
+        assert W.headline(c, task_id).state == W.SNOOZED  # the task's line says so while it sleeps
+        gh.set_checks(REPO, head, "success")
+        seen(c, gh)
+        assert E.task(c, task_id)["snooze"] is None
+        ended = c.execute("SELECT ended_by_id FROM snoozes WHERE task_id=?", (task_id,)).fetchone()[0]
+        assert ended == E.SYSTEM
+        ((key, body),) = news(c, task_id)
+        assert key.endswith(f"checks:{REF}:{head}:success")
+        assert f"The checks on {REF} passed" in body and "re-queue once checks pass" in body
+        snoozed(c, task_id, "the queue is busy; re-queue later")
+        seen(c, gh)  # the same checks read again, as a sweep does
+        hooked(c, "synchronize", gh)
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 1
+
+
+def test_a_move_of_main_ends_a_bots_snooze_once_per_commit_and_a_named_pr_waits_for_its_merge(company):
+    """Tico Team, Nov 11: the Release Owner snoozed "until 04:30, waiting for #3417 to merge". #3417 merged at 03:01
+    and nothing woke it. A snooze that names a PR ends when that PR merges into the base; one that names none ends
+    when the base moves, once per base commit however many webhooks report it."""
+    from backend import github as G
+
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "until 04:30, waiting for #3417 to merge; then re-queue #1 unchanged")
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main")  # the push: no PR named
+        G.base_moved(c, REPO, "main", "b" * 40, default_branch="main", merged_number=3400)  # another PR
+        assert E.task(c, task_id)["snooze"] and news(c, task_id) == []
+        G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)
+        ((key, body),) = news(c, task_id)
+        assert E.task(c, task_id)["snooze"] is None and f"{REPO}#3417 merged into main." in body
+
+        snoozed(c, task_id, "re-queue once main has the fix")
+        G.base_moved(c, REPO, "main", "c" * 40, default_branch="main", merged_number=3417)  # the same merge again
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 1
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main")
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main", merged_number=3418)  # the same move again
+        assert E.task(c, task_id)["snooze"] is None and len(news(c, task_id)) == 2
+        snoozed(c, task_id, "re-queue once main has the fix")
+        G.base_moved(c, REPO, "main", "d" * 40, default_branch="main")  # a webhook delivered again
+        G.base_moved(c, REPO, "release", "e" * 40, default_branch="main")  # another branch
+        assert E.task(c, task_id)["snooze"] and len(news(c, task_id)) == 2
+
+
+def test_a_persons_snooze_on_merge_is_never_ended_by_github(company):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    task_id = dropped(company, gh)
+    with company.transaction() as c:
+        head = gh.push(REPO, 1)
+        gh.set_checks(REPO, head, "pending")
+        seen(c, gh)
+        snoozed(c, task_id, "hold it for the launch", by=X.ANA)
+        gh.set_checks(REPO, head, "failure")
+        seen(c, gh)
+        G.base_moved(c, REPO, "main", "a" * 40, default_branch="main", merged_number=9)
+        assert E.task(c, task_id)["snooze"]["by_id"] == X.ANA and news(c, task_id) == []
+
+
+def test_a_removal_a_conflict_and_a_merge_end_a_bots_snooze(company):
+    from backend import github as G
+
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        snoozed(c, task_id, "in the queue; look again at 04:30")
+    gh.drop(REPO, 1, "It conflicts with its base branch")
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        assert E.task(c, task_id)["snooze"] is None  # the removal's own wake is not held by it
+        assert len([k for k, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in k]) == 1
+        X.settled(c)
+        snoozed(c, task_id, "rebase after lunch")
+        pr = {"number": 1, "html_url": f"https://github.com/{REPO}/pull/1", "state": "open", "mergeable": False}
+        pr["head"] = {"sha": gh.prs[(REPO, 1)]["head_sha"], "ref": "feature"}
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)
+        ((_, body),) = news(c, task_id)
+        assert E.task(c, task_id)["snooze"] is None and f"{REF} conflicts with its base branch now." in body
+        G.pull_request(c, {"action": "refresh", "pull_request": pr}, read_refresh=True)  # read again: no news
+        assert len(news(c, task_id)) == 1
+        snoozed(c, task_id, "waiting for the queue")
+        version = E.task(c, task_id)["version"]
+    gh.prs[(REPO, 1)]["queue_state"] = "queued"
+    gh.merge(REPO, 1)
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        assert stage(c, task_id) == "Release" and E.task(c, task_id)["version"] > version
