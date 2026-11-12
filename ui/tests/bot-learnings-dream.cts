@@ -1,8 +1,10 @@
 // Dream mode in the Learnings panel and the bot page's question card: numbered questions become cards whose answers
 // go back as one numbered reply to the question itself, the done view lists only this dream's commits, Wake up
-// returns to the history, and polling stops when the panel closes. Desktop and phone widths.
+// returns to the history, polling stops when the panel closes, and Stop closes the dream's task. Desktop and phone widths.
+// Task bodies are checked against the server's own body models (support/task_body_check.py), as the real routes do.
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const path: typeof import('node:path') = require('node:path');
+const {execFileSync}: typeof import('node:child_process') = require('node:child_process');
 const {chromium} = require('playwright') as typeof import('playwright');
 
 // Page-side globals: the test keeps its fake hub in window.state, and bot-learnings.js defines the rest in the page.
@@ -19,6 +21,7 @@ interface DreamState {
   dream: Partial<DreamRecord> | null;
   posts: {url: string; body?: unknown}[];
   dreamReads: number;
+  toasts: string[];
   gate?: Promise<unknown>;
   release?: (value?: unknown) => void;
 }
@@ -44,7 +47,14 @@ declare const window: Window & typeof globalThis & {
   state: DreamState;
   get: (url: string) => Promise<unknown>;
   post: (url: string, body?: unknown) => Promise<unknown>;
+  taskBodyCheck: (url: string, body: unknown) => Promise<string>;
 };
+
+const ROOT = path.join(__dirname, '../..');
+const PYTHON = process.env.TICO_PYTHON || 'python3';
+// The real route's answer to a task body: '' when it takes it, else its 422 detail.
+const taskBodyCheck = (url: string, body: unknown): string =>
+  execFileSync(PYTHON, ['ui/tests/support/task_body_check.py', url, JSON.stringify(body)], {cwd: ROOT}).toString().trim();
 
 const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go to Ana or the whole team? Suggested: the whole team\n'
   + '2. Drop the old "deploy on Fridays" rule? Suggested: yes';
@@ -54,6 +64,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
   try {
     const page = await browser.newPage();
     page.setDefaultTimeout(10000);
+    await page.exposeFunction('taskBodyCheck', taskBodyCheck);
     await page.setContent('<button id="bot-learn" class="bot-learn"><span class="bl-n"></span></button><div id="bot-dream-host"></div>');
     await page.addStyleTag({path: path.join(__dirname, '../styles/bot-learnings.css')});
     await page.evaluate(questions => {
@@ -61,7 +72,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';
-      window.toast = message => { throw new Error('toast: ' + message); };
+      window.toast = message => { state.toasts.push(message); throw new Error('toast: ' + message); };
       window.BOT = {slug: 'ops'};
       window.newRequestId = () => 'req-1';
       const row = (subject: string, task?: string) => ({subject, author: 'ops', when: '2026-11-02T10:00:00Z', files: ['memory/learnings.md'],
@@ -69,7 +80,7 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       window.state = {
         dream: {task: 't1', status: 'waiting', state: 'asking', questions: {task_id: 't1', requirement_id: 'r1', text: questions, mine: true},
                 summary: null, closed_at: null, started_at: '2026-11-02T09:00:00Z'},
-        posts: [], dreamReads: 0,
+        posts: [], dreamReads: 0, toasts: [],
       };
       window.get = async url => {
         if (url.endsWith('/dream')) { state.dreamReads++; return {dream: state.dream}; }
@@ -78,6 +89,13 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       };
       window.post = async (url, body) => {
         state.posts.push({url, body});
+        if (/^\/v2\/tasks\/[^/]+(\/move)?$/.test(url)) {
+          const refused = await window.taskBodyCheck(url, body);
+          if (refused) throw new Error('422 ' + refused);
+          if (url.endsWith('/move') && (body as {to?: string}).to === 'closed')
+            state.dream = {...state.dream, state: 'stopped', status: 'closed', closed_at: '2026-11-02T13:05:00Z'};
+          return {task: {id: 't1', version: 4}};
+        }
         if (url.includes('/answer')) state.dream = {...state.dream, state: 'done', status: 'done', questions: null,
           summary: 'Merged two report rules. Dropped the Friday deploy rule.', closed_at: '2026-11-02T10:05:00Z'};
         if (url.endsWith('/dream')) { await state.gate; return {dream: state.dream}; }
@@ -167,7 +185,23 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
     await page.waitForTimeout(4500);
     assert.equal(await page.evaluate(() => state.dreamReads), before, 'a start that lands after close polls nothing');
     assert.ok(await page.locator('#bot-learn').evaluate(el => el.classList.contains('dreaming')), 'the brain shows it');
-    console.log('bot-learnings-dream: cards, numbered answer, done view, wake up, start, polling and a start landing after close passed at 1280 and 390');
+
+    // Stop on a running dream closes its task through the move route, with the version just read; the dream is over.
+    await page.evaluate(() => {
+      state.dream = {task: 't4', status: 'open', state: 'dreaming', questions: null, summary: null, closed_at: null,
+                     started_at: '2026-11-02T13:00:00Z'};
+      state.posts = []; state.toasts = [];
+      learnOpen('ops', {updates: [], documents: {}}, state.dream);
+    });
+    await page.locator('.learn-panel [data-dream-stop]').click();
+    await page.locator('.learn-panel [data-dream-wake]').waitFor({timeout: 5000}).catch(async () => {
+      assert.fail('Stop left the dream running: ' + JSON.stringify(await page.evaluate(() => ({posts: state.posts, toasts: state.toasts}))));
+    });
+    assert.deepEqual(await page.evaluate(() => state.posts), [{url: '/v2/tasks/t4/move', body: {to: 'closed', version: 3}}]);
+    assert.equal(await page.locator('.learn-panel .dream-line').innerText(), 'Awake');
+    assert.equal(await page.locator('.learn-panel [data-dream-stop]').count(), 0, 'a stopped dream has no Stop');
+    assert.equal(await page.locator('#bot-learn').evaluate(el => el.classList.contains('dreaming')), false);
+    console.log('bot-learnings-dream: cards, numbered answer, done view, wake up, start, polling, a start landing after close and stop passed at 1280 and 390');
   } finally {
     await browser.close();
   }
