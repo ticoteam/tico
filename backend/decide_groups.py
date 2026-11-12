@@ -5,8 +5,8 @@ Jev charges for what it reads, so one call per small item pays the call's fixed 
 hands its items here as `(state, questions)` pairs, all under one question set's label, and gets back, for each item,
 only its own answers, in the shape one call about that item alone returns.
 
-How a group is asked: up to MOST items whose states and questions fit one call (`J.MAX_STATE_CHARS`, and
-`J.MAX_QUESTIONS` while the client has one) go in one call. The state lists the items by name (`item1`, `item2`, ...)
+How a group is asked: up to MOST items whose states and questions fit one call (`J.fits`: the state within
+`J.MAX_STATE_CHARS` and the whole call within `J.MAX_CALL_CHARS`) go in one call. The state lists the items by name (`item1`, `item2`, ...)
 under `items`; each item's questions are asked again under `<name>__<id>`, their instructions opened with the item they
 are about, and nothing else about them changes. A group of one is sent exactly as the item alone always was, so a pass
 kept at one item per call (`size=1`) asks as it did before grouping.
@@ -76,32 +76,31 @@ def _size(state: Any) -> int:
 
 def packs(items: Sequence[Item], size: int = MOST) -> list[list[int]]:
     """The items' places, in order, cut into runs that fit one call each: at most `size` items, their states within
-    J.MAX_STATE_CHARS once grouped and, while the client caps it, their questions within J.MAX_QUESTIONS. An item too
-    big to share a call goes alone."""
+    J.MAX_STATE_CHARS once grouped and the whole grouped call within J.MAX_CALL_CHARS (`J.fits`). An item too big to
+    share a call goes alone."""
     size = max(1, int(size))
-    most_questions: int | None = getattr(J, "MAX_QUESTIONS", None)
     most_chars = int(_J.MAX_STATE_CHARS)
     out: list[list[int]] = []
     run: list[int] = []
-    chars, asked = WRAP, 0
-    for place, (state, questions) in enumerate(items):
+    chars = WRAP
+    for place, (state, _questions) in enumerate(items):
         mine = _size(state) + len(NAME.format(len(run) + 1)) + 4
-        count = len(questions)
-        fits = (
-            len(run) < size
-            and chars + mine <= most_chars
-            and (most_questions is None or asked + count <= most_questions)
-        )
+        fits = len(run) < size and chars + mine <= most_chars and _fits_with(items, run, place)
         if run and not fits:
             out.append(run)
-            run, chars, asked = [], WRAP, 0
+            run, chars = [], WRAP
             mine = _size(state) + len(NAME.format(1)) + 4
         run.append(place)
         chars += mine
-        asked += count
     if run:
         out.append(run)
     return out
+
+
+def _fits_with(items: Sequence[Item], run: list[int], place: int) -> bool:
+    """Whether the grouped call about `run` and `place` is within the client's size limits, questions included."""
+    state, questions, _ = grouped([items[p] for p in [*run, place]])
+    return bool(_J.fits(state, questions))
 
 
 def _about(name: str, text: Any) -> Any:
