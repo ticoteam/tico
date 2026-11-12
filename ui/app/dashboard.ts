@@ -156,7 +156,8 @@ const dashDue = (due: string | null | undefined) => {
   return `<span class="${day < today ? 'dash-bad' : 'muted'}">${day < today ? 'Overdue' : 'Due'} ${esc(day.slice(5))}</span>`;
 };
 const DASH_BODY: Record<string, DashBody> = {
-  tasks_by_status: (d, card) => `<div class="dash-stats">${([['open', 'Open'], ['doing', 'Doing'], ['waiting', 'Waiting'], ['done', 'Done this week']] as const)
+  // Only what the server counts (backend/cards.py tasks_by_status): no column without a number.
+  tasks_by_status: (d, card) => `<div class="dash-stats">${([['open', 'Open'], ['done', 'Done this week']] as const)
     .map(([k, label]) => `<a class="dash-stat" href="${dashTasksHref(card)}"><strong>${dashNum(d.counts[k])}</strong><span>${label}</span></a>`).join('')}</div>`,
   done_per_week: d => {
     const weeks = d.weeks || [], last = weeks[weeks.length - 1]?.done ?? 0, total = weeks.reduce((s, w) => s + w.done, 0);
