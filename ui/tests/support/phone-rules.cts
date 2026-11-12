@@ -46,7 +46,6 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
   '5 | dialog onb': {states: ['setup-halfway'],
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
   // Small tap targets that are the only control of their row or card.
-  '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
   '6 | a "BotOps"': {states: ['sign-off', 'bot-waiting'], what: 'Settings > Computers: an agent row\'s bot link is 16 px'},
   '6 | button.pv-tab.on': {states: ['setup-halfway'], what: 'a pipeline with one stage: its tab is 29 px'},
 };
