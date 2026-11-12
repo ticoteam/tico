@@ -788,6 +788,8 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
   time: 5 days.
 - **Validate.** Owner: Product Owner. To leave: a "Checked in production" page that names the version production runs
   and shows the change working there: what was run or looked at, and what it gave. Jev checks it. No person. Expected time: 1 day.
+  The Product Owner takes the page's screenshots itself, in a read-only view of the app
+  ([computers.md](computers.md#let-a-bot-view-the-app-read-only)).
 
 ### Engineering
 

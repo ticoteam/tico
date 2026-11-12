@@ -540,6 +540,10 @@ def install(app, store, auth, mutate, rule_check):
             row = threads.home(c, _home_owner(actor), create=False)
             if row is not None:
                 return threads.get(c, v, row["id"])
+        if getattr(
+            request.state.identity, "view", ""
+        ):  # a bot's read-only view of the app makes nothing (backend/app_view.py)
+            raise Problem("no_home", "This teammate has no Home yet", 404)
         with store.transaction() as c:
             _read_or_404(c, v, actor)
             row = threads.home(c, _home_owner(actor))
@@ -551,7 +555,9 @@ def install(app, store, auth, mutate, rule_check):
         reply-back rule applies): 404 when I cannot see them, 403 naming Write when I can see them but may not message
         them. `create=false` makes nothing: 404 `no_dm` when there is none yet."""
         v = threads.viewer(auth, request.state.identity)
-        if not create:
+        if not create or getattr(
+            request.state.identity, "view", ""
+        ):  # a read-only view never starts a DM (backend/app_view.py)
             with store.read() as c:
                 return threads.dm(c, v, [peer], make=False)
         with store.transaction() as c:

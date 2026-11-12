@@ -141,6 +141,10 @@ EMPTY = (
     "browser_exits",
     "bot_browser_exits",
     "browser_exit_marks",
+    # A bot's read-only view of the app: the setting is an admin's grant on the source, and a view is a way in
+    # (backend/app_view.py); a copy keeps neither.
+    "bot_app_view",
+    "app_views",
     # Open windows and their heartbeats belong to the source, not the rehearsal.
     "presences",
     # human sign-in and service keys

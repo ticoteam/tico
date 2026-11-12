@@ -21,7 +21,7 @@ from starlette.requests import ClientDisconnect
 
 
 from . import built_on
-from . import agents, app_delivery, mcp_oauth, oidc, views
+from . import agents, app_delivery, app_view, mcp_oauth, oidc, views
 from . import outcome_stats
 from . import pipeline_judges
 from . import recorder_installs
@@ -890,6 +890,10 @@ def create_app(settings=None):
 
                     raw = request.scope.get("raw_path") or b""
                     support_access.gate(who, raw.decode("latin-1") if raw else request.url.path, request.method)
+                if who.view:
+                    # A bot's read-only view (backend/app_view.py), on the path as sent as well.
+                    raw = request.scope.get("raw_path") or b""
+                    app_view.gate(raw.decode("latin-1") if raw else request.url.path, request.method)
                 if who.via == "assistant" and not who.confirmed and not who.task_actor and not who.attempt_id:
                     who = replace(who, task_actor="bot:" + settings.assistant_bot)
                 request.state.auth_ms = (time.perf_counter() - began) * 1000
@@ -5723,6 +5727,8 @@ def create_app(settings=None):
     from .performance import install as install_performance
 
     install_performance(app, store, auth, mutate, execution)
+    # A bot's read-only view of the app, for its own screenshots (backend/app_view.py).
+    app_view.install(app, store, auth)
     # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
     from .browser_exit import install as install_browser_exit
 

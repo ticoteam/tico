@@ -519,6 +519,90 @@ def bot_browser_exit(api, args):
 
 
 @tool(
+    "tico_bot_app_view",
+    "Read or set “Can view the app (read only)” for a bot: whether it may open the app signed in as itself, read only, "
+    "to take screenshots for its own proof pages. Only an owner or an admin turns it on or off; every view is in the "
+    "audit log.",
+    {
+        "bot": _s("Bot slug"),
+        "on": {"type": "boolean", "description": "Omit to read; true to turn it on, false to turn it off"},
+    },
+    ("bot",),
+    writes=True,
+)
+def bot_app_view(api, args):
+    who = _as_person(api)
+    if "on" in args:
+        return who.post(f"bots/{args['bot']}/app-view", {"on": bool(args["on"])}, key=_key(args))
+    return who.get(f"bots/{args['bot']}/app-view")
+
+
+@tool(
+    "tico_bot_app_shot",
+    "A screenshot of the app as you see it, read only, signed in as yourself: for the screenshots on a spec or "
+    "Checked in production page. Opens a read-only view (a person turned on “Can view the app” for you; nothing can "
+    "be changed from it), opens `path` (an app address such as /#/tasks or /#/task/<id>) at `width` (390 for a "
+    "phone, 1280 for a desktop) and writes a PNG to `out`. Runs Chrome on this computer.",
+    {
+        "path": _s("The app address to open, such as /#/tasks; / for home"),
+        "out": _s("Where to write the PNG"),
+        "width": {
+            "type": "integer",
+            "minimum": 320,
+            "maximum": 2560,
+            "description": "Window width in px: 390 phone, 1280 desktop",
+        },
+        "height": {"type": "integer", "minimum": 320, "maximum": 4000, "description": "Window height in px"},
+        "wait_ms": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "How long the page reads its data after it loads (default 2500)",
+        },
+        "full": {"type": "boolean", "description": "The whole page, not only the window"},
+    },
+    ("out",),
+    writes=True,
+    local=True,
+)
+def bot_app_shot(api, args):
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    path = str(args.get("path") or "/")
+    if not path.startswith("/"):
+        raise APIError("validation", "path is an app address that starts with /, such as /#/tasks")
+    view = api.post("app-view", {}, key=_key(args))
+    out = str(Path(args["out"]).expanduser().resolve())
+    width = int(args.get("width") or 390)
+    command = [
+        "node",
+        str(Path(__file__).resolve().parent.parent / "app_shot.mjs"),
+        api.url + path,
+        out,
+        str(width),
+        str(int(args.get("height") or 0) or ""),
+        str(int(args.get("wait_ms") if args.get("wait_ms") is not None else 2500)),
+        "full" if args.get("full") else "",
+    ]
+    # The token goes in the environment, never on the command line: it would show in the process list.
+    done = subprocess.run(
+        command,
+        env={**os.environ, "TICO_VIEW_TOKEN": view["token"]},
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if done.returncode != 0:
+        raise APIError("app_shot", (done.stderr or done.stdout or "the screenshot failed").strip()[-500:])
+    shot = json.loads(done.stdout.strip().splitlines()[-1])
+    return {**shot, "view": view["id"], "read_only": True}
+
+
+@tool(
     "tico_bot_budget",
     "Read or set how many runs a bot may start per hour and per day, as the person who asked you. "
     "Tico holds a bot that goes over (a runaway loop, not normal work): its queued work is kept and a person's "
