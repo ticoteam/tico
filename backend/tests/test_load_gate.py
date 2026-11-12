@@ -143,3 +143,9 @@ def test_a_lagging_sender_is_not_valid_even_when_its_chained_steps_show_no_laten
     behind = R.level_report(300, [log(400.0, 0.1)], flight, 100, 160)
     assert behind["valid"] is False and behind["sender"]["lateness_p95_ms"] <= R.LATENESS_P95_MS
     assert any("loop lag" in why for why in behind["not_valid_because"]), behind["not_valid_because"]
+    assert calm["warnings"] == [] and calm["server"]["seen_share"] == 1.0
+
+    # The recorder holding a sixth of the window's requests means a minute is missing: the level warns, in the report too.
+    short = R.level_report(300, [log(2.0, 0.1)], {"requests": {"n": 100, "routes": []}, "process": {}}, 100, 160)
+    assert short["valid"] is True and short["server"]["seen_share"] == round(100 / 600, 3)
+    assert len(short["warnings"]) == 1 and "minute may be missing" in short["warnings"][0]
