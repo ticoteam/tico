@@ -1057,7 +1057,11 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
         person = {task_id for task_id, _ in W.slots(conn, stage_id).on_person}
         count = len([task_id for task_id in came if task_id not in person])
         if count > limit:
-            out.append(Break(f"6: stage {stage_id} holds {count} tasks that moved forward into it, over its limit of {limit}", []))
+            out.append(
+                Break(
+                    f"6: stage {stage_id} holds {count} tasks that moved forward into it, over its limit of {limit}", []
+                )
+            )
     return out
 
 
