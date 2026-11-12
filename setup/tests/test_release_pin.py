@@ -52,6 +52,8 @@ def test_a_checkout_at_a_release_tag_is_that_release(tmp_path):
     [
         (f"nightly\n{RC}\n", RC),  # another tag on the same commit does not hide the release
         ("v0.6.0-rc.18\nv0.6.0\n", "v0.6.0"),  # an rc promoted on the same commit: the final release
+        ("v0.6.0-rc.18\nv0.6.0-rc.9\n", "v0.6.0-rc.18"),  # two rcs on one commit: the newer, by number
+        ("v0.6.10\nv0.6.9\n", "v0.6.10"),
     ],
 )
 def test_every_tag_on_head_is_read(tmp_path, tags, release):
@@ -122,6 +124,12 @@ def test_a_compose_ref_given_without_tico_version_still_names_where_compose_come
     user_data, env_text = aws("--compose-ref", sha)
     assert f"TICO_TAG={RC}" in env_text
     assert state.load(DOMAIN)[0]["compose_ref"] == sha
+
+
+def test_tico_version_names_the_compose_even_beside_a_compose_ref():
+    user_data, env_text = aws("--tico-version", STABLE, "--compose-ref", "0123456789abcdef0123456789abcdef01234567")
+    assert f"TICO_TAG={STABLE}" in env_text
+    assert embedded_compose(user_data) is None and f"curl -fsSL {contract.compose_url(STABLE)} -o " in user_data
 
 
 def test_naming_the_checkouts_own_release_keeps_its_compose():

@@ -90,11 +90,16 @@ def checkout_version(root: Path | None = None, git=None) -> str:
             tags = res.stdout.split() if res.returncode == 0 else []
         except (OSError, subprocess.SubprocessError):
             tags = []
-        releases = sorted(t for t in tags if cloudinit.VERSION_RE.match(t))
+        releases = sorted((t for t in tags if cloudinit.VERSION_RE.match(t)), key=_release_order)
         finals = [t for t in releases if "-" not in t]
         found = (finals or releases or [""])[-1]
     found = found if not found or found.startswith("v") else "v" + found
     return found if cloudinit.VERSION_RE.match(found) else ""
+
+
+def _release_order(tag: str) -> list:
+    """Numeric where the tag is: v0.6.0-rc.18 after v0.6.0-rc.9, and v0.6.10 after v0.6.9."""
+    return [(0, int(x), "") if x.isdigit() else (1, 0, x) for x in re.split(r"[.\-]", tag[1:])]
 
 
 def same_release(compose_ref: str, version: str) -> bool:
