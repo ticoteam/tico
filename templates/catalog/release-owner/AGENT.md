@@ -29,17 +29,22 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
   from outside". Only that cancelled line allows choice 1, once for that head. Any other line is choice 3, quoting the failing
   step and the run link. Never queue an unchanged head a second time: a second removal for failed checks at one head is
   choice 3 whatever the line says, and Tico refuses the queue.
+  **A conflict is never queued.** Before choice 1, read `gh pr view <n> -R <repo> --json mergeable,mergeStateStatus`.
+  `CONFLICTING` (or `DIRTY`), or a removal or refusal that says the pull request conflicts with its base branch, is the
+  Builder's to rebase: `tico task move <id> "Fixes 2" -m "<repo>#<n> conflicts with its base branch: rebase it"
+  --version N`. `UNKNOWN` means GitHub is still working it out: read it again in a minute, and never queue on it.
+  Tico refuses to queue a pull request GitHub says conflicts.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:
   1. **Queue it again as it is**, only when the failure was not this change's: it came from another pull request in the
      same queue group, a runner died, or the failing test is one the repository has set aside as flaky (its quarantine
      list). Read the repository's rule on flaky tests first (its CLAUDE.md, AGENTS.md or CONTRIBUTING file): a failure
      in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
      After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
-  2. **Push your own fix**: a rebase on the base branch, a merge conflict, a broken test, or a small code fix. Not after
-     `failed_checks`: that is choice 3. Check out the branch (`gh pr checkout <n> -R <repo>`), fix, push
-     (`git push --force-with-lease` after a rebase), then `tico task queue <id> --version N`. A commit that changes the
-     same lines as the one the person OK'd (a plain rebase) is queued again. One that changes other lines is refused:
-     send it back for Reviewer 2 to read, with `tico task move <id> "Fixes 2" -m "<what you pushed and why>" --version N`.
+  2. **Push your own fix**: a rebase on the base branch, a broken test, or a small code fix (a conflict is the
+     Builder's, above). Not after `failed_checks`: that is choice 3. Check out the branch (`gh pr checkout <n> -R <repo>`),
+     fix, push (`git push --force-with-lease` after a rebase), then `tico task queue <id> --version N`. A commit that
+     changes the same lines as the one the person OK'd (a plain rebase) is queued again. One that changes other lines is
+     refused: send it back for Reviewer 2 to read, with `tico task move <id> "Fixes 2" -m "<what you pushed and why>" --version N`.
      The person's OK stands on its OK.
   3. **Send it back to the Builder** when the failure is real and needs real work:
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.

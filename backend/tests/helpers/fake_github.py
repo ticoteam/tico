@@ -124,6 +124,11 @@ class FakeGitHub:
         `reason` until `rule(repo, number, None)` lifts it."""
         self.prs[(repo, number)]["rule"] = reason
 
+    def mergeable(self, repo, number, state):
+        """What GitHub says of merging the PR into its base branch: MERGEABLE, CONFLICTING or UNKNOWN (still working it
+        out). `enqueue` refuses a conflicting PR and raises while it is unknown."""
+        self.prs[(repo, number)]["mergeable"] = state
+
     def require_merge_ok(self, repo):
         """The repo's ruleset requires `tico/merge-ok` from the company's App."""
         self.merge_ok_required.add(repo)
@@ -201,6 +206,12 @@ class FakeGitHub:
             return {"ok": False, "how": None, "reason": "Pull request is in draft state"}
         if pr.get("rule"):
             return {"ok": False, "how": None, "reason": pr["rule"]}
+        from backend.item_sources import github as GS
+
+        if pr.get("mergeable") == "CONFLICTING":
+            return {"ok": False, "how": None, "reason": GS.CONFLICTS}
+        if pr.get("mergeable") == "UNKNOWN":
+            raise GitHubError(GS.MERGEABLE_UNKNOWN)
         if repo in self.merge_ok_required and not self.merge_ok_on(repo, head_sha):
             return {"ok": False, "how": None, "reason": 'Required status check "tico/merge-ok" is expected.'}
         pr["queue_state"] = "queued" if self.queue else "auto_merge"
