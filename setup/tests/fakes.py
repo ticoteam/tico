@@ -87,6 +87,9 @@ class _Exc:
     class InvocationDoesNotExist(Exception):
         pass
 
+    class InvalidInstanceId(Exception):
+        pass
+
     class ParameterAlreadyExists(Exception):
         pass
 
