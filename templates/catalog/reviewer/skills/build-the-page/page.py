@@ -220,7 +220,7 @@ def chrome():
 
 
 def render(file_id, kind, out):
-    read = subprocess.run(["tico", "file", "read", file_id], capture_output=True, text=True)
+    read = subprocess.run(["tico", "file", "read", file_id], capture_output=True, text=True, check=False)
     if read.returncode:
         sys.exit("render: tico file read failed: " + read.stderr.strip())
     text = json.loads(read.stdout)["text"]
@@ -247,6 +247,7 @@ def render(file_id, kind, out):
                     page.as_uri(),
                 ],
                 capture_output=True,
+                check=False,
                 timeout=90,
             )
             if shot.is_file() and shot.stat().st_size > 2000:
