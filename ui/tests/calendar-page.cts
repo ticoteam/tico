@@ -73,7 +73,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
     if (p === '/api/humans') return json({people: PEOPLE});
-    if (p === '/api/employees') return json(BOTS);
+    if (p === '/api/employees') return json(w.many ? [...BOTS, ...['scout', 'clerk', 'herald'].map(id => ({...BOTS[0], id, name: id, display_name: id[0]!.toUpperCase() + id.slice(1)}))] : BOTS);
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/tasks') return json({tasks: []});
@@ -82,7 +82,7 @@ async function open(browser: Browser, viewport: {width: number; height: number},
       const who = (q.get('who') || 'me').split(','), from = new Date(q.get('from') || 0).getTime(), to = new Date(q.get('to') || 0).getTime();
       // As the server answers: more than WHO_MAX calendars is refused.
       if (who.length > WHO_MAX) return route.fulfill({status: 422, contentType: 'application/json', body: JSON.stringify({error: {code: 'validation', detail: `At most ${WHO_MAX} calendars at a time`}})});
-      const views = who.map(r => r === 'me' || r === 'human:ana' ? ANA : r === 'human:ben' ? BEN : r === 'bot:ops' ? OPS : MANY.find(m => m.ref === r) || null).filter(Boolean);
+      const views = who.map(r => r === 'me' || r === 'human:ana' ? ANA : r === 'human:ben' ? BEN : r === 'bot:ops' ? OPS : MANY.find(m => m.ref === r) || (r.startsWith('bot:') ? {...OPS, ref: r, id: r.slice(4), name: r.slice(4)} : null)).filter(Boolean);
       const kinds = q.get('kinds')?.split(',');
       // As the server answers: a bot's runs only when that bot is in `who`, never for the person it reports to.
       const occ = [...ANA_OCC, ...(who.includes('human:ben') ? BEN_OCC : []), ...(who.includes('bot:ops') ? OPS_OCC : [])]
@@ -372,6 +372,15 @@ async function shot(page: Page, name: string, clip?: string) {
       assert.equal(await more.isVisible(), true, 'many: the chips past the line fold into +N');
       const shown = await page.locator('[data-cal-chip]:visible').count();
       assert.equal(await more.innerText(), `+${WHO_MAX - shown}`, 'many: +N counts the hidden chips');
+      await shot(page, 'page-chips-more-light', '#cal-root .cal-h');
+      // At 20, search still finds a calendar but says it cannot add it, and Enter leaves the view as it is.
+      await page.locator('[data-cal-find]').click();
+      await page.locator('#cal-q').fill('person 2');
+      await page.locator('#cal-dd [data-dd-cal="human:p21"]').waitFor();
+      assert.match(await page.locator('#cal-dd [data-dd-cal="human:p21"]').innerText(), /at most 20/i, 'many: search says why it cannot add');
+      await page.locator('#cal-dd [data-dd-cal="human:p21"]').dispatchEvent('click');      // marked disabled, so sent directly
+      assert.equal(await page.locator('[data-cal-chip]').count(), WHO_MAX, 'many: and adds nothing');
+      await page.locator('#cal-q').press('Escape');
       await more.click();
       await page.locator('[data-cal-addm] [data-cal-pick]').first().waitFor();
       assert.equal(await page.locator('[data-cal-quick="all"]').isDisabled(), true, 'many: Everyone is off over 20');
@@ -384,6 +393,15 @@ async function shot(page: Page, name: string, clip?: string) {
       await page.locator('[data-cal-addm] [data-cal-pick="human:p01"]').check();
       await page.waitForFunction(() => document.querySelectorAll('[data-cal-chip]').length === 19);
       assert.equal(await page.locator('#cal-root .err').count(), 0, 'many: no error after ticking');
+      // Her 4 bots (Ops and 3 more) need 3 more rows; with room for 1, "Bots that report to me" is off and says why.
+      assert.equal(await page.locator('[data-cal-quick="mine"]').isDisabled(), true, 'many: her bots do not all fit, so the choice is off');
+      assert.match(await page.locator('[data-cal-addm] .cal-addm-note').innerText(), /untick/i, 'many: and the note says to untick some');
+      await page.locator('[data-cal-addm] [data-cal-pick="human:p03"]').uncheck();
+      await page.locator('[data-cal-addm] [data-cal-pick="human:p04"]').uncheck();
+      await page.waitForFunction(() => !(document.querySelector('[data-cal-quick="mine"]') as HTMLButtonElement | null)?.disabled);
+      await page.locator('[data-cal-quick="mine"]').click();
+      await page.waitForFunction(() => document.querySelectorAll('[data-cal-chip]').length === 20);
+      assert.equal(await page.locator('[data-cal-chip="bot:herald"]').count(), 1, 'many: with room, every one of her bots is added');
       assert.deepEqual(errors, [], 'many');
       await context.close();
     }

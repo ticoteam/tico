@@ -268,11 +268,14 @@ function calAddDraw(): void {
   const p = CALP, host = document.querySelector<HTMLElement>('#cal-root [data-cal-addrows]'); if (!p || !host || !p.add.open) return;
   const words = p.add.q.trim().toLowerCase(), mine = calMyBots(), on = calKinds(), everyone = calAddList(p);
   const full = p.who.length >= CAL_WHO_MAX, tooMany = everyone.length > CAL_WHO_MAX;
+  // "Bots that report to me" adds them all or none: a choice that would leave some out is off, and the note says why.
+  const missing = mine.filter(r => !p.who.includes(r)), mineFits = missing.length > 0 && missing.length <= CAL_WHO_MAX - p.who.length;
+  const crowded = full || (missing.length > 0 && !mineFits);
   const rows = everyone.filter(c => !words || c.name.toLowerCase().split(/\s+/).some(w => w.startsWith(words)) || c.name.toLowerCase().startsWith(words));
   const quick = words ? '' : `<div class="cal-addm-quick">
-      <button type="button" data-cal-quick="mine"${mine.some(r => !p.who.includes(r)) && !full ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">smart_toy</span><span class="l">Bots that report to me</span><span class="n" data-cal-quick-n>${mine.length}</span></button>
+      <button type="button" data-cal-quick="mine"${mineFits ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">smart_toy</span><span class="l">Bots that report to me</span><span class="n" data-cal-quick-n>${mine.length}</span></button>
       <button type="button" data-cal-quick="all"${tooMany || full ? ' disabled' : ''}><span class="nav-icon" aria-hidden="true">groups</span><span class="l">Everyone</span></button>
-      ${tooMany || full ? `<p class="cal-addm-note">At most ${CAL_WHO_MAX} calendars show at a time${full ? ': untick one to add another' : ''}.</p>` : ''}</div>`;
+      ${tooMany || crowded ? `<p class="cal-addm-note">At most ${CAL_WHO_MAX} calendars show at a time${crowded ? ': untick some to add more' : ''}.</p>` : ''}</div>`;
   const list = rows.map(c => {
     const ticked = p.who.includes(c.ref);
     return `<label class="cal-addm-row"><input type="checkbox" data-cal-pick="${esc(c.ref)}"${ticked ? ' checked' : full ? ' disabled' : ''}><i class="cal-cd${ticked ? '' : ' off'}" style="--h:${calHue(c.ref)}" aria-hidden="true"></i><span class="l">${esc(c.ref === calMe() ? `${c.name} (me)` : c.name)}</span>${c.type === 'bot' ? '<span class="m">Bot</span>' : ''}</label>`;
@@ -641,7 +644,9 @@ function calDropRows(): string[] {
   const q = p.q.trim(); if (!q) return [];
   const rows: string[] = [];
   const kindIcon: Record<string, string> = {person: 'person', human: 'person', bot: 'smart_toy', team: 'groups', shared: 'calendar_month', google: 'calendar_month'};
-  for (const c of p.drop.cals) rows.push(`<button type="button" role="option" data-dd-cal="${esc(c.ref)}"><span class="nav-icon" aria-hidden="true">${kindIcon[c.kind || c.type] || 'calendar_month'}</span><span class="l">${esc(c.name)}</span></button>`);
+  // At the server's 20 a calendar is still found, and says why it cannot be added.
+  const full = p.who.length >= CAL_WHO_MAX;
+  for (const c of p.drop.cals) rows.push(`<button type="button" role="option" data-dd-cal="${esc(c.ref)}"${full ? ' aria-disabled="true"' : ''}><span class="nav-icon" aria-hidden="true">${kindIcon[c.kind || c.type] || 'calendar_month'}</span><span class="l">${esc(c.name)}</span>${full ? `<span class="m">At most ${CAL_WHO_MAX} in view</span>` : ''}</button>`);
   for (const o of p.drop.events) {
     const s = calWhen(o.start);
     rows.push(`<button type="button" role="option" data-dd-ev="${esc(o.occurrence_id)}"><span class="t">${esc(s.toLocaleDateString(undefined, {month: 'short', day: 'numeric'}))} ${o.all_day ? '' : esc(calClock(s))}</span><span class="l">${esc(o.busy_only ? 'Busy' : o.title)}</span><span class="m">${esc(o.calendar.name)}</span></button>`);
@@ -665,8 +670,9 @@ async function calDropTake(btn: HTMLElement): Promise<void> {
   const p = CALP, input = document.querySelector<HTMLInputElement>('#cal-q'); if (!p || !input) return;
   if (btn.dataset.ddCal) {
     const ref = btn.dataset.ddCal;
+    if (p.who.length >= CAL_WHO_MAX) return;      // the row says why
     input.value = ''; p.q = ''; p.drop.open = false; calDropDraw();
-    calWhoSet(p, [...p.who, ref]);      // a 21st calendar is left out (the server reads 20)
+    calWhoSet(p, [...p.who, ref]);
     return;
   }
   if (btn.dataset.ddEv) {

@@ -107,6 +107,7 @@ a.cal-nx:hover{color:var(--accent);text-decoration:underline}
 .cal-dd[hidden]{display:none}
 .cal-dd button{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;padding:4px 8px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
 .cal-dd button.on,.cal-dd button:hover{background:var(--surface2)}
+.cal-dd button[aria-disabled="true"]{color:var(--muted);cursor:default}
 .cal-dd .nav-icon{font-size:18px;color:var(--muted);margin:0}
 .cal-dd .t{flex:none;min-width:84px;color:var(--muted);font-variant-numeric:tabular-nums}
 .cal-dd .l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
