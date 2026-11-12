@@ -1220,17 +1220,17 @@ def unmerge(c: sqlite3.Connection, actor: str, drop_id: str) -> str:
         ],
     )
     # Counts come from the rows each entity holds now. The kept entity's last activity is its own from before the
-    # merge, moved forward by any mention it has had since; the merge's snapshot alone would lose that.
+    # merge, moved forward to the newest linked mention it holds now (one it gained since, or through a later merge);
+    # the merge's snapshot alone would lose that.
     c.execute(
         "UPDATE entities SET mentions_count = (SELECT COUNT(*) FROM entity_mentions m WHERE m.entity_id = entities.id "
         "AND m.status = 'linked'), updated_at = ? WHERE id IN (?, ?)",
         (now, keep_id, drop_id),
     )
-    since: str | None = c.execute(
-        "SELECT MAX(created_at) FROM entity_mentions WHERE entity_id = ? AND status = 'linked' AND created_at >= ?",
-        (keep_id, log["created_at"]),
+    held: str | None = c.execute(
+        "SELECT MAX(created_at) FROM entity_mentions WHERE entity_id = ? AND status = 'linked'", (keep_id,)
     ).fetchone()[0]
-    activity = [v for v in (prior["keep"]["last_activity_at"], since) if v]
+    activity = [v for v in (prior["keep"]["last_activity_at"], held) if v]
     c.execute("UPDATE entities SET last_activity_at = ? WHERE id = ?", (max(activity) if activity else None, keep_id))
     c.execute(
         "UPDATE entities SET status = ?, merged_into_id = ?, updated_at = ? WHERE id = ?",

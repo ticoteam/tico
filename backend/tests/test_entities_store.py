@@ -154,6 +154,21 @@ def test_an_unmerge_leaves_rows_that_moved_on_since_and_recounts_from_the_rows(a
         assert c.execute("SELECT mentions_count FROM entities WHERE id = ?", (drop,)).fetchone()[0] == 1
 
 
+def test_an_unmerge_keeps_the_last_activity_of_a_mention_a_later_merge_brought(api):
+    with tx(api) as c:
+        _setup_types(c)
+        keep = ES.upsert(c, ANA, "organization", match={"domain": "keep.example"}, name="Keep Co")["id"]
+        drop = ES.upsert(c, ANA, "organization", match={"domain": "drop.example"}, name="Drop Co")["id"]
+        other = ES.upsert(c, ANA, "organization", match={"domain": "other.example"}, name="Other Co")["id"]
+        _mention(c, other, "msg_other")  # created before the merge that is undone
+        ES.merge(c, ANA, keep, drop)
+        ES.merge(c, ANA, keep, other)
+        held = c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0]
+
+        ES.unmerge(c, ANA, drop)
+        assert c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0] == held
+
+
 def test_a_mailbox_source_shows_only_to_the_person_who_holds_that_mailbox(api):
     with tx(api) as c:
         _setup_types(c)
