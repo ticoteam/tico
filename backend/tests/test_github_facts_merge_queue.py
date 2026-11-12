@@ -489,6 +489,44 @@ def test_the_third_removal_in_a_visit_goes_up_the_ladder_and_a_fourth_to_a_perso
         assert MQ.drops_in_visit(c, task_id, E.task(c, task_id)["visit"]["id"]) == 0  # a new visit counts afresh
 
 
+def test_a_second_failed_checks_removal_at_one_head_goes_to_fixes_not_the_queue(company):
+    gh = FakeGitHub()
+    failed = "Checks failed in the merge queue"
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+
+    def bodies(c):
+        keys = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
+        return [c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0] for key in keys]
+
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, failed, check="browser-1", url="https://ci/1")
+    F.refresh(company, gh, later(10))
+    with company.transaction() as c:
+        (first,) = bodies(c)
+        assert f"tico task queue {task_id}" in first
+        MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])  # once, after the first failed checks
+    MQ.run(company, gh)
+    gh.drop(REPO, 1, failed, check="browser-1", url="https://ci/2")  # the same head fails in the queue again
+    F.refresh(company, gh, later(20))
+    with company.transaction() as c:
+        later_bodies = bodies(c)
+        assert len(later_bodies) == 2
+        (second,) = [body for body in later_bodies if body != first]
+        assert "Fixes 2" in second and "Queue it again" not in second
+        version = E.task(c, task_id)["version"]
+        assert "Fixes 2" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert stage(c, task_id) == "Merge"
+    head = gh.push(REPO, 1)  # a fix pushed: a bot may not queue that commit, a person may
+    F.refresh(company, gh, later(30))
+    with company.transaction() as c:
+        assert "Fixes 2" in refused(
+            lambda: MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"]), "task_requirement"
+        )
+        owed = MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])
+        assert [e["pinned"] for e in owed] == [head]
+
+
 def test_a_queue_entry_that_vanishes_without_a_word_is_a_drop(company):
     gh = FakeGitHub()
     with company.transaction() as c:
