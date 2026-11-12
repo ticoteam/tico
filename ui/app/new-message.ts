@@ -1,7 +1,8 @@
 /* ui/app/new-message.ts — New message (#/threads/new): one To box over people, bots, groups and threads, in the thread
    pane beside the rail (the whole screen on a phone). With teammates chosen it offers the threads with exactly them
    (GET /api/v2/threads/match), their DM when there is one teammate, and a new named thread; the composer under it sends
-   to the one marked. `?to=<actor>` (repeatable) starts with those teammates chosen.
+   to the one marked, with any files pasted or attached (chips, as the thread composer's). `?to=<actor>` (repeatable)
+   starts with those teammates chosen.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -34,8 +35,10 @@ function pageNewMessage(): void {
       <input id="nm-q" type="text" autocomplete="off" spellcheck="false" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="nm-list"></div>
     <ul class="nm-list" id="nm-list" role="listbox" aria-label="To" hidden></ul>
     <span class="nm-fill"></span>
-    <div class="thv-composer nm-composer"><div class="ask pill-thread thv-ask"><div class="p-pill">
+    <div class="thv-composer nm-composer"><div class="ask pill-thread thv-ask"><div class="p-chips"></div><div class="p-pill">
       <textarea class="p-text" rows="1" autocorrect="on" autocapitalize="sentences" spellcheck="true" aria-label="Message" placeholder="Message"></textarea>
+      <button class="p-attach p-icon" type="button" title="Attach" aria-label="Attach">${ICON_CLIP}</button>
+      <input type="file" multiple hidden class="p-file">
       <button class="p-send p-send-icon" type="button" aria-label="Send" title="Send" disabled>${ICON_SEND}</button></div></div></div></section>`;
   NM_OPEN = {pane, route: S.route, draw: nmWire(pane, [...new Set(to.filter(a => /^(human|bot|group):./.test(a) && a !== myActor()))])};
 }
@@ -44,8 +47,11 @@ function pageNewMessage(): void {
 function nmWire(pane: HTMLElement, start: string[]): () => void {
   const q = pane.querySelector('#nm-q') as HTMLInputElement, list = pane.querySelector('.nm-list') as HTMLUListElement;
   const chips = pane.querySelector('.nm-chips') as HTMLElement, box = pane.querySelector('.p-text') as HTMLTextAreaElement;
-  const send = pane.querySelector('.p-send') as HTMLButtonElement;
+  const send = pane.querySelector('.p-send') as HTMLButtonElement, file = pane.querySelector('.p-file') as HTMLInputElement;
+  const fileChips = pane.querySelector('.p-chips') as HTMLElement;
   const chosen: string[] = [...start];
+  // Files waiting to go with the first message: pasted (pill.ts pillPasteWire) or attached, each a chip (pillChipHTML).
+  let files: File[] = [];
   // `found`: threads by name from Browse for the words typed. `match`: the answer for `chosen` (null while asked).
   // `hit` marks a row while typing; `pick` marks the one Send goes to among the matches.
   let found: ThreadRow[] = [], match: NmMatch | null = null, hit = 0, pick = 0, name = '', busy = false, seq = 0, timer = 0;
@@ -135,9 +141,21 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
     threadsPut(t);
     return t.id;
   };
+  const drawFiles = (): void => { fileChips.innerHTML = files.map((f, i) => pillChipHTML(f, String(i))).join(''); };
+  // The first message into a thread: with files it is one upload, as the thread composer sends (thread-view.ts thvUpload).
+  const say = async (id: string, body: string, sent: File[]): Promise<void> => {
+    const r: {held?: unknown} | null = sent.length ? await thvUpload(thvPath(id).replace('/v2/', '/v2/uploads/') + '/messages', {text: body}, sent)
+      : await post(thvPath(id) + '/messages', {text: body});
+    if (r?.held) toast('Your first message was held by a rule', true);
+  };
+  // A DM or thread made for files whose upload then failed: the next Send to the same row posts there, not into a
+  // second thread of the same name.
+  let early: {key: string; id: string} | null = null;
   // Go to a row: a teammate is added, a thread opens, a DM or a new thread is made first when it has to be. `body`: the
-  // composer's words, posted there on the way.
-  const go = async (r: NmRow | null | undefined, body = ''): Promise<void> => {
+  // composer's words when sending, posted there on the way with the files waiting; a DM or thread made for files is made
+  // empty first, then the message with them goes in it. A row picked from the list (no `body`) only goes there, sending
+  // neither the words nor the files.
+  const go = async (r: NmRow | null | undefined, body?: string): Promise<void> => {
     if (!r || busy) return;
     if (r.kind === 'actor') { choose(r.actor); return; }
     const title = name.trim().replace(/^#+/, '').trim();
@@ -148,13 +166,18 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
     }
     busy = true; sendable();
     try {
+      const sent = body === undefined ? [] : files.slice(), words = body || '', first = sent.length ? '' : words;
+      const key = r.kind === 'dm' ? 'dm\n' + r.actor : r.kind === 'new' ? ['new', title, ...chosen].join('\n') : '';
       let id = r.kind === 'thread' ? r.t.id : r.kind === 'dm' ? r.id || '' : '';
-      if (id && body) await post(thvPath(id) + '/messages', {text: body});
-      else if (r.kind === 'dm' && !id) id = made(await post('/v2/threads/dm', {members: [r.actor], ...(body ? {body} : {})}));
-      else if (r.kind === 'new') {
-        id = made(await post('/v2/threads', {title, audience: 'members', members: chosen, pin_for_members: true, ...(body ? {body} : {})}));
+      if (!id && key && early?.key === key) id = early.id;
+      const posted = !!id;
+      if (r.kind === 'dm' && !id) id = made(await post('/v2/threads/dm', {members: [r.actor], ...(first ? {body: first} : {})}));
+      else if (r.kind === 'new' && !id) {
+        id = made(await post('/v2/threads', {title, audience: 'members', members: chosen, pin_for_members: true, ...(first ? {body: first} : {})}));
       }
-      if (id) { box.value = ''; open(id); }
+      if (!posted && id && sent.length) early = {key, id};
+      if (id && (sent.length || posted && words)) await say(id, words, sent);
+      if (id) { box.value = ''; files.forEach(pillPreviewForget); files = []; drawFiles(); open(id); }
     } catch (e) {
       if (errorCode(e) === 'name_required') list.querySelector<HTMLInputElement>('#nm-title')?.focus();
       toast(errorMessage(e, ''), true);
@@ -222,6 +245,17 @@ function nmWire(pane: HTMLElement, start: string[]): () => void {
     else if (ev.key === 'Escape') { ev.preventDefault(); close(); }
   });
   send.onclick = () => void go(target(), box.value.trim());
+  pillPasteWire(box, pasted => { files.push(...pasted); drawFiles(); });
+  (pane.querySelector('.p-attach') as HTMLElement).onclick = () => file.click();
+  file.onchange = () => { files.push(...file.files!); file.value = ''; drawFiles(); };
+  fileChips.onclick = (ev: MouseEvent) => {
+    // A thumbnail opens the image full size (chat.ts chatImageOpen); × takes the file off.
+    const thumb = eventElement(ev)?.closest<HTMLElement>('.p-thumb'); if (thumb) { ev.preventDefault(); chatImageOpen(thumb); return; }
+    const rm = eventElement(ev)?.closest<HTMLElement>('[data-rm]'); if (!rm) return;
+    ev.preventDefault();
+    pillPreviewForget(files.splice(Number(rm.dataset.rm), 1)[0]);
+    drawFiles();
+  };
   void ask();
   (chosen.length ? box : q).focus();
   return draw;

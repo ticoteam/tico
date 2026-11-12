@@ -25,6 +25,14 @@ async function api(hub: RealHubSupport.Hub, teammate: string, method: string, p:
   assert.ok(r.status < 300, `${method} ${p} as ${teammate}: ${r.status} ${JSON.stringify(json)}`);
   return json;
 }
+// A 1x1 PNG, as a pasted screenshot.
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+// A thread's messages as Dana reads them: each one's words and the names of the files attached to it.
+async function attached(hub: RealHubSupport.Hub, id: string): Promise<{text: string; files: string[]}[]> {
+  const r = await api(hub, 'dana', 'GET', `/v2/threads/${encodeURIComponent(id)}/timeline?flat=1`);
+  return (r.messages as {body?: string; refs?: {attachments?: {name?: string}[]}}[])
+    .map(m => ({text: m.body || '', files: (m.refs?.attachments || []).map(f => f.name || '')}));
+}
 // The screen in both themes (desktop) or as it is (phone): new-message-<name>-<dark|light>.png.
 async function shot(page: Page, name: string, themes = ['dark', 'light']) {
   if (!shots) return;
@@ -108,6 +116,81 @@ async function add(page: Page, words: string, name: string) {
     await page.locator('.nm-composer .p-send:not([disabled])').waitFor({timeout: WAIT});
     await page.locator('.nm-composer .p-send').click();
     await hashIs(page, '#/thread/' + dm.id);
+
+    // A pasted screenshot is a chip, and the first message carries it: Priya has no DM yet, so it is made, then the
+    // message with the image goes in it (as the thread composer sends files).
+    await openPane(page);
+    await add(page, 'pri', 'Priya');
+    await page.locator('#nm-list li[aria-selected="true"] .nm-name', {hasText: 'Priya'}).waitFor({timeout: WAIT});
+    const nmBox = page.locator('.nm-composer .p-text'), nmChips = page.locator('.nm-composer .p-chips > span');
+    await nmBox.fill('See the header');
+    const pasted = await nmBox.evaluate((el: HTMLTextAreaElement, b64: string) => {
+      const dt = new DataTransfer();
+      dt.items.add(new File([Uint8Array.from(atob(b64), c => c.charCodeAt(0))], 'shot.png', {type: 'image/png'}));
+      const ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
+      el.dispatchEvent(ev);
+      return ev.defaultPrevented;
+    }, PNG.toString('base64'));
+    assert.equal(pasted, true, 'a screenshot paste is the composer\'s');
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    assert.equal(await nmBox.inputValue(), 'See the header', 'the words stay as typed');
+    // The clip adds a file; × takes it off again.
+    await page.locator('.nm-composer .p-attach').click();
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes')});
+    await page.waitForFunction(() => document.querySelectorAll('.nm-composer .p-chips > span').length === 2, null, {timeout: WAIT});
+    await nmChips.nth(1).locator('[data-rm]').click();
+    await page.waitForFunction(() => document.querySelectorAll('.nm-composer .p-chips > span').length === 1, null, {timeout: WAIT});
+    await page.locator('.nm-composer .p-send').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, {timeout: WAIT});
+    await page.locator('.th-msg', {hasText: 'See the header'}).waitFor({timeout: WAIT});
+    const priya: Thread = await api(hub, 'dana', 'GET', '/v2/threads/dm?with=human:priya&create=false');
+    assert.equal(await page.evaluate(() => location.hash), '#/thread/' + priya.id);
+    const sent = (await attached(hub, priya.id)).find(m => m.text === 'See the header');
+    assert.deepEqual(sent?.files, ['shot.png'], 'the image went with the first message');
+    // Omar's DM is there already: a file alone, from the clip with no words, is sent to it (not just opened).
+    await openPane(page);
+    await add(page, 'om', 'Omar');
+    await page.locator('.nm-composer .p-send:not([disabled])').waitFor({timeout: WAIT});
+    await page.locator('.nm-composer .p-attach').click();
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'plan.png', mimeType: 'image/png', buffer: PNG});
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    await page.locator('.nm-composer .p-send').click();
+    await hashIs(page, '#/thread/' + dm.id);
+    await page.waitForFunction(() => !document.querySelector('.nm-composer'), null, {timeout: WAIT});
+    for (let i = 0; i < 50 && !(await attached(hub, dm.id)).some(m => m.files.includes('plan.png')); i++) await page.waitForTimeout(100);
+    assert.ok((await attached(hub, dm.id)).some(m => m.files.includes('plan.png')), 'a file alone is a message');
+    // A row picked from the list only goes there: neither the words nor the files waiting are sent (only Send sends).
+    const before = (await attached(hub, dm.id)).length;
+    await openPane(page);
+    await add(page, 'om', 'Omar');
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'pick.png', mimeType: 'image/png', buffer: PNG});
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    await nmBox.fill('Not yet');
+    await page.locator('#nm-list li .nm-name', {hasText: 'Omar'}).click();
+    await hashIs(page, '#/thread/' + dm.id);
+    await page.waitForTimeout(500);
+    assert.equal((await attached(hub, dm.id)).length, before, 'a pick sends nothing');
+
+    // An upload refused after a new thread was made for it: the next Send posts into that thread, not a second one.
+    await openPane(page);
+    await add(page, 'pri', 'Priya');
+    await add(page, 'engineering', 'engineering-manager');
+    await page.locator('#nm-list li[aria-selected="true"].nm-new').waitFor({timeout: WAIT});
+    await page.locator('#nm-title').fill('shots');
+    await page.locator('.nm-composer .p-file').setInputFiles({name: 'retry.png', mimeType: 'image/png', buffer: PNG});
+    await nmChips.locator('.p-thumb').waitFor({timeout: WAIT});
+    await page.route('**/api/v2/uploads/threads/**', route => route.fulfill({status: 413, contentType: 'application/json',
+      body: JSON.stringify({error: {code: 'too_large', message: 'Too large'}})}), {times: 1});
+    await page.locator('.nm-composer .p-send').click();
+    await page.locator('.nm-composer .p-send:not([disabled])').waitFor({timeout: WAIT});
+    assert.equal(await page.evaluate(() => location.hash), '#/threads/new', 'a refused upload stays to try again');
+    assert.equal(await nmChips.count(), 1, 'the file waits');
+    await page.locator('.nm-composer .p-send').click();
+    await page.waitForFunction(() => location.hash.startsWith('#/thread/'), null, {timeout: WAIT});
+    const retried = decodeURIComponent((await page.evaluate(() => location.hash)).slice('#/thread/'.length));
+    const named = ((await api(hub, 'dana', 'GET', '/v2/threads?limit=200')).threads as Thread[]).filter(t => t.title === 'shots');
+    assert.deepEqual(named.map(t => t.id), [retried], 'one thread named shots');
+    assert.ok((await attached(hub, retried)).some(m => m.files.includes('retry.png')), 'the file went in on the retry');
 
     // Omar and a bot, no thread yet: a name is asked for, then a private thread, pinned for its people, takes the message.
     await openPane(page);
