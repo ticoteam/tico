@@ -193,7 +193,7 @@ function settingsAgentPair(slug: string) {
 async function settingsAgentCredential(slug: string) {
   const e: DeviceBot | undefined = S.emps.find(row => row.id === slug); if (!e) return;
   const rotating = !!e.agent?.credential;
-  if (rotating && !confirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`)) return;
+  if (rotating && !(await askConfirm(`Rotate the agent credential for ${e.display_name}? The current token stops working at once; install the new one on its computer.`))) return;
   let issued: AgentCredentialIssued;
   try { issued = await post(`/v2/bots/${encodeURIComponent(slug)}/agent-credential`, {}); }
   catch (error) { toast(errorMessage(error, ''), true); return; }
@@ -275,7 +275,7 @@ function settingsTokenShow(issued: PersonalTokenIssued) {
   document.body.appendChild(dialog); dialog.showModal();
 }
 async function settingsTokenRevoke(id: string | undefined, label: string | undefined) {
-  if (!confirm(`Revoke the token ${label}? Anything using it stops at once.`)) return;
+  if (!(await askConfirm(`Revoke the token ${label}? Anything using it stops at once.`))) return;
   try { await post(`/v2/me/tokens/${encodeURIComponent(String(id))}/revoke`, {}); toast(`Token ${label} revoked`); }
   catch (error) { toast(errorMessage(error, ''), true); }
   await renderSettingsTokens();
@@ -285,7 +285,7 @@ function agentConfigYaml(setup: AgentSetup) {
 }
 async function settingsAgentRevoke(slug: string | undefined) {
   const e = S.emps.find(row => row.id === slug); if (!e) return;
-  if (!confirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`)) return;
+  if (!(await askConfirm(`Revoke the agent credential for ${e.display_name}? Its computer loses access at once; the bot record stays.`))) return;
   try { await post(`/v2/bots/${encodeURIComponent(String(slug))}/agent-credential/revoke`, {}); toast(`${e.display_name} credential revoked`); await loadSettings(); }
   catch (error) { toast(errorMessage(error, ''), true); }
 }

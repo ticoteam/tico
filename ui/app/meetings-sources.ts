@@ -114,7 +114,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
       if (act === 'close-panel') dialog.close();
       else if (act === 'g-connect') granolaConnect(state);
       else if (act === 'g-sync') granolaSync(state, true);   // the button: may retry inside a backoff
-      else if (act === 'g-remove') { if (confirm('Remove Granola?')) granolaDisconnect(state); }
+      else if (act === 'g-remove') { if (await askConfirm('Remove Granola?', el)) granolaDisconnect(state); }
       else if (act === 'imp-connect') {
         if (!source) throw new Error(`Unknown source ${id}`);
         window.openMeetingImporter?.(id, source.name, () => meetSources(state));
@@ -123,7 +123,7 @@ function meetSourcesPaint(state: MeetSourcesState, focus?: string) {
         const label = el.closest('.msrc-row')?.querySelector('b');
         if (!label) throw new Error('Source row has no name');
         const name = label.textContent;
-        if (!confirm(`Remove ${name}?`)) return;
+        if (!(await askConfirm(`Remove ${name}?`))) return;
         el.disabled = true;
         try { await post('/v2/meeting-importers/' + encodeURIComponent(id), {enabled: false, runner_id: ''}); }
         catch (error) { el.disabled = false; toast(errorMessage(error, 'Could not remove the source'), true); return; }

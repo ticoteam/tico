@@ -11,6 +11,8 @@ interface Window {
   };
   supportOn?: (known?: boolean) => boolean;
   talkToUs?: (report: { kind: string; title?: string; [key: string]: unknown }) => void;
+  /** The desktop app's OK/Cancel dialog (app/src/bridge.rs DIALOG_SCRIPT): true only for OK. Called by askConfirm. */
+  ticoConfirm?: (message: string) => Promise<boolean>;
   ticoNative?: any;
   ticoNativeFeatures?: any;
   ticoNativeLog?: any;

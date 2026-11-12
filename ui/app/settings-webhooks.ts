@@ -340,7 +340,7 @@ function whSigningDialog(t: WebhookTrigger) {
   `${t.signed ? '<button type="button" class="ghost danger" data-wh-sign-off>Turn off</button>' : ''}<button type="submit" class="primary">Save</button>`);
   const path = `/v2/triggers/${encodeURIComponent(t.id)}/signing`;
   whSubmit(dialog, async v => {
-    if (t.signed && !confirm('Replace the signing secret? Calls signed with the current one are refused at once.')) return;
+    if (t.signed && !(await askConfirm('Replace the signing secret? Calls signed with the current one are refused at once.'))) return;
     const secret = String(v.get('secret') || '').trim();
     const made: WhTriggerMade = (await post(path, {preset: String(v.get('preset')), ...(secret ? {secret} : {})})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id};
@@ -349,13 +349,13 @@ function whSigningDialog(t: WebhookTrigger) {
   });
   const off = dialog.querySelector<HTMLElement>('[data-wh-sign-off]');
   if (off) off.onclick = async () => {
-    if (!confirm('Turn signing off? Anyone with the address can call it.')) return;
+    if (!(await askConfirm('Turn signing off? Anyone with the address can call it.'))) return;
     try { await post(path, {off: true}); if (WH.shown?.id === t.id) delete WH.shown.signing; dialog.close(); void whRender(); }
     catch (e) { const error = dialog.querySelector('[data-wh-error]'); if (error) error.textContent = errorMessage(e, ''); }
   };
 }
 async function whRotate(t: WebhookTrigger) {
-  if (!confirm('Make a new address? The current one stops working at once.')) return;
+  if (!(await askConfirm('Make a new address? The current one stops working at once.'))) return;
   try {
     const made: WhTriggerMade = (await post(`/v2/triggers/${encodeURIComponent(t.id)}/rotate`, {})).trigger;
     WH.shown = {...(WH.shown?.id === t.id ? WH.shown : {}), id: t.id, url: made.replayed ? '' : made.url};
@@ -364,7 +364,7 @@ async function whRotate(t: WebhookTrigger) {
   } catch (e) { toast(errorMessage(e, ''), true); }
 }
 async function whTriggerDelete(t: WebhookTrigger) {
-  if (!confirm(`Delete “${t.name}”?`)) return;
+  if (!(await askConfirm(`Delete “${t.name}”?`))) return;
   try {
     await post(`/v2/triggers/${encodeURIComponent(t.id)}/delete`, {});
     Object.assign(WH, {trigger: '', shown: null});
@@ -593,16 +593,16 @@ async function whHookDetail(el: HTMLElement, run: number) {
   const act = async (fn: () => Promise<unknown>, after?: () => void) => { try { await fn(); after?.(); void whRender(); } catch (e) { toast(errorMessage(e, ''), true); } };
   on('[data-wh-hook-edit]', () => void whHookDialog(h));
   on('[data-wh-hook-pause]', () => act(() => post(`${path}/${h.enabled ? 'pause' : 'resume'}`, {})));
-  on('[data-wh-hook-rotate]', () => {
-    if (!confirm('Make a new signing secret? The old one keeps working for a while.')) return;
+  on('[data-wh-hook-rotate]', async () => {
+    if (!(await askConfirm('Make a new signing secret? The old one keeps working for a while.'))) return;
     void act(async () => {
       const made: WhHookMade = (await post(path + '/rotate', {})).webhook;
       WH.hookShown = made.replayed ? null : {id, secret: made.secret};
       if (made.replayed) toast('A new secret was made, but it was lost on the way. Try again.', true);
     });
   });
-  on('[data-wh-hook-delete]', () => {
-    if (!confirm(`Delete “${h.name}”? Nothing more is sent to it.`)) return;
+  on('[data-wh-hook-delete]', async () => {
+    if (!(await askConfirm(`Delete “${h.name}”? Nothing more is sent to it.`))) return;
     void act(() => post(path + '/delete', {}), () => { WH.hook = ''; WH.hookShown = null; });
   });
   on('[data-wh-example]', () => act(async () => {
@@ -658,8 +658,8 @@ async function whGateway(el: HTMLElement, run: number) {
   }; });
   el.querySelectorAll<HTMLButtonElement>('[data-wh-relay-do]').forEach(b => { b.onclick = async () => {
     const id = b.closest<HTMLElement>('[data-wh-relay]')!.dataset.whRelay!, what = b.dataset.whRelayDo, path = `/v2/triggers/${encodeURIComponent(id)}/relay`;
-    if (what === 'delete' && !confirm('Remove the Gateway address? Calls to it stop at once.')) return;
-    if (what === 'rotate' && !confirm('Make a new Gateway address? The current one stops working at once.')) return;
+    if (what === 'delete' && !(await askConfirm('Remove the Gateway address? Calls to it stop at once.'))) return;
+    if (what === 'rotate' && !(await askConfirm('Make a new Gateway address? The current one stops working at once.'))) return;
     b.disabled = true;
     try {
       const r: import('../types/api').WebhookRelayAddress['relay'] = (await post(what === 'make' ? path : `${path}/${what}`, {})).relay;

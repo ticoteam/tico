@@ -396,14 +396,14 @@ function auMaintClick(t: Element): boolean {
   if ((m = t.closest<HTMLElement>('[data-mt-more]'))) { void auMaintRunsLoad(au, true); return true; }
   return false;
 }
-function auMaintChange(e: Event): void {
+async function auMaintChange(e: Event): Promise<void> {
   const t = e.target;
   const au = automationsState();
   if (!(t instanceof HTMLInputElement || t instanceof HTMLSelectElement) || !au || au.id !== AU_MAINT || !t.closest('.au-hd,.au-pane')) return;
   if (au.mtBusy) { auDrawHead(); auDrawPane(); return; }
   const d = t.dataset, step = (k: string): Partial<MaintStep> => auMaintStep(k) || {};
   if (t instanceof HTMLInputElement && 'mtPause' in d) {
-    if (!t.checked && !confirm('Pause Maintenance? No step runs until it is back on.')) { t.checked = true; return; }
+    if (!t.checked && !(await askConfirm('Pause Maintenance? No step runs until it is back on.', t))) { t.checked = true; return; }
     void auMaintSave({paused: !t.checked});
   } else if ('mtSchedule' in d) void auMaintSave({schedule: t.value});
   else if ('mtCap' in d) void auMaintSave({monthly_cap_usd: Number(t.value)});

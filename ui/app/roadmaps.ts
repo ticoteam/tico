@@ -183,7 +183,7 @@ function roadmapCommentsBind(state: TaskChatState) {
     $('button[type=submit]', form).insertAdjacentHTML('beforebegin', '<label class="prop-check roadmap-check"><input type="checkbox" data-comment-public>Public</label>');
   }
   state.host.querySelectorAll<HTMLButtonElement>('[data-public-moderate]').forEach(button => button.onclick = async () => {
-    if (button.dataset.publicModerate === 'delete' && !window.confirm('Delete this public comment?')) return;
+    if (button.dataset.publicModerate === 'delete' && !(await askConfirm('Delete this public comment?', button))) return;
     button.disabled = true;
     try { await post(`/v2/tasks/${encodeURIComponent(state.id)}/comments/${encodeURIComponent(String(button.dataset.message))}/moderate`, {action: button.dataset.publicModerate}); await taskChatRead(state); }
     catch (error) { toast(errorMessage(error, ''), true); button.disabled = false; }

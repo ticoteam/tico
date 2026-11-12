@@ -551,8 +551,8 @@
     };
     const perfSelect = dialog.querySelector<HTMLSelectElement>('[name=perf]')!;
     perfSelect.onchange = () => { perf = Number(perfSelect.value); void load(); };
-    dialog.querySelector<HTMLElement>('[data-refresh]')!.onclick = () => {
-      if (area.value && !confirm('Replace this capture and its edits with current diagnostics?')) return;
+    dialog.querySelector<HTMLElement>('[data-refresh]')!.onclick = async event => {
+      if (area.value && !(await askConfirm('Replace this capture and its edits with current diagnostics?', eventElement(event)))) return;
       void load();
     };
     dialog.querySelector<HTMLElement>('[data-save]')!.onclick = async () => {

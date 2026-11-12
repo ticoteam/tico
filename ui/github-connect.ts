@@ -128,7 +128,7 @@ window.mountGithubConnect = async function (host) {
     };
     const disconnect = ghEl<HTMLButtonElement>(host, '[data-gh-disconnect]');
     disconnect.onclick = async () => {
-      if (!confirm('Forget the GitHub app?')) return;
+      if (!(await askConfirm('Forget the GitHub app?'))) return;
       disconnect.disabled = true;
       try { await post('/v2/github/app/disconnect', {}); window.mountGithubConnect(host); }
       catch (error) { ghEl<HTMLElement>(host, '[data-gh-status]').textContent = errorMessage(error, ''); disconnect.disabled = false; }
@@ -155,7 +155,7 @@ window.mountGithubConnect = async function (host) {
       try { setup = await get('/v2/github/app/manifest?' + query); }
       catch (error) {
         // github-app.key is lost with no backup copy: only an explicit confirm drops what it sealed (docs/install.md).
-        if (errorCode(error) !== 'github_key_missing' || !confirm(LOST_KEY_CONFIRM)) throw error;
+        if (errorCode(error) !== 'github_key_missing' || !(await askConfirm(LOST_KEY_CONFIRM))) throw error;
         await post('/v2/github/app/replace-lost-key', {});
         setup = await get('/v2/github/app/manifest?' + query);
       }
