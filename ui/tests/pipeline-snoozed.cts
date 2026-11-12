@@ -61,7 +61,7 @@ async function drawn(page: Page, rows: string) {
     const mark = el.querySelector('.pv-sleep'), title = el.querySelector('.tk-title');
     return {id: (el as HTMLElement).dataset['task'], dim: el.classList.contains('pv-snoozed'),
       color: title ? getComputedStyle(title).color + '/' + getComputedStyle(title).opacity : '',
-      label: mark?.getAttribute('aria-label') ?? null, tip: mark?.getAttribute('title') ?? null, role: mark?.getAttribute('role') ?? null,
+      rowTip: el.getAttribute('data-tip'), label: mark?.getAttribute('aria-label') ?? null, tip: mark?.getAttribute('title') ?? null, role: mark?.getAttribute('role') ?? null,
       markText: mark?.textContent ?? null, icon: !!mark?.querySelector('svg'), text: (el as HTMLElement).innerText.replace(/\s+/g, ' ').trim()};
   }));
 }
@@ -77,6 +77,7 @@ function check(where: string, rows: Awaited<ReturnType<typeof drawn>>): void {
     assert.equal(r.role, 'img', `${where}: ${id}'s sleep mark is an image`);
     assert.ok(r.icon, `${where}: ${id}'s sleep mark is an icon`);
     assert.equal(r.markText, '', `${where}: ${id}'s sleep mark has no words`);
+    assert.match(r.rowTip ?? '', /Back after the launch/, `${where}: ${id}'s tip keeps the snooze's why`);
   }
   assert.equal(by['s1']!.label, 'Snoozed until Nov 14', `${where}: the mark's label says when it wakes`);
   assert.equal(by['s1']!.tip, 'Snoozed until Nov 14', `${where}: and so does its title`);

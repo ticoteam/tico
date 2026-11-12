@@ -129,14 +129,16 @@ const PV_SLEEP_ICON = '<svg viewBox="0 0 14 14" width="12" height="12" aria-hidd
 const pvWake = (t: TaskAny): string => shortDate(t.turn?.state === 'snoozed' ? t.turn.until : null) || 'On ice';
 
 /** A snoozed task, dimmed: the sleep mark (a mark, not words: its label and title say "Snoozed until Nov 14"), the title
- * and the day it wakes. `card` in a column, else a row of the list or the phone's stage. */
+ * and the day it wakes. `card` in a column, else a row of the list or the phone's stage. Its tip is the task's line, as
+ * an awake one's is: for a snoozed task, the snooze's why. */
 function pvSnoozedHTML(t: TaskAny, card: boolean): string {
   const wake = pvWake(t), words = wake === 'On ice' ? 'Snoozed, On ice' : `Snoozed until ${wake}`;
   const mark = `<span class="tk-mark pv-sleep" role="img" aria-label="${esc(words)}" title="${esc(words)}">${PV_SLEEP_ICON}</span>`;
   const title = `<span class="tk-title">${esc(t.title || '')}</span>`, when = `<span class="tk-age pv-wake">${esc(wake)}</span>`;
+  const tip = esc(taskLine(t)), attrs = `data-task="${esc(t.id)}" role="button" tabindex="0"${tip ? ` data-tip="${tip}"` : ''}`;
   return card
-    ? `<div class="tk-card pv-snoozed" data-task="${esc(t.id)}" role="button" tabindex="0">${title}${mark}${when}</div>`
-    : `<div class="tk-row tk-row-dim pv-snoozed" data-task="${esc(t.id)}" role="button" tabindex="0">${mark}${title}${when}</div>`;
+    ? `<div class="tk-card pv-snoozed" ${attrs}>${title}${mark}${when}</div>`
+    : `<div class="tk-row tk-row-dim pv-snoozed" ${attrs}>${mark}${title}${when}</div>`;
 }
 const pvCardHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, true) : taskCardHTML(t);
 const pvRowHTML = (t: TaskAny): string => pvSnoozed(t) ? pvSnoozedHTML(t, false) : taskRowHTML(t, {look: 'list'});
