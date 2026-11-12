@@ -36,6 +36,10 @@ If the repository asks for a pre-push hook and its setup script does not turn it
 A push the hook stops is a finding: fix it and push again. Never skip the hook. If it cannot run on this computer (a
 tool it needs is missing and the setup script cannot install it), say on the task which tool, and do not push around it.
 
+One task has one pull request at a time. When the task already has an open one (`tico task show` lists it: the task
+was someone else's before you), work on its branch instead: `gh pr checkout <its link>`, commit and push there, and
+never open a second pull request beside it.
+
 Work only on that branch. Never commit to the base branch. Never force-push, with one exception: after a rebase on the
 base branch (a merge conflict wakes you for one), push your own branch with `git push --force-with-lease`. After the
 first commit, push. {{app_name}} opens the draft pull request for a `tico/<task>-` branch at its first push and links

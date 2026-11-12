@@ -2938,9 +2938,40 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         or filer_live(c, message)
     ):
         return "lane_held"
+    if turn_moved_on(c, job["bot_id"], task_id, refs):
+        return "task_turn_out"
     if (until := handed_back_until(c, job)) and until > H.now():
         return "handed_back"
     return None
+
+
+def turn_moved_on(c, bot, task_id, refs):
+    """Whether this job, a turn the engine gave `bot` on a task (a `task_turn` wake), waits for another bot's turn on
+    the same visit that is still out though the task no longer waits on that bot: the task was given to `bot` while the
+    other's run was under way (task_engine.reassign asks that run to stop). One task has one turn of its work at a
+    time, keyed on the task and its visit, not on the bot, so two bots never build one task at once (#171). A bot the
+    task still waits on (asked for an OK or an answer) has a turn of its own and holds nothing."""
+    visit = refs.get("visit")
+    if not task_id or refs.get("wake") != "task_turn" or not visit:
+        return False
+    others = {
+        str(row[0])
+        for row in c.execute(
+            "SELECT j.bot_id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+            "WHERE a.task_id=? AND a.state IN ('leased','running') AND j.bot_id<>? "
+            "AND json_extract(m.refs,'$.wake')='task_turn' AND json_extract(m.refs,'$.visit')=?",
+            (task_id, bot, visit),
+        )
+    }
+    if not others:
+        return False
+    from . import task_engine, waiting_on
+
+    row = task_engine.task(c, task_id)
+    if not row or (row.get("visit") or {}).get("id") != visit:
+        return False  # the task moved on: this wake is about a visit that ended, and the engine drops it
+    turns = {str(H.actor_id(who)) for who in waiting_on.turns(c, row)}
+    return any(other not in turns for other in others)
 
 
 def obsolete_notices_sql(c):
