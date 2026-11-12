@@ -1640,6 +1640,7 @@ def on_delete(conn: "sqlite3.Connection", task_ids: Sequence[str], by: str) -> i
     conn.execute(f"DELETE FROM answers WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM requirements WHERE visit_id IN ({visits})", ids)
     conn.execute(f"DELETE FROM snoozes WHERE task_id IN ({marks})", ids)
+    conn.execute(f"DELETE FROM idea_checks WHERE task_id IN ({marks})", ids)  # an owed check is for this visit
     return conn.execute(f"DELETE FROM visits WHERE task_id IN ({marks})", ids).rowcount
 
 
