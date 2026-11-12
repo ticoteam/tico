@@ -1184,18 +1184,27 @@ def _tunnel(io: IO, args, s: Settings, deps: Deps, zone, cf: Cloudflare | None) 
     return s.tunnel_id
 
 
-def _version_key(v: str) -> tuple[int, ...] | None:
-    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", v or "")
-    return tuple(int(x) for x in m.groups()) if m else None
+def _version_key(v: str) -> tuple | None:
+    """A release tag's order, as semver orders it: a pre-release sorts below its release, and its dot parts compare as
+    numbers when both are (rc.10 > rc.9). None for anything that is not a release tag (latest, empty)."""
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.]+))?", v or "")
+    if not m:
+        return None
+    pre = m.group(4)
+    if pre is None:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)), 1, ())
+    parts = tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in pre.split("."))
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), 0, parts)
 
 
-def _keep_newer_server_version(io, s: Settings, ssm, deps, env_text: str) -> str:
+def _keep_newer_server_version(io, s: Settings, ssm, deps, env_text: str) -> tuple[str, bool]:
     """A re-run on a running server: an update (Update now, or scripts/install.sh on the server) moves TICO_TAG in the
     server's .env only, and pull-env.sh replaces that .env with the stored parameter. So read the server's version first
     and keep it when it is newer than this setup's: the parameter then holds it too, and the re-run never downgrades.
-    A first install (no saved server) asks nothing."""
+    The update also replaced the server's compose.yaml, so a kept version takes that release's compose.yaml as well.
+    A first install (no saved server) asks nothing. Returns the env and whether the server's version was kept."""
     if not s.aws_instance_id:
-        return env_text
+        return env_text, False
     cmd = f"sed -n 's/^TICO_TAG=//p' {contract.REMOTE_DIR}/.env 2>/dev/null | head -n 1"
     try:
         res = remote.SSMShell(ssm, s.aws_instance_id, deps.sleep).run(cmd)
@@ -1203,14 +1212,16 @@ def _keep_newer_server_version(io, s: Settings, ssm, deps, env_text: str) -> str
         res = None
     if res is None or res.returncode:
         io.say("  Could not read the version this server runs; writing this setup's version.")
-        return env_text
+        return env_text, False
     running = res.stdout.strip().strip("\"'")
     have, mine = _version_key(running), _version_key(s.tag)
     if have is None or (mine is not None and have <= mine):
-        return env_text
+        return env_text, False
     io.say(f"  The server was updated to {running}; keeping it (this setup is {s.tag}).")
+    if cloudinit.VERSION_RE.match(s.compose_ref):
+        s.compose_ref = running
     s.tag = running
-    return envfile.render(s.to_env())
+    return envfile.render(s.to_env()), True
 
 
 def _aws(
@@ -1232,7 +1243,10 @@ def _aws(
             ) from None
     elif plan_s3 and owned.strict(s.asset_prefix):
         d.verify_plan_bucket(plan_s3)  # before the env names it and before the upload
-    env_text = _keep_newer_server_version(io, s, ssm, deps, env_text)
+    env_text, kept = _keep_newer_server_version(io, s, ssm, deps, env_text)
+    if kept and s.compose_ref == s.tag:
+        # This setup's own compose.yaml is of its older release; the server's release's comes from its tag.
+        compose, url = None, contract.compose_url(s.compose_ref)
     d.put_env(env_text, company_file=bool(s.company_file_data) and not plan.plan_bucket)
     if plan_s3:
         # Before launch: the server copies it at first boot. A re-run puts it again, for pull-env.sh below.
