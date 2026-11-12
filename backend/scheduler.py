@@ -524,30 +524,29 @@ class Scheduler:
         if ctx is None:
             ctx = heartbeat.Context(self, at)
             heartbeat.beat(ctx)
-        at = ctx.at
         # tick_ms is this tick's own time; the beat records its own (heartbeat_beats.total_ms).
         started = time.monotonic()
-        fired, failures, holds, locked = [], ctx.failures, ctx.holds, ctx.locked
-        # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
-        from . import thread_bot_status
+        try:
+            return self._pass(ctx)
+        except Exception as exc:
+            ctx.failures.append({"scheduler": type(exc).__name__})
+            raise
+        finally:
+            # Written once the whole pass has run, so every job's failure in it is on the row.
+            self._record_health(ctx, started)
 
-        with self.store.read() as c:
-            trailing = thread_bot_status.trailing_roots(c)
-        if trailing:
-            with locked("thread_bot_status") as c:
-                with isolated(c, "thread_bot_status", "trailing", failures):
-                    thread_bot_status.send_trailing(c, trailing)
+    def _record_health(self, ctx, started):
+        failures, holds = ctx.failures, ctx.holds
         longest = max(holds, default=(0, 0, None))
         with self.store.transaction() as c:
             c.execute(
                 "INSERT INTO service_health VALUES('scheduler',?,?,?) ON CONFLICT(service) DO UPDATE SET "
                 "last_succeeded_at=excluded.last_succeeded_at,last_error=excluded.last_error,detail=excluded.detail",
                 (
-                    stamp(at),
+                    stamp(ctx.at),
                     "schedule errors" if failures else None,
-                    # How long the 10-second pass took, the longest any one of its transactions held the write
-                    # lock and which step that was, and the longest it waited for the lock behind other writers.
-                    # The minute and hourly passes below take their own transactions and are not counted here.
+                    # How long the pass took, the longest any one of its locked steps held the write lock and which
+                    # step that was, and the longest it waited for the lock behind other writers.
                     encode(
                         {
                             "failures": failures,
@@ -560,6 +559,19 @@ class Scheduler:
                     ),
                 ),
             )
+
+    def _pass(self, ctx):
+        at = ctx.at
+        fired, failures, locked = [], ctx.failures, ctx.locked
+        # A running turn's step the bot status throttle held back is sent now (backend/thread_bot_status.py).
+        from . import thread_bot_status
+
+        with self.store.read() as c:
+            trailing = thread_bot_status.trailing_roots(c)
+        if trailing:
+            with locked("thread_bot_status") as c:
+                with isolated(c, "thread_bot_status", "trailing", failures):
+                    thread_bot_status.send_trailing(c, trailing)
         try:
             # The controlled jobs' saved settings; if they cannot be read, only those jobs wait for the next tick.
             with self.store.read() as c:
