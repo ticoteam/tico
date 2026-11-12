@@ -852,6 +852,8 @@ def grow_plan(current, disk, offered, caps, others_cpu, at=0):
 
 
 def cloud_size_name(name):
+    if name == "xlarge":
+        return "XLarge"
     return (name or "")[:1].upper() + (name or "")[1:]
 
 

@@ -69,7 +69,7 @@ def test_an_unavailable_size_is_listed_with_its_reason_and_the_api_refuses_it_fo
     refused = cloud.api.post("/api/v2/bots/ops/cloud-machine", json={"size": "xlarge"}, headers=headers())
     assert refused.status_code == 422
     error = refused.json()["error"]
-    assert error["code"] == "size_unavailable" and "needs a higher plan" in error["message"].lower()
+    assert error["code"] == "size_unavailable" and "needs a higher plan" in error["detail"].lower()
     assert error["available"] == ["small", "default", "large"] and error["reason"] == "Needs a higher plan"
     assert cloud.row()["size"] == "default"  # unchanged
     assert post(cloud.api, "bots/ops/cloud-machine", {"size": "large"})["cloud_machine"]["size"] == "large"
