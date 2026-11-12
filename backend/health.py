@@ -58,6 +58,7 @@ QUEUE_WAITS = (
     "lane_held",
     "cooling_off",
     "task_wait",
+    "task_turn_out",
     "handed_back",
     "scoped",
     "task_quarantine",
@@ -1253,6 +1254,8 @@ HELD = {
     "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its task is snoozed: its work starts when the snooze ends", RUNS),
+    # The task was given to this bot while another bot's turn on it was out (execution.turn_moved_on).
+    "task_turn_out": ("Its task was handed to it mid-turn: it starts when the earlier owner's turn ends", RUNS),
     "paused": ("Paused: its owner or BotOps must resume it", BOT_SETTINGS),
     "company_paused": ("All bots on Tico Team are paused: its work starts when someone resumes", BOT_SETTINGS),
     "no_slot": ("No slot on {computer}: queued behind running turns", RUNS),
