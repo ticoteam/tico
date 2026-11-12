@@ -5,8 +5,8 @@ order. Neither may leave a stale fact that is never read again.
 - A save at the same version as the saved row that says something different marks the PR due, in the same
   transaction, so the next pass reads GitHub and the saved fact returns to what GitHub says.
 
-Reuses the golden file's world (real task and links, webhooks the way the server takes them, the in-memory GitHub);
-the reproduction is the state-machines audit's B10 harness.
+Real task and links, webhooks the way the server takes them, the in-memory GitHub: the state-machines audit's B10
+reproduction harness.
 """
 
 import importlib.util
@@ -17,9 +17,54 @@ import pytest
 from backend import item_metadata as IM
 from backend.item_sources import github as G
 from backend.store import H
-from backend.tests.test_source_golden import REPO, Seam, World, engineering, new, pr_payload
+from backend.tests.helpers.fake_github import FakeGitHub
+from backend.tests.helpers.github_facts_merge_queue import REPO, engineering, new
 
 KEY = G.pr_key(REPO, 1)
+
+
+class World:
+    def __init__(self, store):
+        self.store = store
+        self.gh = FakeGitHub()
+
+    def tx(self):
+        return self.store.transaction()
+
+
+class Seam:
+    @staticmethod
+    def webhook(c, event, payload, delivery=None):
+        """A webhook as the server's route takes it (backend/github.py): a repeated delivery is dropped ("repeat"),
+        then the metadata step, then the older PR pass."""
+        from backend import github as GH
+
+        if G.seen_delivery(c, delivery, event):
+            return "repeat"
+        found = G.webhook(c, event, payload)
+        GH.pull_request(c, payload)
+        return found
+
+    @staticmethod
+    def refresh(store, gh, now):
+        return G.refresh(store, gh, now)
+
+
+def pr_payload(gh, action, number=1, updated_at=None):
+    """GitHub's pull_request webhook built from the fake's PR as it is now."""
+    pr = gh.prs[(REPO, number)]
+    snapshot = {
+        "number": number,
+        "html_url": f"https://github.com/{REPO}/pull/{number}",
+        "state": "closed" if pr["state"] != "open" else "open",
+        "merged": pr["state"] == "merged",
+        "merge_commit_sha": pr["merged_sha"],
+        "merged_at": pr["merged_at"],
+        "draft": pr["draft"],
+        "head": {"sha": pr["head_sha"], "ref": "feature"},
+        "updated_at": updated_at,
+    }
+    return {"action": action, "pull_request": snapshot, "repository": {"full_name": REPO}}
 
 
 def _stamp(seconds=0):
