@@ -1,7 +1,7 @@
 import type {Route} from 'playwright';
 // Offline browser check of Skip on the ask screen (task #181), against a fake of the new routes, on a 390 px phone and
 // on a desktop:
-// - every item shows a Skip button with at least a 40 px tap area, on every width; the phone has no ‹ ›;
+// - every item, a typed choice with no answer row of its own included, shows a Skip button with at least a 40 px tap area, on every width; the phone has no ‹ ›;
 // - Skip goes to the next item and sends nothing: the skipped item is not answered or changed;
 // - at the last item, Skip wraps to the first one skipped, which is still waiting;
 // - on a desktop ‹ › and the arrow keys still step through.
@@ -17,10 +17,12 @@ const brief = (id: string, title: string) => ({id, title, number: 1, pipeline_id
   owner_id: 'bot:pm', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null, snoozed: false,
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: '2026-11-09T10:00:00Z', until: null, ask: true, requirement_id: null},
   version: 3});
-const question = (n: number, line: string, choices: string[]) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
+// `typed`: a stage's typed choice, which is only its buttons and has no answer row of its own; Skip makes one.
+const question = (n: number, line: string, choices: string[], typed = false) => ({kind: 'ask', id: `r${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line,
   since: `2026-11-09T1${n}:00:00Z`, task: brief(`t${n}`, `Task ${n}`),
   ask: {requirement_id: `r${n}`, kind: 'answer', line, who: 'human:ana', asked_by: 'bot:pm', choices, may: ['answer', 'thumbs'],
-    met: false, shows: [], standing: 'waiting', answer: null}});
+    met: false, shows: [], standing: 'waiting', answer: null,
+    typed: typed ? {name: 'region', type: 'choice', min: null, max: null, question: line} : undefined}});
 const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: [{id: 'spec', name: 'Spec', purpose: '', owner: null, by_hand: false, task_limit: null, expected_minutes: null,
@@ -33,7 +35,7 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
   try {
     for (const [label, viewport] of [['phone', {width: 390, height: 844}], ['desktop', {width: 1200, height: 900}]] as const) {
       const errors: string[] = [], writes: string[] = [];
-      let needs = [question(1, Q[0]!, ['Free', 'Pro trial']), question(2, Q[1]!, ['EU', 'US']), question(3, Q[2]!, ['Yes', 'No'])];
+      let needs = [question(1, Q[0]!, ['Free', 'Pro trial']), question(2, Q[1]!, ['EU', 'US'], true), question(3, Q[2]!, ['Yes', 'No'])];
       const page = await browser.newPage({viewport, serviceWorkers: 'block'});
       page.on('pageerror', (error: Error) => errors.push(error.message));
       await page.route('**/*', (route: Route) => {
@@ -81,6 +83,7 @@ const Q = ['Which plan do new signups get?', 'Which region first?', 'Ship on Mon
       await skipBox();
       await skip.click();
       await at(2, 3);
+      await dialog.locator('[data-dc-choice="EU"]').waitFor();          // the typed choice: its buttons, then Skip
       await skipBox();
       await skip.click();
       await at(3, 3);
