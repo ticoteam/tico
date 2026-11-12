@@ -198,6 +198,7 @@ def test_with_decisions_off_posts_stay_new_show_hollow_and_expire_in_a_week(api,
 def test_a_pass_out_of_time_releases_its_claims_still_sends_and_the_next_pass_scores_them(api, monkeypatch):
     clock = {"now": 0.0, "step": 6.0}
     monkeypatch.setattr(L, "CLOCK", lambda: clock["now"])
+    monkeypatch.setattr(L, "GROUP", 1)  # one post per call, as a listening kept off grouped calls asks
     judge = FakeJudge()
 
     def slow(state, questions, label=None):
@@ -228,9 +229,15 @@ def test_the_newest_posts_are_scored_first(api, monkeypatch):
         return judge(state, questions, label)
 
     aid, source = started(api, rules=[KEEP])
-    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
-    run(api, at(0.1), slow)
-    assert [text.split()[2] for text in judge.calls] == ["9", "8", "7", "6"]
+    saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(25)])
+    monkeypatch.setattr(L, "GROUP", 3)
+    run(api, at(0.1), slow)  # the fourth call uses up the 20 seconds
+    assert [[text.split()[2] for text in call] for call in judge.calls] == [
+        ["24", "23", "22"],
+        ["21", "20", "19"],
+        ["18", "17", "16"],
+        ["15", "14", "13"],
+    ]
 
 
 def test_copies_of_a_copy_count_on_the_one_original(api):
@@ -265,7 +272,9 @@ def test_the_same_post_with_another_link_is_a_copy(api):
     assert statuses(api, aid) == {"kept": 1, "duplicate": 1}
 
 
-def test_scoring_stops_when_the_pass_itself_reaches_the_spend_cap(api):
+def test_scoring_stops_when_the_pass_itself_reaches_the_spend_cap(api, monkeypatch):
+    """Each post of a call carries its share of the call's cost, so the cap counts what the calls cost."""
+    monkeypatch.setattr(L, "GROUP", 2)
     judge = FakeJudge()
 
     def paid(state, questions, label=None):
@@ -274,7 +283,8 @@ def test_scoring_stops_when_the_pass_itself_reaches_the_spend_cap(api):
     aid, source = started(api, rules=[KEEP], spend_cap={"per_30m": 0.05})
     saved(api, source, [item(n, f"{story(n)} [r0]") for n in range(10)])
     run(api, at(0.1), paid)
-    assert len(judge.calls) == 3 and statuses(api, aid) == {"kept": 3, "new": 7}
+    assert len(judge.calls) == 3 and statuses(api, aid) == {"kept": 6, "new": 4}
+    assert sql(api, "SELECT round(sum(cost), 6) AS c FROM listening_items")[0]["c"] == 0.06
     assert sql(api, "SELECT count(*) AS n FROM listening_items WHERE claimed_at IS NOT NULL")[0]["n"] == 0
 
 
@@ -308,13 +318,13 @@ def test_two_passes_at_once_score_no_post_twice(api):
     answer = FakeJudge()
 
     def racing(state, questions, label=None):
-        if not judge.calls:  # a second pass starts while the first is asking about its first post
-            judge.calls.append(state["text"])
+        if not judge.calls:  # a second pass starts while the first is asking about its first posts
+            judge.calls.append(state)
             L.run_pass(store, at(0.1), answer)
         return answer(state, questions, label)
 
     L.run_pass(store, at(0.1), racing)
-    assert sorted(answer.calls) == sorted(f"{story(n)} [r0]" for n in range(5))
+    assert sorted(answer.posts) == sorted(f"{story(n)} [r0]" for n in range(5)) and len(answer.calls) == 1
     assert statuses(api, aid) == {"kept": 5}
 
 
@@ -608,3 +618,25 @@ def test_a_migrated_automation_runs_without_its_listening_find_when_turned_back_
     api.app.state.store.automations.drain()
     done = runs(api, aid)
     assert len(done) == 1 and done[0]["status"] == "ok" and notes(done[0]) == ["hello"]
+
+
+def test_ten_small_posts_with_three_rules_take_one_call_and_each_is_decided_as_alone(api, monkeypatch):
+    """AC-6: grouped posts get the verdicts they would get one at a time."""
+    marks = ["[r0]", "[r1]", "[r2]", "[r0] [r2]", "", "[r1:0.8]", "[r0:0.5]", "[r1] [r2:0.6]", "[r0] [r1]", "[r2]"]
+    posts = [item(n, f"{story(n)} {mark}") for n, mark in enumerate(marks)]
+
+    def decided(group):
+        aid, source = started(api, rules=[KEEP, KEEP_NEWS, DROP])
+        saved(api, source, posts)
+        monkeypatch.setattr(L, "GROUP", group)
+        judge = FakeJudge()
+        run(api, at(0.1), judge)
+        rows = sql(api, "SELECT native_id, status, tag FROM listening_items WHERE automation_id=?", (aid,))
+        return judge, {r["native_id"]: (r["status"], r["tag"]) for r in rows}
+
+    alone, one_by_one = decided(1)
+    grouped, together = decided(L.DG.MOST)
+    assert len(alone.calls) == 10 and len(grouped.calls) <= 2
+    assert together == one_by_one and len(together) == 10
+    calls = sql(api, "SELECT detail FROM events WHERE action='judge.call' ORDER BY rowid DESC LIMIT 1")
+    assert '"items": 10' in calls[0]["detail"]
