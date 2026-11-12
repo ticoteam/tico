@@ -114,10 +114,18 @@ function subsUsageHTML(sub: SubsRow) {
   return '';
 }
 function subsStatusHTML(sub: SubsRow) {
-  if (sub.status !== 'needs_reconnect') return '';
-  const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
-  return subsMayEdit() ? `<button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Reconnect</button>`
-    : `<span class="pill waiting"${title}>Reconnect</span>`;
+  if (sub.status === 'needs_reconnect') {
+    const title = sub.status_detail ? ` title="${esc(sub.status_detail)}"` : '';
+    return subsMayEdit() ? `<span class="subs-diagnosis">Sign-in expired</span> <button type="button" class="pill waiting subs-reconnect" data-subs-reconnect="${esc(sub.id)}"${title}>Sign in again</button>`
+      : `<span class="pill waiting"${title}>Sign-in expired. Ask an admin to sign in again.</span>`;
+  }
+  const computers = sub.computers || [];
+  if (!computers.length && subsOwned(sub.kind)) return `<span class="subs-diagnosis">No computer assigned</span>${subsMayEdit() ? ' <span class="muted">Assign this plan to a computer in Settings → Computers.</span>' : ''}`;
+  if (sub.status && sub.status !== 'working') {
+    const names = computers.map(subsComputerLabel).filter(Boolean).join(', ');
+    return `<span class="subs-diagnosis">Connection unavailable${names ? ` on ${esc(names)}` : ''}</span>`;
+  }
+  return '';
 }
 function subsRowHTML(sub: SubsRow) {
   const count = (sub.computers || []).length;

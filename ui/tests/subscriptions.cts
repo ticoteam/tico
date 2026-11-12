@@ -284,9 +284,11 @@ async function modelsTab(browser: Browser) {
     ['Claude Max (Ana)', 'Claude plan', 'Ana', '3', '5h 62%'],
     ['ChatGPT Pro (Ana)', 'ChatGPT plan', '', '1', 'week 13% resets in 4d 15h'],
     ['OpenAI key (company)', 'OpenAI API key', '', '0', '$41.20 this month'],
-    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Reconnect'],
+    ['Claude Max (Sam)', 'Claude plan', 'Sam', '0', 'Sign in again'],
     ['ChatGPT Team (Cy)', 'ChatGPT plan', '', '1', 'week 0%'],
     ['Claude Max (Dee)', 'Claude plan', '', '1', 'Waiting for a computer to report']]);
+  assert.equal(await pane.locator('[data-subs-row=s4] [data-subs-reconnect]').innerText(), 'Sign in again');
+  assert.match(await pane.locator('[data-subs-row=s4] .subs-use').innerText(), /Sign-in expired/);
   // The time until the window resets sits after the share; the tooltip adds the share left and the reset time.
   assert.match((await pane.locator('[data-subs-row=s2] .subs-usage').getAttribute('title'))!, /^13% used in the week · 87% left · resets \S/);
   assert.equal(await pane.locator('[data-subs-row=s1] .subs-reset').count(), 0);
