@@ -42,7 +42,7 @@ fn picker_search_runs_blocking_http_outside_the_tauri_runtime() {
         let headers = String::from_utf8(headers).unwrap();
         assert!(
             headers
-                .starts_with("GET /api/v2/tasks?q=%2342&limit=30&brief=true&offset=30&type=bug ")
+                .starts_with("GET /api/v2/tasks?q=%2342&limit=30&brief=true&offset=30 ")
         );
         let body = r##"{"tasks":[{"id":"task","number":42,"title":"Review pricing","status":"open"}],"next_offset":60}"##;
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();

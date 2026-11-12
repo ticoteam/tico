@@ -255,3 +255,63 @@ def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
     assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
+
+
+def test_an_unknown_filter_is_refused_not_ignored(api):
+    """A filter the list does not take answers 422 naming it, never the list without it (#150: `assignee=` read as
+    no filter and answered every open task)."""
+    post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    r = api.get("/api/v2/tasks?assignee=bot:x&status=open", headers=headers())
+    assert r.status_code == 422, r.text
+    error = r.json()["error"]
+    assert error["code"] == "filter" and "assignee" in error["detail"] and "owner=" in error["detail"]
+    assert "status" in error["detail"] and "waiting_on" in error["detail"]  # the filters it does take
+    # A delta read is refused the same way.
+    cursor = tasks(api, ACTIVE)["cursor"]
+    r = api.get(f"/api/v2/tasks?status=open&changed_after={cursor}&colour=red", headers=headers())
+    assert r.status_code == 422 and r.json()["error"]["code"] == "filter" and "colour" in r.text, r.text
+    assert api.get("/api/v2/tasks?owner=bot:x", headers=headers()).status_code == 200
+    assert get(api, "tasks?owner=bot:ops&status=open")["tasks"] == []  # owner= still filters
+
+
+def test_every_filter_the_list_takes_still_answers(api):
+    from backend import task_list_routes
+
+    made = post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
+    cursor = tasks(api, ACTIVE)["cursor"]
+    values = {
+        "owner": "ben",
+        "requester": "ana",
+        "status": "open",
+        "lane": "company",
+        "label": "area-a",
+        "limit": "10",
+        "offset": "0",
+        "sort": "queue",
+        "number": "1",
+        "updated_since": "2026-01-01T00:00:00Z",
+        "brief": "true",
+        "member": "ana",
+        "role": "requester&member=ana",  # role narrows member
+        "changed_after": cursor,
+        "ids": made["id"],
+        "snoozed": "all",
+        "q": "agenda",
+        "pipeline": made.get("pipeline_id") or "engineering",
+        "stage": made.get("stage_id") or "engineering-build",
+        "waiting_on": "ben",
+        "pushed_past": "false",
+        "on_behalf_of": "default",
+    }
+    assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
+    for name, value in values.items():
+        r = api.get(f"/api/v2/tasks?{name}={value}", headers=headers())
+        assert r.status_code == 200, (name, r.text)
+
+
+def test_the_filter_list_is_what_the_route_declares(api):
+    """LIST_FILTERS is kept by hand next to the handler; it must name exactly the route's query parameters."""
+    from backend import task_list_routes
+
+    route = next(r for r in api.app.routes if getattr(r, "path", "") == "/api/v2/tasks" and "GET" in r.methods)
+    assert {p.alias for p in route.dependant.query_params} == task_list_routes.LIST_FILTERS

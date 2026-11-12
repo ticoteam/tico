@@ -129,7 +129,7 @@ def test_tasks_are_assigned_taken_and_closed_by_slug_or_id(api, sales):
     assert back["owner_id"] == "bot:" + sales
     # the list filters by either
     for owner in ("sales-helper", "bot:sales-helper", sales, "bot:" + sales):
-        ids = {t["id"] for t in get(api, "tasks?owner_id=" + owner)["tasks"]}
+        ids = {t["id"] for t in get(api, "tasks?owner=" + owner)["tasks"]}
         assert {by_slug["id"], by_actor["id"], by_id["id"]} <= ids, owner
     # the bot takes and closes its own task through the MCP tools
     token = bot_token(api, sales)
