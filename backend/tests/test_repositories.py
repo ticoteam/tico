@@ -412,6 +412,31 @@ def test_a_github_token_recovery_clears_the_old_failure_message(api):
     assert row['last_succeeded_at'] and row['last_error'] is None and row['detail'] == '{}'
 
 
+def test_a_github_token_failure_ages_by_its_time_not_its_message(api):
+    """The failure's time decides whether it is recent, never how its message sorts against a timestamp."""
+    import json
+
+    from backend.health import H, note_github_token, token_failure
+
+    store = api.app_state.store
+    for message in ('Bad credentials', '123 authorization failed'):
+        note_github_token(store, message, 'Check the App.')
+        with store.read() as c:
+            assert token_failure(c) == {'message': message, 'action': 'Check the App.'}
+    with store.transaction() as c:  # the same failure, two days old
+        old = json.dumps(
+            {'message': 'Bad credentials', 'action': 'Check the App.', 'failed_at': H.shift(H.now(), hours=-48)}
+        )
+        c.execute(
+            "UPDATE service_health SET last_error='Bad credentials',detail=? WHERE service='github:token'", (old,)
+        )
+    with store.read() as c:
+        assert token_failure(c) is None
+    note_github_token(store, 'Bad credentials', 'Check the App.')  # failing again makes it recent again
+    with store.read() as c:
+        assert token_failure(c) == {'message': 'Bad credentials', 'action': 'Check the App.'}
+
+
 def test_run_workflows_gets_its_own_actions_token_only_once_the_installation_accepts_it(api, gh):
     catalog(api, gh)
     runner_token(api, 'cpo')
