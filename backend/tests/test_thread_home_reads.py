@@ -11,8 +11,7 @@ HOLD_S = 0.3
 
 
 def home(api, actor, token="ana-test"):
-    response = api.get(f"/api/v2/threads/home/{actor}", headers=headers(token))
-    return response
+    return api.get(f"/api/v2/threads/home/{actor}", headers=headers(token))
 
 
 def count_writers(store, monkeypatch):
@@ -62,7 +61,7 @@ def test_an_existing_home_is_served_while_another_request_holds_the_writer(api):
     assert elapsed < HOLD_S / 2, f"Home read took {elapsed * 1000:.0f} ms under a {HOLD_S * 1000:.0f} ms writer hold"
 
 
-def test_an_unknown_teammate_is_still_the_same_404_and_makes_nothing(api, monkeypatch):
+def test_an_unknown_teammate_is_still_the_same_404_and_makes_nothing(api):
     for actor in ("bot:nobody", "human:nobody", "group:nobody"):
         got = home(api, actor)
         assert got.status_code == 404, (actor, got.text)
