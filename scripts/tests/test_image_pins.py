@@ -216,7 +216,6 @@ def requires_python_on_pypi(pin):
     return pypi_json(*pin)['info'].get('requires_python') or ''
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize('requirements', ['backend/requirements.txt', 'backend/requirements-dev.txt'])
 def test_every_pin_still_installs_on_the_oldest_supported_python(requirements):
     """Locks resolve for the images' Python, but runner Macs may still have 3.12 (scripts/setup-runner.sh).
