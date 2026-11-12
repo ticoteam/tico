@@ -60,3 +60,10 @@ def test_deeply_nested_tables_keep_every_word():
     depth = 10_000
     out = md("<table><tr><td>w" * depth + "</td></tr></table>" * depth)
     assert out == "| " + " ".join(["w"] * depth) + " |\n| --- |\n"
+
+
+def test_a_file_ending_inside_a_table_keeps_its_words():
+    # A file may end inside a table, even inside a <script> in a cell: the open table is still written out.
+    assert md("<table><tr><td>A</td><td>B") == "| A | B |\n| --- | --- |\n"
+    assert md("<table><tr><td>A<table><tr><td>B") == "| A B |\n| --- |\n"
+    assert md("<table><tr><td>A<script>x") == "| A |\n| --- |\n"
