@@ -49,6 +49,7 @@
 /* A tool's page: crumb, title, tabs, two columns of cards */
 .tt-crumb{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:var(--t-sm);color:var(--muted);margin:8px 0 10px;overflow-wrap:anywhere}
 .tt-crumb a{color:var(--muted)}
+@media(max-width:760px){.tt-crumb a{display:inline-flex;align-items:center;min-width:40px;min-height:40px}}
 .lc-ph .tt-crumb{margin:0;font-size:var(--t-lg)}
 .tt-title{display:flex;align-items:center;flex-wrap:wrap;gap:8px 14px;margin:0 0 10px}
 .tt-title-text{flex:1 1 220px;min-width:0}
