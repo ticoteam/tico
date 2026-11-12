@@ -277,6 +277,52 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     return stage_row.get("owner") or None
 
 
+def cannot_work(conn: "sqlite3.Connection", task_id: str, pipeline_id: str, stage_row: Row, who: str | None) -> str:
+    """Why bot `who` cannot do the work of `stage_row`, a work stage owned by the task's assignee in a pipeline whose
+    work is code (Engineering's On deck, Build and Fixes): it has write access to none of the repositories the task's
+    work is in (stage_inputs.repositories), so it can open no pull request there. A Product Owner a handoff left as
+    assignee, read-only on the product's repository, once snoozed a Build task for days. "" when it can, when `who` is
+    no bot or the stage is not the assignee's, or when Tico cannot tell (no GitHub App, no repository In use). A builder
+    that a kickback returns a task to has write access, so it keeps it."""
+    import sqlite3
+
+    from . import repositories as RP
+    from . import stage_inputs
+    from .store import Problem
+
+    if stage_row["kind"] != "work" or stage_row.get("owner") != "assignee" or not who or not is_bot(who):
+        return ""
+    repos = stage_inputs.repositories(conn, task_id, lambda _: True, pipeline_id)
+    if not repos:
+        return ""
+    try:
+        app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
+    except sqlite3.OperationalError:
+        return ""  # GitHub was never set up here
+    if not app:
+        return ""
+    reads: Any = RP
+    try:
+        grants: list[Row] = reads.access(conn, _core.actor_id(who), app[0])["effective"]
+    except Problem:
+        return ""  # no such bot: nothing to judge
+    writes = {str(g["full_name"]).lower() for g in grants if g.get("access") == "write"}
+    if any(repo.lower() in writes for repo in repos):
+        return ""
+    names = ", ".join(repos)
+    return f"{_h().actor_name(conn, who)} cannot work {stage_row['name']}: it has no write access to {names}"
+
+
+def owner_able(
+    conn: "sqlite3.Connection", task_id: str, pipeline_id: str, stage_row: Row, owner: str | None
+) -> tuple[str | None, str]:
+    """`owner` (owner_for) for the task in `stage_row`, or None with why when it is a bot that cannot work the stage
+    (`cannot_work`): the stage then has nobody, as with no assignee, and the pipeline's manager is woken to pick one
+    (C25)."""
+    why = cannot_work(conn, task_id, pipeline_id, stage_row, owner)
+    return (None, why) if why else (owner, "")
+
+
 def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
     """Why `who` may not be asked about private task `row`, as a plain `{"who", "cause", "fix"}`, or None when they
     may read it already. An ask never makes anyone a reader: a person who can see the task shares it first."""
@@ -553,7 +599,9 @@ def enter(
             _refuse(conn, by, "not-found", "No such task to file under", task_id)
         if depth(conn, parent) >= MAX_DEPTH:
             _refuse(conn, by, "task_too_deep", f"Sub-tasks nest at most {MAX_DEPTH} deep", task_id)
-    owner = owner_for(first, assignee)
+    owner, unable = owner_able(conn, task_id, pipeline_id, first, owner_for(first, assignee))
+    if unable:
+        assignee = None
     # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
     # its owner, or someone the stage asks, cannot read it, for nobody could take it on from there.
     held = shut_out(conn, row, first, owner, new=True)
@@ -576,7 +624,16 @@ def enter(
             "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
             (H.new_id(), parent, task_id, _part(above, "visit").get("id"), link, ts),
         )
-    _event(conn, task_id, by, "move", None, first["id"], None, {"move": "new", "owner": owner, "parent": parent})
+    _event(
+        conn,
+        task_id,
+        by,
+        "move",
+        None,
+        first["id"],
+        unable or None,
+        {"move": "new", "owner": owner, "parent": parent, **({"owner_cannot_work": unable} if unable else {})},
+    )
     if above:
         _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
@@ -894,7 +951,9 @@ def move(
     _close_visit(conn, visit, how, by, why, ts)
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
-    owner = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    owner, unable = owner_able(
+        conn, task_id, row["pipeline_id"], target, owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    )
     task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
     status = {"work": "open", "done": "done", "closed": "closed"}[target["kind"]]
     extra: Row = {}
@@ -904,6 +963,8 @@ def move(
         extra["closed_at"] = ts if status == "closed" else None
     if "closed_by_id" in row:
         extra["closed_by_id"] = str(by) if status == "closed" else None
+    if unable:
+        extra["assignee_id"] = None  # the manager picks who has it (reassign), as for a task with no assignee
     _write(
         conn,
         task_id,
@@ -922,12 +983,13 @@ def move(
         "move",
         row["stage_id"],
         target["id"],
-        why,
+        ". ".join(part for part in (why, unable) if part) or None,
         {
             "move": "pushed_past" if pushed else kind,
             "owner": owner,
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
+            **({"owner_cannot_work": unable} if unable else {}),
         },
     )
     _owned(conn, row, _task(conn, task_id), by)
@@ -1436,16 +1498,24 @@ def snooze(
     _need_why(conn, by, why, "snooze it", task_id)
     ts = H.now()
     visit = row["visit"]
-    if is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
+    # The owner bot that cannot work its stage (`cannot_work`) does not set the task aside where nobody sees it: the
+    # manager bot gets it, to give it to someone who can.
+    unable = cannot_work(conn, task_id, row["pipeline_id"], row["stage"], by) if by == row.get("owner_id") else ""
+    if unable or (is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES):
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
         )
         # The manager bot has it now: what was still queued for a bot with no turn would start runs nobody asked for.
         # A bot named on an OK or an answer that still waits keeps its wake.
         _drop_stale(conn, task_id)
-        _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
+        said: Row = {"snoozes": visit.get("bot_snoozes"), **({"owner_cannot_work": unable} if unable else {})}
+        _event(conn, task_id, by, "snooze_refused", None, None, why, said)
         out = _task(conn, task_id)
-        out["note"] = f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
+        out["note"] = (
+            f"{unable}. The manager has it now, to give it to someone who can."
+            if unable
+            else f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
+        )
         return out
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)
