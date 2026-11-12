@@ -71,6 +71,7 @@ interface NeedsRead {
   count?: number;
   next?: string | null;
   bots?: Record<string, number> | null;
+  stages?: Record<string, number> | null;
   plate_count?: number | null;
   by_kind?: Record<string, number> | null;
   folded_task_ids?: string[] | null;
@@ -281,6 +282,7 @@ const needsAll = () => !S.v2.needsNext;
 function needsTake(needs: NeedsRead) {
   S.v2.needs = needs.items || []; S.v2.needsVersion = needs.version || null;
   S.v2.needsCount = needs.count ?? S.v2.needs.length; S.v2.needsNext = needs.next || null; S.v2.needsBots = needs.bots || null;
+  S.v2.needsStages = needs.stages || null;
   S.v2.needsPlateCount = needs.plate_count ?? null;
   S.v2.needsByKind = needs.by_kind || null;
   S.v2.needsFoldedIds = needs.folded_task_ids || null;
@@ -314,6 +316,7 @@ function v2NeedsMore() {
       if (r.restart || r.version !== S.v2.needsVersion) { await v2NeedsRead(); return true; }
       S.v2.needs = [...S.v2.needs, ...(r.items || [])];
       S.v2.needsCount = r.count ?? S.v2.needs.length; S.v2.needsNext = r.next || null; S.v2.needsBots = r.bots || null;
+      S.v2.needsStages = r.stages || null;
       S.v2.needsPlateCount = r.plate_count ?? null;
       S.v2.needsByKind = r.by_kind || null;
       S.v2.needsFoldedIds = r.folded_task_ids || null;
@@ -391,6 +394,7 @@ async function v2NeedsMend(d: NeedsChange): Promise<boolean | 'whole'> {
   S.v2.needsPlateCount = plateCount ?? null;
   S.v2.needsNext = all || items.length >= d.count ? null : needsCursor(d.version, items.length);
   if (d.bots) S.v2.needsBots = d.bots;
+  if (d.stages) S.v2.needsStages = d.stages;
   S.v2.needsByKind = d.by_kind || null;
   if (Array.isArray(d.folded_task_ids)) S.v2.needsFoldedIds = d.folded_task_ids;
   NEEDS_REVISION++;

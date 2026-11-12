@@ -79,7 +79,7 @@ EVENTS_DESCRIPTION = (
     "`GET /api/v2/threads/{thread_id}/bot-status` gives it; `routed` carries `message_id` and `routed`.\n"
     "- `needs`: the viewer's own Needs-you `count`, `plate_count` and `items` (as `GET /api/v2/needs-you`; a mention "
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
-    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), counts by kind (`by_kind`), "
+    "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), each stage's count (`stages`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
     "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
@@ -3562,6 +3562,12 @@ SCHEMAS = {
                     "type": "object",
                     "additionalProperties": {"type": "integer"},
                     "description": "With limit or cursor: how many items in the whole list each bot is behind",
+                },
+                stages={
+                    "type": "object",
+                    "additionalProperties": {"type": "integer"},
+                    "description": "With limit or cursor: how many asks, tasks and mentions in the whole list wait in "
+                    "each stage (by stage id), for a stage's review",
                 },
                 restart={
                     "type": "boolean",

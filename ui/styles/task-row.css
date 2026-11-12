@@ -29,8 +29,20 @@
 .tk-group{display:flex;gap:6px;align-items:baseline;margin:14px 10px 4px;color:var(--muted);font-size:var(--t-2xs);letter-spacing:var(--track-caps);text-transform:uppercase}
 .tk-group .n{font-variant-numeric:tabular-nums}
 
+/* Needs you by stage (Tasks › You): a chip per stage with items, each opening that stage's review. */
+.tk-stages{display:flex;flex-wrap:wrap;gap:6px;margin:6px 10px 2px}
+.tk-stage{display:inline-flex;align-items:center;gap:6px;min-height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);font:500 var(--t-sm)/var(--lh-none) var(--sans);cursor:pointer}
+.tk-stage:hover{background:var(--surface2)}
+.tk-stage:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
+.tk-stage .n{color:var(--wait-ink);font-weight:600}
+
+@media (max-width:760px){
+  /* S17: 44 px rows and chips; whom a task waits on stays in view. */
+  .tk-row{min-height:44px}
+  .tk-stage{min-height:44px;padding:0 14px}
+}
 @media (max-width:640px){
-  .tk-row .tk-after,.tk-row .tk-who{display:none}
+  .tk-row .tk-after{display:none}
   /* S17: a long title wraps on a phone, to two lines at most. */
   .tk-row .tk-title{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-height:var(--lh-tight)}
 }

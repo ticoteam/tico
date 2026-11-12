@@ -2212,6 +2212,29 @@ def needs_bots(items, me):
     return counts
 
 
+# The items a stage's review walks (the ▶ on a stage): asks, tasks and @s on a task in that stage. A Paused cause is the
+# person's to fix in settings, whatever stage its first task is in.
+NEEDS_STAGE_KINDS = ("ask", "task", "mention")
+
+
+def needs_stage(it):
+    """The stage one Needs-you item is in, for a stage's review: its task's stage, or None."""
+    if it.get("kind") not in NEEDS_STAGE_KINDS:
+        return None
+    return (it.get("task") or {}).get("stage_id") or None
+
+
+def needs_stages(items):
+    """How many Needs-you items wait in each stage ({"<stage id>": n}, needs_stage) over the whole list, so a stage's ▶
+    shows its count before every page is read."""
+    counts = {}
+    for it in items:
+        stage = needs_stage(it)
+        if stage:
+            counts[stage] = counts.get(stage, 0) + 1
+    return counts
+
+
 def needs_kinds(items):
     """Whole-list counts by kind."""
     counts = {}
@@ -3515,6 +3538,7 @@ def install_views(app, store, auth, mutate, task_view):
             if limit is not None or cursor:
                 out["items"], out["next"], restarted = needs_page(items, current, limit, cursor)
                 out["bots"] = needs_bots(items, who.actor)
+                out["stages"] = needs_stages(items)
                 if restarted:
                     out["restart"] = True
             return out

@@ -65,8 +65,10 @@ button.prop-v:hover,button.prop-v[aria-expanded=true]{background:var(--prop-hove
 .prop-pop{width:272px}
 @media (max-width:760px){
   .prop{grid-template-columns:96px minmax(0,1fr);min-height:44px;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent)}
-  .prop-v{height:40px;font-size:var(--t-md)}
-  .prop-x,.prop-add{width:36px;height:36px}
+  .prop-v{height:44px;font-size:var(--t-md)}
+  .prop-check{min-width:44px;justify-content:center}
+  .prop-x,.prop-add{width:44px;height:44px}
+  .prop-vwrap .roadmap-size{height:44px}
 }
 /* Code: repo · branch · ↑2 ↓1 · 3 files, or #212 title and its state chips */
 .code-list,.sub-list{list-style:none;margin:0;padding:0}

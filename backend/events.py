@@ -2681,7 +2681,7 @@ def needs_baseline(c, auth, who, task_view):
 
 
 def _needs_list(view, rows, task_view, held=None):
-    from .views import needs_bots, needs_items, needs_kinds, needs_marks
+    from .views import needs_bots, needs_items, needs_kinds, needs_marks, needs_stages
 
     items = needs_items(view.c, view.auth, view.who, task_view)
     if held is None:
@@ -2698,6 +2698,7 @@ def _needs_list(view, rows, task_view, held=None):
         "changed": None if many else changed,
         "removed": None if many else removed,
         "bots": needs_bots(items, view.who.actor),
+        "stages": needs_stages(items),
         "by_kind": needs_kinds(items),
     }  # whole-list facts, even on a page
     held.update(marks=marks, version=version)

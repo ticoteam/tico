@@ -8,6 +8,9 @@
    version, read here before Approve is on; what does not load leaves Approve off. Approve sends the hash of exactly that preview. If
    the engine answers that it changed, the new content is read and shown with "It changed. Look again." and Approve
    needs a new click: it is never sent again by itself.
+   A stage's review (the ▶ on a stage, #/decide?stage=<id>): the same screen, walking only what waits on the person in
+   that stage (needsStageOf); the top bar names the stage ("Spec · 2 of 7"), and a clear stage offers the next stage of
+   its pipeline that has items, then Close.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -54,10 +57,16 @@ interface DecState {
   barTimer: number;
   opener: HTMLElement | null;
   off: (() => void)[];
+  /** A stage's review: the stage walked ('' walks everything; DEC_OTHER, what is in no stage). */
+  stage: string;
+  /** Answers given here in this stage's walk, for "Spec is clear · 7 answered". */
+  answered: number;
 }
 
 let DEC: DecState | null = null;            // the open screen, null while it is shut
 let DECIDE_WANT = '';                       // a deep link's item (#/decide?item=<id>), opened once Tasks has read
+let DECIDE_STAGE = '';                      // a deep link's stage review (#/decide?stage=<id>), opened once Tasks has read
+const DEC_OTHER = '-';                      // the walk of what is in no stage (Tasks › You's Other chip)
 const DEC_UNDO_MS = 10_000;
 const DEC_CHIPS: [AskSheet['chip'], string][] = [['exist', "Shouldn't exist"], ['person', 'Wrong person'], ['written', 'Badly written']];
 
@@ -88,8 +97,11 @@ const decideShows = (it: NeedsEntry) => (it.ask?.shows || []).join('\n');
 const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it) || v.shows !== decideShows(it);
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
+/** The items a walk takes: a stage's review only that stage's. */
+const decideInWalk = (st: DecState, it: NeedsEntry) => !st.stage
+  || (st.stage === DEC_OTHER ? !decideStageName(needsStageOf(it)) : needsStageOf(it) === st.stage);
 function decideSync(st: DecState, items: NeedsEntry[]) {
-  const fresh = decideOrdered(items), keys = new Set(fresh.map(it => it.id));
+  const fresh = decideOrdered(items.filter(it => decideInWalk(st, it))), keys = new Set(fresh.map(it => it.id));
   const before = st.order, was = st.at ? st.items.get(st.at) : undefined;
   st.items = new Map(fresh.map(it => [it.id, it]));
   const order = before.filter(k => keys.has(k));
@@ -184,14 +196,18 @@ function decideNeedsText(root: HTMLElement) {
     b.disabled = !box?.value.trim() || !!DEC?.busy;
   }
 }
-/** Opens the item `id`, or the first of the list with none. False when there is no such item. `items` is the list to
-    walk, Needs you as the page shows it by default. */
-function decideOpen(id: string = '', items: NeedsEntry[] = decideSource()): boolean {
+/** Opens the item `id`, or the first of the list with none. `items` is the list to walk, Needs you as the page shows
+    it by default; `stage` walks only that stage's items (a stage's review), and an open screen walking another switches
+    to it. False when there is no such item. */
+function decideOpen(id: string = '', items: NeedsEntry[] = decideSource(), stage: string = ''): boolean {
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), sheet: null, more: '',
-    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: []};
+    busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: [], stage, answered: 0};
+  // Opening one item from a list walks the list it is in; ▶ on a stage walks that stage, from its first item.
+  if (st.stage !== stage && (stage || !id)) { st.stage = stage; st.order = []; st.gone.clear(); st.answered = 0; st.at = null; }
   decideSync(st, items);
+  if (id && st.stage && !st.items.has(id)) { st.stage = ''; st.order = []; st.gone.clear(); st.answered = 0; decideSync(st, items); }
   const live = decideLive(st), to = id ? (live.includes(id) ? id : null) : live[0] || null;
   if (!to) return false;
   if (fresh) DEC = st;
@@ -222,6 +238,26 @@ async function decideOpenAsk(taskId: string, rid: string): Promise<boolean> {
     : needsAll() ? 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.'
       : 'This ask was not found in the part of your Needs you list read so far. Open it from Needs you.', true);
   return false;
+}
+/** ▶ on a stage: every page of Needs you is read first, then the stage's items are walked. False when none wait. */
+async function decideStageOpen(stage: string): Promise<boolean> {
+  if (!stage || S.me?.role === 'bot') return false;
+  if (!needsAll()) await needsReadAll();
+  return decideOpen('', decideSource(), stage);
+}
+/** A deep link to a stage's review (#/decide?stage=<id>): its walk, or, with nothing there, its pipeline on that stage
+    saying so. */
+async function decideStageWanted(stage: string) {
+  if (await decideStageOpen(stage)) return;
+  const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.stages.some(s => s.id === stage));
+  const name = decideStageName(stage) || 'this stage';
+  if (!p || typeof TASKS_ST === 'undefined' || !TASKS_ST) { toast(`Nothing in ${name} waits on you`); return; }
+  pvStageKeep(p.id, stage);
+  const view = pvStateFor(p);
+  view.stage = stage;
+  view.bar = {taskId: '', to: '', push: false, text: `Nothing in ${name} waits on you`};
+  if (TASKS_ST.pipeline !== p.id || TASKS_ST.archive) tasksShow(TASKS_ST, {pipeline: p.id, archive: ''});
+  else tasksRender(TASKS_ST);
 }
 function decideStop() {
   const st = DEC;
@@ -261,11 +297,31 @@ function decideStep(st: DecState, dir: number) {
 /** After an answer: the next item, else the one before, else All caught up. */
 function decideAfter(st: DecState, id: string) {
   st.gone.add(id);
+  st.answered++;
   const i = st.order.indexOf(id), live = (k: string) => !st.gone.has(k) && st.items.has(k);
   decideGo(st, st.order.slice(i + 1).find(live) || st.order.slice(0, Math.max(i, 0)).reverse().find(live) || null);
 }
 
 // ---- drawing
+/** The walk's name in the top bar: the stage's, Other, or nothing for the whole list. */
+const decideWalkName = (st: DecState) => !st.stage ? '' : st.stage === DEC_OTHER ? 'Other' : decideStageName(st.stage) || 'Stage';
+/** The next stage of the stage's pipeline with items for the person, after it, else before it: [id, name, count]. */
+function decideNextStage(stage: string): [string, string, number] | null {
+  const p = ((typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []).find(x => x.stages.some(s => s.id === stage));
+  if (!p) return null;
+  const at = p.stages.findIndex(s => s.id === stage), counts = needsStageCounts();
+  const s = [...p.stages.slice(at + 1), ...p.stages.slice(0, at)].find(x => x.id && (counts.get(x.id) || 0) > 0);
+  return s?.id ? [s.id, s.name, counts.get(s.id) || 0] : null;
+}
+/** Nothing left: All caught up; a stage's walk says the stage is clear and offers the next stage with items. */
+function decideDoneHTML(st: DecState): string {
+  const close = '<button type="button" class="ghost" data-dc="close">Close</button>';
+  if (!st.stage) return `<div class="dc-done"><h2>All caught up</h2>${close}</div>`;
+  const next = st.stage === DEC_OTHER ? null : decideNextStage(st.stage);
+  const play = next ? `<button type="button" class="primary" data-dc-walk="${esc(next[0])}">▶ ${esc(next[1])} · <span class="tnum">${next[2]}</span></button>` : '';
+  return `<div class="dc-done"><h2>${esc(decideWalkName(st))} is clear</h2>`
+    + (st.answered ? `<p class="dc-sub">${st.answered} answered</p>` : '') + `<div class="dc-acts">${play}${close}</div></div>`;
+}
 const decideStageName = (id: string | null | undefined): string => {
   for (const p of (typeof TASK_PIPELINES !== 'undefined' && TASK_PIPELINES) || []) {
     const s = p.stages.find(x => x.id === id);
@@ -283,7 +339,8 @@ function decidePaintHead(st: DecState) {
   const root = $('.decide');
   if (!root) return;
   const live = decideLive(st), at = live.indexOf(st.at || ''), it = decideCurrent(st);
-  $('.dc-count', root)!.textContent = it ? `${at + 1} of ${live.length}` : '';
+  const stage = decideWalkName(st);
+  $('.dc-count', root)!.textContent = it ? `${stage ? stage + ' · ' : ''}${at + 1} of ${live.length}` : stage;
   ($('[data-dc="prev"]', root) as HTMLButtonElement).disabled = !it || at <= 0;
   ($('[data-dc="next"]', root) as HTMLButtonElement).disabled = !it || at >= live.length - 1;
   const thumbs = !!it && it.kind === 'ask' && !!it.ask?.may.includes('thumbs');
@@ -300,7 +357,7 @@ function decideRender(st: DecState) {
   root.classList.toggle('dc-empty', !it);
   if (!it) {
     $('.dc-thing', root)!.innerHTML = '';
-    $('.dc-side', root)!.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="close">Close</button></div>';
+    $('.dc-side', root)!.innerHTML = decideDoneHTML(st);
     return;
   }
   // Coming to an ask: what it shows is read once; held content from other refs (a new version came while it was off
@@ -655,8 +712,9 @@ async function decideApprove(st: DecState, it: NeedsEntry) {
   }
 }
 async function decideClick(st: DecState, ev: MouseEvent) {
-  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip]');
+  const el = eventElement(ev), b = el?.closest<HTMLElement>('[data-dc], [data-dc-choice], [data-dc-stage], [data-dc-chip], [data-dc-walk]');
   if (!b || (b as HTMLButtonElement).disabled) return;
+  if (b.dataset.dcWalk) { await decideStageOpen(b.dataset.dcWalk); return; }
   const what = b.dataset.dc || '';
   if (what === 'close') { decideStop(); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
