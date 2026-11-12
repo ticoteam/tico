@@ -119,6 +119,8 @@ class InProcessApi:
         content, raw_headers = raw_body(raw) if raw is not None else (None, {})
         if raw is not None and hasattr(raw, "read"):
             timeout = max(timeout, STREAM_WAIT)  # a file streamed from disk: stored after its last block
+        # A no-op when the caller already allocated it (`_run`, `request`, which report it on an error); a direct
+        # caller of `_send` still gets one id for the request and the timeout.
         key = operation_key(method, raw, key)
 
         async def go():
