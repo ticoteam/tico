@@ -62,5 +62,6 @@ Either prints the file id. Attach it to the requirement `tico task show` names:
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 
 Jev checks it, then a person OKs it, and the task moves to In development, where {{app_name}} files the Engineering task.
+The stage asks the person for that OK: do not ask them again with `tico task ask`.
 Put the open questions and who owes them in a note on the task. If the person sends it back, their notes are on the task:
 change the spec, publish again and attach the new version.

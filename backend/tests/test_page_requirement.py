@@ -421,10 +421,13 @@ def test_a_page_a_person_oks_anyway_goes_to_them_every_version_and_after_a_send_
             E.add_requirement(
                 c, row["id"], WRITER, kind, BEN, "OK to merge?", choices=choices, shows=shows, seen_version=_v(c, row)
             )
+    # Nor a question of the person the page waits on (Tico Team, Nov 12): it goes on the page.
+    with _refused("The stage already asks Ben to OK Spec page"):
+        E.add_requirement(c, row["id"], WRITER, "answer", BEN, "Round half up or half even?", seen_version=_v(c, row))
     asked = E.add_requirement(
-        c, row["id"], WRITER, "answer", BEN, "Round half up or half even?", seen_version=_v(c, row)
+        c, row["id"], WRITER, "answer", ANA, "Round half up or half even?", seen_version=_v(c, row)
     )
-    assert asked["requirement_id"], "a real question is still the bot's to ask"
+    assert asked["requirement_id"], "a real question of someone else is still the bot's to ask"
     assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] == "Spec", "the question is still open"
 
 
@@ -489,6 +492,58 @@ def test_a_plain_yes_no_question_on_a_stage_with_a_page_a_person_oks_is_allowed(
         seen_version=_v(c, row),
     )
     assert asked["requirement_id"], "a plain clarifying yes/no is the Product Owner's to ask"
+
+
+def test_a_bot_does_not_ask_the_person_the_stages_page_ok_already_asks(c, store):
+    """Tico Team rc.7 (Nov 12): the Product Owner attached the Spec page, which asks the person to OK it, and also asked
+    them "Please OK the attached spec" as a question of its own. Needs you showed two items and Spec waited on both.
+    The question is refused while Jev checks the page and once it waits on the person; a question of anyone else still
+    works; the page OK alone moves the task."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    rid = _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    page_row = _attach(c, row, "page:" + fid, by=po)
+    for choices in (None, ["Looks good", "Needs changes"]):
+        with _refused("The stage already asks Ben to OK Spec page. Do not ask them again"):
+            E.add_requirement(
+                c,
+                row["id"],
+                po,
+                "answer",
+                BEN,
+                "Please OK the attached spec.",
+                choices=choices,
+                seen_version=_v(c, row),
+            )
+    _say(c, page_row, "met")
+    assert (_standing(c, row).state, _standing(c, row).on) == (R.WAITING, BEN)
+    with _refused("The stage already asks Ben to OK Spec page"):
+        E.add_requirement(c, row["id"], po, "answer", BEN, "Please OK the attached spec.", seen_version=_v(c, row))
+    assert [s.requirement["id"] for s in R.unmet(c, E.task(c, row["id"]))] == [rid], "one thing waits: the page OK"
+    assert A.answer(c, row["id"], rid, BEN, "ok")["stage"]["name"] != "Spec", "the page OK alone moves it"
+
+
+def test_a_bots_question_of_someone_else_while_the_page_ok_waits_still_works(c, store):
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    fid, _ = _page(c, store)
+    _say(c, _attach(c, row, "page:" + fid, by=po), "met")
+    asked = E.add_requirement(c, row["id"], po, "answer", ANA, "Which importer first?", seen_version=_v(c, row))
+    assert asked["requirement_id"]
+
+
+def test_a_bots_question_of_a_person_no_stage_ok_waits_on_still_works(c, store):
+    """Before a page is attached nothing waits on the person: the Product Owner's clarifying question is asked."""
+    po = "bot:product-owner"
+    X.bot(c, "product-owner")
+    _pipeline(c, person=BEN)
+    row = _owned(c, po)
+    asked = E.add_requirement(c, row["id"], po, "answer", BEN, "Should negate accept strings?", seen_version=_v(c, row))
+    assert asked["requirement_id"]
 
 
 def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c, store):

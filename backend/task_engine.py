@@ -1460,7 +1460,8 @@ def add_requirement(
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
-    `_replace_open`)."""
+    `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
+    (`_stage_asks`)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1482,6 +1483,13 @@ def add_requirement(
         page = _people_page(conn, row, kind, shows, choices)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
+    if is_bot(by) and kind == "answer" and is_human(person):
+        signoff = _stage_asks(conn, row, str(person))
+        if signoff:
+            name = H.actor_name(conn, person)
+            _refuse(
+                conn, by, "task_requirement", f"The stage already asks {name} to OK {signoff}. {ASKED_HINT}", task_id
+            )
     _may_name(conn, by, person, task_id)
     unshared = not_shared(conn, row, str(person))
     if unshared:
@@ -1540,6 +1548,33 @@ def _people_page(
         attached = P.current(conn, row["visit"]["id"], requirement["id"])
         named = bool(attached) and any(str(attached["file_id"]) in ref for ref in refs)
         if named or (kind == "ok" and not refs):
+            return R.name_of(requirement)
+    return None
+
+
+# What a bot is told when the stage already asks the person it names (`_stage_asks`).
+ASKED_HINT = "Do not ask them again: put any question on the page or in a comment."
+
+
+def _stage_asks(conn: "sqlite3.Connection", row: Row, person: str) -> str | None:
+    """The name of the stage's OK or page that waits on `person` now, or None. A bot's question to that same person
+    would be a second item in their Needs you, and the stage would wait on both (Tico Team, Nov 12: the Product Owner
+    asked "Please OK the attached spec" beside the Spec page's own OK, and Spec stayed after the page was OK'd). A page
+    a person OKs anyway counts while Jev is still checking it: it goes to them next."""
+    from . import waiting_on
+
+    for standing in R.standings(conn, row):
+        requirement = standing.requirement
+        if standing.state != R.WAITING or not requirement.get("stage_id") or requirement["kind"] not in R.STEERED:
+            continue
+        on = standing.on
+        if on == R.JEV:
+            if not (requirement.get("person_id") or R.people_only(requirement)):
+                continue  # Jev passing it is enough: no person is asked
+            on = R.person_of(conn, requirement, row["visit"]["id"])
+        elif on and not is_human(on):
+            continue  # a bot named to approve, or a source
+        if (on or waiting_on.person_for(conn, row)) == person:
             return R.name_of(requirement)
     return None
 
