@@ -364,6 +364,8 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   d.querySelectorAll<HTMLElement>('[data-copy-session]').forEach(b => b.onclick = () =>
     void copyText(b.dataset.copySession!).then(() => toast('Copied'), () => toast('Could not copy', true)));
   d.querySelectorAll<HTMLElement>('[data-drop-link]').forEach(b => b.onclick = async () => {
+    // A session is asked about once: its × sits beside Copy, and a removed bot session cannot be added back as it was.
+    if (b.closest('.task-sessions') && !window.confirm('Remove this session from the task?')) return;
     try {
       await post(`/v2/tasks/${encodeURIComponent(task.id)}/links`, {remove: b.dataset.dropLink});
       const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);
@@ -409,12 +411,12 @@ function taskSessionsHTML(t: ModalTask) {
     if (l.d.bot) {
       const who = 'bot:' + l.d.bot;
       const cmd = l.d.thread_id ? botResumeCommand(l.d.harness, l.d.thread_id, l.d.bot) : '';
-      return `<span class="tlink session${l.d.primary ? ' primary" title="Primary' : ''}">${actorFace(who, 14)}<span>${esc(actorLabel(who))}${l.d.harness ? ` · ${esc(l.d.harness)}` : ''}</span>${cmd ? copy(cmd, 'resume command') : ''}${l.d.primary ? '' : drop(l)}</span>`;
+      return `<span class="tlink session${l.d.primary ? ' primary" title="Primary' : ''}">${actorFace(who, 14)}<span class="tsess-name">${esc(actorLabel(who))}${l.d.harness ? ` · ${esc(l.d.harness)}` : ''}</span>${cmd ? copy(cmd, 'resume command') : ''}${l.d.primary ? '' : drop(l)}</span>`;
     }
     const label = esc(l.title || l.value);
     return /^https?:\/\//.test(String(l.url))
-      ? `<span class="tlink session"><a href="${esc(l.url)}" target="_blank" rel="noopener">${label}</a>${drop(l)}</span>`
-      : `<span class="tlink session"><span title="${esc(l.value)}">${label}</span>${copy(l.value, 'session')}${drop(l)}</span>`;
+      ? `<span class="tlink session"><a class="tsess-name" href="${esc(l.url)}" target="_blank" rel="noopener">${label}</a>${drop(l)}</span>`
+      : `<span class="tlink session"><span class="tsess-name" title="${esc(l.value)}">${label}</span>${copy(l.value, 'session')}${drop(l)}</span>`;
   });
   return `<section class="tsec task-sessions${rows.length ? '' : ' tsec-empty'}"><h3 class="rail-h">Sessions<button type="button" class="prop-add" data-session-add aria-label="Add a session" title="Add a session">${TL_ICON.plus}</button></h3>
     ${rows.length ? `<div class="tlinks">${rows.join('')}</div>` : ''}
