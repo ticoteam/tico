@@ -433,7 +433,9 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   /* the search's line is drawn inside it, so its field is the whole 44 px */
   .tl-head .tl-search{border-width:0;box-shadow:inset 0 0 0 1px var(--line)}
   .tl-head .tl-search:focus-within{box-shadow:inset 0 0 0 1px var(--focus)}
-  .tl-head.s-fold .tl-search:not(:focus-within){box-shadow:none}
+  /* folded to an icon it is drawn like Filter beside it, with its line back only while it holds a search */
+  .tl-head .tl-search:not(:focus-within){box-shadow:none}
+  .tl-head .tl-search:not(:focus-within):has(input:not(:placeholder-shown)){box-shadow:inset 0 0 0 1px var(--line)}
   .tl-head .tl-search input{height:44px}
   /* the icon buttons and the folded search are 30 px wide above; a thumb needs 44 both ways */
   .tl-head{--add-w:44px}

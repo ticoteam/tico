@@ -118,6 +118,8 @@ async function walkOnAPhone(browser: Browser) {
 
 async function chipsOnYou(browser: Browser) {
   const {page, errors} = await opened(browser, {hash: '#/tasks?pipeline='});
+  // The chips count the shared Needs you list, which can land after the first rows; it redraws them when it does.
+  await page.waitForFunction(() => document.querySelectorAll('.tk-stages [data-need-stage]').length === 4, null, {timeout: 15_000}).catch(() => {});
   const chips = await page.locator('.tk-stages [data-need-stage]').evaluateAll(els => els.map(e => [...e.children].map(c => c.textContent).join(' ')));
   assert.deepEqual(chips, ['Spec 3', 'Review 2', 'To do 1', 'Other 1'], `chips: ${chips.join(' | ')}`);
   await page.locator('[data-need-stage="review"]').click();
