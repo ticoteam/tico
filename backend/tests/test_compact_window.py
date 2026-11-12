@@ -110,3 +110,10 @@ def test_tico_bot_model_takes_compact_at_on_the_command_line():
 
     args = hubcli.parser().parse_args(["bot", "model", "ops", "--compact-at", "300000"])
     assert (args.fn, args.bot, args.model, args.compact_at) == ("bot model", "ops", None, 300_000)
+
+
+def test_a_saved_window_larger_than_the_models_is_lowered_to_fit_on_the_turn():
+    # Saved at 600k, then moved to a 500k model by an agent or the API: the turn compacts at 500k, not past the window.
+    assert providers.with_compact_default({"model": "grok-4.6", "compact_at": 600_000})["compact_at"] == 500_000
+    assert providers.with_compact_default({"model": "claude-opus-5-5", "compact_at": 700_000})["compact_at"] == 700_000
+    assert providers.with_compact_default({"model": "grok-4.6"})["compact_at"] == 250_000

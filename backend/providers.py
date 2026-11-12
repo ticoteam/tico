@@ -493,9 +493,13 @@ def compact_default(model):
 
 
 def with_compact_default(config):
-    """A turn's `config` with its model's default compaction size when it carries none of its own."""
-    if config.get("compact_at"):
-        return config
+    """A turn's `config` with its model's default compaction size when it carries none of its own, and a saved size
+    lowered to fit the model it runs on (a bot moved to a smaller model by an agent or the API keeps its size until
+    then)."""
+    saved = config.get("compact_at")
+    if isinstance(saved, int) and not isinstance(saved, bool) and saved > 0:
+        fitted = fit_compact_at(saved, (MODEL_BY_ID.get(config.get("model") or "") or {}).get("context_tokens"))
+        return config if fitted == saved else {**config, "compact_at": fitted}
     return {**config, "compact_at": compact_default(config.get("model"))}
 
 
