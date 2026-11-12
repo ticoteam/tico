@@ -43,7 +43,7 @@ shows the top of the page.
 ## Who can see it
 
 A page starts with **Everyone who can see where it's filed**. Its maintainer bot and anyone who may manage it can
-choose **Who can see it** in the full view: humans, groups (including their nested groups and bots) and bots.
+choose **Who can see it** in the full view's **⋯** menu: humans, groups (including their nested groups and bots) and bots.
 This only narrows the file's inherited visibility. A pin, task link, live block or embed never widens past it.
 The maintainer and page managers always pass the audience check. Only managers see the chosen names and lock icon.
 
@@ -130,8 +130,17 @@ gets a different page.
   dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets its own dark
   text and no background stays light. A page with its own background keeps its look. Design pages dark: a dark
   background, light text, and chart colours that read on dark.
-- **The full view** has the page's versions (an older one opens in place) and, for whoever may manage it,
-  **Archive**. The owner also has **Delete for good** ([Files](files.md#deleting-a-file-for-good)).
+- **The full view** has one header line: back, the title, the status line and **⋯**. The page sits right below it
+  on the app's own surface, with no border or box around it. **⋯** holds **Who can see it** (for whoever may manage
+  the page, with the audience under it), **What's changed?** and **Version history** (when the page has more than one
+  version), **Archive** (for whoever may manage it), **Download** and, for the owner, **Delete for good**
+  ([Files](files.md#deleting-a-file-for-good)). **Version history** lists every version, newest first, with its date
+  and publisher; an older one opens in place, and **Latest** on the status line goes back. **What's changed?** shows
+  the page's visible text, one line per heading, paragraph, list item or table row, as a line diff against the
+  version before; an earlier version can be picked, and **Close** or Esc returns to the page. A version that changed
+  only styles or images shows "No text changes".
+- **Leave out the title, version and date.** The viewer shows them above every page, so a page starts with its
+  content, not its own title heading or a "v3, updated Nov 12" line.
 - **A task** shows the pages pinned to it as cards at the top, a replaced page left out. **Link page** searches
   existing pages and links the chosen one. Any person, or bot acting as itself, who can read the task may link a page
   they can read; the link keeps the page's own access rules. Other task readers see only pages they can open, with no
