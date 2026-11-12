@@ -58,3 +58,29 @@ def test_the_count_and_the_summary_take_the_same_lane(api, monkeypatch):
     for found in (state, summary):
         assert found["most"] == needs_lane.LANES
         assert all(name.startswith("tico-needs-you") for name in found["threads"]), found["threads"]
+
+
+def test_other_routes_answer_while_needs_you_builds_wait_their_turn(api, monkeypatch):
+    """More Needs you readers than the shared pool has threads, every build held: a request waiting its turn on the lane
+    holds no thread of the shared pool, so GET /api/v2/me still answers."""
+    release = threading.Event()
+    real = V.needs_items
+
+    def held(*args, **kwargs):
+        release.wait(30)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(V, "needs_items", held)
+    readers = ThreadPoolExecutor(45)
+    try:
+        waiting = [readers.submit(api.get, "/api/v2/needs-you", headers=headers("ben-test")) for _ in range(45)]
+        time.sleep(0.5)  # every Needs you request has arrived and waits on the held builds
+        with ThreadPoolExecutor(1) as one:
+            me = one.submit(api.get, "/api/v2/me", headers=headers("ana-test"))
+            answer = me.result(timeout=10)
+            assert not release.is_set()
+            assert answer.status_code == 200
+    finally:
+        release.set()
+        readers.shutdown(wait=True)
+    assert [w.result().status_code for w in waiting] == [200] * 45

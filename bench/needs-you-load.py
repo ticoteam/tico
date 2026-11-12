@@ -77,20 +77,7 @@ async def reader(client, path, token, rate, until, out):
         await asyncio.sleep(max(0.0, sent + gap - time.monotonic()))
 
 
-async def send(url, path, readers, rate, seconds, ana_readers):
-    import httpx
-
-    out = {"ok": 0, "errors": 0, "timeouts": 0, "times": []}
-    limits = httpx.Limits(max_connections=readers, max_keepalive_connections=readers)
-    async with httpx.AsyncClient(base_url=url, limits=limits) as client:
-        # Warm the route once per person before the clock starts.
-        for token in ("ben-test", "ana-test"):
-            await client.get(path, headers={"Authorization": f"Bearer {token}"}, timeout=60)
-        start = time.monotonic()
-        until = start + seconds
-        tokens = ["ana-test" if n < ana_readers else "ben-test" for n in range(readers)]
-        await asyncio.gather(*(reader(client, path, t, rate, until, out) for t in tokens))
-        elapsed = time.monotonic() - start
+def summary(path, readers, rate, elapsed, out):
     times = sorted(out["times"])
 
     def pct(p):
@@ -111,12 +98,38 @@ async def send(url, path, readers, rate, seconds, ana_readers):
     }
 
 
+async def send(url, path, readers, rate, seconds, ana_readers, badge_readers=0):
+    import httpx
+
+    out = {"ok": 0, "errors": 0, "timeouts": 0, "times": []}
+    badge = {"ok": 0, "errors": 0, "timeouts": 0, "times": []}
+    limits = httpx.Limits(max_connections=readers + badge_readers, max_keepalive_connections=readers + badge_readers)
+    async with httpx.AsyncClient(base_url=url, limits=limits) as client:
+        # Warm the route once per person before the clock starts.
+        for token in ("ben-test", "ana-test"):
+            await client.get(path, headers={"Authorization": f"Bearer {token}"}, timeout=60)
+        start = time.monotonic()
+        until = start + seconds
+        tokens = ["ana-test" if n < ana_readers else "ben-test" for n in range(readers)]
+        # The Tasks badge (`count=1`) beside them, as Ben, timed on its own.
+        badges = [
+            reader(client, "/api/v2/needs-you?count=1", "ben-test", rate, until, badge) for _ in range(badge_readers)
+        ]
+        await asyncio.gather(*(reader(client, path, t, rate, until, out) for t in tokens), *badges)
+        elapsed = time.monotonic() - start
+    found = [summary(path, readers, rate, elapsed, out)]
+    if badge_readers:
+        found.append(summary("/api/v2/needs-you?count=1", badge_readers, rate, elapsed, badge))
+    return found
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--readers", type=int, default=50)
     parser.add_argument("--ana-readers", type=int, default=5)
     parser.add_argument("--rate", type=float, default=10)
+    parser.add_argument("--badge-readers", type=int, default=0, help="more readers, each reading the Tasks badge")
     parser.add_argument("--open-tasks", type=int, default=1500)
     parser.add_argument("--path", action="append", help="route(s) to send, in turn (default /api/v2/needs-you)")
     parser.add_argument("--serve", nargs=2, metavar=("FOLDER", "PORT"), help=argparse.SUPPRESS)
@@ -137,8 +150,9 @@ def main():
             assert child.stdout
             url = json.loads(child.stdout.readline())["url"]
             for path in args.path or ["/api/v2/needs-you"]:
-                result = asyncio.run(send(url, path, args.readers, args.rate, args.seconds, args.ana_readers))
-                print(json.dumps(result), flush=True)
+                found = send(url, path, args.readers, args.rate, args.seconds, args.ana_readers, args.badge_readers)
+                for result in asyncio.run(found):
+                    print(json.dumps(result), flush=True)
         finally:
             assert child.stdin
             child.stdin.close()
