@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -122,9 +123,16 @@ class GitHub(Protocol):
         ...
 
 
+_last_version = [0]
+_version_lock = threading.Lock()
+
+
 def version_now() -> int:
-    """Metadata version for a read or webhook that begins now: the time in ms."""
-    return time.time_ns() // 1_000_000
+    """Metadata version for a read or webhook that begins now: the time in ms, never the same twice in this process.
+    Two of Tico's own reads are ordered by when they began; only GitHub's same-second stamps tie (item_metadata.save)."""
+    with _version_lock:
+        _last_version[0] = max(time.time_ns() // 1_000_000, _last_version[0] + 1)
+        return _last_version[0]
 
 
 def sent_version(payload: Row, arrived: int) -> int:

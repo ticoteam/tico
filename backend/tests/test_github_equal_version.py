@@ -203,7 +203,13 @@ def test_a_merged_pr_never_reopens(company):
         Seam.webhook(c, "pull_request", reopened, delivery="reopen")
         assert G.pr(c, REPO, 1)["state"] == "merged"
         assert _row(c)["final_at"] is not None
+        assert _row(c)["due_at"] is None
         assert _due(c) == []
+
+
+def test_tico_s_own_reads_never_share_a_version():
+    seen = [G.version_now() for _ in range(1000)]
+    assert seen == sorted(set(seen))
 
 
 def test_the_migration_lets_an_unmerged_closed_pr_be_read_again(company):

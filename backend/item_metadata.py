@@ -73,15 +73,15 @@ def save(
 ) -> bool:
     """Save what the source said of an item, as seen by a read or webhook that began at `version`. `fields` replaces the
     saved fields (the source merges first). False, and nothing written, when the saved metadata is newer. Saved at the
-    same version as different fields, the item is also marked due: which of the two is newer is unknown, so the next
-    pass reads the source (`due_reads`)."""
+    same version as different fields, an item that is not final is also marked due: which of the two is newer is
+    unknown, so the next pass reads the source (`due_reads`)."""
     H = _h()
     now = H.now()
     old = get(conn, source, item_type, key)
     if old and int(old["metadata_version"]) > version:
         return False
     text = json.dumps(fields)
-    tied = bool(old) and int(old["metadata_version"]) == version and old["fields"] != json.loads(text)
+    tied = not final and bool(old) and int(old["metadata_version"]) == version and old["fields"] != json.loads(text)
     if tied:
         LOG.info("equal_version_conflict %s %s %s at %s: read again on the next pass", source, item_type, key, version)
     values = (title, text, version, now, (old or {}).get("final_at") or now if final else None, now)
