@@ -11,6 +11,7 @@ import math
 LATENESS_P95_MS = 50.0  # the sender's p95 lateness above this makes a level not valid
 LATENESS_MAX_MS = 1000.0  # and any single send this late
 SENDER_CPU_SHARE = 0.9  # a sender process busier than this share of one CPU is the limit
+BUCKET = 0.25  # the flight recorder's histogram buckets are this far apart, so its p95 moves in 25% steps
 MIN_REQUESTS = 1000  # repeatability (Measure 3) compares routes with at least this many requests
 
 
@@ -162,8 +163,10 @@ def check_budget(level, budget):
 
 
 def compare(a, b, share=0.15, minimum=MIN_REQUESTS):
-    """Measures 3 and 4: per route present in both reports' level with at least `minimum` requests, the server p95 of
-    each and whether they are within `share` of each other."""
+    """Measures 3 and 4: per route present in both reports' level with at least `minimum` requests, the sender's and the
+    server's p95 of each and whether they are within `share` of each other. The server's percentiles are the upper
+    edges of the flight recorder's histogram buckets, 25% apart (backend/flight.py EDGES): two server values one bucket
+    apart count as within, since the recorder cannot tell them closer."""
     out = []
     levels_b = {lv["level"]: lv for lv in b["levels"]}
     for lv in a["levels"]:
@@ -179,6 +182,7 @@ def compare(a, b, share=0.15, minimum=MIN_REQUESTS):
                 if x is None or y is None:
                     continue
                 spread = abs(x - y) / max(1e-9, min(x, y))
+                tolerance = max(share, BUCKET + 0.01) if side == "server_p95" else share
                 out.append(
                     {
                         "level": lv["level"],
@@ -187,7 +191,7 @@ def compare(a, b, share=0.15, minimum=MIN_REQUESTS):
                         "a": x,
                         "b": y,
                         "delta_ms": round(y - x, 2),
-                        "within": spread <= share,
+                        "within": spread <= tolerance,
                     }
                 )
     return out

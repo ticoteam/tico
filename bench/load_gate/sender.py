@@ -135,7 +135,7 @@ class Worker:
             if at >= self.stop_at:
                 break
             pending.append(asyncio.ensure_future(self.action(client, who, rnd.choice(kinds), rnd, at)))
-            # Keep at most a minute of plans ahead in flight: sleep until shortly before the next one.
+            # Plan one action ahead: sleep until shortly before it is due, so no backlog of waiting plans builds up.
             ahead = at - time.time() - 0.05
             if ahead > 0:
                 await asyncio.sleep(ahead)
@@ -252,10 +252,13 @@ class Worker:
             end = min(begin + length, self.stop_at)
             seq, renewed, next_event, next_input = 0, begin, begin + EVENT_EVERY, begin + INPUTS_EVERY
             while True:
-                at = min(next_event, next_input)
-                if at >= end:
+                slot = min(next_event, next_input)
+                if slot >= end:
                     break
-                if at == next_input:
+                # A step follows the one before it: planned at its slot, or at the previous answer if that came later,
+                # so a slow server is not counted as the sender's lateness.
+                at = max(slot, time.time())
+                if slot == next_input:
                     await self.call(
                         client, "POST", "POST /api/v2/attempts/{aid}/inputs", f"attempts/{aid}/inputs", tok, {}, at
                     )

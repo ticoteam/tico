@@ -109,3 +109,9 @@ def test_compare_names_the_routes_whose_p95_moved():
     slower["levels"][0]["routes"]["GET /api/v2/tasks"]["server_p95"] = 70.0
     moved = [r for r in R.compare(report(20.0), slower) if not r["within"]]
     assert [(r["route"], r["side"], r["delta_ms"]) for r in moved] == [("GET /api/v2/tasks", "server_p95", 50.0)]
+    # The server's p95 is a histogram bucket's edge, 25% apart: one bucket is within, two are not.
+    adjacent, apart = report(16.54), report(16.54)
+    adjacent["levels"][0]["routes"]["GET /api/v2/tasks"]["server_p95"] = 20.68
+    apart["levels"][0]["routes"]["GET /api/v2/tasks"]["server_p95"] = 25.85
+    assert all(r["within"] for r in R.compare(report(16.54), adjacent))
+    assert [r["route"] for r in R.compare(report(16.54), apart) if not r["within"]] == ["GET /api/v2/tasks"]

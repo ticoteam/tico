@@ -36,6 +36,11 @@ Compare two reports per route (repeatability, Measure 3: two runs of one commit 
 python -m bench.load_gate compare reports/a/report.json reports/b/report.json
 ```
 
+The sender's p95 is exact; the server's comes from the flight recorder's histogram, whose buckets are 25% apart, so
+`compare` counts two server values one bucket apart as within (the recorder cannot tell them closer). Judge
+repeatability on routes with at least 1,000 requests, on a dedicated host: on a shared machine, other work moves the
+small routes' p95 by a bucket or two.
+
 ## What it sends
 
 The company (`company.py`, sizes in the report): 50 people, 300 bots on 8 computers, 900 routines (one in ten fires
