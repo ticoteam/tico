@@ -746,7 +746,7 @@ def _rejected_summary(rows):
     )
     return (
         f"Sign-in rejected for {first}"
-        + (f" at {when}" if when else "")
+        + (f" at {_clock(when)}" if when else "")
         + (f": {why}" if why else ".")
         + fix
         + " It takes no work that needs it until then."
@@ -3849,7 +3849,7 @@ def view(c, who, settings, auth, github, config):
                 "warn",
                 "; ".join(
                     f"{name}: {_tokens_words(n)} uncached input tokens in 24 h"
-                    for name, n in ((_bot_name(c, bot), n) for bot, n in heavy[:5])
+                    for name, n in ((_bot_name(c, bot, DELETED_BOT), n) for bot, n in heavy[:5])
                 )
                 + ("." if len(heavy) <= 5 else f"; and {len(heavy) - 5} more."),
                 [_fix("Open Usage", "#/usage")],
