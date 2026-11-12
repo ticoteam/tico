@@ -1,10 +1,12 @@
 """A stand-in for Google's token, Gmail and Calendar endpoints, for docker/connectors-smoke.sh only.
 
 It answers just what one mailbox sync and one calendar lookup ask, and appends each request path to
-the file named by argv[2] so the smoke test can see the connectors job really reached it.
+the file named by argv[2] so the smoke test can see the connectors job really reached it. The sync reads
+messages in a Gmail batch call (POST /batch/gmail/v1): each part is answered as its own path would be.
 """
 
 import json
+import re
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -44,16 +46,34 @@ def answer(path):
     return {}
 
 
+def batch(content_type, body):
+    """(content type, body) answering each part of a Gmail batch call."""
+    boundary = re.search(r'boundary="?([^";]+)"?', content_type).group(1)
+    parts = []
+    for chunk in body.split("--" + boundary)[1:]:
+        if chunk.startswith("--"):
+            break
+        cid = re.search(r"(?im)^content-id:\s*<([^>]+)>", chunk).group(1)
+        path = re.search(r"(?m)^[A-Z]+ (\S+) HTTP/", chunk).group(1)
+        parts.append(
+            f"--part\r\nContent-Type: application/http\r\nContent-ID: <response-{cid}>\r\n\r\n"
+            f"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n{json.dumps(answer(path))}\r\n"
+        )
+    return "multipart/mixed; boundary=part", "".join(parts) + "--part--\r\n"
+
+
 class Handler(BaseHTTPRequestHandler):
     def respond(self):
         length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        sent = self.rfile.read(length).decode("utf-8", "replace") if length else ""
         with open(sys.argv[2], "a") as log:
             log.write(self.command + " " + self.path + "\n")
-        body = json.dumps(answer(self.path)).encode()
+        kind, text = "application/json", json.dumps(answer(self.path))
+        if self.path.startswith("/batch/"):
+            kind, text = batch(self.headers.get("Content-Type", ""), sent)
+        body = text.encode()
         self.send_response(200)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
