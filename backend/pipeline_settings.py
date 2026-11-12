@@ -271,7 +271,7 @@ PRESETS["product"] = {
             "A spec a builder can build from.",
             2880,
             [_people_only(_page("Spec page", SPEC_RUBRIC))],
-            task_limit=2,
+            task_limit=20,  # room for every owner: a few specs waiting on a person must not hold up the rest
         ),
         _stage(
             "product-in-development",

@@ -227,7 +227,7 @@ def presets(r: SoftRig) -> None:
     expect(not on_deck["requirements"], f"On deck has {on_deck['requirements']}")
     stages = {s["name"]: s for s in [*product["stages"], *engineering["stages"]]}
     expect(stages["Ideas"]["by_hand"], "tasks do not leave Ideas by hand")
-    expect(stages["Spec"]["task_limit"] == 2 and stages["Build"]["task_limit"] == 3, "the limits")
+    expect(stages["Spec"]["task_limit"] == 20 and stages["Build"]["task_limit"] == 3, "the limits")
     owners = {name: stages[name]["owner"] for name in ("Build", "Review 1", "Review 2", "Merge", "Release")}
     want = {"Build": BUILDER, "Review 1": REVIEWER_1, "Review 2": REVIEWER_2, "Merge": RELEASE, "Release": RELEASE}
     expect(owners == want, f"owners {owners}")
@@ -318,6 +318,9 @@ def push_past_pr_merged(r: SoftRig) -> None:
 def spec_full(r: SoftRig) -> None:
     from backend import task_engine as E
 
+    pid = r.preset(PRODUCT)["id"]
+    with r.w.tx() as c:  # the preset gives Spec 20; a limit of 2 keeps the case small
+        c.execute("UPDATE stages SET task_limit=2 WHERE pipeline_id=? AND name='Spec'", (pid,))
     ideas = [r.idea(f"Idea {i}", by=PM) for i in range(1, 4)]  # the PM's own: held by hand
     for p in ideas[:2]:
         r.by_hand(p)
