@@ -585,7 +585,9 @@ def ask_ok(
         if reached:
             row = reached
     # Acting for `by` inside this transaction: the version is the one just read.
-    asked: Row = H.task_ask(conn, by, task_id, target, line, kind="ok", shows=shows, seen_version=row.get("version"))
+    asked: Row = H.task_ask(
+        conn, by, task_id, target, line, kind="ok", shows=shows, seen_version=row.get("version"), for_action=True
+    )
     requirement_id = str(asked["requirement_id"])
     conn.execute(
         "INSERT INTO ok_grants (requirement_id, asked_by_id, asked_of_id, subject, content_hash, content, filed, "

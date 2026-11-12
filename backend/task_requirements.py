@@ -296,6 +296,12 @@ def _ok(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row | N
     if answer and answer["answer"] == "no":
         notes = (answer.get("notes") or "").strip()
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Sent back: {notes}" if notes else "Sent back")
+    if task.get("stage_id") == "product-validate":
+        from . import validate_gate
+
+        held = validate_gate.held(conn, task, requirement)  # a bot's OK reaches the person with a passed page only
+        if held:
+            return held
     return Standing(requirement, WAITING, person, what)
 
 

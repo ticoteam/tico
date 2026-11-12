@@ -363,6 +363,7 @@ def task_ask(
     shows: object = None,
     seen_version: int | str | None = None,
     mover: bool | None = None,
+    for_action: bool = False,
 ) -> Row:
     """Ask someone on the task: an answer (`kind` "answer", with `choices` where there are some) or an OK (`kind`
     "ok"). The task stays in its stage until they answer, the ask is withdrawn, or someone pushes past it. The result
@@ -386,7 +387,16 @@ def task_ask(
         # What a bot puts in front of a person is plain: one or two short sentences, no ids or paths (rule 7).
         H.require_person_ask(conn, actor, target, line, "ask")
     return E.add_requirement(
-        conn, task_id, actor, kind, target, line, choices=choices, shows=shows, seen_version=seen_version
+        conn,
+        task_id,
+        actor,
+        kind,
+        target,
+        line,
+        choices=choices,
+        shows=shows,
+        seen_version=seen_version,
+        for_action=for_action,
     )
 
 
