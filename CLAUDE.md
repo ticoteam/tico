@@ -75,9 +75,9 @@ when the branch would not merge into origin/main and names the files. A person m
 
 ## How we work
 Trunk-based: branches are `<who>/<topic>` (a Tico bot's: `tico/...`), one ticket per PR. Draft PRs run no CI. The flow: open the PR as a draft
-(`gh pr create --draft`) and push freely; when done, run `python3 scripts/pr_checks.py local --ready`, which runs the
+(`gh pr create --draft`) and push freely; when done, a person runs `python3 scripts/pr_checks.py local --ready`, which runs the
 tests the PR checks select for your diff on this computer, prints a receipt line with the head sha for the ticket, and
-marks the PR ready after a pass. Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
+marks the PR ready after a pass. A Tico bot never runs that script: it marks its PR ready with `gh pr ready` after its own tests (see "A Tico bot on a Tico task"). Mark ready once: each push to a ready PR runs CI again, so batch later fixes. Wait for
 green `checks` on that run (not skipped), and once it is reviewed, enqueue it with
 `gh pr merge <N> --merge`: the merge queue tests the PR merged onto current main before it lands. Enqueue once. No bot
 enqueues: Tico queues a bot's PR at the checked head when its task reaches Merge, and a queue removal goes to the
