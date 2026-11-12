@@ -360,7 +360,8 @@ conversation to the cache again at its next turn; after an hour idle that cache 
 not come within 48 hours (counted from the first time the update was ready, kept across runner restarts), the update
 goes in at the next moment no run uses the harness, as before. The runner's log line says which: `Claude Code updated
 to 2.1.316 (no turn on this computer has used it for 64 minutes)` or `(no turn running; sessions stayed warm for 48
-hours)`. A first install and the owner's **Update** or pin do not wait.
+hours)`. A first install and the owner's **Update** or pin do not wait, and pinning a harness drops a daily update
+still waiting for it.
 
 A harness can be **pinned** to a version: the runner keeps that version and only reports that a newer one exists.
 The manifest can ship a pin (`[update] policy = "pinned"`, `pin = "1.2.3"`), and the owner can pin or unpin per

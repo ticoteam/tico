@@ -1193,6 +1193,12 @@ struct Job {
     staged: Option<(PathBuf, String)>,
 }
 
+/// The daily check's own update (not an install, an owner's request or a pin's move): the one that waits for cold
+/// sessions.
+fn daily(job: &Job) -> bool {
+    job.kind == "update" && job.request.is_empty() && job.version.is_empty()
+}
+
 type Slot = Arc<Mutex<Option<Result<Value, String>>>>;
 
 /// One runner's tools directory, its manifests, and the work of keeping them current.
@@ -1561,6 +1567,21 @@ impl Harnesses {
         self.harvest();
         for id in self.staged.keys().cloned().collect::<Vec<_>>() {
             let m = self.manifests[&id].clone();
+            // A daily update waiting for cold sessions is void once the owner pins the harness: switching it in
+            // later would install the version the pin was set against, then downgrade again.
+            if daily(&self.staged[&id]) && self.policy(&m).0 != "latest" {
+                let job = self.staged.remove(&id).unwrap();
+                if let Some((dir, version)) = &job.staged {
+                    let _ = std::fs::remove_dir_all(dir);
+                    log(&format!(
+                        "Tico runner: dropped the {} {version} update; it is pinned on this computer",
+                        m.name
+                    ));
+                }
+                self.section("cold_wait").remove(&m.id);
+                self.save();
+                continue;
+            }
             if busy().contains(&m.host) {
                 continue;
             }
@@ -1629,15 +1650,17 @@ impl Harnesses {
     /// write its whole conversation again at the next turn. The wait starts when the version is first staged and is
     /// kept in the state file, so a runner restart does not start it again.
     fn may_switch(&mut self, m: &Manifest, job: &Job) -> Option<String> {
-        if job.kind != "update" || !job.request.is_empty() || !job.version.is_empty() {
+        if !daily(job) {
             return Some("no turn running".into());
         }
         let quiet = (self.quiet)(&m.host);
         if quiet >= COLD_AFTER_S {
-            return Some(format!(
-                "no turn on this computer has used it for {} minutes",
-                (quiet / 60.0) as u64
-            ));
+            let idle = if quiet < 2.0 * 3600.0 {
+                format!("{} minutes", (quiet / 60.0) as u64)
+            } else {
+                format!("{} hours", (quiet / 3600.0) as u64)
+            };
+            return Some(format!("no turn on this computer has used it for {idle}"));
         }
         let now = epoch_s();
         let since = match self.read("cold_wait", &m.id).as_f64() {
@@ -3056,11 +3079,49 @@ mod tests {
     }
 
     #[test]
-    fn a_turn_marks_its_hosts_warm() {
+    fn a_pin_set_while_a_daily_update_waits_drops_that_update() {
+        let mut m = Machine::new(true);
+        m.h.check_every = f64::INFINITY;
+        m.stage("2.1.300");
+        m.h.step(HashSet::new);
+        m.h.quiet = Box::new(|_| 5.0 * 60.0); // sessions warm: the update waits
+        m.stage_daily_update("2.1.316");
+        let copy = m.h.tools.join("claude-code").join("2.1.316");
+        m.h.step(HashSet::new);
+        assert!(m.h.staged.contains_key("claude-code"));
+        assert_eq!(m.h.request("pin", "claude-code", "").0, "done");
+
+        m.h.quiet = Box::new(|_| 61.0 * 60.0); // an hour with no turn
+        m.h.step(HashSet::new);
+        assert!(!m.h.staged.contains_key("claude-code"));
+        assert!(!copy.exists(), "the waiting copy is deleted");
+        assert!(m.h.read("cold_wait", "claude-code").is_null());
+        assert_eq!(
+            m.h.detect(&m.h.manifests["claude-code"].clone(), &m.managed(), 15),
+            "2.1.300"
+        );
+    }
+
+    #[test]
+    fn a_turn_marks_its_hosts_warm_when_it_starts_and_ends() {
+        let stamp = || {
+            LAST_TURN
+                .get_or_init(Default::default)
+                .lock()
+                .unwrap()
+                .get("cold-test-host")
+                .copied()
+        };
         turn_runtimes("cold-test-turn", &["cold-test-host".to_string()]);
+        let started = stamp().unwrap();
         assert!(quiet_for("cold-test-host") < 5.0);
+        LAST_TURN
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .insert("cold-test-host".into(), 0.0);
         turn_done("cold-test-turn");
-        assert!(quiet_for("cold-test-host") < 5.0);
+        assert!(stamp().unwrap() >= started, "the end stamps it again");
     }
 
     /// A server that, on its one request, runs `meanwhile` before it answers `{}`.
