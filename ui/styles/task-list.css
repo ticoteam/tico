@@ -353,7 +353,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .task-layout .task-wait{margin:2px 0 10px;color:var(--muted);font-size:var(--t-base)}
 .task-layout .task-wait .lbl{display:inline;margin-right:4px}
 .task-layout .tsec{margin:10px 0 0;padding-top:8px;border-top:1px solid var(--line)}
-.task-layout .rail-h .prop-add{margin-left:auto;width:20px;height:20px}
+.task-layout .rail-h .prop-add{margin-left:auto;width:40px;height:40px}
 .task-layout .task-links .tlinks,.task-layout .task-related .tlinks{margin:2px 0 4px}
 .task-layout .trel{display:flex;align-items:baseline;gap:8px;margin:2px 0}
 .task-layout .trel-k{flex:0 0 84px;font-size:var(--t-sm);color:var(--muted)}
@@ -366,7 +366,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
 .task-layout .tsecs>.tsec-empty:not(:has(form:not([hidden]))){order:1;flex:none;margin:10px 0 0;padding:0;border:0}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h{position:relative;gap:4px;height:24px;min-height:0;margin:0;padding:0 8px 0 4px;border-radius:6px;font-size:var(--t-sm);font-weight:500;letter-spacing:var(--track-normal);text-transform:none}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h:hover{background:var(--surface2);color:var(--ink)}
-.tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add{order:-1;margin:0;width:16px;height:16px;background:none;color:inherit}
+.tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add{order:-1;margin:0;width:40px;height:40px;background:none;color:inherit}
 .tsec-empty:not(:has(form:not([hidden]))) .rail-h .prop-add::after{content:"";position:absolute;inset:0}
 .tsec-empty :is(.tf-strip,.tf-empty){display:none}
 @media (max-width:760px){.tsec-empty:not(:has(form:not([hidden]))) .rail-h{height:40px;padding:0 12px 0 8px}}
@@ -391,7 +391,7 @@ button.linkish.tl-clear:hover{color:var(--ink)}
   .tmodal:has(.task-layout) .tmodal-head .peek-pos{display:none}
   .tmodal-body.task-layout{align-items:stretch}
   .sub-owner{width:40px;height:40px}
-  .task-links .prop-add,.task-related .prop-add{width:36px;height:36px}
+  .task-links .prop-add,.task-related .prop-add{width:40px;height:40px}
 }
 .tl-parent>span[aria-hidden]{margin-right:3px}
 /* Release now on the Pending Release column (ui/app/settings-release.ts) */
