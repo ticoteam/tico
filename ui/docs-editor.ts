@@ -148,8 +148,8 @@ declare var DocsEditor: DocsEditorApi;
     form.addEventListener('input', () => { form.dataset.dirty = start() === initial ? '' : '1'; });
     window.addEventListener('beforeunload', onUnload);
     const done = () => { form.dataset.dirty = ''; window.removeEventListener('beforeunload', onUnload); };
-    form.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = () => { // `!`: drawn by the template above
-      if (form.dataset.dirty === '1' && !confirm('Discard your changes to this doc?')) return;
+    form.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = async () => { // `!`: drawn by the template above
+      if (form.dataset.dirty === '1' && !(await askConfirm('Discard your changes to this doc?'))) return;
       done(); onCancel?.();
     };
     form.addEventListener('keydown', event => {
@@ -305,7 +305,7 @@ declare var DocsEditor: DocsEditorApi;
       event.preventDefault();
       send({url: form.elements.url.value.trim(), title: form.elements.title.value.trim() || (link ? link.title : ''), description: form.elements.description.value.trim(), reference: form.elements.reference.value.trim()});
     };
-    box.querySelector<HTMLButtonElement>('[data-remove]')?.addEventListener('click', () => { if (confirm('Remove this source?')) send({archived: true}); });
+    box.querySelector<HTMLButtonElement>('[data-remove]')?.addEventListener('click', async event => { if (await askConfirm('Remove this source?', eventElement(event))) send({archived: true}); });
     return box;
   }
 

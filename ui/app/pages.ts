@@ -268,7 +268,7 @@ async function pageFullAct(state: PageFullState, act: string | undefined) {
       pageFullHead(state);
       toast(r.page.archived ? 'Archived' : 'Restored');
     } else if (act === 'delete') {
-      if (!confirm(`Delete “${p.title}” and every version for good? This cannot be undone.`)) return;
+      if (!(await askConfirm(`Delete “${p.title}” and every version for good? This cannot be undone.`))) return;
       await writeRequest('DELETE', '/v2/files/' + encodeURIComponent(p.file_id));
       toast('Deleted');
       location.hash = RD_FILES;

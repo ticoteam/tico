@@ -53,7 +53,7 @@ pub(crate) fn build_server_window(app: &App) -> tauri::Result<()> {
 /// `new_page_label`) and no window: a window grant would match every child webview in "main", so one org's grant
 /// would reach the others. The remote URL confines it to the org's own origin. One per org, granted once: Tauri keeps
 /// every capability it is given for the rest of the run, so a grant per page would grow with every switch. No
-/// dialogs here: a page's `alert` and `confirm` go through `page_dialog`, which only the page on screen may use.
+/// dialogs here: a page's `alert` and `ticoConfirm` go through `page_dialog`, which only the page on screen may use.
 pub(crate) fn server_capability(hub: &url::Url, id: &str) -> Value {
     let mut capability: Value =
         serde_json::from_str(include_str!("../capabilities/main.json")).unwrap();

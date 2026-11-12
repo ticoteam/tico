@@ -628,7 +628,7 @@ function kpiPanelBind(dlg: HTMLDialogElement, d: GkKpiDetail) {
     const restoring = Boolean(k.archived_at);
     const linked = d.links || [];
     const impact = linked.length ? `\n\nIt stops counting toward ${linked.length} ${linked.length === 1 ? 'goal' : 'goals'}:\n${linked.map(l => '• ' + l.goal_title).join('\n')}` : '';
-    if (!restoring && !window.confirm(`Archive “${k.name}”? Its readings and definition history will stay available.${impact}`)) return;
+    if (!restoring && !(await askConfirm(`Archive “${k.name}”? Its readings and definition history will stay available.${impact}`, archive))) return;
     archive.disabled = true;
     try {
       await post(`/v2/kpis/${encodeURIComponent(k.id)}/${restoring ? 'restore' : 'archive'}`, {});

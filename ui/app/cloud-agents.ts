@@ -217,7 +217,7 @@
       body.innerHTML = seatHTML(detail);
       const cancel = body.querySelector<HTMLButtonElement>('[data-cloud-cancel]');
       if (cancel) cancel.onclick = async () => {
-        if (!confirm('Cancel this request?')) return;
+        if (!(await askConfirm('Cancel this request?', cancel))) return;
         try {
           await post(`/v2/seats/${encodeURIComponent(seatId)}/cancel-request`, {});
           void refresh(true);

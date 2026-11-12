@@ -467,7 +467,7 @@ function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void 
     if (task.status === 'open' && (r.mover || r.party)) items.push({text: 'Close', danger: true, run: () => save('stage', {close: true})});
     // Closing counts as finished work; a task made by mistake is deleted into the trash instead.
     if (r.mover || task.requester_id === myActor()) items.push({text: 'Delete task', danger: true, run: async () => {
-      if (!window.confirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`)) return;
+      if (!(await askConfirm(`Delete "${task.title}"? It goes to the trash, from which it can be restored.`))) return;
       try { await post(`/v2/tasks/${encodeURIComponent(task.id)}/delete`, {}); } catch (e) { toast(errorCode(e) === 'has_work' ? "This task has work on it, such as a bot's turn, an answer, a bot's file or a subtask, so it can't be deleted. Close it instead." : errorMessage(e, ''), true); return; }
       d.close(); toast('Deleted');
       if (TASKS_ST) void tasksCatchUp(TASKS_ST);

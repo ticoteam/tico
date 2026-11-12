@@ -192,6 +192,19 @@ async function docsSetup(slot: HTMLElement, {asked, current, openImport, reload}
 let DOC_CACHE_KEY = '';
 // An editor with unsaved text asks before a click in the list leaves it.
 const docsDirty = (): boolean => $('form.docs-editor')?.dataset.dirty === '1';
+// Following `link` away from a doc with unsaved changes asks first. The desktop app answers later, so the click is held
+// (true: the caller stops) and made again on OK, with the changes marked discarded so it goes through.
+function docsLeaveDirty(event: Event, link: HTMLAnchorElement): boolean {
+  if (!docsDirty()) return false;
+  event.preventDefault();
+  void (async () => {
+    if (!(await askConfirm('Discard your changes to this doc?')) || !link.isConnected) return;
+    const form = $('form.docs-editor');
+    if (form) form.dataset.dirty = '';
+    link.click();
+  })();
+  return true;
+}
 
 window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   $('#main').classList.add('docs-layout');
@@ -315,7 +328,7 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   browser.onclick = event => {
     // A click's target is an Element (eventElement, ui/app/dom.ts), so `?.` skips the closest() calls for anything else.
     const item = eventElement(event)?.closest<HTMLAnchorElement>('a.docs-item, a.docs-link-main, a.docs-source-all');
-    if (item && docsDirty() && !confirm('Discard your changes to this doc?')) { event.preventDefault(); return; }
+    if (item && docsLeaveDirty(event, item)) return;
     if (eventElement(event)?.closest('[data-docs-import]')) openImport();
     const add = eventElement(event)?.closest('[data-docs-link]'); if (add) openLink(null);
     const edit = eventElement(event)?.closest<HTMLElement>('[data-link-edit]');
@@ -350,7 +363,8 @@ window.pageCompanyDocs = async function pageCompanyDocs(): Promise<void> {
   const reader: HTMLElement = $('#docs-reader');  // drawn above
   reader.addEventListener('click', event => {
     // A click in the reader targets an Element (eventElement, ui/app/dom.ts), as in the browser handler above.
-    if (eventElement(event)?.closest('.docs-back') && docsDirty() && !confirm('Discard your changes to this doc?')) event.preventDefault();
+    const back = eventElement(event)?.closest<HTMLAnchorElement>('a.docs-back');
+    if (back) docsLeaveDirty(event, back);
   });
   const back = `<a class="docs-back" href="${docsHref('', archived ? {archived: '1'} : {})}">‹ Docs</a>`;
   // No doc open: the docs changed most recently, so the page opens on something to read.

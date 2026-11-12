@@ -258,7 +258,7 @@ function lstEdOp(op: string, m: HTMLElement, ed: AuEd): void {
 }
 async function lstNewAddress(sourceId: string, button: HTMLElement): Promise<void> {
   const state = AU;
-  if (!state?.cur || !confirm('The old address stops working.')) return;
+  if (!state?.cur || !(await askConfirm('The old address stops working.', button))) return;
   const row = (state.lstSources?.get(state.cur.id) || []).find(r => r.key === sourceId || r.id === sourceId);
   button.setAttribute('disabled', '');
   try {

@@ -633,7 +633,7 @@ async function thvArchive(view: ThvView, button: HTMLButtonElement) {
 }
 // Delete asks first. The thread leaves Threads and Catch up at once and reads as not found after that.
 async function thvDelete(view: ThvView, button: HTMLButtonElement) {
-  const t = view.thread; if (!t || !confirm("Delete this thread? It can't be undone.")) return;
+  const t = view.thread; if (!t || !(await askConfirm("Delete this thread? It can't be undone.", button))) return;
   button.disabled = true;
   try {
     await writeRequest('DELETE', thvPath(t.id));

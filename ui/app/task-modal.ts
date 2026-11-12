@@ -365,7 +365,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
     void copyText(b.dataset.copySession!).then(() => toast('Copied'), () => toast('Could not copy', true)));
   d.querySelectorAll<HTMLElement>('[data-drop-link]').forEach(b => b.onclick = async () => {
     // A session is asked about once: its × sits beside Copy, and a removed bot session cannot be added back as it was.
-    if (b.closest('.task-sessions') && !window.confirm('Remove this session from the task?')) return;
+    if (b.closest('.task-sessions') && !(await askConfirm('Remove this session from the task?', b))) return;
     try {
       await post(`/v2/tasks/${encodeURIComponent(task.id)}/links`, {remove: b.dataset.dropLink});
       const data = await get(`/v2/tasks/${encodeURIComponent(task.id)}`);

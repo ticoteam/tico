@@ -74,16 +74,20 @@ const CAPTURE_SCRIPT: &str = r#"
 })();
 "#;
 
-/// The page's `alert` and `confirm`, as the dialog plugin makes them (`alert` returns at once, `confirm` returns a
-/// promise of true for OK), but through `page_dialog`, which shows them only for the page on screen. Org pages have
-/// no dialog plugin permission; this runs after the plugin's own script, so it is the one that stays.
+/// The page's `alert` (returns at once) and its OK/Cancel question, through `page_dialog`, which shows them only for
+/// the page on screen. Org pages have no dialog plugin permission; this runs after the plugin's own script, so it is
+/// the one that stays. The question is `ticoConfirm`, a promise of true for OK and false for anything else (Cancel, a
+/// refused or failed dialog), which the page's `askConfirm` (ui/app/confirm.ts) awaits. `confirm` itself must answer
+/// at once and the dialog cannot, so it answers false without asking: a caller that does not await can never go
+/// ahead on a question still open (a promise is truthy, so `if (!confirm(...)) return;` went ahead before Cancel).
 const DIALOG_SCRIPT: &str = r#"
 (() => {
   if (!window.__TAURI__ || !window.__TAURI__.core) return;
   const invoke = window.__TAURI__.core.invoke;
   const text = message => message === undefined ? '' : String(message);
   window.alert = message => { invoke('page_dialog', {confirm: false, message: text(message)}).catch(() => {}); };
-  window.confirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).catch(() => false);
+  window.ticoConfirm = message => invoke('page_dialog', {confirm: true, message: text(message)}).then(ok => ok === true, () => false);
+  window.confirm = () => false;
 })();
 "#;
 

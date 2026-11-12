@@ -816,9 +816,9 @@ function strategyBind() {
       if (!ok && STRAT === state && sform.isConnected) { [state.editSection, state.addSection] = was; sform.querySelectorAll<HTMLButtonElement>('button').forEach(b => { b.disabled = false; }); }
     };
     const remove = sform.querySelector<HTMLElement>('[data-section-remove]');
-    if (remove) remove.onclick = () => {
+    if (remove) remove.onclick = async () => {
       const title = stratExtra(view.version)[key]?.title || key;
-      if (confirm(`Remove ${title}? Earlier versions keep it.`)) void send({extra: {[key]: ''}});
+      if (await askConfirm(`Remove ${title}? Earlier versions keep it.`, remove)) void send({extra: {[key]: ''}});
     };
     sform.onsubmit = async ev => {
       ev.preventDefault();

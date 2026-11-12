@@ -84,7 +84,7 @@ async function tcnSlackDraw(thread: ThreadRow, sec: HTMLElement | null): Promise
       const b = eventElement(ev)?.closest('button');
       if (!b) return;
       const drop = b.matches('[data-slack-unlink]');
-      if (drop && !confirm(`Unlink ${tcnChannel(link)}?`)) return;
+      if (drop && !(await askConfirm(`Unlink ${tcnChannel(link)}?`, b))) return;
       b.disabled = true;
       try { await tcnSlackAct(link, drop ? 'unlink' : 'resume'); await tcnSlackDraw(thread, sec); }
       catch (e) { tcnPart(body, '[data-tcn-err]').textContent = errorMessage(e, ''); b.disabled = false; }

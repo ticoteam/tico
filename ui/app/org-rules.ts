@@ -1359,11 +1359,11 @@ async function ruRulePanel(side: HTMLElement, id: string, note = '') {
     } catch (e) { status.textContent = ruError(e); }
   });
   form.querySelector('[data-ru-retire]')?.addEventListener('click', async () => {
-    if (!confirm('Retire this rule?')) return;
+    if (!(await askConfirm('Retire this rule?'))) return;
     try {
       const out: {due?: RuleDue[]} = await post('/v2/rules/' + encodeURIComponent(r.id) + '/retire', {version: r.version});
       const dues = (out.due || []).filter(d => !d.retired_at);
-      if (dues.length && confirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`))
+      if (dues.length && (await askConfirm(dues.length === 1 ? 'Remove its due date too?' : `Remove its ${dues.length} due dates too?`)))
         for (const d of dues) await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
       location.hash = ruBack();
       await ruReload();
@@ -1485,7 +1485,7 @@ async function ruDuePanel(side: HTMLElement, id: string, ruleId: string, note = 
   });
   form.querySelector('[data-ru-satisfy-on]')?.addEventListener('click', () => void satisfy(fields.due_on.value));
   form.querySelector('[data-ru-remove]')?.addEventListener('click', async () => {
-    if (!confirm('Remove this due date?')) return;
+    if (!(await askConfirm('Remove this due date?'))) return;
     try {
       if (!d) throw new Error('This due date is gone.');
       await post('/v2/rule-due/' + encodeURIComponent(d.id) + '/remove', {});
