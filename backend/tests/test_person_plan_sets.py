@@ -162,6 +162,64 @@ def test_a_persons_plans_run_on_the_soonest_reset_with_usage_left_then_move_on_w
     assert epoch(api) == after and len(moves(api)) == 1
 
 
+def limit_met(api, m, found):
+    """The turn meets its plan's usage limit as a runner reports it: a limit error naming a reset, then a limited end."""
+    soon = datetime.now(timezone.utc) + timedelta(hours=2)
+    notice = f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
+    post(api, f"attempts/{found['id']}/started", {"thread_id": "t-" + found["id"]}, m["token"])
+    post(
+        api,
+        f"attempts/{found['id']}/events",
+        {"events": [{"seq": 1, "kind": "error", "payload": {"error": notice, "limit": True}}]},
+        m["token"],
+    )
+    post(
+        api,
+        f"attempts/{found['id']}/complete",
+        {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+        m["token"],
+    )
+
+
+def test_a_plan_that_runs_out_in_a_turn_hands_the_held_work_to_the_next_plan_at_once(api, readings):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    p1, p2, p3 = three_plans(api, readings)
+    m = machine(api, label="Studio Mac")
+    give_person(api, m)
+    found = turn(api, m)
+    assert signed_with(api, found) == p2
+    before = epoch(api)
+    limit_met(api, m, found)
+    # AC-2 as a runner reports it: the work Plan 2's limit interrupted does not wait for Plan 2's reset while Plan 3
+    # has usage left. The bot is not Rate limited, and its next turn (no new message) runs on Plan 3, fresh.
+    with api.app.state.store.read() as c:
+        assert (H.status(c, "ops") or {}).get("state") != "limited"
+    again = claim(api, m)
+    assert again and again["bot"] == "ops"
+    assert signed_with(api, again) == p3
+    assert epoch(api) > before
+    [event] = moves(api)
+    assert (event["from"], event["to"], event["why"]) == (p2, p3, "held")
+
+
+def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readings):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    p1, p2, p3 = three_plans(api, readings)
+    hold(api, p3, days=3)
+    m = machine(api, label="Studio Mac")
+    give_person(api, m)
+    found = turn(api, m)
+    assert signed_with(api, found) == p2
+    limit_met(api, m, found)
+    with api.app.state.store.read() as c:
+        assert (H.status(c, "ops") or {}).get("state") == "limited"
+    assert claim(api, m) is None
+
+
 def test_when_every_plan_is_held_the_computers_own_login_signs_in_and_the_first_reset_brings_its_plan_back(
     api, readings
 ):
@@ -383,3 +441,20 @@ def test_the_person_migration_adds_the_column_and_skips_a_new_file():
     step.up(old)
     step.up(old)  # a second start changes nothing
     assert old.execute("SELECT subscription_id, person FROM computer_subscriptions").fetchall() == [("s", "")]
+
+
+def test_settings_search_finds_the_picker_by_the_name_of_a_person_who_owns_a_plan(api):
+    setup(api)
+    company(api)
+
+    def found(q):
+        return [s["key"] for s in get(api, f"settings/catalog?q={q}")["settings"]]
+
+    with api.app.state.store.read() as c:
+        name = H.human(c, "ana")["name"]
+    first = name.split()[0]
+    # AC-13: a name finds the picker only once that person owns a plan to give.
+    assert "models.computer_subscription" not in found(first)
+    add(api, name="Plan 1")
+    assert "models.computer_subscription" in found(first)
+    assert "models.computer_subscription" in found("failover")

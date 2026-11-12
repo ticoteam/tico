@@ -372,7 +372,8 @@ def pick_key(sub, usage):
     (never used here, or its window has just reset) comes after every plan with one, oldest first."""
     resets = (usage or {}).get("weekly_resets_at") or ""
     used = (usage or {}).get("weekly_used_pct")
-    return (not resets, resets, used if isinstance(used, (int, float)) else 0, sub.get("created_at") or "", sub["id"])
+    # A reset with no percent known sorts after one that names usage left at the same reset, not ahead of it.
+    return (not resets, resets, used if isinstance(used, (int, float)) else 100, sub.get("created_at") or "", sub["id"])
 
 
 def _ordered(c, subs, runtime, ctx=None):
@@ -1248,6 +1249,18 @@ def plan_owners(c, runtime):
     return out
 
 
+def owner_names(c):
+    """The names of the people who own a plan, for Settings search: searching a person's name finds the picker that
+    gives a computer their plans (settings_catalog.find `extra`)."""
+    if not _present(c):
+        return []
+    names = []
+    for r in c.execute("SELECT DISTINCT owner_id FROM model_subscriptions WHERE owner_id<>'' ORDER BY owner_id"):
+        person = H.human(c, H.actor_id(r["owner_id"])) or {}
+        names.append(person.get("name") or "")
+    return [n for n in names if n]
+
+
 def _person_for(c, value, runtime):
     """`value` as the actor whose plans a computer is given for `runtime`, or a Problem: a person who owns at least one
     plan for that runtime (one who owns none is not offered)."""
@@ -1347,6 +1360,16 @@ def _why_moved(c, entry, runtime):
     if old["status"] == "needs_reconnect":
         return "needs_reconnect"
     return "held" if _held(c, old["id"], runtime) else "available"
+
+
+def moves_on(c, runner_id, runtime):
+    """Whether a computer given a person's plans for `runtime` has another plan to sign its next turn in with than the
+    one the set is on: after a limit is met on that plan, its bots' held work runs on the next one, not at its reset."""
+    entry = _given(c).get((runner_id, runtime))
+    if not entry or not entry.get("person"):
+        return False
+    on = in_effect(c, runner_id, runtime)
+    return bool(on) and on["id"] != entry["id"]
 
 
 def settle(c, settings, runner_id, chosen):

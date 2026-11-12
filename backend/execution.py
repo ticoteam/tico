@@ -7846,6 +7846,10 @@ class Execution:
                     **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {}),
                 },
             )
+            # A computer given a person's plans moves on to the next plan with usage left: the work this limit held
+            # until the spent plan's reset runs now, on that plan (its claim moves the set, model_subscriptions.settle).
+            if model_subscriptions.moves_on(c, row["runner_id"], runtime):
+                lift_limited_on_computer(c, self.store.settings, H.KEEPER, row["runner_id"], runtime)
         elif busy_acted or repeated_capacity:
             when = "again on its continued thread" if repeated_capacity else "after the run had acted"
             settle_status(
