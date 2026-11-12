@@ -173,6 +173,7 @@ def test_the_snooze_route_refuses_a_blocked_bot_and_writes_the_rule_on_the_histo
     )
     assert "You're blocked, not waiting" in str(refused)
     assert "(rule sr_real_wait)" in str(refused)
+    assert any("tico task ask" in step for step in refused["next"])
     with api.app.state.store.read() as c:
         assert E.task(c, task["id"]).get("snooze") is None
         notes = [
@@ -214,4 +215,40 @@ def test_once_at_release_blocked_bot_snoozes_end_and_each_manager_gets_one_wake(
         ).fetchall()
     assert [bot for bot, _ in wakes] == ["lead"]
     assert wakes[0][1].startswith("Stage rules: 2 snoozed tasks were blocked, not waiting")
+    assert SR.sweep_snoozes(company) == []
+
+
+def test_the_cli_sends_set_anyway_only_when_asked():
+    """`tico task reassign --set-anyway` is a person's way past a refused owner; without the flag nothing is sent."""
+    from clients import hubcli, remotecli
+
+    class Recorder:
+        def __init__(self):
+            self.sent = []
+
+        def post(self, path, body, key=None):
+            self.sent.append((path, body))
+            return {}
+
+    for argv, anyway in (([], None), (["--set-anyway"], True)):
+        args = hubcli.parser().parse_args(["task", "reassign", "t1", "human:ana", "--version", "3", *argv])
+        client = Recorder()
+        remotecli.via_tool(client, args)
+        assert client.sent[0][0] == "tasks/t1/owner"
+        assert client.sent[0][1].get("set_anyway") is anyway
+
+
+def test_a_jev_outage_does_not_use_up_the_release_sweep(company, monkeypatch):
+    """Jev down at the first start judges nothing and keeps every snooze; the next run, with Jev up, ends the blocked one."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        SR.ensure_defaults(c)
+        row = X.new_task(c, ANA, "One", assignee="bot:ops")
+        E.snooze(c, row["id"], "bot:ops", "no access to the board", "2099-01-05T08:00:00.000000Z", row["version"])
+    monkeypatch.setattr(SR, "JEV", FakeJev(fail=True))
+    assert SR.sweep_snoozes(company) == []
+    up = FakeJev()
+    monkeypatch.setattr(SR, "JEV", up)
+    assert SR.sweep_snoozes(company) == [row["id"]]
+    assert len(up.calls) == 1
     assert SR.sweep_snoozes(company) == []

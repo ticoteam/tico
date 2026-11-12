@@ -286,8 +286,9 @@ const taskDone = (id: string, version: number | null, note?: string): Promise<Ta
 /** `to`: next, done, closed, reopen, or a stage's id or name. `why` pushes past what is missing. */
 const taskMove = (id: string, to: string, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/move`, withVersion(version, why ? {to, why} : {to}), newRequestId());
-const taskReassign = (id: string, owner: string, version: number | null, why?: string): Promise<TaskMoved> =>
-  post(`${taskPath(id)}/owner`, withVersion(version, why ? {owner, why} : {owner}), newRequestId());
+/** `setAnyway`: a person gives it past a stage rule that refused this owner (409 task_stage_rule). */
+const taskReassign = (id: string, owner: string, version: number | null, why?: string, setAnyway?: boolean): Promise<TaskMoved> =>
+  post(`${taskPath(id)}/owner`, withVersion(version, {owner, ...(why ? {why} : {}), ...(setAnyway ? {set_anyway: true} : {})}), newRequestId());
 /** `until`: an ISO date or date-time; null snoozes with no end. */
 const taskSnooze = (id: string, until: string | null, version: number | null, why?: string): Promise<TaskMoved> =>
   post(`${taskPath(id)}/snooze`, withVersion(version, {...(until ? {until} : {}), ...(why ? {why} : {})}), newRequestId());

@@ -195,7 +195,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
     await taskMenuSettled(d);
     if (!d.open || String(d.dataset.task) !== String(task.id) || d.taskOpening !== opening) return;
   }
-  if (d.dataset.task !== String(task.id)) { d.propsErrs = null; d.focusProp = ''; d.liveTask = null; }
+  if (d.dataset.task !== String(task.id)) { d.propsErrs = null; d.propsAnyway = null; d.focusProp = ''; d.liveTask = null; }
   // never draw an older copy of the task over the newer one a save returned
   else if (d.liveTask && Number(task.version) < Number(d.liveTask.version)) task = d.liveTask;
   const seq = d.drawSeq = (d.drawSeq || 0) + 1;
@@ -569,7 +569,7 @@ async function taskSaveSend(cur: ModalTask, body: PropPatch, note: string): Prom
   if (typeof body.move === 'string') return (await taskMove(id, body.move, version, why)).task;
   if (body.close) return (await taskMove(id, 'closed', version)).task;
   if (body.done) return (await taskDone(id, version, note || undefined)).task;
-  if (typeof body.owner === 'string') return (await taskReassign(id, body.owner, version)).task;
+  if (typeof body.owner === 'string') return (await taskReassign(id, body.owner, version, undefined, body.set_anyway === true)).task;
   if (typeof body.snooze === 'string') return (await taskSnooze(id, body.snooze, version)).task;
   if (body.unsnooze) return (await taskUnsnooze(id)).task;
   return taskEdit(id, version, body);
@@ -601,6 +601,8 @@ async function taskSave(d: ModalDialog, id: string, body: PropBody | null, then:
   } catch (e) {
     const refused = taskRefusedOf(e);
     if (quiet && refused?.missing.length) return refused;
+    // A stage rule refused this owner: a person may give it all the same (taskPropsMsgPaint draws Set anyway).
+    d.propsAnyway = refused?.error === 'task_stage_rule' && typeof body.owner === 'string' && body.set_anyway !== true ? {id, owner: body.owner} : null;
     if (!here()) { toast(errorMessage(e, ''), true); return false; }
     errs.set(field, refused?.error === 'task_changed' || errorStatus(e) === 409 && !refused?.detail ? 'Changed elsewhere. Showing the latest.'
       : `Not saved: ${refused?.detail || errorMessage(e, 'refused')}`);

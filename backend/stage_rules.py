@@ -472,18 +472,36 @@ def snooze_rules(conn: Any, task_row: Any, by: str, why: str, until: str | None)
     return None, asked
 
 
-def ask_snooze(task_row: Any, why: str, until: str | None, asked: Any, *, store: Any = None) -> Any:
+def _match_at() -> float:
+    """The question set's match threshold (questions/stage-rule.json), so an edit there is the one that counts;
+    MATCH_AT when the set cannot be read."""
+    try:
+        from clients import judge as _judge_mod
+
+        judge: Any = _judge_mod
+        found: Any = judge.load_set(QUESTION_SET)
+        return float(found["thresholds"]["match"])
+    except Exception:  # noqa: BLE001 - a missing or odd set keeps the default
+        return MATCH_AT
+
+
+def ask_snooze(
+    task_row: Any, why: str, until: str | None, asked: Any, *, store: Any = None, unjudged: list[str] | None = None
+) -> Any:
     """Every Jev question of `asked` in ONE call, with no connection held: the first rule Jev says holds, as (rule,
-    line), or None (none holds, or Jev is off or failed: the snooze goes)."""
+    line), or None (none holds, or Jev is off or failed: the snooze goes). `unjudged` collects the task when Jev gave
+    no answer, so a sweep can tell judged from let through."""
     if not asked:
         return None
     questions = _questions(asked)
     answers = _ask_jev(store, _state(task_row, why, until), questions)
     if answers is None:
+        if unjudged is not None:
+            unjudged.append(str(task_row["id"]))
         return None
     for i, rule in enumerate(asked):
         p = answers.get(f"rule_{i}")
-        if p is not None and p >= MATCH_AT:
+        if p is not None and p >= _match_at():
             return rule, _line(rule, "")
     return None
 
@@ -628,6 +646,7 @@ def sweep_snoozes(store: Any) -> list[str]:
             ).fetchall()
         ]
     refused: list[tuple[str, dict[str, Any], str]] = []
+    unjudged: list[str] = []
     for task_id in ids:
         with store.read() as c:
             row: Any = E.task(c, task_id)
@@ -636,7 +655,7 @@ def sweep_snoozes(store: Any) -> list[str]:
             snooze: Any = row["snooze"]
             why, until = str(snooze.get("why") or ""), snooze.get("until_at")
             fixed, asked = snooze_rules(c, row, str(snooze.get("by_id")), why, until)
-        found = fixed or ask_snooze(row, why, until, asked, store=store)
+        found = fixed or ask_snooze(row, why, until, asked, store=store, unjudged=unjudged)
         if found:
             refused.append((task_id, found[0], found[1]))
     told: dict[str, list[tuple[Any, str]]] = {}
@@ -663,6 +682,16 @@ def sweep_snoozes(store: Any) -> list[str]:
                 f"bots.\n{lines}",
                 wake_key=f"stage-rules-sweep:{REAL_WAIT}:{manager}",
             )
+        if unjudged:
+            # Jev gave no answer on some (down, or not set up yet): the sweep is not used up, so the next start
+            # judges the snoozes still open; the ones ended here are no longer open bot snoozes.
+            c.execute("DELETE FROM registry_metadata WHERE key=?", (SWEPT,))
+    log.info(
+        "stage rules: snooze sweep judged %d of %d bot snoozes, ended %d",
+        len(ids) - len(unjudged),
+        len(ids),
+        len(refused),
+    )
     return [task_id for task_id, _, _ in refused]
 
 

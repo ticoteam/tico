@@ -414,6 +414,10 @@ def task_close(api, args):
         "owner": _s("The new owner: a bot slug, a person id, or `me`"),
         "why": WHY,
         "version": VERSION,
+        "set_anyway": {
+            "type": "boolean",
+            "description": "A person gives it all the same when a stage rule refused this owner (a bot is refused)",
+        },
         "on_behalf_of": ASKED,
     },
     required=("id", "owner"),
@@ -422,6 +426,8 @@ def task_close(api, args):
 def task_reassign(api, args):
     version = _seen(args)
     body = {"owner": _target(api, args["owner"]), "version": version, **_why(args)}
+    if args.get("set_anyway"):
+        body["set_anyway"] = True
     return _asked(api, args).post(f"tasks/{args['id']}/owner", body, key=_key(args))
 
 
