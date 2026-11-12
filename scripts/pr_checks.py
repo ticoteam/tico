@@ -851,8 +851,10 @@ UI_RUNNER = "scripts/ui-tests.cts"
 # or through other helpers; for UI source outside UI_MAP, the scripts named after it (ui/app/tools.ts: tools, bot-tools,
 # redesign-e2e-tools; its stem as whole words of the script's name). The page loads every UI file, so no map from a
 # source file to the scripts that can see it is sound: the name match is a cheap best effort beside the smoke set, and
-# the release check still runs the rest. When rule 6 picks more than BROWSER_ALL_OVER scripts (a rename across many
-# scripts, a helper most scripts run), the change runs every script the release check runs, about four VMs.
+# the release check still runs the rest. Rule 6 also reads the diff: a script that names a top-level function or const
+# whose definition changed (task-code.cts calls taskModalOpen in ui/app/task-modal.ts) runs. When rule 6 picks more
+# than BROWSER_ALL_OVER scripts (a rename across many scripts, a helper most scripts run), the change runs every script
+# the release check runs, about four VMs.
 SUPPORT = "ui/tests/support/"
 BROWSER_ALL_OVER = 40
 # The phone dead-end scripts (release-only) fail when a KNOWN break stops happening, so a fix in the app's own files
@@ -912,6 +914,99 @@ def named_after(name, scripts):
         parts = script.split("-")
         if any(parts[i : i + len(words)] == words for i in range(len(parts) - len(words) + 1)):
             found.add(script)
+    return found
+
+
+# A top-level definition in a classic UI script: a function, const, let, var or class at column 0.
+TOP_LEVEL = re.compile(
+    r"(?:export\s+)?(?:async\s+)?(?:function\s*\*?\s*([A-Za-z_$][\w$]*)|(?:const|let|var|class)\s+([A-Za-z_$][\w$]*))"
+)
+HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", re.MULTILINE)
+
+
+def top_level_spans(text):
+    """(name, first line, last line) of each top-level definition in a UI script. A definition starts at column 0 and
+    runs until the next line that starts at column 0 with anything but a closing bracket (its `}` stays inside it)."""
+    spans, current, lines = [], None, text.splitlines()
+    for number, line in enumerate(lines, 1):
+        if not line or line[0].isspace() or line[0] in "})]":
+            continue
+        if current:
+            spans.append((*current, number - 1))
+            current = None
+        match = TOP_LEVEL.match(line)
+        if match:
+            current = (match.group(1) or match.group(2), number)
+    if current:
+        spans.append((*current, len(lines)))
+    return spans
+
+
+def hunk_names(diff, old, new):
+    """The top-level names whose definitions a `git diff -U0` of one file touches: removed lines name the old file's
+    definitions, added lines the new file's."""
+    names = set()
+    sides = [(top_level_spans(old), []), (top_level_spans(new), [])]
+    for match in HUNK.finditer(diff):
+        for side, (start, count) in enumerate(((match[1], match[2]), (match[3], match[4]))):
+            first, size = int(start), 1 if count is None else int(count)
+            if size:
+                sides[side][1].append((first, first + size - 1))
+    for spans, ranges in sides:
+        for name, first, last in spans:
+            if any(a <= last and first <= b for a, b in ranges):
+                names.add(name)
+    return names
+
+
+def changed_definitions(base, head, names, root=ROOT):
+    """{UI source file: the top-level names whose definitions the diff from base's merge point to head changes}, for
+    the ui/ source files in `names` (not tests or vendored code). Git failing names nothing."""
+    out = {}
+    sources = [
+        n
+        for n in names
+        if n.startswith("ui/") and not n.startswith(("ui/tests/", "ui/vendor/")) and n.endswith((".ts", ".js"))
+    ]
+    if not base or not sources:
+        return out
+    try:
+        ancestor = subprocess.check_output(["git", "merge-base", base, head], cwd=root, text=True).strip()
+    except (subprocess.CalledProcessError, OSError):
+        return out
+    for path in sources:
+
+        def show(rev, path=path):
+            done = subprocess.run(
+                ["git", "show", f"{rev}:{path}"], cwd=root, capture_output=True, text=True, check=False
+            )
+            return done.stdout if done.returncode == 0 else ""
+
+        try:
+            diff = subprocess.check_output(
+                ["git", "diff", "-U0", "--no-renames", ancestor, head, "--", path], cwd=root, text=True
+            )
+            found = hunk_names(diff, show(ancestor), show(head))
+        except (subprocess.CalledProcessError, OSError):
+            continue
+        if found:
+            out[path] = found
+    return out
+
+
+def callers(root, defined, scripts):
+    """The browser scripts among `scripts` that name any of `defined` (top-level UI names) as a whole word."""
+    if not defined:
+        return set()
+    pattern = re.compile(r"(?<![\w$])(?:" + "|".join(sorted(map(re.escape, defined))) + r")(?![\w$])")
+    found = set()
+    for script in scripts:
+        path = browser_script(root, script)
+        try:
+            if path and pattern.search(path.read_text(errors="replace")):
+                found.add(script)
+        except OSError:
+            continue
     return found
 
 
@@ -1043,7 +1138,7 @@ def script_changes(base, head, changed, root=ROOT):
     return sorted(found)
 
 
-def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None):
+def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, added=None, core=None, head="HEAD"):
     """The checks a change runs. A pull request or merge queue group never runs the full default suite or every browser
     script (release validation runs both). Main and scheduled runs keep the full suite (python None). A rule that departs
     from the measured dependency map says so in `uncertain`, and `reason` names the rules that applied:
@@ -1063,8 +1158,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        a missing one runs the smoke set's browser scripts instead.
     5. An index.html that changes <script src> names adds the files it now names (prepare, through script_changes).
     6. A ui/ path picks browser scripts the release check runs (see SUPPORT): a changed script, every script that runs a
-       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, and every
-       phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
+       changed or gone helper under ui/tests/support/, the scripts named after UI source outside UI_MAP, the scripts
+       that name a top-level function or const whose definition the diff from `base` to `head` changes in a UI source
+       file (changed_definitions), and every phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
        `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
 
@@ -1214,6 +1310,8 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
                 and ui_map_key(name) not in UI_MAP
             ):
                 direct |= named_after(name, runnable)
+        defined = changed_definitions(base, head, [n for n in names if n in live], root)
+        direct |= callers(root, set().union(*defined.values()), runnable)
         if len(direct) > BROWSER_ALL_OVER:
             uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")
             direct |= runnable
@@ -1670,7 +1768,7 @@ def prepare(event, base, output, timings_path=None, head="HEAD", light=False):
     light = light and event in NARROW
     # One map for the selection and the narrowing; selection builds none for a change it answers without one.
     graph = DependencyMap(ROOT) if light and any(not unread(n) for n in changed) else None
-    picked = selection(changed, event, base=base, added=added, graph=graph)
+    picked = selection(changed, event, base=base, added=added, graph=graph, head=head)
     if light:
         picked = narrow(picked, changed, event, added=added, graph=graph)
     if picked["python"] is not None and not picked["caddy"]:

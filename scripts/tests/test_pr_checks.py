@@ -513,6 +513,59 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
 
 
+def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
+    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
+    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
+    # one that names only an unchanged global of the same file does not.
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    smoke_tree(tmp_path)
+    modal = (ROOT / "ui/app/task-modal.ts").read_text()
+    source(tmp_path, "ui/app/task-modal.ts", modal)
+    source(tmp_path, "ui/tests/task-code.cts", (ROOT / "ui/tests/task-code.cts").read_text())
+    source(tmp_path, "ui/tests/other.cts", "await page.evaluate(() => taskModalLoadFailed('t', null));\n")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+
+    def change(old, new):
+        text = (tmp_path / "ui/app/task-modal.ts").read_text()
+        assert old in text
+        source(tmp_path, "ui/app/task-modal.ts", text.replace(old, new, 1))
+        git("commit", "-qam", "Change")
+        return checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+
+    start = modal.index("async function taskModalOpen(")
+    body = modal.index("\n", start) + 1
+    line = modal[body : modal.index("\n", body) + 1]
+    picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
+    assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
+    assert "other" not in picked["browser_direct"]
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalOpen"}
+    }
+    git("reset", "-q", "--hard", base)
+    picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
+    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    # Without a base (no diff to read), the rule picks nothing new.
+    assert "task-code" not in checks.selection(["ui/app/task-modal.ts"], root=tmp_path, core=[])["browser_direct"]
+
+
+def test_changed_definitions_maps_added_and_removed_lines_to_their_top_level_names():
+    old = "const A = 1;\n\nfunction b() {\n  return A;\n}\n// note\nlet c = 2;\n"
+    new = "const A = 1;\n\nfunction b() {\n  return A + 1;\n}\n// note changed\nlet c = 2;\nasync function d() {}\n"
+    spans = checks.top_level_spans(new)
+    assert [s[0] for s in spans] == ["A", "b", "c", "d"]
+    diff = "@@ -4 +4 @@\n-  return A;\n+  return A + 1;\n@@ -6 +6 @@\n-// note\n+// note changed\n@@ -7,0 +8 @@\n+x\n"
+    assert checks.hunk_names(diff, old, new) == {"b", "d"}
+    # A removed function is named by the old side.
+    assert checks.hunk_names("@@ -3,3 +2,0 @@\n-x\n-y\n-z\n", old, "const A = 1;\n\n// note\nlet c = 2;\n") == {"b"}
+
+
 PHONE_SCRIPTS = {
     f"phone-dead-ends-{state}" for state in ("bot-waiting", "no-computer", "no-credit", "setup-halfway", "sign-off")
 }
