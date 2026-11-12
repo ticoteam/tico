@@ -1,6 +1,6 @@
 // No browser: the Tasks page's Filter (ui/app/tasks-page.ts, docs/pipelines-v3.md S7) offers every field whose values the
 // listed rows carry, Tag and Pushed past included:
-// - Tag lists the distinct labels on the shown rows, as they are, and none when no row has a label;
+// - Tag lists the distinct labels on the view's rows (unfiltered and read), as they are, and none when no row has a label;
 // - Pushed past is one choice when any shown row was pushed past, and absent otherwise;
 // - both appear in the Filter menu's fields;
 // - picking Pushed past or a tag in its menu sets the filter, and the filter narrows the rows (task-row.ts).
@@ -32,7 +32,8 @@ const task = (id: string, extra: Record<string, unknown> = {}) => ({id, title: i
   status: 'open', number: 1, owner_id: 'bot:builder', requester_id: 'human:ana', assignee_id: null, due_at: null, late: null,
   snoozed: false, pushed_past: false, turn: null, version: 1, labels: [], ...extra});
 const ROWS = [task('a', {labels: ['ui-fail', 'stress-run']}), task('b', {labels: ['ui-fail'], pushed_past: true}), task('c')];
-const state = (tasks: unknown[]) => ({pipeline: 'eng', archive: '', q: '', filters: {} as Record<string, unknown>, needs: [], tasks, pipelines: [],
+// `base` is the view's unfiltered rows, `tasks` the rows a filter's server read returned (tasks-page.ts tasksNarrow).
+const state = (tasks: unknown[], base: unknown[] = []) => ({pipeline: 'eng', archive: '', q: '', filters: {} as Record<string, unknown>, needs: [], tasks, base, pipelines: [],
   layout: 'list'});
 type Value = {value: string; label: string};
 const values = (st: unknown, k: string): Value[] => plain(ctx.tasksFilterValues(st, k)).map(({value, label}: Value) => ({value, label}));
@@ -42,9 +43,13 @@ const st = state(ROWS);
 assert.deepEqual(values(st, 'tag'), [{value: 'stress-run', label: 'stress-run'}, {value: 'ui-fail', label: 'ui-fail'}], 'Tag lists the labels');
 assert.deepEqual(values(state([task('c')]), 'tag'), [], 'no labels, no Tag values');
 
+// Once a pick narrows the rows, the unfiltered rows still offer their tags, so another tag can be added.
+assert.deepEqual(values(state([ROWS[0]], ROWS), 'tag').map(v => v.value), ['stress-run', 'ui-fail'], 'Tag keeps the unfiltered rows\' labels');
+
 // ---- Pushed past: one choice when a row was pushed past
 assert.deepEqual(values(st, 'pushed'), [{value: '1', label: 'Pushed past'}], 'Pushed past is one choice');
 assert.deepEqual(values(state([task('a'), task('c')]), 'pushed'), [], 'nothing pushed past, no choice');
+assert.deepEqual(values(state([task('a')], ROWS), 'pushed'), [{value: '1', label: 'Pushed past'}], 'a pushed row in the unfiltered rows offers it');
 
 // ---- the Filter menu's fields include both
 let menuHTML = '';
