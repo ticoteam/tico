@@ -58,3 +58,12 @@ def run(store, onboarding, telemetry):
             ship_deployed(c, settings)
     except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
         telemetry.capture("github", exc)
+    # Production runs another release: a bot's snooze in a stage that checks the release production runs (Product's
+    # Validate) ends now, not at the clock time it guessed the release would land (task_engine.end_release_snoozes).
+    try:
+        from . import releases, task_engine
+
+        with _transaction(store) as c:
+            task_engine.end_release_snoozes(c, releases.version(), settings.release_repo)
+    except Exception as exc:  # noqa: BLE001 - one failed job must not prevent the remaining jobs
+        telemetry.capture("release_snoozes", exc)

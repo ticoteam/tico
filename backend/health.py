@@ -1109,10 +1109,14 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None):
                 if where[0] in restarting
                 else refused or "slow"
             )
+            # A job its task's snooze holds waits on purpose: it starts when the snooze ends (Run now and Wake end it).
+            # It is Work queueing, as on a sleeping cloud machine, never a stuck bot.
+            resting = idle and reason == "task_wait"
             slow.append(
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
+                | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
             )
-            if idle:
+            if idle and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                     | (

@@ -977,6 +977,41 @@ def test_a_validate_page_is_judged_against_the_release_its_filed_work_went_out_i
     assert context == {"task": row["id"], "release": ["v1.1.0"]}, "the first release it is in"
 
 
+def test_a_new_running_release_ends_a_bots_snooze_that_waits_for_production_to_run_it(c, store):
+    """Tico Team, Nov 11: the Product Owner found production on rc.7 with the fix in rc.8 and slept three Validate tasks
+    to "the next release window, 10:00 Pacific". rc.8 landed minutes later and nothing woke them. A new release on the
+    server whose repository holds the filed work ends a bot's snooze there; a person's snooze, a stage that checks no
+    release and work in another repository stay asleep."""
+    _pipeline(c, page_settings={"with_release": True})
+    until = H.shift(H.now(), days=2)
+
+    def waiting(title, number, repo="acme/app", by=WRITER):
+        row = X.new_task(c, ANA, title, "product", assignee=WRITER)
+        filed = X.new_task(c, ANA, "Build " + title, assignee=WRITER)
+        c.execute(
+            "INSERT INTO links (id, from_task_id, to_task_id, visit_id, kind, created_at) VALUES (?,?,?,?,?,?)",
+            (H.new_id(), row["id"], filed["id"], row["visit"]["id"], "handoff", H.now()),
+        )
+        _link_pr(c, filed["id"], repo, number, "abc")
+        X.say_done(c, filed)
+        E.advance(c, filed["id"])  # the work is done; production may not run it yet
+        seen = E.task(c, row["id"])["version"]
+        E.snooze(c, row["id"], by, "production runs 1.1.0; the change ships in 1.2.0", until, seen_version=seen)
+        return row["id"]
+
+    bots, persons, elsewhere = waiting("Importer", 1), waiting("Exporter", 2, by=ANA), waiting("Docs", 3, "acme/other")
+    X.settled(c)
+    assert E.end_release_snoozes(c, "1.1.0", "acme/app") == []  # the first start only records what runs
+    assert E.end_release_snoozes(c, "1.1.0", "Acme/App") == []  # the same release again: nothing
+    assert E.end_release_snoozes(c, "1.2.0", "Acme/App") == [bots]
+    assert not E.task(c, bots).get("snooze")
+    assert E.task(c, persons)["snooze"] and E.task(c, elsewhere)["snooze"]
+    said = [body for who, body in _bodies(c, E.task(c, bots)) if who == WRITER][-1]
+    assert said.startswith("Production runs 1.2.0 now (it ran 1.1.0).")
+    ended = c.execute("SELECT ended_by_id FROM snoozes WHERE task_id=? AND ended_at IS NOT NULL", (bots,))
+    assert ended.fetchone()[0] == E.SYSTEM
+
+
 def test_any_page_on_a_task_with_prs_is_judged_with_their_newest_commits_and_an_unread_one_never_holds_it_up(c, store):
     """A pre-release page says the checks pass at the newest commit: Jev is shown the linked PRs' newest commits so it
     can check that. Only an at_head page waits for a PR Tico has not read; any other page leaves that PR out."""

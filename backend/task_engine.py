@@ -1481,6 +1481,52 @@ def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None 
     return _task(conn, task_id)
 
 
+# The release production runs, as end_release_snoozes last saw it.
+RELEASE_SEEN = "release-snoozes-seen"
+# Open tasks a bot snoozed in a stage whose page names the release production runs (`with_release`: Product's
+# Validate), whose filed work has a PR in the repository this server runs (?1, `owner/name`): its production is this
+# server. Such a snooze waits for this server to run a release, so a new one ends it.
+_RELEASE_WAITS = (
+    "SELECT z.task_id FROM snoozes z JOIN tasks t ON t.id = z.task_id "
+    "WHERE z.ended_at IS NULL AND z.by_id LIKE 'bot:%' AND t.status = 'open' AND t.pipeline_id IS NOT NULL "
+    "AND EXISTS (SELECT 1 FROM requirements r WHERE r.stage_id = t.stage_id AND r.withdrawn_at IS NULL "
+    "AND json_extract(r.settings, '$.with_release')) "
+    "AND EXISTS (SELECT 1 FROM links l JOIN task_links tl ON tl.task_id = l.to_task_id AND tl.source = 'github' "
+    "AND tl.item_type = 'pr' WHERE l.from_task_id = t.id "
+    "AND lower(substr(tl.item_key, 1, length(?1) + 1)) = lower(?1) || '#') "
+    "ORDER BY z.created_at, z.id"
+)
+
+
+def end_release_snoozes(conn: "sqlite3.Connection", running: str, repo: str) -> list[str]:
+    """This server runs another release (`running`, of `repo`, read at start-up): a bot's snooze ends in a stage that
+    checks the release production runs, on a task whose filed work is in `repo`, and whoever has the turn is woken once
+    with the release, instead of sleeping to the clock time it guessed. A person's snooze stays. The first start that
+    sees no earlier release only records it. Returns the tasks whose snooze ended."""
+    found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (RELEASE_SEEN,)).fetchone()
+    conn.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (RELEASE_SEEN, running))
+    if not found or found[0] == running or not repo:
+        return []
+    ended: list[str] = []
+    for (task_id,) in conn.execute(_RELEASE_WAITS, (repo,)).fetchall():
+        snoozed: Row = (task(conn, task_id) or {}).get("snooze") or {}
+        why = str(snoozed.get("why") or "")
+        out = unsnooze(conn, task_id, SYSTEM, f"Production runs {running} now")
+        target, _ = _turn_of(conn, out)
+        if target:
+            lead = f"Production runs {running} now (it ran {found[0]}). Your snooze ended: {why}".rstrip(": ")
+            task_wakes.add(
+                conn,
+                out,
+                target,
+                out["visit"],
+                task_wakes.body(conn, out, lead, to=target),
+                wake_key=f"{task_id}:{out['visit']['id']}:release:{running}",
+            )
+        ended.append(str(task_id))
+    return ended
+
+
 # ----------------------------------------------------------------------------- a requirement on one task
 def add_requirement(
     conn: "sqlite3.Connection",
