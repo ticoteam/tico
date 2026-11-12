@@ -50,7 +50,8 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--tico-version",
-        help="release to install, such as v1.2.3 (cloud targets: default the latest release; local: what scripts/install.sh pins)",
+        help="release to install, such as v1.2.3 (default: the release this setup is part of, its bundle or the "
+        "checkout's release tag; else the latest release on cloud targets; local: what scripts/install.sh pins)",
     )
     p.add_argument("--domain")
     p.add_argument("--dns-name", help="hosted AWS/Caddy: exact operational Route 53 hostname; defaults to --domain")
@@ -190,8 +191,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--label", dest="runner_label", help="runner: the computer's name in Tico")
     p.add_argument(
         "--runner-tag",
-        default="latest",
-        help="runner: the release (vX.Y.Z) whose install.sh and images the runner uses; default is the latest",
+        help="runner: the release (vX.Y.Z, or latest) whose install.sh and images the runner uses; default is the "
+        "release the server reports at /healthz",
     )
     p.add_argument("--rejoin", action="store_true", help="runner: replace an existing runner container on the box")
     p.add_argument(

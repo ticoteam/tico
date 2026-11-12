@@ -58,11 +58,54 @@ class Deps:
     cloud_cli: Callable[[list[str]], cloudmod.Cli] = cloudmod.run_cli
     which: Callable[[str], str | None] = shutil.which
     latest_release: Callable[[], str] = lambda: _latest_release()
+    checkout_version: Callable[[], str] = lambda: checkout_version()
+    server_release: Callable[[str], str] = lambda url: _server_release(url)
 
 
 def _local_compose() -> bytes | None:
     p = Path(__file__).resolve().parent.parent / "compose.yaml"
     return p.read_bytes() if p.exists() else None
+
+
+def checkout_version(root: Path | None = None, git=None) -> str:
+    """The release this setup is part of, as vX.Y.Z: the install bundle's VERSION file, else the release tag the
+    git checkout is at. "" for anything else (a branch, main, a commit between releases)."""
+    import subprocess
+
+    root = root or Path(__file__).resolve().parent.parent
+    try:
+        found = (root / "VERSION").read_text().strip()
+    except OSError:
+        found = ""
+    if not found:
+        try:
+            res = (git or subprocess.run)(
+                ["git", "-C", str(root), "describe", "--tags", "--exact-match", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            found = res.stdout.strip() if res.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            found = ""
+    found = found if not found or found.startswith("v") else "v" + found
+    return found if cloudinit.VERSION_RE.match(found) else ""
+
+
+def same_release(compose_ref: str, version: str) -> bool:
+    """Whether the compose.yaml beside setup is the one `compose_ref` names. A release other than this checkout's has
+    its own compose.yaml (services and settings change between releases), so it is fetched from that release."""
+    return not cloudinit.VERSION_RE.match(compose_ref or "") or compose_ref == version
+
+
+def _server_release(url: str) -> str:
+    """The release a Tico server runs, from its /healthz; "" when it cannot be read."""
+    try:
+        req = urllib.request.Request(url.rstrip("/") + contract.HEALTH_PATH, headers={"User-Agent": "tico-setup"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return str(json.loads(r.read(4000)).get("release") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
 
 
 def _latest_release() -> str:
@@ -954,9 +997,13 @@ def run(args, io: IO, deps: Deps) -> int:
         Asker(io, args, s, dry).get(
             "server_ip", "Server's public IPv4 address (what the domain should point at)", flag="--server-ip"
         )
-    if args.tico_version and s.target not in cloudmod.PROVIDERS:
+    # The release to install: --tico-version, else the one this setup is part of (a bundle, or a checkout at a release
+    # tag), so setting up v0.6.0-rc.18 installs it and not GitHub's latest stable. A release pinned by an earlier run is
+    # kept when no flag names one.
+    version = args.tico_version or (s.tag if s.tag not in ("", "latest") else deps.checkout_version())
+    if version and s.target not in cloudmod.PROVIDERS:
         # local and AWS pin the images and fetch compose.yaml from the release, never `latest` or main
-        s.tag = s.compose_ref = args.tico_version
+        s.tag = s.compose_ref = version
     if s.target == "local":
         if s.front_door == "caddy":
             Asker(io, args, s, dry).get(
@@ -1017,7 +1064,7 @@ def run(args, io: IO, deps: Deps) -> int:
     env_text = envfile.render(s.to_env())
     state.save(s.domain, s.public(), s.private_env(env_text))
     scrub = lambda t: envfile.scrub(t, s.secrets())
-    compose = deps.compose_local()
+    compose = deps.compose_local() if same_release(s.compose_ref, deps.checkout_version()) else None
     url = contract.compose_url(s.compose_ref)
     runner: remote.Shell | None = None
     live = True
@@ -1297,7 +1344,7 @@ def _cloud(io: IO, args, s: Settings, deps: Deps, zone, cf, env_text: str, timeo
     """Hetzner / DigitalOcean. Returns an exit code to stop with, or (shell, records) to continue to the checks."""
     pv = cloudmod.PROVIDERS[s.target]
     name = cloudname(s)
-    version = args.tico_version or s.cloud_version or deps.latest_release()
+    version = args.tico_version or s.cloud_version or deps.checkout_version() or deps.latest_release()
     if not cloudinit.VERSION_RE.match(version or ""):
         raise MissingInput(
             "Could not find the latest Tico release; pass --tico-version vX.Y.Z (see github.com/ticoteam/tico/releases)"
