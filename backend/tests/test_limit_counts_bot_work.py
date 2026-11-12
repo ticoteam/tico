@@ -296,7 +296,8 @@ def test_a_list_of_fifty_rows_half_on_a_person_reads_no_task_per_row(c, store, m
     """A list of 50 rows, 25 of them waiting only on a person, says which wait on a person from one batch read
     (`waiting_on.on_person_many`), never `task_engine.task` per row (P-I16, P-I39). Counted from a cold read, with the
     snapshot's cache and without it (a list read outside a transaction keeps nothing between reads): beyond its waits,
-    the brief of 50 rows costs what the brief of 4 rows, 2 on a person, does. Each row's answer is `on_person`'s."""
+    the brief of 50 rows costs what the brief of 4 rows, 2 on a person, does. Each row's answer is `on_person`'s, a row whose snooze has ended
+    included."""
     from backend import read_cache
 
     def cold(read):
@@ -316,6 +317,9 @@ def test_a_list_of_fifty_rows_half_on_a_person_reads_no_task_per_row(c, store, m
         return cold(lambda: task_reads.brief(c, [{"id": i} for i in ids])) - cold(lambda: W.waiting_on_many(c, ids))
 
     person = [_to_person(c, store, _in_spec(c, f"Spec {n}"))["id"] for n in range(25)]
+    # One was snoozed and woken again: its ended snooze must not count as open, or it would hold a slot again.
+    E.snooze(c, person[1], ANA)
+    E.unsnooze(c, person[1], ANA)
     ideas = [_idea(c, f"Idea {n}")["id"] for n in range(25)]
     rows = task_reads.brief(c, [{"id": i} for i in person + ideas])
     each = {i for i, found in W.waiting_on_many(c, person + ideas).items() if W.on_person(c, E.task(c, i), found)}
