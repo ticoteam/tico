@@ -1167,7 +1167,6 @@ def reassign(
     # (backend/task_effects.py). Before the wake, so a task that just became private wakes only who may read it.
     task_effects.reassigned(conn, row, moved, by, why, revision)
     moved = _task(conn, task_id)
-    _stop_moved_turn(conn, moved, row.get("owner_id"), by)
     if is_bot(owner) and _turn_of(conn, moved)[0] == owner:
         task_wakes.add(
             conn,
@@ -1178,35 +1177,6 @@ def reassign(
             wake_key=f"{task_id}:{moved['visit']['id']}:owner:v{moved['version']}",
         )
     return moved
-
-
-def _stop_moved_turn(conn: "sqlite3.Connection", row: Row, was: str | None, by: str) -> int:
-    """The task was given away from bot `was` while its turn on this visit was out: that turn is asked to stop, as a
-    person's Stop asks (execution.request_stop), so the new owner's turn, which the claim holds until it has ended
-    (execution.turn_moved_on), is the task's one turn (#171). Not when the task still waits on `was` (asked for an OK),
-    and never the turn that made the change (H.RUN). Returns how many turns it asked to stop."""
-    from . import execution
-    from . import waiting_on as W
-
-    H = _h()
-    if not is_bot(was) or was in W.turns(conn, row):
-        return 0
-    turn = H.RUN.get() or ""
-    live = conn.execute(
-        "SELECT a.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
-        "WHERE a.task_id=? AND j.bot_id=? AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL "
-        "AND json_extract(m.refs,'$.wake')='task_turn' AND json_extract(m.refs,'$.visit')=?",
-        (row["id"], H.actor_id(was), row["visit"]["id"]),
-    ).fetchall()
-    stopped = 0
-    for (attempt,) in live:
-        if attempt == turn:
-            continue
-        cast("Any", execution).request_stop(
-            conn, by, attempt, H.actor_id(was), {"task": row["id"], "reassigned": row.get("owner_id")}
-        )
-        stopped += 1
-    return stopped
 
 
 PROGRESS_SQL = (

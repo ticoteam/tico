@@ -3,8 +3,7 @@ test_one_turn_per_task.py, which keeps one bot to one turn per task, this keeps 
 
 Nov 12 stress run: a task's Build turn was out with one Builder when a person reassigned it to a second Builder. The
 reassign canceled only wakes no run had taken yet, so the second Builder's wake started a run beside the first: two
-Build sessions, two pull requests. Now the reassign asks the first turn to stop, and the claim holds the new owner's
-turn until it has ended. Synthetic rows only: the test company's bots on one test computer.
+Build sessions, two pull requests. Now the claim holds the new owner's turn until the first has ended. Synthetic rows only: the test company's bots on one test computer.
 """
 
 from backend import execution
@@ -43,8 +42,6 @@ def test_reassigning_a_task_while_its_owners_turn_is_out_starts_one_turn_not_two
     with api.app.state.store.read() as c:
         queued = c.execute("SELECT id FROM jobs WHERE bot_id='cpo' AND state='queued'").fetchone()
         assert queued, "the new owner is woken"
-        stop = c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (first["id"],)).fetchone()[0]
-    assert stop, "the old owner's turn is asked to stop: the task is not its any more"
     assert claim(api, machine) is None, "no second turn on the task while the first is out"
     with api.app.state.store.read() as c:
         assert execution.bot_claimable(c, api.app.state.store.settings, machine["runner_id"], "cpo")[0] == (
@@ -56,8 +53,7 @@ def test_reassigning_a_task_while_its_owners_turn_is_out_starts_one_turn_not_two
 
 
 def test_a_bot_that_hands_its_own_task_on_keeps_its_turn_and_the_new_owner_waits_for_it(api):
-    """A bot reassigning its own task from its turn is never stopped by it (the turn that makes the change), and the
-    new owner starts only once that turn has ended."""
+    """A bot reassigning its own task from its turn: the new owner starts only once that turn has ended."""
     machine = _setup(api)
     token = machine["token"]
     tid = post(api, "tasks", {"owner": "ops", "title": "Plan the week", "body": "Draft it."})["id"]
@@ -69,7 +65,6 @@ def test_a_bot_that_hands_its_own_task_on_keeps_its_turn_and_the_new_owner_waits
             E.reassign(c, tid, "bot:cpo", "bot:ops", "cpo plans this", E.task(c, tid)["version"])
         finally:
             H.RUN.reset(reset)
-        assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (first["id"],)).fetchone()[0] is None
     assert claim(api, machine) is None
     post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, token)
     second = claim(api, machine)
