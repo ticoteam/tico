@@ -152,7 +152,8 @@ async function renderReleaseCard(): Promise<void> {
 interface SettingsGeneralManagerDepartment {
   department: string;
   name: string;
-  checked?: string | null;
+  checked_at?: string | null;
+  changed_at?: string | null;
   items: number;
   task?: { id: string; title?: string } | null;
 }
@@ -171,7 +172,7 @@ function generalManagerHTML(v: SettingsGeneralManagerView): string {
   const toggle = owner ? `<button type="button" class="ghost" data-tm-toggle="${v.on ? 'off' : 'on'}">${v.on ? 'Pause' : 'Resume'}</button>` : '';
   const rows = (v.departments || []).map(d => `<div class="tm-row" data-tm-dept="${esc(d.department)}">
       <strong>${esc(d.name)}</strong>
-      <span class="tnum${d.checked ? '' : ' muted'}" ${d.checked ? `title="${esc(fmt(d.checked))}"` : ''}>${d.checked ? esc(ago(d.checked)) : 'Not checked'}</span>
+      <span class="tnum${d.checked_at ? '' : ' muted'}" ${d.checked_at ? `title="${esc(fmt(d.checked_at))}"` : ''}>${d.checked_at ? esc(ago(d.checked_at)) : 'Not checked'}</span>
       <span class="tnum${d.items ? '' : ' muted'}">${d.items} item${d.items === 1 ? '' : 's'}</span>
       ${d.task ? `<a href="#/task/${encodeURIComponent(d.task.id)}" title="${esc(d.task.title || '')}">Check task</a>` : '<span class="muted">—</span>'}
     </div>`).join('');
