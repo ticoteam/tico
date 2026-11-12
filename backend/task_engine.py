@@ -15,6 +15,7 @@ Names and signatures are in docs/dev/pipelines-v3-build.md.
 
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, NoReturn, cast
 
@@ -34,6 +35,7 @@ is_bot: Callable[[object], bool] = _core.is_bot
 is_human: Callable[[object], bool] = _core.is_human
 
 NEXT, DONE, CLOSED, REOPEN = "next", "done", "closed", "reopen"
+LOG = logging.getLogger("tico.task_engine")
 MAX_DEPTH = 5  # sub-tasks nest at most this deep (C20)
 BOT_SNOOZES = 3  # a bot's snoozes in one stage before the manager bot gets the task
 FIRST_TRY_S = 120  # seconds after a wake before the never-stuck check looks at a bot that stopped early
@@ -1048,16 +1050,22 @@ def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -
 
 def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     """A task ended. If a task filed it and that was the last one open from that visit, the filing task's owner is woken
-    once with how each ended, and the filing task moves on if that was all it needed. A filed task the woken bot may
-    not be told of (task_wakes.told) is "A sub-task": that it ended, never its title."""
+    once with how each ended, and the filing task moves on if that was all it needed. When the turn is a person's (the
+    stage's OK, held while the review ran: waiting_on.of), its owner bot is still woken: it has the review's findings
+    to fold in before the person is asked (task_wakes.FILED). A filed task the woken bot may not be told of (task_wakes.told) is
+    "A sub-task": that it ended, never its title. A parent nobody is woken on is logged with why."""
     link = _h()._one(conn, "SELECT * FROM links WHERE to_task_id=?", (row["id"],))
-    if not link or not link.get("visit_id"):
+    if not link:
         return
+    if not link.get("visit_id"):
+        return _no_parent_wake("filed_in_no_visit", link["from_task_id"], row["id"])
     above = task(conn, link["from_task_id"])
-    if not above or above["status"] != "open" or _part(above, "visit").get("id") != link["visit_id"]:
-        return
+    if not above or above["status"] != "open":
+        return _no_parent_wake("parent_ended", link["from_task_id"], row["id"])
+    if _part(above, "visit").get("id") != link["visit_id"]:
+        return _no_parent_wake("parent_left_stage", above["id"], row["id"])
     if stage_effects.filed_open(conn, link["visit_id"]):
-        return
+        return _no_parent_wake("filed_still_open", above["id"], row["id"])
     # A bot that snoozed while it waited on what it filed is woken now, not on the snooze's date (Initech, Nov 11).
     above = task_effects.filed_ended(conn, above, by)
     if advance(conn, above["id"]):
@@ -1070,6 +1078,12 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
     _reset_ladder(conn, above["visit"], _h().now(), by)
     above = _task(conn, above["id"])
     target, _ = _turn_of(conn, above)
+    if not target and _may_wake_owner(above):
+        target = str(above["owner_id"])
+    if not target:
+        level = _part(above, "visit").get("level")
+        why = "snoozed" if above.get("snooze") else "person_level" if level == "person" else "no_bot_owner"
+        _no_parent_wake(why, above["id"], row["id"])
     if target:
         from . import waiting_on as W
 
@@ -1084,8 +1098,26 @@ def _ended(conn: "sqlite3.Connection", row: Row, by: str) -> None:
             target,
             above["visit"],
             task_wakes.body(conn, above, lead, to=target),
-            wake_key=f"{above['id']}:{above['visit']['id']}:filed:{row['id']}",
+            wake_key=f"{above['id']}:{above['visit']['id']}:{task_wakes.FILED}:{row['id']}",
         )
+
+
+def _may_wake_owner(row: Row) -> bool:
+    """Whether a filing task's owner bot may hear that what it filed ended, though nobody has a turn (a person's OK
+    waits): the task is open, not snoozed and not at level person (task_wakes.may_start holds those too)."""
+    return (
+        row["status"] == "open"
+        and not row.get("snooze")
+        and (_part(row, "visit").get("level") or "owner") != "person"
+        and is_bot(row.get("owner_id"))
+    )
+
+
+def _no_parent_wake(why: str, parent_id: str, filed_id: str) -> None:
+    """A filed task ended and nobody is woken on the task that filed it: the category and both ids, for the logs. A
+    person-owned parent (`no_bot_owner`) is the normal case there, so it logs at DEBUG."""
+    level = logging.DEBUG if why == "no_bot_owner" else logging.INFO
+    LOG.log(level, "parent wake skipped: %s parent=%s filed=%s", why, parent_id, filed_id)
 
 
 def tell_owner(

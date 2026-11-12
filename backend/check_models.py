@@ -3,7 +3,7 @@
 The subtask stays the bot's own. Its turns run on the named runtime and model, in a session of their own, and
 read only the subtask's room. Only the runtime, model, harness and effort change: the bot's repository, tools,
 isolation and credentials are its own, so a check never runs with more than the bot has. When the bot finishes
-it, the parent's owner is woken on the parent with the verdict (hubdb._subtask_wake)."""
+it, the parent's owner is woken on the parent with how it ended (task_engine._ended)."""
 
 from . import hubdb as H
 from . import providers

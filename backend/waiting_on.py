@@ -398,6 +398,20 @@ def of(
     )
     filed: list[tuple[str, str]] | None = None
     on_tasks: set[str] = set()
+
+    def on_filed(requirement_id: str, since: str | None) -> bool:
+        """Whether a requirement waits on the first open task the bot filed this visit (one line per such task)."""
+        nonlocal filed
+        if filed is None:
+            filed = _filed_open(conn, visit["id"]) if theirs else []
+        if not filed:
+            return False
+        first, title = filed[0]
+        if first not in on_tasks:
+            on_tasks.add(first)
+            out.append(Wait(TASKS, first, title, requirement_id, since, about=first))
+        return True
+
     shut = unreadable(conn, row, unmet)  # asked, and may not open it
     for standing in unmet:
         requirement = standing.requirement
@@ -426,6 +440,10 @@ def of(
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names
             # nobody, or a person who left (`person_of` skips them), is the task's person's.
             named = standing.on or person_for(conn, row)
+            if not requirement.get("visit_id") and not is_bot(named) and on_filed(requirement["id"], since):
+                # The stage's own OK or answer waits on a task its bot filed this visit (a review of what the person
+                # is to OK): the person is asked once that has ended, not on what the review may still change.
+                continue
             if shut and named and E.not_shared(conn, row, named):
                 # Someone who may not open it: the task's person shares it first. Work of theirs, not an ask.
                 out.append(Wait(PERSON, person_for(conn, row), _share_line(conn, named), requirement["id"], since))
@@ -438,13 +456,7 @@ def of(
             # turn, and the person who fixes it has one row for every task it holds up (`needs_by_person`).
             out.append(Wait(PAUSED, has, line, requirement["id"], since, fix=standing.fix))
         else:
-            if filed is None:
-                filed = _filed_open(conn, visit["id"]) if theirs else []
-            if filed:
-                first, title = filed[0]
-                if first not in on_tasks:
-                    on_tasks.add(first)
-                    out.append(Wait(TASKS, first, title, requirement["id"], since, about=first))
+            if on_filed(requirement["id"], since):
                 continue
             # Not met: whoever has the task's work has this too.
             out.append(_turn(conn, row, has, line, requirement["id"], since, False, seen, standing.about))
