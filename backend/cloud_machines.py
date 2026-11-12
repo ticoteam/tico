@@ -2270,7 +2270,7 @@ class Manager:
                 fields["grow_note"] = fallback_note(sizes(c), current["size"], plan)
                 save(c, key, **fields)
                 self.tell(c, current, current["machine_size"], plan, at)
-            elif plan and self.fall_back(c, current, current["size"], plan, at, **fields):
+            elif plan and self.fall_back(c, current, current["size"], plan, at, action, fields):
                 return  # a new or replaced machine: the next look asks again, one size down (`fall_back`)
             else:
                 save(c, key, **fields)
@@ -2306,7 +2306,7 @@ class Manager:
         tried = machine["size"] or current["size"]
         if tried != current["size"]:
             return  # a person chose another size meanwhile: the next machine is made at theirs
-        if not self.fall_back(c, current, tried, code, at):
+        if not self.fall_back(c, current, tried, code, at, "made"):
             failures = current["failures"] + 1
             save(
                 c,
@@ -2317,7 +2317,7 @@ class Manager:
                 next_try_at=at + min(BACKOFF_MAX, BACKOFF * 2 ** (failures - 1)),
             )
 
-    def fall_back(self, c, current, refused_size, code, at, **fields):
+    def fall_back(self, c, current, refused_size, code, at, action="create", fields=None):
         """HQ refused size `refused_size` for machine row `current` because the plan cannot run it (`code`, one of
         PLAN_REFUSALS) and there is no smaller size it already has: set it to the largest size the plan can start
         (`fallback_size`), ask again at once with no failure counted, keep the note until a person changes the size, and
@@ -2327,6 +2327,7 @@ class Manager:
         target = fallback_size(sizes(c), refused_size)
         if target is None:
             return False
+        fields = dict(fields or {})
         fields.update(
             size=target,
             grow_refused_size=refused_size,
@@ -2343,7 +2344,7 @@ class Manager:
             H.KEEPER,
             "cloud_machine.refused",
             key,
-            {"action": "create", "code": code, "size": refused_size, "fallback": target},
+            {"action": action, "code": code, "size": refused_size, "fallback": target},
         )
         self.tell(c, {**current, "size": refused_size}, target, code, at)
         return True
