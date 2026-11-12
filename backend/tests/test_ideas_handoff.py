@@ -158,3 +158,19 @@ def test_a_persons_request_still_moves_to_spec_by_itself_or_waits_for_room(c, pr
     waiting = next(row for row in rows if row["stage_id"] == "product-ideas")
     (wait,) = W.of(c, waiting)
     assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
+
+
+def test_time_a_hand_off_spent_snoozed_moves_its_due_time_and_late(c, product, time_machine):
+    row = _handed_back(c, product)
+    entered = row["visit"]["entered_at"]
+    E.snooze(c, row["id"], row["owner_id"], "Park it for two hours", seen_version=row["version"])
+    time_machine.shift(timedelta(hours=2))
+    E.unsnooze(c, row["id"], ANA)
+    X.settled(c)
+    (wait,) = W.of(c, E.task(c, row["id"]))
+    assert wait.until == H.shift(entered, seconds=26 * 3600)
+    time_machine.shift(timedelta(hours=22, minutes=30))  # 24 h 30 min since it entered
+    assert N.check(c)["late"] == 0
+    time_machine.shift(timedelta(hours=2))  # 26 h 30 min
+    assert N.check(c)["late"] == 1
+    assert len(_manager_late_wakes(c, row)) == 1
