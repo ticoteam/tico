@@ -1,4 +1,5 @@
-"""A bot's read-only view of the app (docs/bots.md, "Viewing the app"): a Product Owner looks at production signed in as
+# pyright: strict
+"""A bot's read-only view of the app (docs/computers.md, "Let a bot view the app (read only)"): a Product Owner looks at production signed in as
 itself, at phone and desktop width, and takes the screenshots for its own proof pages instead of asking a person to.
 
 Off for every bot until an owner or admin turns it on for that bot (`bot_app_view`, one row per bot that has it). A bot
@@ -9,14 +10,26 @@ any write (POST, PUT, PATCH, DELETE), and the reads that make or show a token, k
 off ends the bot's open views at once (`check_live` reads it on every request).
 
 Each turn on or off and each view opened is a line in the audit log (`app_view:<bot id>`), and the view itself is kept in
-`app_views`. `tico app shot` (clients/commands/app_view.py) opens a view and takes the screenshot.
+`app_views`. `tico bot app-shot` (clients/commands/bots.py, clients/app_shot.mjs) opens a view and takes the screenshot.
 """
 
 import re
 import secrets
+import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 from . import audit_log
-from .store import H, Problem, digest
+from . import store as _store_untyped
+from .store import Problem
+
+if TYPE_CHECKING:
+    from .auth import Identity
+
+_store: Any = _store_untyped
+H: Any = _store.H
+digest = cast("Callable[[str], str]", _store.digest)
+_audit: Any = audit_log
 
 TOKEN_PREFIX = "tico_av_"
 VIEW_MINUTES = 15
@@ -48,12 +61,12 @@ ENCODED_SEPARATOR = re.compile(r"%(?:2[eEfF]|5[cC]|00)")
 OTHER_REFUSED = re.compile(r"/(?:scim/.*|download/.*|api/employees/[^/]+/session|api/download/.*|api/runs/[^/]+/log)")
 
 
-def is_on(c, bot):
+def is_on(c: sqlite3.Connection, bot: str) -> bool:
     return bool(c.execute("SELECT 1 FROM bot_app_view WHERE bot=?", (bot,)).fetchone())
 
 
-def setting(c, bot):
-    row = c.execute("SELECT turned_on_by, turned_on_at FROM bot_app_view WHERE bot=?", (bot,)).fetchone()
+def setting(c: sqlite3.Connection, bot: str) -> dict[str, Any]:
+    row: Any = c.execute("SELECT turned_on_by, turned_on_at FROM bot_app_view WHERE bot=?", (bot,)).fetchone()
     return {
         "on": bool(row),
         "turned_on_by": row["turned_on_by"] if row else None,
@@ -61,7 +74,7 @@ def setting(c, bot):
     }
 
 
-def turn(c, who, bot, on):
+def turn(c: sqlite3.Connection, who: "Identity", bot: str, on: bool) -> dict[str, Any]:
     """Turn a bot's read-only view on or off; the caller checked that `who` may. Off ends its open views now."""
     before = setting(c, bot)
     if bool(on) == before["on"]:
@@ -72,39 +85,41 @@ def turn(c, who, bot, on):
         c.execute("DELETE FROM bot_app_view WHERE bot=?", (bot,))
         c.execute("UPDATE app_views SET expires_at=? WHERE bot=? AND expires_at>?", (H.now(), bot, H.now()))
     after = setting(c, bot)
-    audit_log.write(c, who.actor, "app_view:" + bot, before, after, who.via or None)
+    _audit.write(c, who.actor, "app_view:" + bot, before, after, who.via or None)
     H.event(c, who.actor, "bot.app_view", bot, {"on": bool(on)})
     return after
 
 
-def open_view(c, who):
+def open_view(c: sqlite3.Connection, who: "Identity") -> dict[str, Any]:
     """A view for the bot `who` in the run it is in: the token, once. Refused unless the setting is on."""
     if who.role != "bot" or not who.attempt_id or who.view or who.via or who.agent:
         raise Problem("forbidden", "Only a bot, from inside one of its runs, opens a view of the app", 403)
-    bot = H.actor_id(who.actor)
+    bot: str = H.actor_id(who.actor)
     if not is_on(c, bot):
         raise Problem(
             "app_view_off",
             "This bot cannot view the app. An owner or admin turns on “Can view the app (read only)” for it.",
             403,
         )
-    vid, token = H.new_id(), TOKEN_PREFIX + secrets.token_urlsafe(32)
-    opened, expires = H.now(), H.shift(H.now(), seconds=VIEW_MINUTES * 60)
+    vid: str = H.new_id()
+    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    opened: str = H.now()
+    expires: str = H.shift(H.now(), seconds=VIEW_MINUTES * 60)
     c.execute(
         "INSERT INTO app_views(id, bot, attempt_id, opened_at, expires_at, token_hash) VALUES(?,?,?,?,?,?)",
         (vid, bot, who.attempt_id, opened, expires, digest(token)),
     )
-    audit_log.write(
+    _audit.write(
         c, who.actor, "app_view:" + bot, None, {"view": vid, "attempt_id": who.attempt_id, "expires_at": expires}
     )
     return {"id": vid, "token": token, "expires_at": expires, "read_only": True}
 
 
-def identity(c, token):
+def identity(c: sqlite3.Connection, token: str) -> "Identity":
     """The bot a view token belongs to, in the run that opened it. Else 401."""
     from .auth import Identity
 
-    row = c.execute(
+    row: Any = c.execute(
         "SELECT v.*, a.runner_id FROM app_views v JOIN attempts a ON a.id=v.attempt_id WHERE v.token_hash=?",
         (digest(token),),
     ).fetchone()
@@ -115,14 +130,14 @@ def identity(c, token):
     )
 
 
-def check_live(c, who):
+def check_live(c: sqlite3.Connection, who: "Identity") -> None:
     """validate_identity for a view: not ended, not expired, and the setting still on, under a write's lock too."""
-    row = c.execute("SELECT bot, expires_at FROM app_views WHERE id=?", (who.view,)).fetchone()
+    row: Any = c.execute("SELECT bot, expires_at FROM app_views WHERE id=?", (who.view,)).fetchone()
     if not row or row["expires_at"] <= H.now() or not is_on(c, row["bot"]) or "bot:" + row["bot"] != who.actor:
         raise Problem("identity", "Invalid credential", 401)
 
 
-def gate(path, method):
+def gate(path: str, method: str | None) -> None:
     """What a view reaches: reads only. Refused (403) before any route runs. `path` is the address as sent."""
     method = (method or "").upper()
     if method not in READS:
@@ -135,42 +150,46 @@ def gate(path, method):
         raise Problem(CODE, "Read-only view: this is not shown in it.", 403)
 
 
-def install(app, store, auth):
+def install(app: Any, store: Any, auth: Any) -> None:
     from fastapi import Request
 
     from . import models as M
-    from .views import human_only
+    from . import views as _views_untyped
 
-    def bot_id(c, who, slug):
+    views: Any = _views_untyped
+
+    def bot_id(c: sqlite3.Connection, who: "Identity", slug: str) -> str:
         auth.require_see(c, who, slug)
-        row = H.resolve_bot(c, slug)
+        row: Any = H.resolve_bot(c, slug)
         if not row:
             raise Problem("not_found", "Bot not found", 404)
         return row["id"]
 
     @app.get("/api/v2/bots/{bot}/app-view")
-    def app_view_setting(request: Request, bot: str):
+    def app_view_setting(request: Request, bot: str) -> dict[str, Any]:
         """Whether this bot may view the app, read only, and who turned it on."""
-        who = request.state.identity
+        who: Identity = request.state.identity
         with store.read() as c:
             return setting(c, bot_id(c, who, bot))
 
     @app.post("/api/v2/bots/{bot}/app-view")
-    def app_view_turn(request: Request, bot: str, body: M.BotAppView):
+    def app_view_turn(request: Request, bot: str, body: M.BotAppView) -> dict[str, Any]:
         """Turn “Can view the app (read only)” on or off for a bot. An owner or admin only, as themselves."""
-        who = request.state.identity
-        human_only(who)
+        who: Identity = request.state.identity
+        views.human_only(who)
         if not auth.bot_admin(who) or who.support or (who.via and not who.confirmed):
             raise Problem("forbidden", "Only an owner or an admin lets a bot view the app", 403)
         with store.transaction() as c:
             return turn(c, who, bot_id(c, who, bot), body.on)
 
     @app.post("/api/v2/app-view")
-    def app_view_open(request: Request):
+    def app_view_open(request: Request) -> dict[str, Any]:
         """Open a read-only view of the app for this bot, from inside its run. The token is shown once."""
-        who = request.state.identity
-        from .auth import validate_identity
+        who: Identity = request.state.identity
+        from . import auth as _auth_untyped
+
+        auth_module: Any = _auth_untyped
 
         with store.transaction() as c:
-            validate_identity(c, who)  # the run is still this bot's, under the write's lock
+            auth_module.validate_identity(c, who)  # the run is still this bot's, under the write's lock
             return open_view(c, who)

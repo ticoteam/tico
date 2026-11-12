@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// A screenshot of the app as a bot sees it, read only (backend/app_view.py; `tico app shot`, clients/commands/app_view.py).
+// A screenshot of the app as a bot sees it, read only (backend/app_view.py; `tico bot app-shot`, clients/commands/bots.py).
 // Starts its own headless Chrome with an empty profile, sends the view's token only to the app's own origin, opens the
 // address at the width asked for and writes a PNG. No dependencies: Chrome's DevTools protocol over Node's WebSocket.
 //
