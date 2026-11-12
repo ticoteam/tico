@@ -1595,6 +1595,11 @@ def ensure_presets(conn: "sqlite3.Connection") -> list[str]:
         if check(conn, record):
             continue
         made.append(save(conn, SYSTEM, record)["id"])
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    stage_rules.ensure_defaults(conn)  # each default stage rule once, on the pipelines the company has
     return made
 
 
