@@ -186,7 +186,7 @@ CREATE TABLE IF NOT EXISTS attempts(
  settled_at TEXT, trigger TEXT, message_id TEXT, task_id TEXT, exit TEXT, summary TEXT,
  trigger_kind TEXT, trigger_source TEXT, purpose TEXT, rule_id TEXT, writes INTEGER, outcome TEXT,
  did_nothing INTEGER, rotated TEXT, session_kind TEXT, session_why TEXT,
- input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER,
+ input_tokens INTEGER, cached_tokens INTEGER, output_tokens INTEGER, prompt_tokens INTEGER, cache_write_tokens INTEGER,
  usage_model TEXT, provider TEXT, est_cost_usd REAL, billing TEXT, usage_reason TEXT,
  CHECK (job_id IS NULL OR (runner_id IS NOT NULL AND generation IS NOT NULL AND token_hash IS NOT NULL
         AND state IS NOT NULL AND lease_until IS NOT NULL)));

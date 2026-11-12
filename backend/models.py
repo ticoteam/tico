@@ -2645,6 +2645,8 @@ RequestUsage = (
 
 class RunUsagePart(Contract):
     """What a run spent, as its runner counted it: uncached input, cached input and output tokens.
+    `cache_write_tokens` is the input written to the prompt cache, apart from `input_tokens` (0 from a runtime that
+    writes none); None from a runner too old to send it, whose `input_tokens` still count cache writes.
     `requests` is the same three per model request, sent when the runner saw every request, so a model whose
     long prompts cost more (providers.LONG_PROMPT) is priced request by request. A fourth count, when the runner
     sends one, marks the bot's own requests (1) from its subagents' (0): the newest of its own is the session's
@@ -2652,6 +2654,7 @@ class RunUsagePart(Contract):
 
     input_tokens: int = Field(default=0, ge=0, le=10**12)
     cached_tokens: int = Field(default=0, ge=0, le=10**12)
+    cache_write_tokens: int | None = Field(default=None, ge=0, le=10**12)
     output_tokens: int = Field(default=0, ge=0, le=10**12)
     requests: list[RequestUsage] | None = Field(default=None, max_length=2000)
     model: str = Field(default="", max_length=120)

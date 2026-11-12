@@ -335,6 +335,7 @@ class AttemptRow(TypedDict):
     cached_tokens: int | None
     output_tokens: int | None
     prompt_tokens: int | None
+    cache_write_tokens: int | None
     usage_model: str | None
     provider: str | None
     est_cost_usd: float | None
@@ -534,6 +535,7 @@ class UsageFactRow(TypedDict):
     started_at: str
     metered_at: str
     created_at: str
+    cache_write_tokens: int | None
 
 
 class UsageMeterReadRow(TypedDict):

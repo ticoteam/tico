@@ -262,6 +262,33 @@ def test_each_haiku_request_pays_the_rate_for_its_own_prompt_length(api):
     )
 
 
+def test_a_claude_runs_cache_writes_are_kept_apart_from_input_in_every_group(api):
+    """A Claude run reports `cache_creation_input_tokens` as `cache_write_tokens`: stored on the run and its fact,
+    left out of `input_tokens`, and returned by every grouping of /api/v2/usage. Priced as input, as before."""
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, haiku(input_tokens=200, cached_tokens=40_000, cache_write_tokens=3_000, output_tokens=90))
+    row = turn(api, attempt["id"])
+    assert (row["input_tokens"], row["cached_tokens"], row["cache_write_tokens"]) == (200, 40_000, 3_000)
+    assert row["est_cost_usd"] == pytest.approx(price("claude-haiku-5-5", 3_200, 40_000, 90))
+    with api.app.state.store.read() as c:
+        fact = c.execute("SELECT input_tokens, cache_write_tokens FROM usage_facts WHERE run_id=?", (attempt["id"],))
+        assert tuple(fact.fetchone()) == (200, 3_000)
+    day = hubdb.now()[:10]
+    for group in ("bot", "day", "routine", "task", "harness", "model", "effort", "subscription"):
+        got = usage(api, group=group, **{"from": day, "to": day})
+        assert got["totals"]["cache_write_tokens"] == 3_000, group
+        assert got["totals"]["input_tokens"] == 200, group
+        assert sum(row["cache_write_tokens"] for row in got["rows"]) == 3_000, group
+
+
+def test_a_runner_that_does_not_count_cache_writes_apart_records_none(api):
+    """An older runner sends no `cache_write_tokens` (its input still counts them): the run records NULL, read as 0."""
+    r, _, attempt = setup_attempt(api)
+    complete(api, r, attempt, haiku(input_tokens=3_200, cached_tokens=40_000, output_tokens=90))
+    assert turn(api, attempt["id"])["cache_write_tokens"] is None
+    assert today(api)["cache_write_tokens"] == 0
+
+
 def test_tico_low_bills_a_prompt_over_100k_whole_at_its_long_rate():
     # 100,000 prompt tokens is the standard Low price (Haiku 5.5); one more and the whole request is at $0.75 / $3.75, cached 10%.
     assert providers.estimate("tico-low-1.0", 100_000, 0, 1_000, [[100_000, 0, 1_000]]) == (

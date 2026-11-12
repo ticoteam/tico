@@ -246,7 +246,8 @@ DERIVED = {
         SELECT date(started_at, '-6 days', 'weekday 1') AS week, bot, coalesce(trigger_kind, 'unknown') AS trigger,
                coalesce(purpose, 'unknown') AS purpose,
                count(*) AS runs,
-               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0) + coalesce(cache_write_tokens, 0))
+                 AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
                sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,
@@ -260,7 +261,8 @@ DERIVED = {
                round(100.0 * sum(coalesce(outcome, '') = 'nothing_to_do') / count(*), 1) AS nothing_to_do_pct,
                round(100.0 * sum(outcome IS NULL) / count(*), 1) AS unknown_pct
         FROM (SELECT CASE WHEN trigger IS NULL THEN coalesce(started_at, created_at) ELSE created_at END AS started_at,
-                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, output_tokens,
+                     bot_id AS bot, trigger_kind, purpose, input_tokens, cached_tokens, cache_write_tokens,
+                     output_tokens,
                      outcome, did_nothing, rotated
               FROM {attempts})
         GROUP BY 1, 2, 3, 4""",
@@ -272,7 +274,8 @@ DERIVED = {
         """
         SELECT date(created_at, '-6 days', 'weekday 1') AS week, bot_id AS bot, coalesce(rule_id, 'unknown') AS rule,
                count(*) AS runs,
-               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0)) AS input_tokens,
+               sum(coalesce(input_tokens, 0) + coalesce(cached_tokens, 0) + coalesce(cache_write_tokens, 0))
+                 AS input_tokens,
                sum(coalesce(cached_tokens, 0)) AS cached_input_tokens,
                sum(coalesce(output_tokens, 0)) AS output_tokens,
                sum(coalesce(outcome, '') = 'acted') AS acted,

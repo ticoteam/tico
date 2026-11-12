@@ -500,7 +500,7 @@ def restore_snapshot(source, destination):
 
         # Its runner will never report these runs' tokens: 0 with the reason, as hubdb.turn_finish records it.
         c.execute(
-            f"UPDATE attempts SET settled_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,"
+            f"UPDATE attempts SET settled_at=?,exit='interrupted',{SETTLE_SQL},input_tokens=0,cached_tokens=0,cache_write_tokens=0,"
             "output_tokens=0,est_cost_usd=0,usage_reason='no_result' WHERE settled_at IS NULL "
             "AND (job_id IS NULL OR trigger IS NOT NULL)",
             (now,),

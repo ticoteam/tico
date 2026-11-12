@@ -7232,7 +7232,8 @@ def rate_limits(conn):
 # An attempt with a job and no trigger failed before its record was written (old history) and has none.
 TURN_SELECT = (
     "id, bot_id AS bot, thread_id, created_at AS started_at, settled_at AS finished_at, trigger, "
-    "message_id, task_id, exit, summary, input_tokens, cached_tokens, output_tokens, usage_model AS model, "
+    "message_id, task_id, exit, summary, input_tokens, cached_tokens, cache_write_tokens, output_tokens, "
+    "usage_model AS model, "
     "provider, est_cost_usd, billing, trigger_kind, trigger_source, writes, outcome, did_nothing, purpose, "
     "rotated, session_kind, session_why, prompt_tokens, usage_reason, rule_id"
 )
@@ -7298,19 +7299,22 @@ def turn_start(
 
 
 # Why a finished run's usage says 0 tokens or no cost (`attempts.usage_reason`). Usage is written on every finish, so a
-# sum over input_tokens, cached_tokens, output_tokens and est_cost_usd counts every run, failed and stopped ones too.
+# sum over input_tokens, cached_tokens, cache_write_tokens, output_tokens and est_cost_usd counts every run, failed and
+# stopped ones too. cache_write_tokens is NULL on a run whose runner did not count cache writes apart (an older runner):
+# its input_tokens include them.
 USAGE_REASONS = {
     "usage_unreported": "its runner sent a result with no token counts (the harness reported none)",
     "usage_limited": "the runtime refused the turn on a usage limit and reported no tokens",
     "no_result": "its runner never sent a result (the lease ran out, or a restore ended it)",
     "cost_unpriced": "tokens were counted, but its model has no list price, so est_cost_usd is null",
 }
-NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
+NO_USAGE = {"input_tokens": 0, "cached_tokens": 0, "cache_write_tokens": 0, "output_tokens": 0, "est_cost_usd": 0.0}
 
 
 def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, usage_reason="usage_unreported"):
     """Close a turn. `exit_code` is the `exit` column (`exit` is a builtin, not a keyword here).
-    `usage` is what the run cost in tokens: input_tokens, cached_tokens, output_tokens, model, provider,
+    `usage` is what the run cost in tokens: input_tokens (uncached, without cache writes), cached_tokens,
+    cache_write_tokens (None when its runner did not count them apart), output_tokens, model, provider,
     est_cost_usd and billing (see USAGE_SCHEMA), and prompt_tokens, its newest request's prompt when known.
     Without `usage` the run is recorded at 0 tokens and $0 with `usage_reason` (USAGE_REASONS) saying why; never
     left blank."""
@@ -7332,11 +7336,12 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
     if not recorded:
         conn.execute(
             "UPDATE attempts SET input_tokens=:input_tokens, cached_tokens=:cached_tokens, "
-            "output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
+            "cache_write_tokens=:cache_write_tokens, output_tokens=:output_tokens, usage_model=:model, provider=:provider, est_cost_usd=:est_cost_usd, "
             "billing=:billing, prompt_tokens=:prompt_tokens, usage_reason=:usage_reason WHERE id=:id",
             {
                 "input_tokens": None,
                 "cached_tokens": None,
+                "cache_write_tokens": None,
                 "output_tokens": None,
                 "model": None,
                 "provider": None,

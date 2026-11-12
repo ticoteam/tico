@@ -5755,12 +5755,15 @@ class Execution:
             model, runtime = item.model, item.runtime
             catalog = providers.MODEL_BY_ID.get(model) or {}
             provider = catalog.get("provider") or providers.runtime_provider(runtime or catalog.get("runtime"))
+            # Cache writes are priced as input, as before they were counted apart (the requests count them so too).
+            writes = item.cache_write_tokens or 0
             cost, low = providers.estimate(
-                model, item.input_tokens, item.cached_tokens, item.output_tokens, item.requests
+                model, item.input_tokens + writes, item.cached_tokens, item.output_tokens, item.requests
             )
             return {
                 "input_tokens": item.input_tokens,
                 "cached_tokens": item.cached_tokens,
+                "cache_write_tokens": item.cache_write_tokens,
                 "output_tokens": item.output_tokens,
                 "model": model or None,
                 "provider": provider or None,
@@ -5782,7 +5785,9 @@ class Execution:
             return {"gateway_key_id": row["gateway_key_id"] or None, "install_id": install_id_in(c)}
 
         items = [
-            item for item in (used.segments or [used]) if item.input_tokens or item.cached_tokens or item.output_tokens
+            item
+            for item in (used.segments or [used])
+            if item.input_tokens or item.cached_tokens or item.cache_write_tokens or item.output_tokens
         ]
         segments = [part(item) for item in items]
         if not segments:
@@ -5790,6 +5795,9 @@ class Execution:
         result = dict(segments[-1])
         for key in ("input_tokens", "cached_tokens", "output_tokens"):
             result[key] = sum(p[key] for p in segments)
+        # Unknown (None) only when no segment's runner reported cache writes.
+        writes = [p["cache_write_tokens"] for p in segments if p["cache_write_tokens"] is not None]
+        result["cache_write_tokens"] = sum(writes) if writes else None
         # Legacy readers of a run's totals see API spend only for a mixed-billing run. Usage and limits
         # consume the immutable segments and keep the subscription equivalent separate.
         billed = [p for p in segments if p["billing"] != "subscription"] or segments

@@ -40,6 +40,7 @@
   "usage": {
    "input": 26083,
    "cached": 15560,
+   "cache_write": 10521,
    "output": 4,
    "requests": []
   }
