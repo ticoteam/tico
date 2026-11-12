@@ -1104,7 +1104,8 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
   const snooze = t.snooze || null;
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
-  const turnLine = turn?.line ? `<p class="task-wait"${yours ? ' data-task-yours' : ''}>${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${yours
+  const creditAction = turn?.line === 'Out of credit' ? ` <a class="link" href="${BOT_BILLING}">Add credit</a>` : '';
+  const turnLine = turn?.line ? `<p class="task-wait"${yours ? ' data-task-yours' : ''}>${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${creditAction}${yours
     ? ` <button type="button" class="primary tmodal-act" data-task-answer="${esc(turn.requirement_id)}">Answer</button>` : ''}</p>` : '';
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
       <span class="tthread-only tthread-title" tabindex="-1">${esc(t.title)}</span>` : ''}${taskSnoozed(t)
