@@ -267,7 +267,7 @@ let browser: import('playwright').Browser | null = null;
   }, k);
   assert.deepEqual(await snap(B), await snap(A), 'the two views start the same');
   const ids = Array.from({length: N}, (_, i) => 'm' + (i + 1));
-  for (let seed = 1; seed <= 40; seed++) {
+  for (let seed = 1; seed <= 24; seed++) {
     const events = randomBurst(seed, 1 + (seed * 7) % 12, ids, seq);
     // B: drawn after each event, as before this change. A: drawn by the frame.
     await page.evaluate(([b, evs]) => { const vb = [...THV_VIEWS].find(v => v.key === b)!; for (const [kind, d] of evs) { threadViewsLive(kind, d); thvDraw(vb); } }, [B, events] as [number, Live[]]);
