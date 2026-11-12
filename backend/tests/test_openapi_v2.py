@@ -46,8 +46,20 @@ def test_served_to_the_signed_in_only_and_limited_to_the_stable_resources(api):
     text = str(document)
     assert all(ref in document["components"]["schemas"] for ref in re.findall(r"#/components/schemas/(\w+)", text))
     for path, ops in document["paths"].items():  # every write asks for an idempotency key
-        if path.startswith("/api/v2/") and "post" in ops:
-            assert "Idempotency-Key" in [p["name"] for p in ops["post"]["parameters"]], path
+        for method in openapi_v2.WRITE_METHODS:
+            if path.startswith("/api/v2/") and method in ops:
+                assert "Idempotency-Key" in [p["name"] for p in ops[method]["parameters"]], (method, path)
+
+
+def test_a_put_that_needs_an_idempotency_key_says_so():
+    """PUT goes through the same keyed write as POST; a client built from the operation alone must send the key."""
+    paths = openapi_v2.generate()["paths"]
+    puts = {path: ops["put"] for path, ops in paths.items() if path.startswith("/api/v2/") and "put" in ops}
+    assert puts and set(openapi_v2.PUT_WITHOUT_KEY) <= set(puts)
+    for path, op in puts.items():
+        key = [p for p in op.get("parameters", []) if (p["name"], p["in"]) == ("Idempotency-Key", "header")]
+        assert len(key) == 1, path
+        assert key[0]["required"] is (path not in openapi_v2.PUT_WITHOUT_KEY), path
 
 
 def test_every_declared_schema_is_valid_json_schema():
@@ -96,6 +108,11 @@ def test_the_declared_answers_match_the_live_ones(api):
         )
 
     def call(operation, method, path, **kw):
+        declared = [p for p in by_id[operation].get("parameters", []) if p["name"] == "Idempotency-Key"]
+        if method == "put" and declared:  # the published flag is what the server does without the key
+            keyless = getattr(api, method)(path, headers={"Authorization": headers()["Authorization"]}, **kw)
+            refused = keyless.status_code == 422 and keyless.json()["error"]["code"] == "idempotency_key"
+            assert refused is declared[0]["required"], (path, keyless.text[:200])
         response = getattr(api, method)(path, headers=headers(), **kw)
         assert response.status_code == 200, (path, response.text)
         check(operation, response)
@@ -284,6 +301,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     )
     call("getHeartbeat", "get", "/api/v2/heartbeat")
     call("saveHeartbeat", "put", "/api/v2/heartbeat", json={"interval_s": 15})
+    call("setPostalMailSettings", "put", "/api/v2/postal/settings", json={"legal_bot_id": None})
     call("listToolIndex", "get", "/api/v2/tool-index")
     setup_vault(api)
     tool = api.post("/api/v2/api-tools", json={"name": "Close CRM"}, headers=headers()).json()
