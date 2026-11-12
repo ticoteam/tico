@@ -591,6 +591,14 @@ def test_every_failed_leg_is_named_with_its_failed_steps_and_a_timed_out_leg_cou
     )
 
 
+def test_a_startup_failure_is_the_runners_not_a_failing_leg():
+    runner = job("python-5", "startup_failure")
+    checks = job("checks", "failure")
+    assert MQ.failing_leg([checks, runner], lambda _checks: None) == (MQ.CANCELLED_FROM_OUTSIDE, "https://ci/checks")
+    real = job("browser-2", "failure", ["Run selected tests"], "https://ci/b2")
+    assert MQ.failing_leg([checks, runner, real], lambda _checks: None) == (REAL_LEG, "https://ci/b2")
+
+
 @pytest.mark.parametrize(
     "line, want",
     [

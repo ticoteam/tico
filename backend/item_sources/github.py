@@ -435,7 +435,9 @@ def removal_words(reason: object) -> str:
 # same legs in its error line, "Failed: <job>: <step>. Fail fast then cancelled the other legs.", or says "No step failed"
 # when the run was cancelled from outside (a superseded queue group, or by hand).
 CHECKS_JOB = "checks"
-LEG_FAILURES = ("failure", "timed_out", "startup_failure")  # a leg that ended in failure; a fail-fast cancel is not one
+# A leg that failed or hung (timed out) names the change. A fail-fast cancel and a startup failure (the runner's, not the
+# change's) do not: they read as cancelled from outside.
+LEG_FAILURES = ("failure", "timed_out")
 CANCELLED_FROM_OUTSIDE = "no step failed: the run was cancelled from outside"
 FAILED_LINE = "Failed: "
 FAIL_FAST = ". Fail fast"
