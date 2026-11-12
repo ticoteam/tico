@@ -58,6 +58,8 @@ On Automations, the Heartbeat is a single System job. It records one run per bea
 
 A shorter interval never makes outside polls run more often than every 10 seconds. The server's other periodic work also runs at most every 10 seconds; failures from beats whose other work was skipped are reported with the next pass. A longer interval slows down every step and the rest of that work too.
 
+The automation queue (its runs and their Gmail actions), the server's own email sends and the Workspace key check run on workers of their own beside the loop. Each pass of the loop wakes them, and a slow Gmail or automation step never holds the next beat. A drain runs one pass at a time, claims nothing new once 5 seconds of its pass are spent and carries on in its next pass; leases that run out are still put back by the loop itself.
+
 The server reads as running while its last beat or pass is less than the interval plus a minute old (at least a minute).
 
 The screen reads the Heartbeat again once a minute while it is open and the page is visible, and once when you come back to the page.

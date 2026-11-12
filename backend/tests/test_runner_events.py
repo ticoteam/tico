@@ -115,3 +115,33 @@ def test_keepalives_go_out_while_other_computers_changes_keep_ringing_the_bell(a
     monkeypatch.setattr(bell, "wait", rings)
     for _ in range(3):
         stream.until(topic("keepalive"), timeout=5)
+
+
+def test_every_chat_goal_change_tells_only_the_bots_computer_by_bot_id(api):
+    """A running turn reads its goal again on this notice instead of asking every second (runner-rs/src/drive.rs):
+    a person's control, which queues the bot's `/goal` turn, and a change that queues nothing, like a goal its
+    harness reported met."""
+    from backend.tests.helpers.api import claim
+    from backend.tests.helpers.chat_goals import action, goal_event, setup
+
+    machine, cid = setup(api)
+    other = runner(api, label="B")
+    ready(api, other, [])
+
+    def queued():
+        with api.app.state.store.read() as c:
+            return c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0]
+
+    def change(step):
+        start, before = newest(api), queued()
+        step()
+        sent = told(api, machine, start)[0]
+        assert [(data["kind"], data["bots"]) for _, data in sent] == [("work", ["ops"])]
+        assert "Acme" not in json.dumps(sent) and told(api, other, start)[0] == []
+        return queued() - before
+
+    action(api, cid, objective="Write the Acme renewal summary")
+    for step in (("pause",), ("resume",), ("edit", "Write a shorter Acme summary")):
+        change(lambda: action(api, cid, *step))
+    attempt = claim(api, machine)
+    assert change(lambda: goal_event(api, machine, attempt, "met", "The Acme summary is done.")) == 0

@@ -298,7 +298,6 @@ def create_app(settings=None):
             install_signals(recorder_thread.folder, recorder_thread.file)
 
         async def schedule_loop():
-            from . import heartbeat
             from .scheduler import Scheduler
 
             scheduler = Scheduler(store, execution, onboarding=onboarding, auth=auth, github_app=app.state.github_app)
@@ -316,6 +315,26 @@ def create_app(settings=None):
                 releases.notice()
                 # Subscribed updates for bots, as quiet notes; nothing is fetched while no bot subscribes.
                 update_feeds.tick(store)
+
+            # The automation queue, the email sends and the Workspace key check, each on a worker of its own beside
+            # this loop (backend/drains.py): the beat's due times and recovery never wait for Gmail or a connector.
+            from . import drains
+
+            workers = drains.Drains(
+                store,
+                auth,
+                on_error=lambda name, exc: telemetry.capture(drains.TELEMETRY[name], exc),
+                stopping=stop.is_set,
+            ).start()
+            scheduler.drains = workers
+            try:
+                await run_passes(scheduler, recorded, release_check)
+            finally:
+                # No new claims; a call already started finishes within its own timeout.
+                await asyncio.to_thread(workers.stop, 75)
+
+        async def run_passes(scheduler, recorded, release_check):
+            from . import heartbeat
 
             rest = heartbeat.Rest()
             while not stop.is_set():
@@ -338,22 +357,6 @@ def create_app(settings=None):
                         import logging
 
                         logging.getLogger("tico.scheduler").error("Scheduler tick failed: %s", type(exc).__name__)
-                    try:
-                        # Tools > Settings > Email's pending and failing Workspace key is checked again (backend/google_workspace.py).
-                        from . import google_workspace as workspace_checks
-
-                        await asyncio.to_thread(
-                            system_routines.pass_of, store, "workspace_check", workspace_checks.tick, store
-                        )
-                    except Exception as exc:
-                        telemetry.capture("google_workspace", exc)
-                    try:
-                        # Workspace inboxes' queued email, sent by the server itself after its undo window and pacing.
-                        from . import email_sending
-
-                        await asyncio.to_thread(email_sending.drain, store, auth)
-                    except Exception as exc:
-                        telemetry.capture("email_drain", exc)
                 try:
                     # Seconds between beats (Automations > Heartbeat), read each pass: 10 by default, 5 to 60.
                     await asyncio.wait_for(stop.wait(), timeout=await asyncio.to_thread(heartbeat.interval, store))

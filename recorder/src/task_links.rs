@@ -238,8 +238,9 @@ impl Tico {
             "",
         )
     }
-    /// Tasks whose title has every word typed, or the one numbered "#42" (or "42"), optionally of one type.
-    pub fn search_tasks(&self, query: &str, kind: &str, offset: usize) -> Result<Value> {
+    /// Tasks whose title has every word typed, or the one numbered "#42" (or "42"). The task list takes no type
+    /// filter (it refuses a filter it does not know), so `_kind` is not sent.
+    pub fn search_tasks(&self, query: &str, _kind: &str, offset: usize) -> Result<Value> {
         let query = query.trim();
         let query = if !query.is_empty()
             && query.len() <= 10
@@ -255,9 +256,6 @@ impl Tico {
             .append_pair("limit", "30")
             .append_pair("brief", "true")
             .append_pair("offset", &offset.to_string());
-        if !kind.is_empty() {
-            url.query_pairs_mut().append_pair("type", kind);
-        }
         let reply = self.call(
             &format!("/api/v2/tasks?{}", url.query().unwrap_or("")),
             None,

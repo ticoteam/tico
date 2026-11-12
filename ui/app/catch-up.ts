@@ -109,6 +109,8 @@ function cuCardHTML(it: CUItem) {
   const t = it.thread, n = Number(it.new_count) || 0, more = Number(it.more) || 0, hash = threadOnRail(t);
   const title = threadTitle(t, it.messages), name = hash ? '#' + title : title, left = cuLeft(), draft = CU.drafts.get(t.id) || '';
   const busy = CU.sending.has(t.id) ? ' disabled' : '';
+  // Later needs a card to go behind (cuLater): on the last one, with no next page to come, it is left out.
+  const later = left > 1 || CU.next ? '<button type="button" class="cu-later" data-cu-later>Later</button>' : '';
   return `<div class="cu-stack">${left > 2 ? '<span class="cu-back cu-back2"></span>' : ''}${left > 1 ? '<span class="cu-back cu-back1"></span>' : ''}
     <section class="cu-card" aria-labelledby="cu-t" data-thread="${esc(t.id)}">
       <div class="cu-card-head"><h3 id="cu-t">${hash ? threadHashHTML(t) : threadMarkHTML(t, 18)}<span>${esc(title)}</span></h3>
@@ -116,7 +118,7 @@ function cuCardHTML(it: CUItem) {
         <a class="cu-open" href="${esc(threadHref(t))}" data-cu-open>Open</a></div>
       <div class="cu-msgs">${(it.messages || []).map(cuMsgHTML).join('')}${more ? `<a class="cu-more" href="${esc(threadHref(t))}" data-cu-open>${more} more</a>` : ''}</div>
       ${t.me?.can_post === false ? '' : `<form class="cu-reply${draft.trim() ? ' has-text' : ''}"><input type="text" name="text" value="${esc(draft)}" placeholder="Message ${esc(name)}" aria-label="Reply in ${esc(name)}" autocomplete="off" maxlength="20000"${busy}><button type="submit" class="primary cu-send" aria-label="Send"${busy}>${CU_SEND}</button></form>`}
-      <div class="cu-foot"><button type="button" class="cu-later" data-cu-later>Later</button><button type="button" class="cu-mute" data-cu-mute>Mute</button>
+      <div class="cu-foot">${later}<button type="button" class="cu-mute" data-cu-mute>Mute</button>
         <span class="spacer"></span><button type="button" class="primary cu-read" data-cu-read>Mark read${CU_ARROW}</button></div>
     </section></div>`;
 }

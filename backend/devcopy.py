@@ -363,6 +363,7 @@ KEEP = (
             "assistant_actions",
             "attempt_conversations",
             "attempt_events",
+            "attempt_event_briefs",  # an event's status-line fields: its triggers drop it with its event
             "attempt_load_snapshots",
             "attempt_inputs",
             "backup_verified_blobs",

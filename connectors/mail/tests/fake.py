@@ -2,8 +2,9 @@
 
 The fake mimics exactly the slice of googleapiclient's Resource that connectors/mail/gmail.py
 uses: users().getProfile / labels().list / labels().create / messages().list / messages().get /
-messages().attachments().get / messages().modify / threads().get / history().list, and for
-stage 2 drafts().create / update / get / delete / send. Its query support is deliberately small -
+messages().attachments().get / messages().modify / messages().batchModify / threads().get / history().list, a
+batch call (`_tico_batch`, as auth.build_service attaches it), and for stage 2 drafts().create / update / get /
+delete / send. `round_trips` counts HTTPS calls (a batch call is one) and `latency` makes each one wait. Its query support is deliberately small -
 `in:inbox`, `in:sent`, `label:"X"`, `-label:"X"`,
 `from:`, `subject:"X"` and `after:<epoch>` - which is all the CLI ever sends.
 
@@ -11,7 +12,7 @@ stage 2 drafts().create / update / get / delete / send. Its query support is del
 and events().insert / delete.
 """
 
-import base64, re, sys
+import base64, re, sys, time
 from pathlib import Path
 
 HUB = Path(__file__).resolve().parents[3]
@@ -66,12 +67,40 @@ def message(
 
 
 class _Req:
-    def __init__(self, fn):
+    def __init__(self, fn, service=None):
         self.fn = fn
         self.headers = {}
+        self.service = service
 
     def execute(self):
+        if self.service is not None:
+            self.service.trip()
         return self.fn()
+
+
+class _Batch:
+    """A Gmail batch call: one round trip for every request added. Gmail may answer the parts in any order; this one
+    answers them last first, so a caller that relies on the order it asked in is caught."""
+
+    def __init__(self, s, callback):
+        self.s, self.callback, self.parts = s, callback, []
+
+    def add(self, request, request_id):
+        self.parts.append((request_id, request))
+
+    def execute(self):
+        self.s.trip()
+        self.s.batches.append(len(self.parts))
+        if self.s.batch_errors:
+            raise self.s.batch_errors.pop(0)
+        answers = []
+        for rid, request in self.parts:
+            try:
+                answers.append((rid, request.fn(), None))
+            except Exception as e:
+                answers.append((rid, None, e))
+        for rid, response, exc in reversed(answers):
+            self.callback(rid, response, exc)
 
 
 class Boom(Exception):
@@ -97,6 +126,8 @@ class FakeGmailService:
         attachments=None,
         history=None,
         history_expired=False,
+        batch=True,
+        latency=0.0,
     ):
         self.store = {m["id"]: m for m in (messages or [])}  # `messages()` is the resource
         self.labels_by_id = dict(labels or {"INBOX": "INBOX", "UNREAD": "UNREAD", "STARRED": "STARRED", "SENT": "SENT"})
@@ -109,13 +140,26 @@ class FakeGmailService:
         self.send_fails = False  # make drafts.send blow up, for rollback
         self.history_records = list(history or [])
         self.history_expired = history_expired
+        self.latency, self.round_trips = latency, 0  # seconds each HTTPS call waits; how many were made
+        self.batches = []  # the size of each batch call
+        self.batch_errors = []  # exceptions the next batch calls raise as a whole
+        self.batch_modifies = []  # the ids of each messages.batchModify
+        self.reads = []  # every messages.get, by id
+        self.fail_reads = {}  # id -> [status, ...]: that message's next reads answer these
+        if batch:
+            self._tico_batch = lambda callback: _Batch(self, callback)
+
+    def trip(self):
+        self.round_trips += 1
+        if self.latency:
+            time.sleep(self.latency)
 
     # -- resource surface -------------------------------------------
     def users(self):
         return self
 
     def getProfile(self, userId="me"):
-        return _Req(lambda: self._maybe_fail(dict(self._profile)))
+        return _Req(lambda: self._maybe_fail(dict(self._profile)), self)
 
     def labels(self):
         return _Labels(self)
@@ -186,9 +230,11 @@ class _Labels:
         self.s = s
 
     def list(self, userId="me"):
-        return _Req(
-            lambda: self.s._maybe_fail({"labels": [{"id": i, "name": n} for i, n in self.s.labels_by_id.items()]})
-        )
+        def go():
+            self.s.calls.append(("labels.list",))
+            return self.s._maybe_fail({"labels": [{"id": i, "name": n} for i, n in self.s.labels_by_id.items()]})
+
+        return _Req(go, self.s)
 
     def create(self, userId="me", body=None):
         def go():
@@ -198,7 +244,7 @@ class _Labels:
             self.s.created.append(body["name"])
             return {"id": lid, "name": body["name"]}
 
-        return _Req(go)
+        return _Req(go, self.s)
 
 
 class _Messages:
@@ -215,7 +261,7 @@ class _Messages:
             self.s.sent.append({"id": m["id"], "threadId": m["threadId"], "raw": body["raw"]})
             return {"id": m["id"], "threadId": m["threadId"]}
 
-        return _Req(go)
+        return _Req(go, self.s)
 
     def list(self, userId="me", q=None, labelIds=None, maxResults=100, pageToken=None):
         def go():
@@ -226,40 +272,59 @@ class _Messages:
             hits.sort(key=lambda m: -int(m.get("internalDate", 0)))
             return self.s._maybe_fail({"messages": [{"id": m["id"]} for m in hits[:maxResults]]})
 
-        return _Req(go)
+        return _Req(go, self.s)
 
     def get(self, userId="me", id=None, format="full"):
         def go():
+            self.s.reads.append(id)
+            if self.s.fail_reads.get(id):
+                status = self.s.fail_reads[id].pop(0)
+                raise Boom(status, "notFound" if status == 404 else "rateLimitExceeded")
             if id not in self.s.store:
                 raise Boom(404, "notFound")
             return self.s._maybe_fail(self.s.store[id])
 
-        return _Req(go)
+        return _Req(go, self.s)
 
     def attachments(self):
         return _Attachments(self.s)
 
-    def modify(self, userId="me", id=None, body=None):
-        def go():
-            m = self.s.store[id]
-            have = [l for l in m.get("labelIds") or []]
-            for lid in (body or {}).get("removeLabelIds") or []:
-                if lid in have:
-                    have.remove(lid)
-            for lid in (body or {}).get("addLabelIds") or []:
-                if lid not in have:
-                    have.append(lid)
-            m["labelIds"] = have
-            self.s.modified.append(
-                {
-                    "id": id,
-                    "add": (body or {}).get("addLabelIds") or [],
-                    "remove": (body or {}).get("removeLabelIds") or [],
-                }
-            )
-            return self.s._maybe_fail(m)
+    def _change(self, id, body):
+        m = self.s.store[id]
+        have = [l for l in m.get("labelIds") or []]
+        for lid in (body or {}).get("removeLabelIds") or []:
+            if lid in have:
+                have.remove(lid)
+        for lid in (body or {}).get("addLabelIds") or []:
+            if lid not in have:
+                have.append(lid)
+        m["labelIds"] = have
+        self.s.modified.append(
+            {
+                "id": id,
+                "add": (body or {}).get("addLabelIds") or [],
+                "remove": (body or {}).get("removeLabelIds") or [],
+            }
+        )
+        return m
 
-        return _Req(go)
+    def modify(self, userId="me", id=None, body=None):
+        return _Req(lambda: self.s._maybe_fail(self._change(id, body)), self.s)
+
+    def batchModify(self, userId="me", body=None):
+        """All or none, as Gmail: one unknown id refuses the whole call."""
+
+        def go():
+            ids = list((body or {}).get("ids") or [])
+            self.s.batch_modifies.append(ids)
+            if any(i not in self.s.store for i in ids):
+                raise Boom(400, "Invalid id value")
+            self.s._maybe_fail(None)
+            for i in ids:
+                self._change(i, body)
+            return None
+
+        return _Req(go, self.s)
 
 
 class _Attachments:
@@ -274,7 +339,7 @@ class _Attachments:
                 raise Boom(404, "notFound")
             return self.s._maybe_fail(dict(self.s.attachment_data[key]))
 
-        return _Req(go)
+        return _Req(go, self.s)
 
 
 class _Threads:
@@ -287,7 +352,7 @@ class _Threads:
             msgs.sort(key=lambda m: int(m.get("internalDate", 0)))
             return self.s._maybe_fail({"id": id, "messages": msgs})
 
-        return _Req(go)
+        return _Req(go, self.s)
 
 
 class _History:
@@ -311,7 +376,7 @@ class _History:
                 }
             )
 
-        return _Req(go)
+        return _Req(go, self.s)
 
 
 # ---------------------------------------------------------------- drafts (stage 2)
@@ -360,10 +425,10 @@ class _Drafts:
         return rec
 
     def create(self, userId="me", body=None):
-        return _Req(lambda: self.s._maybe_fail(self._make(body)))
+        return _Req(lambda: self.s._maybe_fail(self._make(body)), self.s)
 
     def update(self, userId="me", id=None, body=None):
-        return _Req(lambda: self.s._maybe_fail(self._make(body, draft_id=id)))
+        return _Req(lambda: self.s._maybe_fail(self._make(body, draft_id=id)), self.s)
 
     def get(self, userId="me", id=None, format="full"):
         def go():
@@ -374,7 +439,7 @@ class _Drafts:
                 return {"id": id, "message": {"id": rec["message"]["id"], "raw": rec["message"]["raw"]}}
             return {"id": id, "message": self.s.store[rec["message"]["id"]]}
 
-        return _Req(go)
+        return _Req(go, self.s)
 
     def delete(self, userId="me", id=None):
         def go():
@@ -385,7 +450,7 @@ class _Drafts:
             self.s.deleted_drafts.append(id)
             return {}
 
-        return _Req(go)
+        return _Req(go, self.s)
 
     def send(self, userId="me", body=None):
         def go():
@@ -400,7 +465,7 @@ class _Drafts:
             self.s.sent.append({"draft": did, "id": m["id"], "threadId": m["threadId"]})
             return {"id": m["id"], "threadId": m["threadId"], "labelIds": ["SENT"]}
 
-        return _Req(go)
+        return _Req(go, self.s)
 
 
 # ---------------------------------------------------------------- calendar

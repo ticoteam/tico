@@ -188,8 +188,9 @@ def check(
 # ----------------------------------------------------------------------------- C10: room after a by-hand stage
 # Each by-hand stage holding a task that is not snoozed, with the work stage after it, when that stage has a limit.
 _ROOM = (
-    "SELECT s.id, n.id, s.owner FROM stages s JOIN stages n ON n.pipeline_id = s.pipeline_id AND n.kind='work' "
-    "AND n.retired_at IS NULL AND n.task_limit > 0 AND n.position = (SELECT MIN(x.position) FROM stages x "
+    "SELECT s.id, n.id, s.owner, s.requests_move_on FROM stages s JOIN stages n ON n.pipeline_id = s.pipeline_id "
+    "AND n.kind='work' AND n.retired_at IS NULL AND n.task_limit > 0 "
+    "AND n.position = (SELECT MIN(x.position) FROM stages x "
     "WHERE x.pipeline_id = s.pipeline_id AND x.kind='work' AND x.retired_at IS NULL AND x.position > s.position) "
     "WHERE s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL AND EXISTS (SELECT 1 FROM tasks t "
     "WHERE t.pipeline_id IS NOT NULL AND t.stage_id = s.id AND t.status='open' "
@@ -244,10 +245,13 @@ def room_key(stage_id: str, freed_by: str | None) -> str:
 
 def _room(conn: "sqlite3.Connection") -> int:
     """C10: when the stage after a by-hand stage (Product's Ideas, then Spec) has room, the by-hand stage's owner bot
-    (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per freed slot (`room_key`); never chased: the
-    by-hand stage has no ladder. Returns how many wakes were written."""
+    (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per
+    freed slot (`room_key`); never chased: the by-hand stage has no ladder. A stage owned by "the task's assignee" wakes
+    that task's owner only when it moves a person's request on (Product's Ideas with one Product Owner per area); with
+    the switch off (Growth's and Success's Ideas, Watching) its tasks rest and nobody is told. Returns how many wakes
+    were written."""
     woken = 0
-    for by_hand, after, stage_owner in conn.execute(_ROOM).fetchall():
+    for by_hand, after, stage_owner, requests_move_on in conn.execute(_ROOM).fetchall():
         nxt = E.stage(conn, str(after))
         if not nxt or not E.has_room(conn, nxt):
             continue
@@ -257,9 +261,10 @@ def _room(conn: "sqlite3.Connection") -> int:
         row = E.task(conn, str(first[0])) if first else None
         if not row or not row.get("visit"):
             continue
-        if stage_owner == "assignee":
-            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas)
-        owner: str | None = stage_owner or row.get("owner_id")
+        if stage_owner == "assignee" and not requests_move_on:
+            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas, Watching)
+        # Product's Ideas owned by the assignee: the oldest waiting task's own owner is told.
+        owner: str | None = row.get("owner_id") if stage_owner == "assignee" else stage_owner or row.get("owner_id")
         if not is_bot(owner) or not _reads(conn, owner, row):
             continue
         text = f"{nxt['name']} has room."

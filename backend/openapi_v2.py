@@ -735,7 +735,8 @@ STABLE = [
         "brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by "
         "ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters "
         "answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in "
-        "full. A full read has an ETag: If-None-Match answers 304 when nothing changed",
+        "full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is "
+        "not one of these filters answers 422 `filter` naming it (owner=, not assignee=)",
         "TaskList",
     ),
     ("/api/v2/tasks", "post", "Tasks", "createTask", "Create a task", "TaskResult"),

@@ -18,6 +18,63 @@ from . import reach
 from . import views
 
 
+# The query parameters GET /api/v2/tasks takes: its own filters (the handler's keywords below, kept equal by
+# test_task_reads) and `on_behalf_of`, which the BotOps middleware reads on every v2 route. Any other name is refused:
+# FastAPI drops unknown query parameters, so a misspelled or unsupported filter (`assignee=`) used to answer the
+# whole list instead of the filtered one.
+LIST_FILTERS = frozenset(
+    {
+        "owner",
+        "requester",
+        "status",
+        "lane",
+        "label",
+        "limit",
+        "offset",
+        "sort",
+        "number",
+        "updated_since",
+        "brief",
+        "member",
+        "role",
+        "changed_after",
+        "ids",
+        "snoozed",
+        "q",
+        "pipeline",
+        "stage",
+        "waiting_on",
+        "pushed_past",
+        "search",
+        "owners",
+        "stages",
+        "requesters",
+        "labels",
+        "turn",
+        "due",
+        "late",
+        "after",
+    }
+)
+# Passed through and ignored. `type`: the Recorder's task picker sends `type=<task type>` from 0.5.181 (Nov 5, 2026)
+# until the build that stopped (recorder/src/task_links.rs `search_tasks`); installed copies keep sending it, so it is
+# accepted rather than refused. The list has no type filter, so it never narrowed the answer.
+_LIST_PASSED = frozenset({"on_behalf_of", "type"})
+_FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
+
+
+def unknown_filters(names):
+    """Refuse a list read naming a filter it does not take (422 `filter`), with the filters it does take."""
+    unknown = sorted(set(names) - LIST_FILTERS - _LIST_PASSED)
+    if unknown:
+        hints = "".join(f" For {n}, {_FILTER_HINTS[n]}." for n in unknown if n in _FILTER_HINTS)
+        raise Problem(
+            "filter",
+            f"Unknown filter: {', '.join(unknown)}.{hints} Filters: {', '.join(sorted(LIST_FILTERS))}.",
+            422,
+        )
+
+
 def register(app, auth, mutate, rule_check, rule_target, store, task_filters, task_idents, visible_tasks):
     @app.get("/api/v2/tasks")
     def tasks(
@@ -67,6 +124,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
 
         who = request.state.identity
         auth.domain(who)
+        unknown_filters(request.query_params.keys())
         with store.read_transaction() as c:
             if limit < 1 or limit > 500:
                 raise Problem("limit", "limit is between 1 and 500", 422)

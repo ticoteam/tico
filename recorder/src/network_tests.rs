@@ -4209,7 +4209,7 @@ fn recorder_picker_reads_task_types_and_searches_a_bare_number() {
     assert!(
         calls[1]
             .0
-            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0&type=bug ")
+            .starts_with("GET /api/v2/tasks?q=%2319118&limit=30&brief=true&offset=0 ")
     );
     assert!(
         calls[2]

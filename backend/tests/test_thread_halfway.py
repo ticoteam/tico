@@ -11,6 +11,7 @@ from backend.tests.helpers.api import assign, claim, headers, post, ready, runne
 from backend.tests.helpers.thread_events import read_as, who
 from backend.tests.helpers.threads_delivery import bot_post, delivery, queued_job
 from backend.tests.helpers.thread_halfway import bot_status, new_thread, say
+from backend.tests.helpers.step_briefs import briefs_schema
 
 
 def timeline(api, thread_id, token="ana-test", **params):
@@ -388,6 +389,7 @@ def test_a_thought_after_a_tool_reads_as_thinking():
 
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE attempt_events(attempt_id TEXT, seq INTEGER, kind TEXT, payload TEXT, created_at TEXT)")
+    briefs_schema(c)
 
     def add(seq, kind, payload):
         c.execute("INSERT INTO attempt_events VALUES('a', ?, ?, ?, '2026-11-04T00:00:00.000Z')", (seq, kind, payload))

@@ -246,7 +246,7 @@ def test_every_source_writes_its_topic(api):
             "VALUES('g1',?,'ops','Ship it','active','human:ana',?,?)",
             (cid, H.now(), H.now()),
         )
-    ) == {("messages", "goal")}
+    ) == {("messages", "goal"), ("runner", "work")}  # ops's computer: its running turn reads the goal again
     loose = post(api, "tasks", {"owner": "ben", "title": "Remove this", "body": "Please."})
     with store.read() as c:
         before = E.latest(c)
@@ -595,3 +595,167 @@ def test_a_consumer_more_changes_behind_than_the_backlog_limit_is_reset(api, mon
     with store.read() as c:
         _, _, reset, _ = E.read(c, auth, who, cursor, topics=("tasks",), task_views=_task_views)
     assert not reset
+
+
+# A read prepares only what it can send (task I49): a viewer behind on large run outputs.
+KiB = 1024
+ANA = Identity("human:ana", "human", "ana@acme.example")
+
+
+def _write_outputs(api, attempt_id, texts, first=1000):
+    with api.app.state.store.transaction() as c:
+        for n, text in enumerate(texts):
+            c.execute(
+                "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,?,'delta',?,?)",
+                (attempt_id, first + n, json.dumps({"delta_kind": "text", "text": text}), H.now()),
+            )
+
+
+def _big(label, size=64 * KiB):
+    return label + "x" * (size - len(label))
+
+
+def _drain(api, cursor, who=ANA, **kw):
+    """Every read until nothing more waits, as a round reads (ROUND_ROWS changes at a time): ([events per read], cursor)."""
+    store, auth, reads, more = api.app.state.store, api.app.state.auth, [], True
+    while more:
+        with store.read() as c:
+            events, cursor, reset, more = E.read(c, auth, who, cursor, limit=E.ROUND_ROWS, **kw)
+        assert not reset
+        reads.append(events)
+    return reads, cursor
+
+
+def _texts(reads):
+    return [d["output"]["payload"]["text"] for events in reads for _, _, d in events if "output" in d]
+
+
+def test_a_read_builds_only_the_run_outputs_it_sends_and_decodes_each_once(api, monkeypatch):
+    """A viewer behind on large outputs: each read checks and builds only what READ_BYTES carries, and each stored
+    payload is decoded once for its privacy checks and its event, not again on every later read."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    texts = [_big(f"out-{n:02d}") for n in range(12)]
+    _write_outputs(api, attempt["id"], texts)
+    decoded, original = [], H._json
+
+    def counted(value, default=None):
+        if isinstance(value, str) and len(value) >= 32 * KiB:
+            decoded.append(value[:40])
+        return original(value, default)
+
+    monkeypatch.setattr(H, "_json", counted)
+    reads, _ = _drain(api, cursor, topics=("runs",))
+    assert _texts(reads) == texts
+    assert len(decoded) == len(texts), f"{len(decoded)} decodes for {len(texts)} outputs"
+    for events in reads:
+        assert len(events) <= 1 or sum(len(d.encoded) for _, _, d in events) <= E.READ_BYTES
+
+
+def test_a_capped_drain_never_sends_an_unreadable_row_and_ends_past_every_row(api):
+    """Rows this viewer may not read, among outputs that fill many reads: a private task, and an output naming it only
+    past its first READ_BYTES. Neither is sent; the cursor ends past every row."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    _write_outputs(api, attempt["id"], [_big(f"before-{n}") for n in range(5)])
+    secret = post(
+        api, "tasks", {"owner": "ben", "title": "Salary bands", "body": "Private.", "private": True}, token="ben-test"
+    )
+    late_reference = _big("hidden-output", 300 * KiB) + f" see #/task/{secret['id']}"
+    _write_outputs(api, attempt["id"], [late_reference, *[_big(f"after-{n}") for n in range(5)]], first=2000)
+    reads, end = _drain(api, cursor, topics=("tasks", "runs"), task_views=_task_views)
+    with api.app.state.store.read() as c:
+        assert end == E.latest(c)
+    sent = json.dumps([[d for _, _, d in events] for events in reads])
+    assert secret["id"] not in sent and "hidden-output" not in sent
+    assert [t[: t.index("x")] for t in _texts(reads)] == [f"before-{n}" for n in range(5)] + [
+        f"after-{n}" for n in range(5)
+    ]
+    assert len(reads) > 3  # the backlog took many capped reads
+
+
+def test_a_run_output_larger_than_a_read_goes_whole_as_its_first_event(api):
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    huge = _big("huge", 300 * KiB)
+    _write_outputs(api, attempt["id"], [huge, "small one", "small two"])
+    reads, _ = _drain(api, cursor, topics=("runs",))
+    first = [d for _, _, d in reads[0] if "output" in d]
+    assert first[0]["output"]["payload"]["text"] == huge
+    assert _texts(reads) == [huge, "small one", "small two"]
+
+
+def test_a_run_state_changing_inside_a_capped_backlog_ends_as_it_stands_and_never_goes_back(api):
+    _, _, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    for n, state in enumerate(("running", "input", "running", "completed")):
+        _write_outputs(api, aid, [_big(f"step-{n}-{k}") for k in range(3)], first=1000 + 10 * n)
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET state=? WHERE id=?", (state, aid))
+    reads, _ = _drain(api, cursor, topics=("runs",))
+    events = [(seq, d) for events in reads for seq, _, d in events]
+    assert [seq for seq, _ in events] == sorted({seq for seq, _ in events})
+    states = [d["state"] for _, d in events if d.get("run_id") == aid and "state" in d and "output" not in d]
+    assert states[-1] == "completed"
+    assert len(_texts(reads)) == 12
+
+
+def test_capped_reads_send_the_same_events_in_the_same_order_as_one_uncapped_read(api, monkeypatch):
+    """Tasks, messages and large run outputs mixed: drained in capped reads or in one read, the viewer gets the same
+    events with the same seqs and data. A summary that describes now (a run's state, a thread's activity, Needs you)
+    is sent once per read as it stands, so capped reads may send earlier ones too; the last of each is the same."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    for n in range(3):
+        post(api, "tasks", {"owner": "ben", "title": f"Mixed item {n}", "body": "Please."})
+        _write_outputs(api, attempt["id"], [_big(f"mixed-{n}-{k}") for k in range(3)], first=1000 + 10 * n)
+        post(api, "chat/ops", {"text": f"And one more thing, {n}"})
+    kw = dict(topics=("tasks", "messages", "runs", "bots", "needs", "threads"), task_views=_task_views)
+
+    def summary(topic, d):
+        return topic in ("threads", "needs", "bots") or topic == "runs" and "output" not in d
+
+    def split(reads):
+        rows, last = [], {}
+        for events in reads:
+            for seq, topic, d in events:
+                text = json.dumps(d, sort_keys=True, default=str)
+                if summary(topic, d):
+                    key = (topic, d.get("kind"), d.get("root_id") or d.get("run_id") or d.get("id"))
+                    last[key] = json.loads(text) | {"seq": None, "at": None}
+                else:
+                    rows.append((seq, topic, text))
+        return rows, last
+
+    capped, capped_end = _drain(api, cursor, **kw)
+    assert len(capped) > 2
+    monkeypatch.setattr(E, "READ_BYTES", 1 << 30)
+    monkeypatch.setattr(E, "ROUND_ROWS", 100_000)
+    whole, whole_end = _drain(api, cursor, **kw)
+    assert len(whole) == 1 and capped_end == whole_end
+    assert split(capped) == split(whole)
+
+
+def test_a_run_output_naming_a_meeting_inside_its_payload_is_sent_as_the_run_page_shows_it(api):
+    """Decoding a run output once must not widen the meeting check: like the run page, it reads the stored row, whose
+    payload text it does not look inside. A meeting named there leaves the live decision as it was."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1000,'delta',?,?)",
+            (
+                attempt["id"],
+                json.dumps({"delta_kind": "text", "text": "notes", "live_meeting": {"meeting_id": "elsewhere"}}),
+                H.now(),
+            ),
+        )
+    reads, _ = _drain(api, cursor, topics=("runs",))
+    assert _texts(reads) == ["notes"]

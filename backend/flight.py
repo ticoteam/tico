@@ -1315,10 +1315,11 @@ class Flight(threading.Thread):
 SECTIONS = ("requests", "slow", "process", "sql", "db", "events")
 
 
-def _requests(c, since):
+def _requests(c, since, until=None, top=25):
     merged = {}
     for r in c.execute(
-        "SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=?", (since,)
+        "SELECT route,caller,n,errors,bytes,total_ms,max_ms,hist FROM flight_requests WHERE created_at>=? AND created_at<?",
+        (since, until if until is not None else 2**62),
     ):
         m = merged.setdefault(
             r[0],
@@ -1342,7 +1343,7 @@ def _requests(c, since):
         "errors": sum(r["errors"] for r in rows),
         "p50": quantile(every, 0.5),
         "p95": quantile(every, 0.95),
-        "routes": rows[:25],
+        "routes": rows[:top],
     }
 
 
@@ -1368,9 +1369,13 @@ def _sql(c, since):
     return {"queries": rows[:25]}
 
 
-def _process(c, since):
+def _process(c, since, until=None):
     rows = [
-        dict(r) for r in c.execute("SELECT * FROM flight_process WHERE created_at>=? ORDER BY created_at", (since,))
+        dict(r)
+        for r in c.execute(
+            "SELECT * FROM flight_process WHERE created_at>=? AND created_at<? ORDER BY created_at",
+            (since, until if until is not None else 2**62),
+        )
     ]
 
     def peak(key):
@@ -1388,6 +1393,7 @@ def _process(c, since):
         "lag_p95": peak("lag_p95"),
         "wait_max": peak("wait_max"),
         "hold_max": peak("hold_max"),
+        "hold_p95": peak("hold_p95"),
         "locked": sum(r["locked"] or 0 for r in rows),
         "dropped": sum(r["dropped"] or 0 for r in rows),
         "minutes": rows[-180:],
@@ -1420,12 +1426,19 @@ def _db(c, now):
     }
 
 
-def view(c, minutes=60, sections=SECTIONS, now=None):
+def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, routes=25):
+    """The last `minutes`, or with `since` the minutes from `since` up to `until` (epoch seconds, `until` excluded): a
+    load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
+    SQL hours and events start at `since`."""
     now = int(now or time.time())
-    since = now - minutes * 60
+    if since is not None:  # the window's own length, in whole minutes
+        minutes = max(0, -(-(int(until if until is not None else now) - int(since)) // 60))
+    since = int(since) if since is not None else now - minutes * 60
     out = {"since": since, "now": now, "minutes": minutes}
+    if until is not None:
+        out["until"] = int(until)
     if "requests" in sections:
-        out["requests"] = _requests(c, since)
+        out["requests"] = _requests(c, since, until, routes)
     if "slow" in sections:
         out["slow"] = [
             {**{k: r[k] for k in r.keys() if k != "top"}, **({"top": json.loads(r["top"])} if r["top"] else {})}
@@ -1436,7 +1449,7 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
             )
         ]
     if "process" in sections:
-        out["process"] = _process(c, since)
+        out["process"] = _process(c, since, until)
     if "sql" in sections:
         out["sql"] = _sql(c, since)
     if "db" in sections:
@@ -1461,8 +1474,17 @@ def install(app, store, auth):
     from .store import Problem
 
     @app.get("/api/v2/system/metrics")
-    def system_metrics(request: Request, minutes: int = 60, section: str = "all"):
-        """The flight recorder (backend/flight.py): owners, admins and the team's bots."""
+    def system_metrics(
+        request: Request,
+        minutes: int = 60,
+        section: str = "all",
+        since: int | None = None,
+        until: int | None = None,
+        routes: int = 25,
+    ):
+        """The flight recorder (backend/flight.py): owners, admins and the team's bots. `since` and `until` (epoch
+        seconds) read one window instead of the last `minutes`, and `routes` how many routes to list (1 to 500): the
+        load gate (bench/load_gate) reads its steady window this way."""
         who = request.state.identity
         auth.domain(who)
         if not auth.bot_admin(who) and who.role != "bot":
@@ -1470,8 +1492,17 @@ def install(app, store, auth):
         wanted = SECTIONS if section == "all" else tuple(s for s in section.split(",") if s in SECTIONS)
         if not wanted:
             raise Problem("section", "section is all or a list of: " + ", ".join(SECTIONS), 422)
+        if since is not None and until is not None and until <= since:
+            raise Problem("window", "until must be after since", 422)
         with store.read() as c:
-            out = view(c, max(1, min(int(minutes), SHORT_DAYS * 1440)), wanted)
+            out = view(
+                c,
+                max(1, min(int(minutes), SHORT_DAYS * 1440)),
+                wanted,
+                since=since,
+                until=until,
+                routes=max(1, min(int(routes), 500)),
+            )
         if who.role == "bot":
             # A slow request's actor names the person or bot who made it; a bot doing performance work needs the
             # route and timing, not who was waiting.

@@ -28,7 +28,8 @@ reconnect misses nothing; a client further behind than the log keeps (24 h), or 
 (a slow consumer), is sent `reset` and reads its page in full. So is one that leaves a read's frames unread for STALL_SECONDS:
 what waits for it is the socket's buffer and no more, and it is sent `reset` and the newest change number instead of
 the backlog once it reads again. One read sends at most READ_BYTES of events and leaves
-the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
+the rest for the next read, so one poll's work and its payload stay bounded however busy the team is: it checks and
+builds only the changes that budget can carry, estimated from their stored sizes first (_within_budget).
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
@@ -74,6 +75,8 @@ STALL_SECONDS = (
     5.0  # a read's frames the client took longer than this to take: a slow consumer, reset rather than replayed
 )
 READ_BYTES = 256 * 1024  # event bytes one read sends; the rest of its changes wait for the next read
+ROW_BYTES = 512  # what one change's event carries besides a run output's stored payload, as a read estimates it
+SIZE_CHUNK = 16  # run outputs whose stored sizes a read looks up at a time, only as far as its budget goes
 LIFETIME_SECONDS = 900  # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15  # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
@@ -882,6 +885,18 @@ RUNNER_TRIGGERS = [
         _bot_runner("work", "NEW.bot"),
     ),
     ("changes_runner_bot_control_delete", "DELETE", "bot_control", None, _bot_runner("work", "OLD.bot")),
+    # A chat goal set, replaced, paused, stopped or edited: the bot's running turn reads its goal again at once
+    # (runner-rs/src/drive.rs compares the id and updated_at). `work` naming the bot, the notice that also tells a running
+    # turn a follow-up was queued for it; a runner too old to read the bot asks for new work, not for everything.
+    ("changes_runner_chat_goals_insert", "INSERT", "chat_goals", None, _bot_runner("work", "NEW.bot")),
+    (
+        "changes_runner_chat_goals_update",
+        "UPDATE",
+        "chat_goals",
+        _changed("id", "updated_at", "status"),
+        _bot_runner("work", "NEW.bot"),
+    ),
+    ("changes_runner_chat_goals_delete", "DELETE", "chat_goals", None, _bot_runner("work", "OLD.bot")),
     # Which bots it runs, and how they are configured (runners/assignments carries the config).
     (
         "changes_runner_assignments_insert",
@@ -2597,7 +2612,11 @@ def _runs(view, rows):
             if event is None:
                 continue
             event = dict(event)
-            if not privacy.content_readable(c, view.principal, event):
+            # The intact stored text is decoded once: the page and task checks and the event sent read that value. The
+            # meeting check reads the row as stored, as every other reader of run output does (run_view, turns).
+            value = H._json(event["payload"], None)
+            decoded = event | {"payload": value} if isinstance(value, (dict, list)) else None
+            if not privacy.content_readable(c, view.principal, event, decoded):
                 continue
             if event["kind"] in ("delta", "message"):
                 # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
@@ -2607,7 +2626,8 @@ def _runs(view, rows):
                     watched[bot] = rules_watch(c, bot)
                 if watched[bot]:
                     continue
-            event["payload"] = H._json(event.pop("payload"), {})
+            stored = event.pop("payload")
+            event["payload"] = value if decoded is not None else H._json(stored, {})
             entry["output"] = event
         elif row["kind"] == "job":
             job = c.execute(
@@ -2800,6 +2820,38 @@ class _Snapshot:
         return _change_rows(self.c, clauses, args, limit)
 
 
+def _within_budget(c, rows):
+    """The leading `rows` whose events one read can send, decided before any is checked or built, so a reader behind
+    on large run outputs has only what READ_BYTES carries prepared, not the whole batch on every read. A run output
+    counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
+    or task still relies on read_in's final byte cut. The first row always goes, however large; a row
+    this viewer may not see still counts, as its size is known before its check."""
+    outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
+    if not outputs:
+        return rows
+    sizes, looked, spent = {}, 0, 0
+    for n, row in enumerate(rows):
+        spent += ROW_BYTES
+        if row["topic"] == "runs" and row["kind"] == "output":
+            ref = str(row["ref"])
+            if ref not in sizes and looked < len(outputs):
+                part = outputs[looked : looked + SIZE_CHUNK]
+                looked += len(part)
+                sizes.update({ref: None for ref in part})
+                sizes.update(
+                    (str(found[0]), found[1])
+                    for found in c.execute(
+                        "SELECT id, length(CAST(payload AS BLOB)) FROM attempt_events WHERE id IN (%s)"
+                        % ",".join("?" * len(part)),
+                        part,
+                    )
+                )
+            spent += sizes.get(ref) or 0
+        if n and spent > READ_BYTES:
+            return rows[:n]
+    return rows
+
+
 def _between_viewers(c):
     """Before the next stream of a round reads in this snapshot: of what the last one left in the connection's read
     cache, only stored rows named here stay, and no one's answers: threads' rows and the roster, read for everyone."""
@@ -2910,6 +2962,9 @@ def read_in(
         who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings, places
     )
     more = len(rows) >= limit
+    kept = _within_budget(c, rows)
+    if len(kept) < len(rows):  # the rest are neither checked nor built here: the next read starts at them
+        rows, more = kept, True
     cursor = rows[-1]["seq"] if more else newest
     if not rows:
         return [], cursor, False, False
