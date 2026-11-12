@@ -31,6 +31,10 @@ const ctx = vm.createContext({
   localStorage: {getItem: () => null, setItem() {}},
   actorFace: (who: string) => `<i data-face="${who}"></i>`,
   actorLabel: (who: string) => who.replace(/^(bot|human):/, ''),
+  // hub-v2.ts's asker, as the task page names it (the browser check pipeline-cards.cts runs the real one).
+  taskAsker: (t: {filer?: string | null; requester_id?: string | null}) => t.filer || t.requester_id,
+  taskFiledByBuiltin: (t: {filer?: string | null}) => t.filer === 'check-health' ? 'Health check' : '',
+  taskAskerLabel: (t: {filer?: string | null; requester_id?: string | null}) => t.filer === 'check-health' ? 'Health check' : String(t.filer || t.requester_id || '').replace(/^(bot|human):/, ''),
   ageShort: () => '2h',
   skelRows: () => '<i class="skel"></i>',
   errorMessage: (_e: unknown, fallback: string) => fallback,

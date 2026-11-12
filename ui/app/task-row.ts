@@ -80,13 +80,14 @@ function taskRowHTML(t: TaskAny, {look = 'list', text = '', after = '', key = ''
     the right. Pointing at the card shows the whole title and its line; at the owner's face, "Owner: <name>". */
 function taskCardHTML(t: TaskAny): string {
   const title = t.title || '', line = taskLine(t);
-  const asker = t.requester_id || null, owner = t.owner_id || null;
+  // Who asked, as the task page's "Asked by" names it: who really filed it (a schedule's person, BotOps, a built-in such
+  // as Health check, which has no face) over the requester whose rights it carries.
+  const asker = taskAsker(t) || null, owner = t.owner_id || null, builtin = !!taskFiledByBuiltin(t);
   const since = t.stage_since || ('created_at' in t ? t.created_at : null);
   const who = asker
-    ? `<span class="tk-asker">${actorFace(asker, 16)}<span class="tk-name">${esc(actorLabel(asker))}</span></span>` : '';
+    ? `<span class="tk-asker">${builtin ? '' : actorFace(asker, 16)}<span class="tk-name">${esc(taskAskerLabel(t))}</span></span>` : '';
   const ownerTip = owner && owner !== asker ? esc(`Owner: ${actorLabel(owner)}`) : '';
-  return `<div class="tk-card" data-task="${esc(t.id)}" role="button" tabindex="0" title="${esc([title, line].filter(Boolean).join('\n'))}"`
-    + `${line ? ` data-tip="${esc(line)}"` : ''}>`
+  return `<div class="tk-card" data-task="${esc(t.id)}" role="button" tabindex="0" title="${esc([title, line].filter(Boolean).join('\n'))}">`
     + `<span class="tk-title">${esc(title)}</span>`
     + `<span class="tk-meta">${who}<span class="tk-sp"></span>${lateTagHTML(t)}${taskMarkHTML(t, {space: false})}`
     + `<span class="tk-age">${esc(ageShort(since))}</span>`

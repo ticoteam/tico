@@ -36,7 +36,9 @@ const brief = (id: string, title: string, extra: Record<string, unknown> = {}) =
 // The worst case for room: every title but one runs to two lines, as 23 of 25 "Product brief: …" Ideas did (Nov 12).
 const title = (i: number) => i === 0 ? LONG : i === 4 ? 'Saved carts' : `Product brief: idea number ${i + 1}, a title long enough to need its second line`;
 const IDEAS = Array.from({length: 25}, (_, i) => brief(`i${i}`, title(i),
-  i === 1 ? {owner_id: 'human:sam'} : i === 2 ? {requester_id: 'bot:perf', owner_id: 'bot:perf', late: {since: ago(5), level: 'told'}} : {}));
+  i === 1 ? {owner_id: 'human:sam'} : i === 2 ? {requester_id: 'bot:perf', owner_id: 'bot:perf', late: {since: ago(5), level: 'told'}}
+    // Who asked, as the task page's "Asked by" says: a built-in that filed it, or the person a schedule filed it for.
+    : i === 5 ? {filer: 'check-health'} : i === 6 ? {requester_id: 'keeper', origin_actor: 'human:sam', owner_id: 'human:sam'} : {}));
 const TASKS = [...IDEAS, brief('s1', 'Pipeline board: see who asked and who owns each card', {stage_id: 'spec', requester_id: 'human:ana',
   turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: ago(2)}})];
 
@@ -105,6 +107,8 @@ async function opened(browser: Browser, viewport: {width: number; height: number
     assert.deepEqual([long!.asker, long!.askerFace, long!.age], ['Sam Rivera', true, '3d'], "the asker's face and name, and 3 days in this stage");
     assert.deepEqual([long!.owner, long!.ownerFace], ['Owner: UI Owner', true], "someone else owns it: the owner's face, saying whose");
     assert.deepEqual([ownsIt!.asker, ownsIt!.owner], ['Sam Rivera', null], 'the asker owns it: the name once, no second face');
+    assert.deepEqual([ideas[5]!.asker, ideas[5]!.askerFace, ideas[5]!.owner], ['Health check', false, 'Owner: UI Owner'], 'a built-in that filed it is the asker, with no face');
+    assert.deepEqual([ideas[6]!.asker, ideas[6]!.owner], ['Sam Rivera', null], "a schedule's task: the person it was filed for asked, and owns it");
     assert.deepEqual([both!.asker, both!.owner, both!.late], ['Performance Owner', null, true], 'Late is on the meta line');
     const [spec] = await cards(desk, '[data-pv-col="spec"]');
     assert.deepEqual([spec!.asker, spec!.mark, spec!.owner], ['You', true, 'Owner: UI Owner'], 'the waiting-on-a-person mark is on the meta line');
