@@ -184,13 +184,14 @@ function decideNeedsText(root: HTMLElement) {
     b.disabled = !box?.value.trim() || !!DEC?.busy;
   }
 }
-/** Opens the item `id`, or the first of the list with none. False when there is no such item. */
-function decideOpen(id: string = ''): boolean {
+/** Opens the item `id`, or the first of the list with none. False when there is no such item. `items` is the list to
+    walk, Needs you as the page shows it by default. */
+function decideOpen(id: string = '', items: NeedsEntry[] = decideSource()): boolean {
   if (S.me?.role === 'bot') return false;
   const fresh = !DEC;
   const st: DecState = DEC || {order: [], at: null, items: new Map(), ok: new Map(), gone: new Set(), sheet: null, more: '',
     busy: false, error: '', thumbed: new Set(), barTimer: 0, opener: document.activeElement as HTMLElement | null, off: []};
-  decideSync(st, decideSource());
+  decideSync(st, items);
   const live = decideLive(st), to = id ? (live.includes(id) ? id : null) : live[0] || null;
   if (!to) return false;
   if (fresh) DEC = st;
@@ -200,6 +201,20 @@ function decideOpen(id: string = ''): boolean {
   return true;
 }
 const decideGoThrough = () => decideOpen('');
+/** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
+    id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
+    and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
+    page's own copy is not read again behind an open task, so the shared list is looked in too. */
+async function decideOpenAsk(taskId: string, rid: string): Promise<boolean> {
+  const mine = (it: NeedsEntry) => it.kind === 'ask' && decideTaskId(it) === taskId && decideRid(it) === rid;
+  const find = () => [decideSource(), needsHeld()].map(items => ({items, it: items.find(mine)})).find(x => x.it);
+  let at = find();
+  if (!at) { await v2Refresh(); at = find(); }
+  if (at?.it && decideOpen(at.it.id, at.items)) return true;
+  toast(at ? 'This ask could not be opened here. Open it from Needs you.'
+    : 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.', true);
+  return false;
+}
 function decideStop() {
   const st = DEC;
   if (!st) return;
