@@ -6,6 +6,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {openPicker, choose, applyPicker} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 declare function loadSettings(): Promise<void>;
 declare function settingsShow(tab: string): void;
@@ -121,8 +122,10 @@ type Call = {slug: string; what: string; body: {expected_revision: number; model
     const open = async (target: string, id: string) => {
       await page.locator('[data-bulk-model]').click();
       await dialog.locator('[data-bulk-target]').selectOption(target);
-      await dialog.locator('[data-choice-harness]').selectOption('claude');
-      await dialog.locator('[data-choice-model]').selectOption(id);
+      const panel = await openPicker(dialog.locator('[data-bulk-pick] [data-bot-choice]'));
+      await choose(panel, 'harness', 'claude');
+      await choose(panel, 'model', id);
+      await applyPicker(panel);
     };
     const apply = async () => {
       await dialog.locator('[data-bulk-apply]').click();

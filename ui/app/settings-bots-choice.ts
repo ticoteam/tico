@@ -247,6 +247,7 @@ function settingsWireChoicePanel(form: HTMLFormElement, box: SettingsChoiceBox, 
     if (from !== 'effort') paintEffort();
     paintCompact();
     if (applyButton) applyButton.disabled = readonly || !valid() || !changed();
+    form.dataset.value = value();   // the pick Apply would make, for a reader of the open panel
     if (inside && !form.contains(document.activeElement) && again) form.querySelector<HTMLElement>(again)?.focus();
   };
   form.addEventListener('change', event => {
@@ -333,6 +334,8 @@ function settingsChoicePopover(anchor: HTMLElement) {
       opener.setAttribute('aria-expanded', 'false');
       if (opener.isConnected && (made.contains(document.activeElement) || document.activeElement === document.body)) opener.focus();
     });
+    // A row that grows the panel (the Gateway's tier controls, the Compact row) keeps it on screen.
+    new ResizeObserver(() => { if (made.matches(':popover-open')) tasksMenuPlace(made, SETTINGS_CHOICE_ANCHOR); }).observe(made);
   }
   const shown = pop;
   (anchor.closest('dialog[open]') || document.body).append(shown);

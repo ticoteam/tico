@@ -6,6 +6,7 @@ const {chromium} = require('playwright') as typeof import('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
+const {openPicker, choose} = require('./support/model-picker.cts') as import('./support/model-picker.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
 // u5: browser globals the page's own scripts define (see ui/app); declared once per name, same type everywhere.
@@ -77,10 +78,11 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
       await page.locator('#recruit-picker [name=title]').fill('Harness test bot');
       await page.locator('#recruit-picker [name=brief]').fill('Check the available harness choices for this new bot.');
       await page.locator('#recruit-picker [type=submit]').click();
-      await page.locator('[data-add-choice] [data-choice-harness]').waitFor();
+      await openPicker(page.locator('[data-add-choice] [data-bot-choice]'));
     };
-    const harnessOptions = () => page.locator('[data-add-choice] [data-choice-harness] option').evaluateAll(
-      (options: HTMLOptionElement[]) => options.map(o => ({value: o.value, text: o.textContent, disabled: o.disabled})));
+    // The Harness row of the open picker: each radio's value, its label as drawn, and whether it may be picked.
+    const harnessOptions = () => page.locator('#sb-choice-pop [data-choice-harness] input').evaluateAll(
+      (inputs: HTMLInputElement[]) => inputs.map(o => ({value: o.value, text: o.closest('label')!.textContent!.trim(), disabled: o.disabled})));
     await page.goto('https://tico-ui.test/#/settings');
     // The fixture switches providers behind the page's back, so a settings read already in flight (a dialog
     // closing reloads settings) must finish first: finishing later, or shared with the next read, it would
@@ -100,7 +102,7 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     assert.match(muse.text, /Muse Code \(off\)/, 'Muse Code says it is off');
     assert.ok(!options.some(o => o.value === 'gemini'), 'a harness with no models stays out');
     assert.ok(options.some(o => o.value === 'hermes' && !o.disabled), 'external harnesses are unaffected');
-    assert.equal(await page.locator('[data-add-choice] [data-choice-off]').count(), 0, 'no off line: the harness option already says (off)');
+    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line: the harness option already says (off)');
     await page.evaluate(() => (document.querySelector('#bot-editor') as HTMLDialogElement).close());
     // Enabling Meta makes Muse Code pickable and lists the Wonder models under it.
     await settle();
@@ -109,10 +111,10 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     await openAdd();
     options = await harnessOptions();
     assert.ok(options.some(o => o.value === 'musecode' && !o.disabled), 'Muse Code is pickable once Meta is on');
-    assert.equal(await page.locator('[data-add-choice] [data-choice-off]').count(), 0, 'no off line once enabled');
-    await page.locator('[data-add-choice] [data-choice-harness]').selectOption('musecode');
-    const models = await page.locator('[data-add-choice] [data-choice-model] option').evaluateAll(
-      (options: HTMLOptionElement[]) => options.map(o => o.value));
+    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'no off line once enabled');
+    const panel = page.locator('#sb-choice-pop');
+    await choose(panel, 'harness', 'musecode');
+    const models = await panel.locator('[data-choice-model] input').evaluateAll((inputs: HTMLInputElement[]) => inputs.map(o => o.value));
     assert.ok(models.includes('muse-spark-1.3'), 'Spark is listed under Muse Code');
     assert.ok(models.includes('muse-wonder-1.0'), 'Wonder is listed under Muse Code');
     assert.ok(models.includes('muse-wonder-full-1.0'), 'Wonder Full is listed under Muse Code');
@@ -124,23 +126,24 @@ declare function settingsWireCombos(root: Element, onPick?: unknown): void;
     await openAdd();
     options = await harnessOptions();
     assert.ok(!options.some(o => o.value === 'musecode'), 'members never see a provider-off harness');
-    assert.equal(await page.locator('[data-add-choice] [data-choice-off]').count(), 0, 'members get no off line');
+    assert.equal(await page.locator('#sb-choice-pop [data-choice-off]').count(), 0, 'members get no off line');
     await page.evaluate(() => { S.me.role = 'owner'; });
     // A bot already on a switched-off harness keeps one row for it, not a current+off pair.
     await settle();
     enabled = ['openai', 'anthropic'];
     await page.evaluate(() => loadSettings());
-    const solo = await page.evaluate(() => {
+    await page.evaluate(() => {
       (document.querySelector('#bot-editor') as HTMLDialogElement | null)?.close();
       document.querySelector('#t')?.remove();
       document.body.insertAdjacentHTML('beforeend',
-        `<div id="t">${settingsChoiceCombo(S.emps.find(e => e.name === 'helper')!, 'model')}</div>`);
+        `<div id="t" style="position:fixed;top:8px;right:8px;z-index:9">${settingsChoiceCombo(S.emps.find(e => e.name === 'helper')!, 'model')}</div>`);
       settingsWireCombos(document.querySelector('#t') as HTMLElement);
-      return [...(document.querySelectorAll('#t [data-choice-harness] option') as unknown as Iterable<HTMLOptionElement>)]
-        .map(o => ({value: o.value, text: o.textContent, disabled: o.disabled, selected: o.selected}));
     });
+    await openPicker(page.locator('#t [data-bot-choice]'));
+    const solo = await page.locator('#sb-choice-pop [data-choice-harness] input').evaluateAll((inputs: HTMLInputElement[]) =>
+      inputs.map(o => ({value: o.value, text: o.closest('label')!.textContent!.trim(), disabled: o.disabled, selected: o.checked})));
     assert.equal(solo.filter(o => o.value === 'musecode').length, 1, 'one Muse Code row for a bot on it');
-    assert.deepEqual(solo.find(o => o.value === 'musecode'), {value: 'musecode', text: 'Muse Code (Meta)',
+    assert.deepEqual(solo.find(o => o.value === 'musecode'), {value: 'musecode', text: 'Muse Code',
       disabled: true, selected: true}, 'it keeps the current row selected');
     assert.deepEqual(errors, []);
     console.log('ok');

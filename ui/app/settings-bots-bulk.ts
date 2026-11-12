@@ -111,7 +111,8 @@ async function settingsBulkApplyOne(slug: string, choice: SettingsChoice, target
   return {state: failed ? 'failed' : blocked ? 'blocked' : changed ? 'changed' : 'skipped',
     partial: changed && (failed || blocked), note: notes.join(' · ')};
 }
-// A window goes only where the harness compacts; for the bot it saves after the model, keeping the session.
+// A window goes only where the harness compacts, lowered to fit the model. For the bot it saves first (keeping the
+// session), and the model change follows on the revision that returns.
 async function settingsBulkApplyKind(slug: string, choice: SettingsChoice, kind: string, compact: number | null = null): Promise<SettingsBulkOutcome> {
   const sized = compact && settingsCompacts(choice.harness) ? settingsFitCompact(compact, settingsModelWindow(choice.model)) : null;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -126,7 +127,7 @@ async function settingsBulkApplyKind(slug: string, choice: SettingsChoice, kind:
     if (same && !resize) return {state: 'skipped', note: 'Already on this model'};
     try {
       if (kind === 'task') {
-        // The task model and its effort change; the bot's own task context length stays.
+        // The task model and its effort change; the task's window too when one was chosen, else it stays.
         const saved: SettingsTaskSaved = await post(`/v2/bots/${encodeURIComponent(slug)}/task-model`, {
           task_model: settingsTaskBody(e, {choice, effort: choice.effort, ...(sized ? {compact_at: sized} : {})}), expected_revision: e.revision});
         return {state: 'changed', note: [`Now ${settingsBulkWords(choice, sized)}`,
