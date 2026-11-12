@@ -119,6 +119,7 @@ function pageTasks(openId = '') {
       </div>
       <div id="task-body" role="region" aria-label="Tasks"></div>
       <div class="tl-more" id="task-more" hidden><button type="button" class="ghost">More</button></div>
+      <div class="pa-host" id="task-ask" hidden></div>
     </div><aside class="tl-rail" id="task-rail" hidden></aside></div>
     <div id="task-filter-pop" class="tl-pop" popover></div>`;
   const signal = state.abort.signal;
@@ -196,6 +197,7 @@ function tasksLeave() {
   state.abort.abort();
   clearTimeout(state.searchTimer);
   tasksRailOff();
+  tasksAskOff();
   TASKS_ST = null;
 }
 /** A change of view: You or a pipeline, list or columns, the archive. Search and filters stay. */
@@ -450,14 +452,20 @@ function tasksRender(state: TasksPageState | null) {
     const html = hooks.html(p, state.tasks, {layout: state.layout, q: state.q, filters: state.filters, phone: matchMedia(PHONE).matches});
     if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
     hooks.bind?.(body, p);
+    hooks.ask?.($('#task-ask'), p, matchMedia(PHONE).matches);
     return;
   }
+  tasksAskOff();
   const html = state.failed ? `<p class="err" role="alert">${esc(state.failed)} <button type="button" class="linkish" data-reload>Try again</button></p>`
     : state.loading && !state.kept && !state.needs.length && !state.tasks.length ? skelRows(6)
     : state.archive ? tasksArchiveHTML(state)
     : state.pipeline ? tasksPipelineHTML(state)
     : tasksYouHTML(state);
   if (body.dataset.html !== html) { body.dataset.html = html; body.innerHTML = html; }
+}
+/** No Ask bar away from a pipeline's board (pipeline-ask.ts). */
+function tasksAskOff() {
+  if (typeof pipelineAskLeave === 'function') pipelineAskLeave();
 }
 /** The rail's host is emptied and hidden away from a pipeline (and the rail's own reads stop, pipeline-rail.ts). */
 function tasksRailOff() {
@@ -547,7 +555,9 @@ async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   }
   if (it) { decideOpen(it.id); return; }
   const task = el?.closest<HTMLElement>('[data-task]')?.dataset.task;
-  if (task) taskModalOpen(task);
+  // On a pipeline's board on a phone a card opens at its conversation, its box asking the task's owner.
+  const board = !!state.pipeline && !state.archive && matchMedia(PHONE).matches;
+  if (task) void taskModalOpen(task, undefined, board ? {thread: true, ask: true} : {});
 }
 
 // ---- the view button, filters

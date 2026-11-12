@@ -412,3 +412,7 @@ body:has(#app-nudge:not([hidden])) #main.bot-split-layout>#bot-top{margin-top:8p
   #pane-chat .conv-run.chat .bubble{margin:3px 0}
   #pane-chat .conv-run.chat.from-me,#pane-chat .conv-run.chat.from-me+.conv-run.chat:not(.from-me){padding-top:10px}
 }
+/* What a message asked from a board carries, under the message (thread-view.ts thvBoardHTML). */
+.th-board{display:inline-flex;align-items:center;gap:4px;max-width:100%;margin:6px 0 0;padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);font-size:var(--t-sm)}
+.th-board-where{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.th-board-n{flex:none;color:var(--muted)}

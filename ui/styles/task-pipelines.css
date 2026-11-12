@@ -106,3 +106,35 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 @media (max-width:600px){
   .pe-f{grid-template-columns:1fr;gap:4px}
 }
+
+/* The Ask bar on a phone's pipeline board and the chat it opens over the board (ui/app/pipeline-ask.ts). The bar sits
+   above the bottom bar (on the screen's edge while a box has the keyboard and the bottom bar hides); the list keeps room
+   under its last row for it. Every tap target is 44px. */
+.pa-host[hidden]{display:none}
+.pa-host{position:fixed;z-index:17;left:0;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));box-sizing:border-box;padding:6px 10px 8px;border-top:1px solid var(--line);background:var(--surface);box-shadow:0 -4px 14px rgba(0,0,0,.08)}
+body.mobile-composer-focus .pa-host{bottom:0}
+.tasks-page.has-ask .tasks-pane{padding-bottom:132px}
+.pa-bar{display:flex;flex-direction:column;gap:4px;min-width:0}
+.pa-ctx{display:flex;min-width:0;color:var(--muted);font-size:var(--t-xs);line-height:16px;white-space:nowrap}
+.pa-where{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pa-n{flex:none}
+.pa-to{display:flex;gap:6px;min-width:0}
+.pa-to:empty{display:none}
+.pa-to-b{flex:1 1 0;min-width:0;min-height:44px;display:flex;align-items:center;gap:6px;padding:0 10px;border:1px solid var(--line);border-radius:22px;background:none;color:var(--muted);font:600 var(--t-sm)/1.2 var(--sans);cursor:pointer;touch-action:manipulation}
+.pa-to-b.on{border-color:var(--accent);background:var(--accent-quiet);color:var(--ink)}
+.pa-to-l{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pa-face{flex:none;display:inline-flex}
+.pa-form{display:flex;align-items:flex-end;gap:6px;min-width:0}
+.pa-text{flex:1;min-width:0;min-height:44px;max-height:120px;box-sizing:border-box;padding:11px 14px;border:1px solid var(--line);border-radius:22px;background:var(--surface2);color:var(--ink);font:inherit;line-height:20px;resize:none}
+.pa-send{flex:none;width:44px;height:44px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:0;border-radius:50%;background:var(--accent);color:var(--accent-ink);cursor:pointer;touch-action:manipulation}
+.pa-send svg{width:18px;height:18px}
+.pa-host.pa-small .pa-ctx,.pa-host.pa-small .pa-to{display:none}
+.pa-sheet{position:fixed;inset:auto 0 0;width:100%;max-width:none;height:calc(100% - 48px - env(safe-area-inset-top));max-height:none;margin:0;padding:0;box-sizing:border-box;display:flex;flex-direction:column;border:0;border-radius:14px 14px 0 0;background:var(--surface);color:var(--ink);box-shadow:0 -8px 30px rgba(0,0,0,.25)}
+.pa-sheet:not([open]){display:none}
+.pa-sheet::backdrop{background:rgba(0,0,0,.38)}
+.pa-head{position:relative;display:flex;align-items:center;gap:8px;padding:14px 6px 8px 14px;border-bottom:1px solid var(--line);touch-action:none}
+.pa-grip{position:absolute;top:5px;left:50%;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:var(--line)}
+.pa-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pa-x{width:44px;height:44px;flex:none}
+.pa-chat{flex:1;min-height:0;display:flex;flex-direction:column;padding:0 10px max(8px, env(safe-area-inset-bottom))}
+.pa-chat>.thv{flex:1;min-height:0}
