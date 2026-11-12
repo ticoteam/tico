@@ -1034,7 +1034,8 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     waiting only on a person's OK or answer holds none). A task that came back, was reopened or had a snooze end may sit
     one over. So may a sub-task filed by a task while it was in the stage: it comes in on its filer's slot
     (task_engine.rides_with_filer). So may one a person answered on this visit, or whose ask was withdrawn: its turn
-    went back to a bot after it gave up its slot, and it keeps its place, as after Back."""
+    went back to a bot after it gave up its slot, and it keeps its place, as after Back. So may one whose every wait is a
+    person's OK or answer, though its bot is Paused or its ladder reached a person (`_persons_turn`)."""
     found = conn.execute(
         "SELECT s.id, s.task_limit, t.id FROM stages s JOIN tasks t ON t.stage_id = s.id AND t.status='open' "
         "AND t.pipeline_id IS NOT NULL JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
@@ -1054,8 +1055,7 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
     for stage_id, (limit, came) in stages.items():
         if len(came) <= limit:
             continue
-        person = {task_id for task_id, _ in W.slots(conn, stage_id).on_person}
-        count = len([task_id for task_id in came if task_id not in person])
+        count = len([task_id for task_id in came if not _persons_turn(conn, task_id)])
         if count > limit:
             out.append(
                 Break(
@@ -1063,6 +1063,13 @@ def _rule_6(conn: "sqlite3.Connection") -> list[str]:
                 )
             )
     return out
+
+
+def _persons_turn(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Every wait on the task is a person's OK or answer. Its slot went back when its turn became a person's; a Paused
+    bot or a ladder at level person makes it hold one again without moving, so it may sit over the limit."""
+    waits = W.waiting_on(conn, task_id)
+    return bool(waits) and all(wait.state == W.PERSON and wait.ask for wait in waits)
 
 
 def _rule_7(conn: "sqlite3.Connection") -> list[str]:

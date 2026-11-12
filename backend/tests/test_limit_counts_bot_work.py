@@ -226,6 +226,19 @@ def test_a_task_stuck_at_a_person_or_whose_bot_is_paused_keeps_its_slot(c, store
     assert not E.has_room(c, _spec(c))
 
 
+def test_a_task_waiting_on_a_person_whose_bot_pauses_keeps_its_place_over_the_limit(c, store):
+    """Given a Spec task's turn became a person's and a request took its slot, when its bot is Paused it holds a slot
+    again: the stage sits over its limit without anything moving, and the Heartbeat's over-the-limit check holds."""
+    first = _in_spec(c, "Importer spec")
+    _in_spec(c, "Exporter spec")
+    _to_person(c, store, first)
+    request = _request(c, "Export a pipeline")
+    assert _pass(c)["moved"] == 1 and _stage(c, request) == "Spec"
+    c.execute("UPDATE bots SET state='quarantined' WHERE id='writer'")
+    assert W.slots(c, "product-spec").held == 3
+    assert NS.rules_hold(c) == []
+
+
 def test_moving_an_idea_into_a_spec_full_of_bot_work_by_hand_is_refused_with_why(c, store):
     """Given a person moves an idea into Spec by hand while Spec's limit of tasks are on a bot's turn, the move is
     refused and says the count is bot work."""
