@@ -51,6 +51,17 @@ def test_sixty_big_outputs_read_the_same_word_from_a_few_kilobytes(monkeypatch):
         ([("tool", tool(1, status="started")), ("delta", {"delta_kind": "thought", "text": "hm"})], "Thinking"),
         ([("delta", {"text": "Hel"}), ("delta", {"text": "lo"})], "Writing a reply"),
         ([("tool", tool(1, status="started", summary="x " * 200))], None),
+        # A closing message that repeats a piece typed across several briefed deltas: the deltas are read again and
+        # joined as typed, so the repeat adds nothing and the tool call stays the step.
+        (
+            [
+                ("delta", {"text": "a" * 1000}),
+                ("delta", {"text": "b"}),
+                ("tool", tool(1, status="started")),
+                ("message", {"text": "a" * 1000 + "b"}),
+            ],
+            "Ran Bash",
+        ),
     ],
 )
 def test_each_word_is_as_before(monkeypatch, rows, word):
