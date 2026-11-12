@@ -590,6 +590,72 @@ def sweep_owners(conn: Any) -> list[str]:
     return [t["id"] for found in changed.values() for t in found]
 
 
+SWEPT = "stage_rules_snooze_sweep"
+
+
+def sweep_snoozes(store: Any) -> list[str]:
+    """Snooze only for a real wait over the open bot snoozes, once at release: each one its rules refuse ends now
+    (the task is the bot's again), the history names the rule, and each pipeline manager gets ONE wake listing them.
+    Jev is asked with no write open, one call per snooze. Returns the task ids unsnoozed; [] once it has run."""
+    from . import task_engine as _E_mod
+    from . import task_wakes as _task_wakes_mod
+
+    E: Any = _E_mod
+    task_wakes: Any = _task_wakes_mod
+    with store.transaction() as c:
+        if (
+            not has_table(c)
+            or not c.execute(
+                "INSERT OR IGNORE INTO registry_metadata (key, value) VALUES (?, ?)", (SWEPT, _h().now())
+            ).rowcount
+        ):
+            return []
+        ids = [
+            str(r[0])
+            for r in c.execute(
+                "SELECT t.id FROM tasks t JOIN snoozes z ON z.task_id = t.id AND z.ended_at IS NULL "
+                "WHERE t.status='open' AND z.by_id LIKE 'bot:%' ORDER BY t.id"
+            ).fetchall()
+        ]
+    refused: list[tuple[str, dict[str, Any], str]] = []
+    for task_id in ids:
+        with store.read() as c:
+            row: Any = E.task(c, task_id)
+            if not row or not row.get("snooze"):
+                continue
+            snooze: Any = row["snooze"]
+            why, until = str(snooze.get("why") or ""), snooze.get("until_at")
+            fixed, asked = snooze_rules(c, row, str(snooze.get("by_id")), why, until)
+        found = fixed or ask_snooze(row, why, until, asked, store=store)
+        if found:
+            refused.append((task_id, found[0], found[1]))
+    told: dict[str, list[tuple[Any, str]]] = {}
+    with store.transaction() as c:
+        for task_id, rule, line in refused:
+            row = E.task(c, task_id)
+            if not row or not row.get("snooze"):
+                continue
+            E.unsnooze(c, task_id, _core.KEEPER, line)
+            record(c, task_id, rule, line, _core.KEEPER, data={"sweep": True})
+            pipe: Any = row.get("pipeline") or {}
+            told.setdefault(str(pipe.get("manager_id") or ""), []).append((row, line))
+        for manager, found_rows in told.items():
+            if not _core.is_bot(manager):
+                continue
+            lines = "\n".join(f"- {r.get('title') or r['id']}: {line}" for r, line in found_rows)
+            first: Any = E.task(c, found_rows[0][0]["id"])
+            task_wakes.add(
+                c,
+                first,
+                manager,
+                first["visit"],
+                f"Stage rules: {len(found_rows)} snoozed tasks were blocked, not waiting, and are back with their "
+                f"bots.\n{lines}",
+                wake_key=f"stage-rules-sweep:{REAL_WAIT}:{manager}",
+            )
+    return [task_id for task_id, _, _ in refused]
+
+
 # ----------------------------------------------------------------------------- writes (the routes are part 3's)
 def _check(fields: Any) -> dict[str, Any]:
     out = dict(fields)
@@ -716,6 +782,27 @@ def skip(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
 
 
 def install(store: Any) -> None:
-    """The store Jev's calls are counted on (server start)."""
+    """The store Jev's calls are counted on (server start), and the release sweep of bot snoozes, once, in the
+    background: it asks Jev, so it never holds up the start."""
+    import threading
+
     global _installed_store
     _installed_store = store
+
+    def sweep() -> None:
+        try:
+            sweep_snoozes(store)
+        except Exception:  # noqa: BLE001 - the sweep is a one-off tidy; a start never fails on it
+            log.warning("stage rules: the snooze sweep failed", exc_info=True)
+
+    try:
+        with store.read() as c:
+            waiting = has_table(c) and not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (SWEPT,)).fetchone()
+            waiting = (
+                waiting
+                and c.execute("SELECT 1 FROM snoozes WHERE ended_at IS NULL AND by_id LIKE 'bot:%' LIMIT 1").fetchone()
+            )
+    except Exception:  # noqa: BLE001 - a store with no tables yet has nothing to sweep
+        waiting = None
+    if waiting:
+        threading.Thread(target=sweep, name="stage-rules-sweep", daemon=True).start()
