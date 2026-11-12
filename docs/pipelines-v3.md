@@ -106,8 +106,10 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that. A request a
-  person filed that still waits in Ideas takes the room first, by itself.
+- **C10.** Ideas: nobody is told when Spec has room, in any pipeline. A request a person filed that still waits in
+  Ideas takes the room by itself, oldest first; a bot's own idea waits for a person to pick it. *Changed Nov 12: the
+  "has room" wake did no work (none of 33 was ever delivered, no idea moved because of one) and one idea's re-fired
+  every few minutes.*
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
@@ -417,11 +419,11 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 - A stage's limit counts its open tasks that are not snoozed and hold a slot. A task holds a slot unless every wait on
   it is a person's OK or an answer it asks a person for, and none is a bot's, Jev's, GitHub's or a sub-task's: bots
   keep working while people review. A task the ladder brought to a person, or whose bot is Paused, still holds its slot:
-  that is stuck work, not review. Every check for room counts this way: requests leaving Ideas, the "has room" wake,
+  that is stuck work, not review. Every check for room counts this way: requests leaving Ideas,
   filling free slots, moves by hand and by the engine, "No room in …" and the Heartbeat's over-the-limit check.
   *Changed Nov 12: on Tico Team Spec sat at 20 of 20 with 15 waiting on one person's OK, and nothing left Ideas.*
 - When a task's turn becomes a person's, its slot frees at once, as when a task leaves: the oldest waiting task takes
-  it, and the by-hand stage's owner gets its one "has room" wake. When a person's answer gives the turn back to a bot
+  it. Nobody is told about the room. When a person's answer gives the turn back to a bot
   (sent back, or answered with work left), the task keeps its place: the stage may sit over its limit, as after Back.
 - Only forward moves need room. Back, Close and Reopen never wait.
 - When a slot frees, the oldest waiting task takes it. This runs right after the move that freed the slot, and again on
@@ -774,7 +776,7 @@ From an idea to something checked in production. Manager: the Product Manager bo
 
 Stages: Ideas → Spec → In development → Validate → Done · Closed
 
-- **Ideas.** Owner: Product Owner. Tasks leave by hand. The Product Owner is woken once when Spec has room. To park an idea, snooze it with
+- **Ideas.** Owner: Product Owner. Tasks leave by hand. Nobody is told when Spec has room. To park an idea, snooze it with
   no end date. A person's request moves on (the stage's switch is on): it goes into Spec as soon as Spec has room,
   oldest first. Work a bot hands over (Bug Triage files a bug, or moves one back) is the Product Owner's turn, due in
   24 hours; past that it is Late and the Product Manager is woken once.

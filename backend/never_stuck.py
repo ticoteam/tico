@@ -14,7 +14,8 @@ are on it:
   woken again 2 minutes after it stopped, then 15 minutes, then 1 hour. After 3 tries with no change the pipeline's
   manager bot gets the task on the same 3 tries, then a person. If the task changed, the count goes back to zero.
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
-  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`).
+  person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`). Nobody
+  is told that a stage has room.
 - Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time it
   lands in one person's list, once.
 - A snooze whose date came ends, and the owner is woken once.
@@ -185,8 +186,7 @@ def check(
         quiet = quiet + 1 if conn.total_changes == changes else 0
     _keeping_reads(conn, "SAVEPOINT never_stuck_room")
     try:
-        done["moved"] += _requests(conn)  # before C10: a person's request takes the room first
-        done["woken"] += _room(conn)
+        done["moved"] += _requests(conn)
         _handoffs(conn, at, done, seen)
     except Exception as error:
         if failures is None or not conn.in_transaction or storage_error(error):
@@ -199,28 +199,7 @@ def check(
     return done
 
 
-# ----------------------------------------------------------------------------- C10: room after a by-hand stage
-# Each by-hand stage holding a task that is not snoozed, with the work stage after it, when that stage has a limit.
-_ROOM = (
-    "SELECT s.id, n.id, s.owner, s.requests_move_on FROM stages s JOIN stages n ON n.pipeline_id = s.pipeline_id "
-    "AND n.kind='work' AND n.retired_at IS NULL AND n.task_limit > 0 "
-    "AND n.position = (SELECT MIN(x.position) FROM stages x "
-    "WHERE x.pipeline_id = s.pipeline_id AND x.kind='work' AND x.retired_at IS NULL AND x.position > s.position) "
-    "WHERE s.kind='work' AND s.by_hand=1 AND s.retired_at IS NULL AND EXISTS (SELECT 1 FROM tasks t "
-    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id = s.id AND t.status='open' "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL))"
-)
-_FIRST_WAITING = (
-    "SELECT t.id FROM tasks t JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
-    "WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
-    "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
-    "ORDER BY v.entered_at, v.id LIMIT 1"
-)
-_FREED = (
-    "SELECT id, left_at FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
-)
-
-
+# ----------------------------------------------------------------------------- room after a by-hand stage
 # A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
 # oldest first.
 _REQUESTS = (
@@ -237,9 +216,10 @@ _REQUESTS = (
 def _requests(conn: "sqlite3.Connection") -> int:
     """A task a person files into a by-hand stage whose "a person's request moves on" setting is on (Product's Ideas)
     is not held there: the person already picked it. Once the stage's own requirements are met (Ideas has none) it moves
-    into the next stage as soon as that has room, oldest first, before the by-hand stage's owner is woken about room
-    (C10). Ideas a bot filed stay until someone moves them, and so does every task in a by-hand stage with the setting
-    off (Growth's Ideas, Monitoring's Watching). Returns how many moved."""
+    into the next stage as soon as that has room, oldest first. Nobody is told about room (C10): the move is the whole
+    of it, and the owner's turn in the next stage wakes them as any move does. Ideas a bot filed stay until a person
+    picks them, and so does every task in a by-hand stage with the setting off (Growth's Ideas, Monitoring's Watching).
+    Returns how many moved."""
     moved = 0
     for (task_id,) in conn.execute(_REQUESTS).fetchall():
         row = E.task(conn, str(task_id))
@@ -296,52 +276,6 @@ def _handoffs(conn: "sqlite3.Connection", at: str, done: dict[str, int], seen: d
             conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
         ):
             done["woken"] += 1
-
-
-def room_key(stage_id: str, freed_by: str | None) -> str:
-    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it, or the task
-    whose turn became a person's and when: `freed`), and one for the room a stage has before any task ever left it."""
-    return f"room:{stage_id}:{freed_by or 'start'}"
-
-
-def freed(conn: "sqlite3.Connection", stage_id: str) -> str | None:
-    """What freed the stage's newest slot: the visit that left it last, or a task in it whose turn became a person's
-    since (`waiting_on.slots`), as "<task id>@<when>". None before any slot was ever freed."""
-    left = conn.execute(_FREED, (stage_id,)).fetchone()
-    newest: tuple[str, str] | None = (str(left[1]), str(left[0])) if left else None
-    for task_id, since in W.slots(conn, stage_id).on_person:
-        if newest is None or since > newest[0]:
-            newest = (since, f"{task_id}@{since}")
-    return newest[1] if newest else None
-
-
-def _room(conn: "sqlite3.Connection") -> int:
-    """C10: when the stage after a by-hand stage (Product's Ideas, then Spec) has room, the by-hand stage's owner bot
-    (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per
-    freed slot (`room_key`); never chased: the by-hand stage has no ladder. A stage owned by "the task's assignee" wakes
-    that task's owner only when it moves a person's request on (Product's Ideas with one Product Owner per area); with
-    the switch off (Growth's and Success's Ideas, Watching) its tasks rest and nobody is told. Returns how many wakes
-    were written."""
-    woken = 0
-    for by_hand, after, stage_owner, requests_move_on in conn.execute(_ROOM).fetchall():
-        nxt = E.stage(conn, str(after))
-        if not nxt or not E.has_room(conn, nxt):
-            continue
-        wake_key = room_key(str(after), freed(conn, str(after)))
-        first = conn.execute(_FIRST_WAITING, (by_hand,)).fetchone()
-        row = E.task(conn, str(first[0])) if first else None
-        if not row or not row.get("visit"):
-            continue
-        if stage_owner == "assignee" and not requests_move_on:
-            continue  # each task there is its own assignee's, and resting: nobody is told (Growth's Ideas, Watching)
-        # Product's Ideas owned by the assignee: the oldest waiting task's own owner is told.
-        owner: str | None = row.get("owner_id") if stage_owner == "assignee" else stage_owner or row.get("owner_id")
-        if not is_bot(owner) or not _reads(conn, owner, row):
-            continue
-        text = f"{nxt['name']} has room."
-        if task_wakes.add(conn, row, owner, row["visit"], text, wake_key=wake_key):
-            woken += 1
-    return woken
 
 
 def _keeping_reads(conn: "sqlite3.Connection", statement: str) -> None:
