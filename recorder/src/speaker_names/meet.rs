@@ -202,6 +202,21 @@ fn local_rows(rows: &[Row]) -> (Vec<bool>, &'static str) {
     (vec![], if rows.is_empty() { "" } else { "none" })
 }
 impl MeetingAdapter for GoogleMeet {
+    fn app(&self) -> &'static str {
+        "Meet"
+    }
+    fn window_title(&self, title: &str) -> bool {
+        window_title(title)
+    }
+    fn kept_class(&self, class: &str) -> bool {
+        kept_class(class)
+    }
+    fn name_container(&self, node: &Node) -> bool {
+        name_container(node)
+    }
+    fn private_branch(&self, role: &str, label: &str) -> bool {
+        private_branch(role, label)
+    }
     fn detect_window(&self, _title: &str, document_url: &str) -> bool {
         let Ok(url) = reqwest::Url::parse(document_url) else {
             return false;
