@@ -46,8 +46,8 @@ def sections(text):
     """{'table.column': the set of values its bullets name}, for each `### table.column` heading."""
     found = {}
     for m in re.finditer(r'^### `?(\w+\.\w+)`?[^\n]*\n(.*?)(?=^#{1,3} |\Z)', text, re.M | re.S):
-        named = re.findall(r'^- ((?:`[a-z_]+`, )*`[a-z_]+`)(?: \(|:)', m[2], re.M)
-        found[m[1]] = {v for bullet in named for v in re.findall(r'`([a-z_]+)`', bullet)}
+        named = re.findall(r'^- ((?:`[a-z0-9_-]+`, )*`[a-z0-9_-]+`)(?: \(|:)', m[2], re.M)
+        found[m[1]] = {v for bullet in named for v in re.findall(r'`([a-z0-9_-]+)`', bullet)}
     return found
 
 
@@ -68,6 +68,8 @@ def drift(text):
 
 
 def render(text):
+    if START not in text or END not in text:
+        raise SystemExit(f'docs/status-and-state.md: put back the {START} and {END} lines around the value table')
     before, rest = text.split(START, 1)
     _, after = rest.split(END, 1)
     return before + START + '\n' + table() + '\n' + END + after
