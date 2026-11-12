@@ -307,6 +307,9 @@ def test_owners_admins_and_bots_read_the_metrics(tmp_path):
         assert routes["GET /api/v2/health"]["callers"].get("human", 0) >= 1
         assert body["sql"]["queries"] and body["events"]["start"]["version"]
         assert set(get("ana-test", "/api/v2/system/metrics?section=slow").json()) == {"since", "now", "minutes", "slow"}
+        window = get("ana-test", "/api/v2/system/metrics?section=requests&since=100&until=160&routes=3").json()
+        assert (window["since"], window["until"], window["requests"]["n"]) == (100, 160, 0)
+        assert get("ana-test", "/api/v2/system/metrics?since=160&until=100").status_code == 422
 
 
 def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path, caplog):
@@ -400,6 +403,30 @@ def test_a_client_that_hangs_up_during_the_body_read_is_a_499_not_a_5xx(tmp_path
         rec.drain()
         routes = {r["route"]: r for r in rec.take(0)["file"][1]["routes"]}
         assert routes["GET /api/v2/health"]["errors"] == 0 and routes["GET /api/v2/test-boom"]["errors"] == 1
+
+
+def test_a_window_reads_only_its_own_minutes(store):
+    """The load gate (bench/load_gate) reads its steady window, not the ramp before it or the cool-down after."""
+    t0 = 1_800_000_000 // 60 * 60
+    with store.transaction() as c:
+        for i, ms in enumerate((4000, 10, 3000)):  # ramp, steady, after
+            hist = {}
+            flight._add(hist, ms)
+            for route in ("GET /api/v2/tasks", "GET /api/v2/needs-you"):
+                c.execute(
+                    "INSERT INTO flight_requests VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (t0 + 60 * i, 60, route, "human", 1, 0, 5, ms, ms, ms, ms, json.dumps(hist)),
+                )
+            c.execute(
+                "INSERT INTO flight_process(created_at,cpu,wait_max,hold_max,hold_p95) VALUES(?,?,?,?,?)",
+                (t0 + 60 * i, 90 - i, ms, ms, ms / 2),
+            )
+        out = flight.view(c, sections=("requests", "process"), now=t0 + 600, since=t0 + 60, until=t0 + 120, routes=1)
+        whole = flight.view(c, sections=("requests",), now=t0 + 600, since=t0)
+    assert out["since"] == t0 + 60 and out["until"] == t0 + 120
+    assert out["requests"]["n"] == 2 and out["requests"]["p95"] < 15 and len(out["requests"]["routes"]) == 1
+    assert (out["process"]["cpu_max"], out["process"]["wait_max"], out["process"]["hold_p95"]) == (89, 10, 5)
+    assert whole["requests"]["n"] == 6 and whole["requests"]["p95"] >= 3000 and len(whole["requests"]["routes"]) == 2
 
 
 def test_minutes_become_hours_and_old_rows_go(store):
