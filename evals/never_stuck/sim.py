@@ -923,6 +923,7 @@ class Sim:
         self.computer.step()
         self.people_act()
         self.faults()
+        self.write(Wd.settle_stopped)
         self.note_changes()
         failures: list[tuple[str, Exception]] = []
         before = None

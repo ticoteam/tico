@@ -398,10 +398,12 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
 # wakes the task once the worktree is ready (backend/worktree_waits.py), so until then it is Paused, not the bot's turn.
 WORKTREE_WAITING = "is waiting for a free worktree"
 WORKTREE_RESERVED = "is waiting for its worktree to be set up"
-# Or a run of it on the task stopped after it may have acted, and Tico holds the task's work until someone checks it
-# (execution.auto_reconcile records `job.held`; `POST jobs/{id}/reconcile` resumes or dismisses it). Until then the bot
-# claims nothing more on the task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold.
-RUN_HELD = "has a run held for a check"
+# Or a run of it on the task stopped partway after it may have acted (its job is `uncertain`), and Tico holds the task's
+# work until someone runs it again or leaves it (`POST jobs/{id}/reconcile`; execution.auto_reconcile resumes a safe one
+# by itself, and hands the rest to BotOps with `job.held`). From the moment it stops the bot claims nothing more on the
+# task (execution.unfenced_sql), so it is Paused, not the bot's turn: never a silent hold (Nov 12: a Codex reviewer
+# stopped partway and its task still said it was the reviewer's turn for the 15 minutes before `job.held`).
+RUN_HELD = "stopped partway: waiting on a person to run it again"
 # Or its computer handed back its runs on the task before starting them, start_holds.SAME times for the same reason, and
 # BotOps has a task to find why (backend/start_holds.py). Paused until BotOps closes it: never a silent "Queued" loop.
 CANT_START = "can't start its runs here: BotOps is checking why"
@@ -435,15 +437,15 @@ def task_cause(
 
 
 def _held_runs_sql(many: bool = False) -> str:
-    """The bots (slugs, comma-joined) with a run held for a check on one task (`RUN_HELD`): a job still uncertain whose
-    attempt auto_reconcile held. With `many`, (task, bots) for every task that has one. Few rows: jobs_uncertain holds
-    only those."""
+    """The bots (slugs, comma-joined) with a run held on one task (`RUN_HELD`): a job still uncertain that nobody has
+    chosen for yet (no `job_recovery` for its try; a saved choice waits only for its lane, and runs by itself). With
+    `many`, (task, bots) for every task that has one. Few rows: jobs_uncertain holds only those."""
     task = str(_h().MESSAGE_TASK_SQL).replace("cv.", "uc.")
     return (
         f"SELECT {task + ', ' if many else ''}group_concat(DISTINCT u.bot_id) FROM jobs u "
         "JOIN messages m ON m.id = u.message_id JOIN conversations uc ON uc.id = m.conversation_id "
-        "WHERE u.state = 'uncertain' AND EXISTS (SELECT 1 FROM events e WHERE e.action = 'job.held' AND "
-        f"e.target = u.attempt_id) {'GROUP BY 1' if many else f'AND {task} = ?'}"
+        "WHERE u.state = 'uncertain' AND NOT EXISTS (SELECT 1 FROM job_recovery r WHERE r.job_id = u.id AND "
+        f"r.attempt_id IS u.attempt_id) {'GROUP BY 1' if many else f'AND {task} = ?'}"
     )
 
 

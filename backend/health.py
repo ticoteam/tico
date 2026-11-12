@@ -2651,10 +2651,10 @@ def _plate_check(c, who, auth, full):
         if len(items) > NEEDS_PLATE_WARN:
             bots = {}
             for item in items:
+                if not item.get("task_id"):
+                    continue  # a Paused cause (a held run, a login) stands for tasks no bot asked this person for
                 # The row Needs you's pass already read for this snapshot (waiting_on.prime): no read of its own.
-                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item.get("task_id") or "",)) or {}).get(
-                    "requester_id"
-                )
+                asker = (H._one(c, "SELECT * FROM tasks WHERE id=?", (item["task_id"],)) or {}).get("requester_id")
                 if H.is_bot(asker):
                     bots[asker] = bots.get(asker, 0) + 1
             over.append((len(items), person.actor, bots))
