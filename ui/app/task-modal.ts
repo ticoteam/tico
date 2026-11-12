@@ -140,10 +140,12 @@ window.addEventListener('popstate', () => {
 });
 // A task that could not be read says so: "Task not found" for a 404 or 403, anything else (a 500, a network error) with
 // Retry, which opens the task by its id again.
+// A task opened from inside the open window (a related or sub-task row) says so on that window: the page behind a modal
+// takes no clicks, so Retry there could not be pressed.
 function taskModalLoadFailed(id: string, error: unknown, d?: ModalDialog) {
-  const status = errorStatus(error);
-  if (status === 404 || status === 403) { toast('Task not found', true); return; }
-  toast(errorMessage(error, 'The task did not load'), true, {label: 'Retry', run: () => taskModalOpen(id, d)});
+  const status = errorStatus(error), opts = d?.open ? {host: d} : {};
+  if (status === 404 || status === 403) { toast('Task not found', true, null, opts); return; }
+  toast(errorMessage(error, 'The task did not load'), true, {label: 'Retry', run: () => taskModalOpen(id, d)}, opts);
 }
 // Opens a task by its id in the task's window.
 async function taskModalOpen(id: string, d?: ModalDialog) {

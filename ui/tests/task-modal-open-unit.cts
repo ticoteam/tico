@@ -12,7 +12,7 @@ const vm: typeof import('node:vm') = require('node:vm');
 const {transformSync} = require('esbuild') as typeof import('esbuild');
 
 const APP = path.join(__dirname, '..', 'app');
-type Toast = {msg: string; isErr: boolean | undefined; action: {label: string; run: () => unknown} | null | undefined};
+type Toast = {msg: string; isErr: boolean | undefined; action: {label: string; run: () => unknown} | null | undefined; opts: {host?: unknown} | undefined};
 const toasts: Toast[] = [];
 const reads: string[] = [];
 let answer: () => Promise<unknown> = () => Promise.resolve(null);
@@ -29,7 +29,7 @@ const ctx = vm.createContext({
   S: {route: '#/tasks'},
   get: (p: string) => { reads.push(p); return answer(); },
   v2Get: (p: string) => { reads.push(p); return answer().catch(() => null); },
-  toast: (msg: string, isErr?: boolean, action?: Toast['action']) => { toasts.push({msg, isErr, action}); },
+  toast: (msg: string, isErr?: boolean, action?: Toast['action'], opts?: Toast['opts']) => { toasts.push({msg, isErr, action, opts}); },
 });
 for (const file of ['errors.ts', 'task-modal.ts']) {
   vm.runInContext(transformSync(fs.readFileSync(path.join(APP, file), 'utf8'), {loader: 'ts', target: 'es2022'}).code, ctx, {filename: file});
@@ -98,6 +98,24 @@ ctx.taskModalShow = (task: unknown) => { shown.push(task); return Promise.resolv
   assert.equal(toasts[0]!.msg, 'Failed to fetch');
   assert.equal(toasts[0]!.action?.label, 'Retry');
   assert.equal(shown.length, 0);
+
+  // ---- opened from inside an open task window (a related or sub-task row): the toast goes on that window, since the
+  // page behind a modal takes no clicks and Retry could not be pressed there
+  for (const [status, retry] of [[404, false], [500, true]] as const) {
+    toasts.length = 0; shown.length = 0;
+    const d = dialog(); d.open = true;
+    answer = () => Promise.reject(failure(status, 'The hub had a problem'));
+    await open('t2', d);
+    assert.equal(toasts.length, 1, `a ${status} from an open window says so`);
+    assert.equal(toasts[0]!.opts?.host, d, `a ${status} toast sits on the open window`);
+    assert.equal(toasts[0]!.action?.label, retry ? 'Retry' : undefined);
+    assert.equal(shown.length, 0);
+  }
+  // ---- with no window open, the toast goes on the page
+  toasts.length = 0;
+  answer = () => Promise.reject(failure(500, 'The hub had a problem'));
+  await open('t1', dialog());
+  assert.equal(toasts[0]!.opts?.host, undefined, 'a closed window is no host');
 
   // ---- a read that works opens the task and says nothing
   toasts.length = 0; shown.length = 0;
