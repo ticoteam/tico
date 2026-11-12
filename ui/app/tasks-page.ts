@@ -63,11 +63,12 @@ let TASK_PIPELINES: PipelineRec[] | null = null;
 const tasksPipelinesRead = async (): Promise<PipelineRec[]> => (TASK_PIPELINES = (await pipelinesAll()).filter(p => !p.retired_at));
 
 // The view comes from the address (#/tasks?pipeline=<id>&layout=columns&archive=done), else as it was last left.
+// A `view` (NEEDS_YOU, Home's My tasks) names You: no pipeline unless the address names one.
 function tasksViewFromURL(): Pick<TasksPageState, 'pipeline' | 'layout' | 'archive'> {
   const q = new URLSearchParams(S.route.split('?')[1] || '');
   let kept: {pipeline?: string; layout?: string} = {};
   try { kept = JSON.parse(localStorage.getItem(TASKS_KEPT) || '{}') as typeof kept; } catch { kept = {}; }
-  const named = q.has('pipeline') || q.has('archive');
+  const named = q.has('pipeline') || q.has('archive') || q.has('view');
   const layout = q.get('layout') || kept.layout;
   const archive = q.get('archive') || '';
   return {
