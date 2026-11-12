@@ -2632,12 +2632,13 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
     watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
-    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    can skip an ineligible bot. `title`, `parent` and `labels` say what is being filed, `task` which existing task is
+    being given; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2667,11 +2668,13 @@ def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=Fa
             parent,
             routine,
             owner=target,
+            labels=labels,
+            task=task,
         )
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
-    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine, labels=labels, task=task):
         refuse(conn, actor, *found)
 
 
@@ -5507,7 +5510,10 @@ def task_create(
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     _botops_only(conn, actor, target)
-    _takes_tasks(conn, actor, target, title, parent_id, routine)
+    from . import profiles
+
+    labels = profiles.review_labels(title, parent_id, _labels(labels))
+    _takes_tasks(conn, actor, target, title, parent_id, routine, labels=labels)
     _learning(conn, actor, target)
     if occurrence and occurrence_step:
         again = _one(
