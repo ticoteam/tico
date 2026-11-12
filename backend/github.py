@@ -2465,6 +2465,18 @@ class AppGitHub:
             return False
         return (response.json() or {}).get("status") in ("ahead", "identical")
 
+    def pr_diff(self, repo, number, sha):
+        from .item_sources import github as GS
+
+        permissions = {"contents": "read", "pull_requests": "read", "metadata": "read"}
+        base = str(
+            ((self._get(repo, f"/pulls/{int(number)}", permissions).json() or {}).get("base") or {}).get("ref") or ""
+        )
+        if not base:
+            return None
+        path = f"/compare/{quote(base, safe='')}...{quote(sha, safe='')}"
+        return GS.diff_id((self._get(repo, path, permissions).json() or {}).get("files"))
+
     # ------------------------------------------------------------------ the merge queue
     def ready(self, repo, number):
         _, found = self._pull(repo, number, WRITE_PERMISSIONS)

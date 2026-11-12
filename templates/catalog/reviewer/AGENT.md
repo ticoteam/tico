@@ -28,8 +28,9 @@ missing.
      `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 - **New commits since the review.** When `tico task show` says the page no longer covers the newest commit, read the new
   commits, write the page again at the new commit, publish and attach it.
-- **New commits after your review, in Fixes 2.** Before a person OKs the work, you are asked to "Review the new
-  commits since the reviews". Read only the commits after the one your page names
+- **New commits after your review, in Fixes 2.** Before a person OKs the work, and after their OK when a conflict fix
+  changes the PR's lines, you are asked to "Review the new commits since the reviews". Your OK keeps the person's.
+  Read only the commits after the one your page names
   (`git log -p <your commit>..<newest>`), against what the reviews found and the Spec page. Answer on the task, not with a move
   and not with a new page: `tico task answer <id> <requirement> ok -m "<the commits you read and what you checked>"
   --version N`, or `no -m "<what must change>"` when one breaks the spec or adds a blocking issue.

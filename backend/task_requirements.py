@@ -389,15 +389,15 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     decides, once per visit:
     after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
     list. On a page a person OKs that is not a review (Fixes 2's), commits pushed after the reviews are a bot's to
-    review before the person is asked (`_new_commits`), and the person's OK counts only while the linked PRs are at the
-    commits it was given at."""
+    review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
+    since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
+    with the task from Merge (`page_for`)."""
     from . import page_verdicts as V
     from .item_sources import github as F
-    from . import task_pages as P
 
     visit_id = task["visit"]["id"]
     owner = task.get("owner_id")
-    page = P.current(conn, visit_id, requirement["id"])
+    page, carried = page_for(conn, task, requirement)
     if not page:
         return Standing(requirement, NOT_MET, owner, "No page attached")
     settings: Row = requirement.get("settings") or {}
@@ -406,14 +406,24 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     signoff = bool(requirement.get("person_id") or people_only(requirement)) and not settings.get("at_head")
     if signoff and answer and _reviews_new(requirement, answer):
         answer = _newest_signoff(conn, visit_id, requirement)  # a bot's review of new commits is not the OK
+    answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
-    lapsed, lapsed_by = "", None
+    lapsed, lapsed_by, since_ok = "", None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
-        # The OK was for the commits the person was shown: new ones since are not OK'd (an OK on an old head never
-        # merges a new one). They are reviewed by a bot first, and the same person is asked again.
+        # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
+        # once a bot read them and OK'd them (`_after_ok`). Otherwise it lapses: the same person is asked again.
+        kept, since_ok = _after_ok(conn, task, requirement, answer)
+        if kept:
+            return kept
         lapsed_by = str(answer["by_id"])
         answer, lapsed = None, sentence(f"New commits since {_name(conn, lapsed_by)}'s OK") + " "
+        if carried:
+            # Back from Merge with no page of its own: the Builder fixes what was sent back and attaches the page again.
+            back = since_ok[-1] if since_ok and since_ok[-1]["answer"] == "no" else None
+            said = " ".join(str((back or {}).get("notes") or "").split())
+            line = f"{_name(conn, back['by_id'])} sent back the new commits: {said}" if back else lapsed.strip()
+            return Standing(requirement, NOT_MET, owner, sentences(line, ATTACH_AGAIN))
     if answer and answer["answer"] == "ok":
         return Standing(requirement, MET, line="OK'd")
     if answer and answer["answer"] == "no":
@@ -437,7 +447,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     first = ""
     if signoff:
         # Commits pushed after the reviews are a bot's to review before the person is asked (`_new_commits`).
-        held, first = _new_commits(conn, task, requirement, asked)
+        held, first = _new_commits(conn, task, requirement, asked, since_ok)
         if held:
             return held
     person = person_of(conn, requirement, visit_id)
@@ -523,6 +533,8 @@ NEW_REVIEWED_SQL = (
 # a review (Fixes 2's Review page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
 # that the newest commits had no bot's review. The Builder's fixes after a send back each start a round.
 REVIEW_NEW = "Review the new commits"
+# What the Builder is told when the person's OK, brought back from Merge, lapsed: the page is OK'd again.
+ATTACH_AGAIN = "Attach the Review page again"
 DELTA_ROUNDS = 2
 
 
@@ -629,15 +641,86 @@ def delta_reviewer(conn: "sqlite3.Connection", task: Row) -> str | None:
     return who if H._actor_exists(conn, who) else None
 
 
-def _new_commits(conn: "sqlite3.Connection", task: Row, requirement: Row, asked: str) -> tuple[Standing | None, str]:
+def page_for(conn: "sqlite3.Connection", task: Row, requirement: Row) -> tuple[Row | None, Row | None]:
+    """(the page that counts for a requirement on the task's visit, the person's OK it carries). A page a person OKs
+    with none attached on this visit, on a task sent back to this stage from the stage that queues its PRs (Merge, as
+    the Release Owner does with new commits after the OK, C22), is the one the person OK'd on the visit before Merge,
+    with that OK. Else this visit's page, and no OK carried."""
+    from . import task_pages as P
+
+    page = P.current(conn, task["visit"]["id"], requirement["id"])
+    if page or not (requirement.get("person_id") or people_only(requirement)):
+        return page, None
+    ok = _carried_ok(conn, task, requirement)
+    return (P.current(conn, str(ok["visit_id"]), requirement["id"]), ok) if ok else (None, None)
+
+
+def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row | None:
+    """The person's OK of this page on the task's visit to this stage before the visits to Merge just before this one."""
+    from .item_sources import github as F
+
+    visits = conn.execute(
+        "SELECT v.id, v.stage_id, s.on_enter FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC",
+        (task["id"],),
+    ).fetchall()
+    if len(visits) < 3 or str(visits[0][0]) != str(task["visit"]["id"]):
+        return None
+    at = 1
+    while at < len(visits) and F.queues_prs({"on_enter": visits[at][2]}):
+        at += 1
+    if at == 1 or at == len(visits) or visits[at][1] != visits[0][1]:
+        return None
+    ok = _newest_signoff(conn, str(visits[at][0]), requirement)
+    if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
+        return None
+    return ok
+
+
+def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:
+    """New commits since a person's OK (`ok`, a rebase or a conflict fixed, C22): (the standing that keeps the OK or
+    holds it for a bot's read, or None when it lapses; the bot reviews of new commits since it). Commits that change
+    the same lines as the OK'd ones (item_sources.github.same_changes) keep it; while Tico reads what they change, it
+    waits on GitHub. Others go to the bot that wrote the newest review (`_new_commits`, the same DELTA_ROUNDS): its OK
+    at the newest commits keeps the person's OK. Its send back, no such bot, or the rounds spent: the OK lapses, and
+    the person is asked again once the next commits were read."""
+    from .item_sources import github as F
+
+    name = _name(conn, ok["by_id"])
+    same = F.same_changes(conn, _heads_of(ok.get("heads")) or {}, cast("dict[str, object]", heads_now(conn, task)))
+    if same is None:
+        return Standing(requirement, WAITING, F.SOURCE, f"Reading what the commits since {name}'s OK change"), []
+    if same:
+        return Standing(requirement, MET, line=f"OK'd by {name}; the commits since change the same lines"), []
+    since = [
+        row
+        for row in _visit_answers(conn, task["visit"]["id"], requirement)
+        if _reviews_new(requirement, row) and row["created_at"] >= ok["created_at"]
+    ]
+    if any(row["answer"] == "no" for row in since):
+        return None, since
+    last = since[-1] if since else None
+    if last and _heads_of(last["heads"]) == heads_now(conn, task):
+        return Standing(
+            requirement, MET, line=f"OK'd by {name}; {_name(conn, last['by_id'])} read the commits since"
+        ), since
+    held, _ = _new_commits(conn, task, requirement, str(ok["created_at"]), since)
+    return held, since
+
+
+def _new_commits(
+    conn: "sqlite3.Connection", task: Row, requirement: Row, asked: str, reviews: list[Row] | None = None
+) -> tuple[Standing | None, str]:
     """Before a person OKs a page that is not a review (Fixes 2's Review page): the commits no bot reviewed since the
     reviews (`_new_heads`) go to the bot that wrote the newest review (`delta_reviewer`), which reads only them against
     what the reviews found and the spec, and OKs them or sends them back as an answer on this page, at the commits it
     read (answers.heads). Its send back is the owner's turn to fix them; the next commits are a new round. After
     DELTA_ROUNDS rounds this visit, or with no such bot, the person is asked with "not reviewed by a bot" said. Returns
-    the standing that holds the person's ask, or None and what the ask says first."""
+    the standing that holds the person's ask, or None and what the ask says first. `reviews`: the bot reviews that
+    count (after a person's OK, those since it); else all of this visit's."""
     visit_id = task["visit"]["id"]
-    reviews = [row for row in _visit_answers(conn, visit_id, requirement) if _reviews_new(requirement, row)]
+    if reviews is None:
+        reviews = [row for row in _visit_answers(conn, visit_id, requirement) if _reviews_new(requirement, row)]
     here = heads_now(conn, task)
     last = reviews[-1] if reviews else None
     new = _new_heads(conn, task)

@@ -17,6 +17,7 @@ from backend import pipeline_judges as PJ
 from backend import task_engine as E
 from backend import task_pages as P
 from backend import task_requirements as R
+from backend.item_sources import github as F
 from backend.blobs import Blobs
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -858,7 +859,9 @@ def test_the_reviewers_send_back_is_the_builders_and_after_two_rounds_the_person
     assert standing.line == (f"New commits since the reviews (now at ddddddd): {R.NOT_REVIEWED} OK someone (version 1)")
 
 
-def test_an_ok_on_an_old_commit_does_not_move_the_task_on_a_new_one(c, store):
+def _oked_at_bbbbbbb(c, store):
+    """Fixes 2 with the Builder's own "done" still to come, so the task stays: bbbbbbb pushed after the review, read and
+    OK'd by the reviewer, then Ben's OK. Returns (task, Pre-release id, done id)."""
     row, rid = _in_fixes_2(c, store, {"kind": "owner_done"})
     done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
     _push(c, "acme/app", 45, "bbbbbbb00000")
@@ -866,18 +869,71 @@ def test_an_ok_on_an_old_commit_does_not_move_the_task_on_a_new_one(c, store):
     _bot(c, row, rid, REVIEWER, "ok", "Read bbbbbbb.")
     A.answer(c, row["id"], rid, BEN, "ok")
     assert _f2(c, row).met
-    # A commit after Ben's OK: the OK was for bbbbbbb. The task does not leave on it.
+    return row, rid, done_id
+
+
+def _ben_asked(c, row):
+    from backend import waiting_on as W
+
+    return [n for n in W.needs(c, BEN) if n["task_id"] == row["id"]]
+
+
+def test_a_rebase_after_the_ok_keeps_it_and_asks_nobody(c, store):
+    """Velocity (~100 PRs a day, Nov 12): main moves under an OK'd PR and the Builder rebases. The new commit changes
+    the same lines, so Ben's OK stands: no bot's read, no person asked."""
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
     _push(c, "acme/app", 45, "ccccccc00000")
     standing = _f2(c, row)
-    assert (standing.state, standing.on) == (R.WAITING, REVIEWER)
-    _bot(c, row, done_id, WRITER, "done")
-    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2"
-    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc: a rebase, no change.")
+    assert (standing.state, standing.on, standing.line) == (
+        R.WAITING,
+        "github",
+        "Reading what the commits since Ben's OK change",
+    )
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d1")
     standing = _f2(c, row)
-    assert (standing.state, standing.on) == (R.WAITING, BEN), "asked of the person whose OK it was"
+    assert standing.met and standing.line == "OK'd by Ben; the commits since change the same lines"
+    assert not _ben_asked(c, row) and not [k for k, _ in _review_wakes(c, row) if k.endswith("@ccccccc00000")]
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+
+
+def test_a_conflict_fix_after_the_ok_is_read_by_the_reviewer_and_asks_nobody(c, store):
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    _push(c, "acme/app", 45, "ccccccc00000")
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, REVIEWER)
+    assert standing.line.startswith(f"{R.REVIEW_NEW} since the reviews (now at ccccccc)")
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2", "the OK'd commit is not this one"
+    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc: the conflict in sign() kept both changes.")
+    assert not _ben_asked(c, row)
+    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2", "Ben's OK stands on the reviewer's"
+
+
+def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the_next_read(c, store):
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    _push(c, "acme/app", 45, "ccccccc00000")
+    _bot(c, row, done_id, WRITER, "done")
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    _bot(c, row, rid, REVIEWER, "no", "The conflict fix dropped the 0 case.")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.NOT_MET, WRITER)
+    assert standing.line == "reviewer sent back the new commits: The conflict fix dropped the 0 case."
+    assert not _ben_asked(c, row)
+    _push(c, "acme/app", 45, "ddddddd00000")
+    F.save_diff(c, "acme/app", "ddddddd00000", "d3")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, REVIEWER), "round 2 since the OK"
+    _bot(c, row, rid, REVIEWER, "ok", "Read ddddddd: 0 is back.")
+    standing = _f2(c, row)
+    assert (standing.state, standing.on) == (R.WAITING, BEN), "the person whose OK it was"
     assert standing.line == (
-        "New commits since Ben's OK. reviewer reviewed the commits since the reviews: Read ccccccc: a rebase, no "
-        "change. OK Ben (version 1)"
+        "New commits since Ben's OK. reviewer reviewed the commits since the reviews: Read ddddddd: 0 is back. "
+        "OK Ben (version 1)"
     )
     assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2"
     A.answer(c, row["id"], rid, BEN, "ok")

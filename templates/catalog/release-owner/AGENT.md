@@ -35,11 +35,12 @@ with its newest or merged commit and the Fixes 2 page. A stage moves on by itsel
      list). Read the repository's rule on flaky tests first (its CLAUDE.md, AGENTS.md or CONTRIBUTING file): a failure
      in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
      After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
-  2. **Push your own fix, then send it back for review**: a rebase on the base branch, a merge conflict, a broken
-     test, or a small code fix. Not after `failed_checks`: that is choice 3. Check out the branch (`gh pr checkout <n> -R <repo>`),
-     fix, push (`git push --force-with-lease` after a rebase), then `tico task move <id> "Fixes 2" -m "<what you pushed and why>"
-     --version N`. The person's OK was for the commit the task came into Merge with: a new commit is reviewed and OK'd
-     again before it merges, and {{app_name}} refuses to queue it otherwise.
+  2. **Push your own fix**: a rebase on the base branch, a merge conflict, a broken test, or a small code fix. Not after
+     `failed_checks`: that is choice 3. Check out the branch (`gh pr checkout <n> -R <repo>`), fix, push
+     (`git push --force-with-lease` after a rebase), then `tico task queue <id> --version N`. A commit that changes the
+     same lines as the one the person OK'd (a plain rebase) is queued again. One that changes other lines is refused:
+     send it back for Reviewer 2 to read, with `tico task move <id> "Fixes 2" -m "<what you pushed and why>" --version N`.
+     The person's OK stands on its OK.
   3. **Send it back to the Builder** when the failure is real and needs real work:
      `tico task move <id> "Fixes 2" -m "<what failed, with the run link>" --version N`.
   Say which you chose and why on the task. Never run `gh pr merge`.

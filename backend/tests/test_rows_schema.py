@@ -121,6 +121,7 @@ TABLES = {
     rows.GithubReleaseReadRow: "github_release_reads",
     rows.GithubReleaseCommitRow: "github_release_commits",
     rows.GithubDeliveryRow: "github_deliveries",
+    rows.GithubPrDiffRow: "github_pr_diffs",
     rows.RequirementPageRow: "requirement_pages",
     rows.PageVerdictRow: "page_verdicts",
     rows.TaskMoveGuardRow: "task_move_guards",

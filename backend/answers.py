@@ -256,14 +256,13 @@ def _may_answer_page(
 def _page_version(
     conn: "sqlite3.Connection", by: str, row: Row, requirement: Row, page_version: str | None
 ) -> int | None:
-    """The page version an answer on a page is for: the one attached now. A caller that names the page it was shown
+    """The page version an answer on a page is for: the one that counts now (task_requirements.page_for: the one
+    attached, or the one a person's OK brought back from Merge). A caller that names the page it was shown
     (`<file id>@<version>`) is refused when another is attached since (`task_changed`): another file at the same
     version number is another page."""
     if requirement["kind"] != "page":
         return None
-    from . import task_pages
-
-    page = task_pages.current(conn, row["visit"]["id"], requirement["id"])
+    page, _ = R.page_for(conn, row, requirement)
     now = int(page["version"]) if page else None
     if page_version not in (None, "") and (not page or str(page_version) != f"{page['file_id']}@{now}"):
         _refuse(conn, by, "task_changed", "The page changed. Look again.", row["id"])
