@@ -259,7 +259,7 @@ def _handoffs(conn: "sqlite3.Connection", at: str, done: dict[str, int], seen: d
         row = E.task(conn, str(task_id))
         if not row or not E.handed_over(conn, row):
             continue
-        if E._wake_turn(conn, row):  # pyright: ignore[reportPrivateUsage]
+        if E.wake_turn(conn, row):
             done["woken"] += 1
         visit = row["visit"]
         if visit.get("late_told_at") or at < E.handover_due(conn, row):

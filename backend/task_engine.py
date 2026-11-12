@@ -499,6 +499,12 @@ def _wake_turn(
     return out
 
 
+def wake_turn(conn: "sqlite3.Connection", row: Row) -> str | None:
+    """`_wake_turn` for the never-stuck check: the wake a turn starts with, written once per visit (its key), so a
+    sweep may call it on every pass. Returns the message id, or None when it was written already or nobody has a turn."""
+    return _wake_turn(conn, row)
+
+
 def _drop_stale(conn: "sqlite3.Connection", task_id: str) -> int:
     """The turn may have gone to someone else: cancel the wakes still queued for a bot that has no turn on the task
     now, and keep those of a bot that still has one, a bot named on an OK or an answer included (R2). A snoozed or
