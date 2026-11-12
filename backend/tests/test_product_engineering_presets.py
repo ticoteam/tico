@@ -359,11 +359,20 @@ def _queued_wakes(c, task_id):
     ).fetchall()
 
 
+def _writes(c, slug, repository="acme/app"):
+    """`slug` may push to `repository` (Settings > Repositories, Chosen, Write): it can build there."""
+    from backend import bot_settings as BS
+
+    BS.write(c, slug, {"repo_access_mode": "chosen"})
+    c.execute("INSERT INTO bot_repo_access VALUES(?,?,'write')", (slug, repository))
+
+
 def _assignee_owned_handoff(c):
     """A Product task moved into In development where Engineering's On deck and Build belong to the task's assignee;
-    the Engineering task it filed."""
+    the Engineering task it filed. The Builder may push to the product's repository; the Product Owner only reads it."""
     row = _product_task(c)
     X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
+    _writes(c, "builder")
     c.execute("UPDATE stages SET owner='assignee' WHERE id IN ('engineering-on-deck', 'engineering-build')")
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
     return E.task(c, _filed(c, row["id"])[0][0])
@@ -409,6 +418,117 @@ def test_a_handoff_into_a_pipeline_with_no_manager_keeps_the_filer_as_assignee(c
     E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
     eng = E.task(c, _filed(c, row["id"])[0][0])
     assert (eng["requester_id"], eng["assignee_id"], eng["owner_id"]) == ("bot:pm", "bot:pm", "bot:pm")
+
+
+def _owned_by_a_bot_that_lost_write_access(c):
+    """An Engineering task the Product Owner owns in On deck, given while it could push; it may only read now."""
+    _writes(c, "pm")
+    eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
+    assert eng["owner_id"] == "bot:pm"
+    # Read-only now, as the Product Owner in the stress run was: a read grant is not enough to build.
+    c.execute("UPDATE bot_repo_access SET access='read' WHERE bot='pm'")
+    return eng
+
+
+def _move_notes(c, task_id):
+    """The note on each of the task's moves, oldest first: why it moved, and why its assignee does not own it."""
+    rows = c.execute(
+        "SELECT note FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='move' ORDER BY rowid",
+        (task_id,),
+    ).fetchall()
+    return [row[0] or "" for row in rows]
+
+
+def _assignee_owned_engineering(c):
+    """Engineering's work stages belong to the task's assignee, the product's repository is In use, and only the
+    Builder may push to it."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    X.github_installed(c)
+    _writes(c, "builder")
+    c.execute("UPDATE stages SET owner='assignee' WHERE pipeline_id='engineering'")
+
+
+def test_a_bot_that_cannot_push_to_the_repository_never_owns_an_assignee_owned_engineering_stage(c):
+    """A task given to the Product Owner, read-only on the product's repository, in Engineering (as a handoff before
+    the fix, or by hand): it never owns On deck or Build there. The stage has nobody, as with no assignee, the
+    Engineering manager is woken to pick a builder, and the task's history says why."""
+    _assignee_owned_engineering(c)
+    eng = H.task_create(c, "bot:pm", "Saved carts", "Let a shopper keep a cart.", "bot:pm", pipeline="engineering")
+    assert (eng["stage_id"], eng["assignee_id"], eng["owner_id"]) == ("engineering-on-deck", None, None)
+    built = E.advance(c, eng["id"])
+    assert (built["stage_id"], built["assignee_id"], built["owner_id"]) == ("engineering-build", None, None)
+    assert E._turn_of(c, built) == (f"bot:{EPM}", "This task has no owner. Pick one and reassign it.")
+    assert [bot for bot, _ in _queued_wakes(c, eng["id"])] == [EPM]
+    assert _move_notes(c, eng["id"]) == ["pm cannot work On deck: it has no write access to acme/app", ""]
+
+
+def test_a_task_that_comes_back_to_a_stage_whose_assignee_lost_write_access_goes_to_the_manager(c):
+    """A task already in Build with the Product Owner as assignee (filed before the fix): a move into Fixes, a work
+    stage of the assignee, leaves it with nobody rather than the bot that cannot push."""
+    _assignee_owned_engineering(c)
+    eng = _owned_by_a_bot_that_lost_write_access(c)
+    fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
+    moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
+    assert (moved["assignee_id"], moved["owner_id"]) == (None, None)
+    assert _move_notes(c, eng["id"])[-1] == (
+        "Review found the cart is lost on sign-out. pm cannot work Fixes 1: it has no write access to acme/app"
+    )
+
+
+def test_a_kickback_keeps_the_builder_that_can_push(c):
+    """Fixes returning to the same builder is unchanged: the Builder may push, so it keeps the task."""
+    _assignee_owned_engineering(c)
+    eng = H.task_create(c, ANA, "Saved carts", "Let a shopper keep a cart.", "bot:builder", pipeline="engineering")
+    assert eng["owner_id"] == "bot:builder"
+    fixes = next(s for s in E.stages(c, "engineering") if s["name"] == "Fixes 1")
+    moved = E.move(c, eng["id"], fixes["id"], ANA, "Review found the cart is lost on sign-out")
+    assert (moved["assignee_id"], moved["owner_id"]) == ("bot:builder", "bot:builder")
+
+
+def test_a_bot_that_cannot_push_does_not_snooze_its_engineering_task_out_of_sight(c):
+    """The Product Owner left owning Build snoozed the task for two days, and nothing showed it. Its snooze is not
+    taken: the manager bot gets the task, to give it to someone who can build. The Builder's own snooze is taken."""
+    _assignee_owned_engineering(c)
+    eng = _owned_by_a_bot_that_lost_write_access(c)
+    row = E.task(c, eng["id"])
+    out = E.snooze(c, eng["id"], "bot:pm", "Needs the Builder", "2026-11-14T08:00:00.000000Z", row["version"])
+    assert out.get("snooze") is None
+    assert out["note"] == (
+        "pm cannot work On deck: it has no write access to acme/app. The manager has it now, to give it to someone "
+        "who can."
+    )
+    assert out["visit"]["level"] == "manager"
+    assert "snooze_refused" in X.events(c, eng["id"])
+    # A long snooze dodges the snooze count and Late: the Engineering manager is woken now, told why, not on a later
+    # pass, and Health's Tasks reading counts the task with a manager until someone who can build has it.
+    wakes = _queued_wakes(c, eng["id"])
+    assert [bot for bot, _ in wakes] == [EPM], wakes
+    assert wakes[0][1].startswith(
+        "pm cannot work On deck: it has no write access to acme/app, and it tried to snooze the task "
+        "(Needs the Builder). Reassign it to a builder."
+    ), wakes[0][1]
+    from backend import health
+
+    assert health.never_stuck_reading(c)["tasks"]["manager"] == [eng["id"]]
+    E.reassign(c, eng["id"], "bot:builder", ANA, "Builder takes it", out["version"])
+    row = E.task(c, eng["id"])
+    assert E.snooze(c, eng["id"], "bot:builder", "Waiting for #12 to merge", None, row["version"]).get("snooze")
+
+
+def test_a_refused_snooze_leaves_a_task_a_person_has_with_that_person(c):
+    """Once the ladder has handed the task to a person, the owner that cannot build trying to snooze it does not hand
+    it back to the manager bot, and the note says a person has it."""
+    _assignee_owned_engineering(c)
+    eng = _owned_by_a_bot_that_lost_write_access(c)
+    c.execute("UPDATE visits SET level='person', person_id=? WHERE task_id=? AND left_at IS NULL", (ANA, eng["id"]))
+    row = E.task(c, eng["id"])
+    out = E.snooze(c, eng["id"], "bot:pm", "Needs the Builder", "2026-11-14T08:00:00.000000Z", row["version"])
+    assert out.get("snooze") is None
+    assert out["visit"]["level"] == "person"
+    assert out["note"].endswith("A person has it now, to give it to someone who can.")
+    assert _queued_wakes(c, eng["id"]) == []
 
 
 def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
