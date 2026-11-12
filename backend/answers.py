@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 from . import hubdb_core, pr_conflicts
 from . import task_engine as E
 from . import task_requirements as R
-from . import task_wakes
+from . import task_wakes, validate_gate
 from . import waiting_on as W
 
 if TYPE_CHECKING:
@@ -197,6 +197,9 @@ def _may_answer(
         return
     if kind == "ok" and value not in (OK, NO):
         _refuse(conn, by, "task_requirement", "An OK takes ok or no", task_id)
+    if kind == "ok" and validate_gate.held(conn, row, requirement):
+        # A bot's OK in Validate is the person's only once Jev passed its page: not from the task page before then.
+        _refuse(conn, by, "task_requirement", f"{validate_gate.HELD}.", task_id)
     if kind == "ok" and requirement.get("visit_id") and not is_human(by):
         _refuse(conn, by, "task_requirement", "An OK is a person's to give", task_id)
     if kind == "ok" and value == OK and requirement.get("visit_id") and by == requirement.get("added_by_id"):
@@ -447,6 +450,11 @@ def answer(
         from . import task_asks
 
         task_asks.revoke(conn, requirement_id)  # a send back ends a bound OK for good (no grant: nothing)
+    if validate_gate.sends_back(conn, row, requirement, value):
+        # Not validated: back to In development with the note, which files new Engineering work.
+        out = validate_gate.not_validated(conn, task_id, by, notes)
+        out["answer_id"] = answer_id
+        return out
     if requirement["kind"] == "owner_done":
         _done_ends_own_snooze(conn, task_id, by)
     else:

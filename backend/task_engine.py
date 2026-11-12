@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any, NoReturn, cast
 
 from . import hubdb_core, stage_effects, task_effects
 from . import task_requirements as R
-from . import task_wakes
+from . import task_wakes, validate_gate
 from .hubdb_core import KEEPER as SYSTEM
 
 if TYPE_CHECKING:
@@ -1734,11 +1734,13 @@ def add_requirement(
     choices: list[str] | None = None,
     shows: object = None,
     seen_version: int | str | None = None,
+    for_action: bool = False,
 ) -> Row:
     """Add an OK or an answer from a named person to this task, for this visit (C30). The task does not leave the stage
     until it is answered, withdrawn or pushed past. A bot has one open per task: asking again replaces it (C15,
     `_replace_open`). A bot does not ask a question of a person the stage's OK or page already waits on
-    (`_stage_asks`)."""
+    (`_stage_asks`), nor one in Product's Validate that is not an OK of its passed proof page (validate_gate;
+    `for_action`: an OK bound to an action, task_asks.ask_ok, is that action's own)."""
     H = _h()
     row = task(conn, task_id)
     if not row:
@@ -1760,6 +1762,8 @@ def add_requirement(
         page = _people_page(conn, row, kind, shows, choices)
         if page:
             _refuse(conn, by, "task_requirement", f"{page} is a person's OK already. {R.PAGE_OK_HINT}", task_id)
+    if not for_action:
+        shows = validate_gate.check_ask(conn, row, by, person, kind, shows, choices)
     if is_bot(by) and kind == "answer" and is_human(person):
         signoff = _stage_asks(conn, row, str(person))
         if signoff:
