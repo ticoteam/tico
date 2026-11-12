@@ -682,7 +682,9 @@ def scrub_page_task(c, tid):
         # Keep sequence receipts so a runner can safely retry output already acknowledged before revocation.
         c.execute("UPDATE attempt_events SET payload=? WHERE attempt_id=?", (encode({"text": REMOVED_PAGE}), aid))
         c.execute(
-            "UPDATE attempt_diagnostics SET stderr_tail=NULL,end_reason=NULL,last_event=NULL WHERE attempt_id=?", (aid,)
+            "UPDATE attempt_diagnostics SET stderr_tail=NULL,failed_tools=NULL,end_reason=NULL,last_event=NULL "
+            "WHERE attempt_id=?",
+            (aid,),
         )
         c.execute("INSERT OR IGNORE INTO attempt_capture_drops(attempt_id,created_at) VALUES(?,?)", (aid, H.now()))
     if attempts:

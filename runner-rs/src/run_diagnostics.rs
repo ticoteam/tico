@@ -25,6 +25,69 @@ fn safe(text: &str, scrub: &Redactor) -> String {
         .into_owned()
 }
 
+/// A failed tool call's output kept for the run's capture: its last lines, at most this many bytes.
+const FAILED_LINES: usize = 40;
+const FAILED_BYTES: usize = 4096;
+/// The command or input of a failed call, clipped.
+const FAILED_COMMAND_CHARS: usize = 1000;
+/// Failed calls a run keeps; the newest win.
+pub const FAILED_KEPT: usize = 20;
+
+/// The end of `text`: its last FAILED_LINES lines, cut to FAILED_BYTES at a line start where it can be.
+fn failed_tail(text: &str) -> String {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    let mut tail = lines[lines.len().saturating_sub(FAILED_LINES)..].join("\n");
+    if tail.len() > FAILED_BYTES {
+        let mut at = tail.len() - FAILED_BYTES;
+        while !tail.is_char_boundary(at) {
+            at += 1;
+        }
+        // A line cut part way is left out: half a token no longer looks like one to the scrubber.
+        at = tail[at..].find('\n').map_or(at, |n| at + n + 1);
+        tail = tail[at..].to_string();
+    }
+    tail
+}
+
+/// A failed tool call (a non-zero exit, an error or a timeout) as the runner keeps it for the run's capture: which
+/// call, what it ran (its command, or its input when it has none) and the end of what it printed, all scrubbed.
+/// It is a `diagnostic` the runner moves to its own capped row (Runner::attempt_events), never a `tool` event:
+/// tool output does not go into events or lists. A successful call keeps nothing here.
+pub fn failed_tool(
+    item_id: &str,
+    tool: &str,
+    command: &str,
+    output: &str,
+    exit_code: Option<i64>,
+) -> serde_json::Value {
+    let none = Redactor::new(&[]);
+    let command: String = command.trim().chars().take(FAILED_COMMAND_CHARS).collect();
+    json!({"kind": "diagnostic", "failed_tool": {
+        "item_id": item_id,
+        "tool": tool,
+        "command": safe(&command, &none),
+        "exit_code": exit_code,
+        // Scrubbed whole before it is cut: a token cut in half no longer looks like one.
+        "output_tail": failed_tail(&safe(output, &none)),
+    }})
+}
+
+/// A failed call's detail with the turn's own secrets taken out too, as the runner stores it.
+pub fn scrub_failed_tool(
+    detail: &serde_json::Value,
+    redactor: Option<&Redactor>,
+) -> serde_json::Value {
+    let none = Redactor::new(&[]);
+    let scrub = redactor.unwrap_or(&none);
+    let mut kept = detail.clone();
+    for key in ["command", "output_tail", "tool", "item_id"] {
+        if let Some(text) = detail[key].as_str() {
+            kept[key] = json!(safe(text, scrub));
+        }
+    }
+    kept
+}
+
 #[derive(Clone, Default)]
 pub struct Stderr(
     Arc<Mutex<VecDeque<String>>>,

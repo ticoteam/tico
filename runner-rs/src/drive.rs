@@ -957,8 +957,36 @@ mod tests {
             .unwrap();
         tx.send(json!({"kind": "diagnostic", "stderr_tail": format!("last failure {secret}")}))
             .unwrap();
+        // A failed call's detail takes its own capped rows, the turn's own secret taken out, and never an event.
+        tx.send(crate::run_diagnostics::failed_tool(
+            "call_1",
+            "shell",
+            &format!("deploy --key {secret}"),
+            &format!("refused: {secret}"),
+            Some(2),
+        ))
+        .unwrap();
         tx.send(json!({"kind": "_diagnostics_drained"})).unwrap();
         assert_eq!(rx.recv().await.unwrap()["kind"], "_diagnostics_drained");
+        let failed = runner.state.pending_failed_tools(None).unwrap();
+        assert_eq!(failed.len(), 1);
+        let (run, calls) = &failed[0];
+        assert_eq!((run.as_str(), calls.len()), ("diagnostics", 1));
+        let detail = &calls[0].1;
+        assert_eq!(
+            (detail["item_id"].as_str(), detail["exit_code"].as_i64()),
+            (Some("call_1"), Some(2))
+        );
+        assert!(detail["command"]
+            .as_str()
+            .unwrap()
+            .starts_with("deploy --key"));
+        assert!(!detail.to_string().contains(&secret), "{detail}");
+        runner
+            .state
+            .failed_tools_sent("diagnostics", &["call_1".into()])
+            .unwrap();
+        assert!(runner.state.pending_failed_tools(None).unwrap().is_empty());
         let tails = runner.state.pending_stderr(Some("diagnostics")).unwrap();
         assert_eq!(tails.len(), 1);
         assert!(tails[0].1.starts_with("last failure"));

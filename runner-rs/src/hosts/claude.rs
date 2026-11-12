@@ -495,6 +495,8 @@ struct ToolCall {
     ended: bool,
     /// A shell's or a monitor's command, clipped.
     command: Option<String>,
+    /// What a failed call is shown with in the run's capture: the command, or its input when it has none, clipped.
+    input: String,
 }
 
 struct Shared {
@@ -1640,14 +1642,24 @@ impl ClaudeHost {
                     } else {
                         "completed"
                     };
-                    self.tool_ended(
-                        b["tool_use_id"].as_str().unwrap_or_default(),
-                        status,
-                        false,
-                        &Value::Null,
-                        tid,
-                        turn,
-                    );
+                    let id = b["tool_use_id"].as_str().unwrap_or_default();
+                    let ended = self.tool_ended(id, status, false, &Value::Null, tid, turn);
+                    if let (Some(call), "failed") = (ended, status) {
+                        // A failed call's command and the end of what it printed, for the run's capture only. A
+                        // failed Bash result starts `Exit code N`.
+                        let text = result_text(&b["content"]);
+                        let code = text
+                            .strip_prefix("Exit code ")
+                            .and_then(|r| r.lines().next())
+                            .and_then(|n| n.trim().parse().ok());
+                        self.emit(crate::run_diagnostics::failed_tool(
+                            id,
+                            &call.name,
+                            &call.input,
+                            &text,
+                            code,
+                        ));
+                    }
                 }
             }
             ("system", "task_started") if msg["is_backgrounded"] == true => {
@@ -1672,14 +1684,17 @@ impl ClaudeHost {
                     "failed" | "error" => "failed",
                     _ => "interrupted",
                 };
-                self.tool_ended(
-                    msg["tool_use_id"].as_str().unwrap_or_default(),
-                    status,
-                    true,
-                    &msg["usage"],
-                    tid,
-                    turn,
-                );
+                let id = msg["tool_use_id"].as_str().unwrap_or_default();
+                let ended = self.tool_ended(id, status, true, &msg["usage"], tid, turn);
+                if let (Some(call), "failed") = (ended, status) {
+                    self.emit(crate::run_diagnostics::failed_tool(
+                        id,
+                        &call.name,
+                        &call.input,
+                        &text_of(&msg["summary"]),
+                        None,
+                    ));
+                }
             }
             _ => {}
         }
@@ -1703,9 +1718,13 @@ impl ClaudeHost {
             if id.is_empty() || inner.tools.contains_key(id) {
                 return; // Claude repeats an assistant message as it grows; a call starts once
             }
-            let command = input["command"]
+            let command: Option<String> = input["command"]
                 .as_str()
                 .map(|c| c.chars().take(COMMAND_CHARS).collect());
+            let shown = match &command {
+                Some(c) => c.clone(),
+                None => input.to_string().chars().take(COMMAND_CHARS).collect(),
+            };
             let call = ToolCall {
                 name: name.into(),
                 parent: parent.map(String::from),
@@ -1713,6 +1732,7 @@ impl ClaudeHost {
                 background,
                 ended: false,
                 command,
+                input: shown,
             };
             inner.tools.insert(id.into(), call);
         }
@@ -1755,7 +1775,7 @@ impl ClaudeHost {
         usage: &Value,
         tid: &str,
         turn: &str,
-    ) {
+    ) -> Option<ToolCall> {
         let call = {
             let mut inner = self.inner();
             match inner.tools.get_mut(id) {
@@ -1763,9 +1783,10 @@ impl ClaudeHost {
                     c.ended = true;
                     c.clone()
                 }
-                _ => return,
+                _ => return None,
             }
         };
+        let ended = call.clone();
         let mut fields =
             json!({"tool": call.name, "status": status, "item_id": id, "parent_id": call.parent});
         if call.background {
@@ -1781,6 +1802,7 @@ impl ClaudeHost {
             fields["subagent"] = s;
         }
         self.emit(event("tool", Some(tid), Some(turn), fields));
+        Some(ended)
     }
 
     fn finish(
@@ -2101,6 +2123,19 @@ fn transcript(settings: &Settings, session: &str) -> Option<std::path::PathBuf> 
         .find(|p| p.is_file())
 }
 
+/// A `tool_result`'s text: a string, or the text blocks of a content list (an image block has none).
+fn result_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn stderr_tail(file: &mut crate::run_diagnostics::Stderr) -> String {
     file.tail()
 }
@@ -2276,6 +2311,64 @@ mod tests {
             assert_eq!(&argv[argv.len() - 2..], &["--resume".to_string(), sid]);
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_failed_bash_keeps_its_command_and_output_tail_scrubbed_and_a_good_one_keeps_nothing() {
+        let path = crate::hosts::fixtures::dir("claude").join("failed-tools/stream.jsonl");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![], tx);
+        for line in std::fs::read_to_string(&path).unwrap().lines() {
+            host.on_tools(&serde_json::from_str(line).unwrap(), "th", "tu");
+        }
+        let mut failed = vec![];
+        let mut tools = vec![];
+        while let Ok(ev) = rx.try_recv() {
+            if ev["kind"] == "diagnostic" && ev["failed_tool"].is_object() {
+                failed.push(ev["failed_tool"].clone());
+            } else if ev["kind"] == "tool" {
+                tools.push(ev);
+            }
+        }
+        assert_eq!(tools.len(), 6, "{tools:?}");
+        assert!(tools
+            .iter()
+            .all(|t| t.get("output_tail").is_none() && t.get("command").is_none()));
+        assert_eq!(
+            failed
+                .iter()
+                .map(|f| f["item_id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["toolu_ui", "toolu_edit"],
+            "only failed calls"
+        );
+        let bash = &failed[0];
+        assert_eq!(
+            (bash["tool"].as_str(), bash["exit_code"].as_i64()),
+            (Some("Bash"), Some(1))
+        );
+        assert!(bash["command"]
+            .as_str()
+            .unwrap()
+            .ends_with("npx playwright test ui/tests/login.spec.ts"));
+        let tail = bash["output_tail"].as_str().unwrap();
+        assert!(tail.contains("Executable doesn't exist") && tail.ends_with("1 failed, 50 passed"));
+        assert!(tail.lines().count() <= 40 && !tail.contains("Exit code 1"));
+        let all = serde_json::to_string(&failed).unwrap();
+        assert!(
+            !all.contains("ghp_abcdefghijklmnopqrstuvwxyz0123")
+                && !all.contains("abcdefghijklmnopqrstuvwxyz012345"),
+            "{all}"
+        );
+        let edit = &failed[1];
+        assert!(edit["command"]
+            .as_str()
+            .unwrap()
+            .contains("/work/acme/notes.md"));
+        assert!(edit["output_tail"]
+            .as_str()
+            .unwrap()
+            .contains("File has not been read yet"));
     }
 
     #[test]

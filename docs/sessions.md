@@ -203,6 +203,10 @@ The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per at
 even with provider stream capture off. `tico run export <attempt> --fixture` adds `stderr.log` when present,
 and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
 exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
+For each tool call that failed (a non-zero exit, an error or a timeout), the runner also keeps what it ran (its
+command, or its input) and the last 40 lines / 4 KiB of its output, scrubbed, for the newest 20 failed calls of a
+run. The export returns them as `failed_tools`, each with the `item_id` of its `tool` events, and `--fixture`
+writes them to `failed_tools.json`; the MCP summary gives only their count. Successful calls keep nothing.
 An older runner can report only the failure evidence it has; historical runs are not assigned a guessed cause.
 
 ## FAQ

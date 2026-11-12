@@ -16,6 +16,10 @@ pub const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS attempt_stderr(
       attempt_id TEXT PRIMARY KEY, tail TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
       uploaded INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE IF NOT EXISTS attempt_failed_tools(
+      attempt_id TEXT NOT NULL, item_id TEXT NOT NULL, detail TEXT NOT NULL,
+      uploaded INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY(attempt_id,item_id));
     CREATE TABLE IF NOT EXISTS events(
       attempt_id TEXT NOT NULL, seq INTEGER NOT NULL, kind TEXT NOT NULL,
       payload TEXT NOT NULL, PRIMARY KEY(attempt_id,seq));
@@ -180,6 +184,55 @@ impl State {
                 params![revision, aid],
             )
             .map(|_| ())
+        })
+    }
+
+    /// A failed tool call's scrubbed detail (crate::run_diagnostics::failed_tool), kept until the hub has it; a run
+    /// keeps its newest FAILED_KEPT.
+    pub fn failed_tool(&self, aid: &str, detail: &Value) -> Result<(), String> {
+        let item = crate::util::text_of(&detail["item_id"]);
+        let text = detail.to_string();
+        self.with(|c| {
+            c.execute("DELETE FROM attempt_failed_tools WHERE updated < datetime('now','-7 days')", [])?;
+            c.execute("INSERT INTO attempt_failed_tools(attempt_id,item_id,detail) VALUES(?,?,?) ON CONFLICT(attempt_id,item_id) DO UPDATE SET detail=excluded.detail,uploaded=0,updated=CURRENT_TIMESTAMP", params![aid, item, text])?;
+            c.execute(
+                "DELETE FROM attempt_failed_tools WHERE attempt_id=? AND rowid NOT IN (SELECT rowid FROM attempt_failed_tools WHERE attempt_id=? ORDER BY rowid DESC LIMIT ?)",
+                params![aid, aid, crate::run_diagnostics::FAILED_KEPT as i64],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Failed calls the hub does not have yet, by run: (run, [(call, detail)]).
+    pub fn pending_failed_tools(
+        &self,
+        aid: Option<&str>,
+    ) -> Result<Vec<(String, Vec<(String, Value)>)>, String> {
+        let rows: Vec<(String, String, String)> = self.with(|c| {
+            let mut q = c.prepare("SELECT attempt_id,item_id,detail FROM attempt_failed_tools WHERE uploaded=0 AND (? IS NULL OR attempt_id=?) ORDER BY attempt_id,rowid LIMIT 200")?;
+            let rows = q.query_map(params![aid, aid], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect()
+        })?;
+        let mut out: Vec<(String, Vec<(String, Value)>)> = vec![];
+        for (run, item, detail) in rows {
+            let detail = serde_json::from_str(&detail).unwrap_or(Value::Null);
+            match out.last_mut() {
+                Some((last, calls)) if *last == run => calls.push((item, detail)),
+                _ => out.push((run, vec![(item, detail)])),
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn failed_tools_sent(&self, aid: &str, items: &[String]) -> Result<(), String> {
+        self.with(|c| {
+            for item in items {
+                c.execute(
+                    "UPDATE attempt_failed_tools SET uploaded=1 WHERE attempt_id=? AND item_id=?",
+                    params![aid, item],
+                )?;
+            }
+            Ok(())
         })
     }
 
