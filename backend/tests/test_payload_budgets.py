@@ -443,3 +443,35 @@ def test_settings_history_pages_stay_within_their_bytes_and_flag_what_they_leave
     ):
         clear()
         story(api, msg["conversation_id"] and msg)
+
+
+def test_a_brief_row_clips_the_snooze_note_and_the_task_keeps_it_whole(api):
+    from backend import task_reads
+
+    store = api.app.state.store
+    note = "🔔" * 500  # 500 characters, 2,000 bytes
+    with store.transaction() as c:
+        ids = [H.task_create(c, "human:ana", f"Snoozed {i}", "x", "human:ana", lint=False)["id"] for i in range(20)]
+        for tid in ids:
+            H.task_snooze(c, "human:ana", tid, note, H.shift(H.now(), days=5))
+    board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
+    rows = board.json()["tasks"]
+    assert len(rows) == 20 and all(r["snoozed"] and r["turn"]["state"] == "snoozed" for r in rows)
+    for r in rows:
+        line = r["turn"]["line"]
+        assert len(line.encode()) <= task_reads.SNOOZE_LINE_BYTES and line.endswith("…"), line
+        assert line[:-1] and note.startswith(line[:-1]), "the row keeps the note's start, cut on a character"
+    assert note not in board.text, "a list row never carries the whole note"
+    # 20 rows used to carry 40 KB of notes; now each row's line is capped.
+    assert len(board.content) < 20 * (task_reads.SNOOZE_LINE_BYTES + 2048), len(board.content)
+    whole = get(api, "tasks/" + ids[0])["task"]
+    assert whole["snooze"]["why"] == note, "the task's own view keeps the note whole"
+
+
+def test_a_short_snooze_note_reaches_the_brief_row_unchanged(api):
+    store = api.app.state.store
+    with store.transaction() as c:
+        tid = H.task_create(c, "human:ana", "Snoozed", "x", "human:ana", lint=False)["id"]
+        H.task_snooze(c, "human:ana", tid, "Back after the release", H.shift(H.now(), days=5))
+    rows = api.get("/api/v2/tasks?brief=1&snoozed=only", headers=headers()).json()["tasks"]
+    assert [r["turn"]["line"] for r in rows if r["id"] == tid] == ["Back after the release"]
