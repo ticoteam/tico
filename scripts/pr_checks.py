@@ -43,6 +43,18 @@ def ui_map_key(name):
 CONFORMANCE = "runner_support/tests/test_conformance.py"
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
 # recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
+# A new or changed file under MIGRATIONS runs the tests that upgrade a legacy or fixture database through every
+# migration, in a light plan too: they reach a migration only through the app's start, past a light plan's depth, and
+# a migration that assumes a column a later legacy migration adds (#3469: an index on tasks.private) breaks only there.
+MIGRATIONS = "backend/migrations/"
+UPGRADE_TESTS = (
+    "backend/tests/test_migrations.py",  # the migration authority: converge, rerun, roll back, refuse
+    "backend/tests/test_schema_every_table.py",  # schema_old_main.sql, every table, one boot
+    "backend/tests/test_schema_renames.py",  # schema_pre_cleanup.sql: the startup renames
+    "backend/tests/test_task_privacy.py",  # the legacy cloud and native hub (user_version 23) upgrades
+    "backend/tests/test_upgrade.py",  # a database an older release made boots twice
+    "backend/tests/test_upgrade_boot.py",  # schema_pre_cleanup.sql through create_app and backend.boot
+)
 CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
 CONTRACT_INPUTS = (
     "backend/",
@@ -1163,6 +1175,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
        file (changed_definitions), and every phone-dead-ends-* script for a change under PHONE_SCOPE. More than BROWSER_ALL_OVER picked runs every script
        `ui-tests.cts --all` runs. `browser_direct` lists them: a light pull request keeps them.
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
+    8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1351,6 +1364,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if owned:
         python |= owned_tests
         notes.append(owned_reason(owned))
+    if any(n.startswith(MIGRATIONS) for n in names):  # rule 8
+        python |= {t for t in UPGRADE_TESTS if (root / t).is_file()}
+        notes.append("rule 8: a migration runs the upgrade tests")
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
     caddy = any(n.startswith(CADDY_INPUTS) for n in names) or bool(touched & set(CADDY_ROOTS)) or PR_WORKFLOW in names
@@ -1661,6 +1677,9 @@ def narrow(picked, changed, event, added=None, root=ROOT, graph=None):
     level = reach_levels(names, mode["depth"], added, root, graph) if names else {}
     smoke_tests, smoke_scripts = smoke(root)
     full = set(picked["python"])
+    # Rule 8: a migration's upgrade tests reach it only through the app's start; they always run, like a changed test.
+    upgrade = set(UPGRADE_TESTS) & full if any(n.startswith(MIGRATIONS) for n in names) else set()
+    level = {**level, **dict.fromkeys(upgrade, 0)}
     python = {p for p in full if p in level}
     left = sorted(full - python)
     # The smoke set runs when the plan drops anything: here by depth, or later by the time budget (prepare removes

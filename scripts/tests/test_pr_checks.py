@@ -2385,6 +2385,23 @@ def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_s
     assert checks.narrow(empty, [], "pull_request", root=tmp_path) is empty
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, repo_map):
+    # Nov 12: #3469 added a migration with an index on tasks.private. Its light plan kept only the tests one step from
+    # the file, not test_task_privacy.py's legacy upgrade tests, and the release check found the crash instead.
+    migration = "backend/migrations/20261112080000_needs_you_per_person.py"
+    for changed in ([migration], ["backend/migrations/__init__.py"]):
+        picked = checks.selection(changed, event, graph=repo_map, added=changed[:1] if changed == [migration] else [])
+        light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
+        assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
+        assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
+    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
+    # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
+    other = ["backend/health.py"]
+    tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
+    assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
+
+
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
     tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
     seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
