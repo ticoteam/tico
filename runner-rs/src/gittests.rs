@@ -1650,6 +1650,94 @@ async fn a_shared_checkout_never_forces_and_says_which_files_conflict() {
     );
 }
 
+/// Product Owner on the Tico Team box: two of its checkouts each added a learning at the end of memory/learnings.md,
+/// and the push after a turn stopped on the conflict for good. Both lines are kept and the push goes through; a
+/// rewritten file (memory/state.md) still stops the catch-up and names it, with nothing half-done left behind.
+#[tokio::test]
+async fn memory_notes_both_checkouts_added_to_keep_both_sides_and_push() {
+    let tmp = Tmp::new();
+    let (bare, seed) = remote(&tmp.0, "bot-product-owner");
+    std::fs::create_dir_all(seed.join("memory")).unwrap();
+    std::fs::write(seed.join("memory/learnings.md"), "# Learnings\n\n- first\n").unwrap();
+    std::fs::write(seed.join("memory/state.md"), "idle\n").unwrap();
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["commit", "-qm", "memory"]);
+    sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+    let mine = tmp.0.join("mine");
+    sh(
+        &tmp.0,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            mine.to_str().unwrap(),
+        ],
+    );
+    let env = turn_env(&tmp.0, &[]);
+
+    std::fs::write(
+        mine.join("memory/learnings.md"),
+        "# Learnings\n\n- first\n- mine\n",
+    )
+    .unwrap();
+    sh(&mine, &["commit", "-qam", "my learning"]);
+    commit_and_push(
+        &seed,
+        "memory/learnings.md",
+        "# Learnings\n\n- first\n- theirs\n",
+    );
+
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "non-fast-forward");
+    assert_eq!(sessions::catch_up(&mine, &env).await, "");
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "");
+    let learnings = std::fs::read_to_string(mine.join("memory/learnings.md")).unwrap();
+    assert!(
+        learnings.contains("- mine\n")
+            && learnings.contains("- theirs\n")
+            && !learnings.contains("<<<<<<<"),
+        "{learnings}"
+    );
+    // The bot's own git is untouched: nothing was written into the repository or its config.
+    assert_eq!(sh(&mine, &["status", "--porcelain"]), "");
+    assert!(!mine.join(".gitattributes").exists() && !mine.join(".git/info/attributes").exists());
+
+    // A task lane's rebase after its turn keeps both sides the same way.
+    std::fs::write(
+        mine.join("memory/learnings.md"),
+        format!("{learnings}- lane\n"),
+    )
+    .unwrap();
+    sh(&mine, &["commit", "-qam", "lane learning"]);
+    commit_and_push(
+        &seed,
+        "memory/learnings.md",
+        &format!("{learnings}- other lane\n"),
+    );
+    assert_eq!(sessions::finish(&mine, "run-1", &env, &[], true).await, "");
+    let learnings = std::fs::read_to_string(mine.join("memory/learnings.md")).unwrap();
+    assert!(
+        learnings.contains("- lane\n") && learnings.contains("- other lane\n"),
+        "{learnings}"
+    );
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "");
+
+    // state.md is rewritten whole each turn: a clash there is a real conflict, undone and named.
+    std::fs::write(mine.join("memory/state.md"), "working on A\n").unwrap();
+    sh(&mine, &["commit", "-qam", "my state"]);
+    commit_and_push(&seed, "memory/state.md", "working on B\n");
+    assert_eq!(execute::push_repo(&mine, &env).await.1, "non-fast-forward");
+    let problem = sessions::catch_up(&mine, &env).await;
+    assert!(
+        problem.contains("they conflict with its unpushed commits in memory/state.md"),
+        "{problem}"
+    );
+    assert!(!mine.join(".git/rebase-merge").exists() && !mine.join(".git/rebase-apply").exists());
+    assert_eq!(
+        std::fs::read_to_string(mine.join("memory/state.md")).unwrap(),
+        "working on A\n"
+    );
+}
+
 /// BotOps, COO, Support and PR Reviewer on the Tico Team box: "Not possible to fast-forward" before each turn and a
 /// refused push after it, only logged, for hours. The turn's prompt now tells the bot to fix its own checkout.
 #[tokio::test]
