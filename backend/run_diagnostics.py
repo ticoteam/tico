@@ -75,7 +75,7 @@ def touch(c, aid, kind=None, payload=None):
 def keep(c, row: AttemptRow, body):
     """A runner's diagnostics for its run (`body` is models.AttemptStderr): its stderr tail, its failed tool calls, or
     both."""
-    kept = keep_stderr(c, row, body.tail) if body.tail is not None else {'kept': False}
+    kept: dict[str, object] = dict(keep_stderr(c, row, body.tail)) if body.tail is not None else {'kept': False}
     if body.failed_tools:
         kept['failed_tools'] = keep_failed_tools(c, row, [t.model_dump() for t in body.failed_tools])
     return kept
