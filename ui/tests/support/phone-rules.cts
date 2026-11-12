@@ -39,7 +39,6 @@ interface Hub { url: string; state: string; token: string; facts: Record<string,
 
 // "rule | element" (a prefix is enough) -> the states it happens in and what it is.
 const ALL = ['no-computer', 'no-credit', 'setup-halfway', 'sign-off', 'bot-waiting'];
-const SET_UP = ALL.filter(state => state !== 'setup-halfway');
 const KNOWN: Record<string, {states: string[]; what: string}> = {
   // Dead ends, reported to the lead on Nov 11 (rc.8 issue hunt, track F).
   '3 | span "Not connected"': {states: ALL,
@@ -48,7 +47,6 @@ const KNOWN: Record<string, {states: string[]; what: string}> = {
     what: 'setup cannot be closed until it is finished (ui/app/welcome.ts reopens it): by design today'},
   // Small tap targets that are the only control of their row or card.
   '6 | a.ghost.asst-learned': {states: ALL, what: 'Assistant: What it has learned is 17 px'},
-  '6 | button.linkish "Edit details"': {states: SET_UP, what: 'a task: Edit details is 19 px'},
   '6 | a "BotOps"': {states: ['sign-off', 'bot-waiting'], what: 'Settings > Computers: an agent row\'s bot link is 16 px'},
   '6 | button.pv-tab.on': {states: ['setup-halfway'], what: 'a pipeline with one stage: its tab is 29 px'},
 };
