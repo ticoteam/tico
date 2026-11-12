@@ -48,6 +48,7 @@ def test_a_server_on_a_newer_prerelease_is_not_shown_an_older_release_as_the_lat
     seen = checker.view("0.6.0-rc.8")
     assert (seen["latest"], seen["available"], seen["url"]) == ("", False, "")
     assert checker.view("0.5.200")["latest"] == "0.5.216" and checker.view("0.5.200")["available"]
+    assert checker.view("0.5.300")["latest"] == "0.5.216"  # a stable build ahead of it still shows it
 
 
 def test_update_is_owner_only(environment):
