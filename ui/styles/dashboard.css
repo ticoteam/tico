@@ -128,4 +128,10 @@ a.dash-big:hover strong{text-decoration:underline}
   .dash-more{width:40px;height:40px}
   .dash-grip{width:32px;height:32px}
   .overview-tabs{padding:10px 12px}
+  /* Factories adds a period control and + Factory to the row: the Company tabs take their own full-width row below. */
+  .of-page .overview-tabs{flex-wrap:wrap}
+  .of-page .overview-tabs>.dash-tabs{order:9;flex-basis:100%;min-width:0;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none}
+  .of-page .overview-tabs>.dash-tabs::-webkit-scrollbar{display:none}
+  /* Six tabs (Share included) fit one 390 px row at this size; a narrower screen scrolls the row, never the page. */
+  .of-page .overview-tabs>.dash-tabs a{flex:none;white-space:nowrap;padding:4px 6px;font-size:var(--t-sm)}
 }
