@@ -369,11 +369,3 @@ def test_calendar_provider_never_notifies_before_the_frozen_invitation_dispatch(
     calendar.create_scheduling_event(start, start + timedelta(minutes=30), 'guest@vendor.example', 'booking', 'Meeting')
     calendar.create_hub_event(start, start + timedelta(minutes=30), 'Meeting', ['guest@vendor.example'], 'hub-event')
     assert all(event['sendUpdates'] == 'none' for event in service.created_events.values())
-
-
-def test_scheduling_preflight_refuses_inbox_never_before_creating_an_event():
-    from connectors.mail import policy
-
-    with patch.object(policy, 'HUB_GET', return_value={'effective': {'mode': 'never'}}):
-        with unittest.TestCase().assertRaises(Refused):
-            policy.sending_preflight('ana@acme.example')

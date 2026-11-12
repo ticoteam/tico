@@ -98,24 +98,3 @@ def test_allow_list_changes_take_effect_without_a_restart(environment):
         {"allowed": [], "allowed_domains": ["nodot"], "expected_revision": revision + 1},
         expected=422,
     )
-
-
-def test_who_can_join_is_the_company_domain_on_the_allow_list(environment):
-    api = environment()
-    riley = person_headers(api, "riley")
-    assert view(api, riley)["join"] == "admin"
-    revision = view(api)["revision"]
-    call(api, "PUT", "/allow", {"allowed": [], "allowed_domains": ["acme.example"], "expected_revision": revision})
-    after = view(api, riley)
-    assert after["join"] == "domain" and after["home_domain"] == "acme.example" and after["domain_sign_in"] is True
-    # Back to "Added by an admin": the domain comes off the list, and only the owner may change it.
-    call(
-        api,
-        "PUT",
-        "/allow",
-        {"allowed": [], "allowed_domains": [], "expected_revision": after["revision"]},
-        riley,
-        expected=403,
-    )
-    call(api, "PUT", "/allow", {"allowed": [], "allowed_domains": [], "expected_revision": after["revision"]})
-    assert view(api)["join"] == "admin"

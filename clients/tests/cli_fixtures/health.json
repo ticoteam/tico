@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "health"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "health",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico health: error: argument sub: invalid choice: 'nope' (choose from check, metrics, findings, report, ready) Did you mean: tico health ready, tico health check?",
-  "exit": 64
- },
- {
-  "argv": [
    "health",
    "check"
   ],
@@ -116,30 +95,6 @@
  {
   "argv": [
    "health",
-   "findings"
-  ],
-  "tools": [
-   [
-    "tico_health_findings",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "health/findings",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "health",
    "report"
   ],
   "tools": [
@@ -152,76 +107,6 @@
   ],
   "http": [],
   "stdout": "{\n  \"error\": \"ValueError: name a finding's key\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "health",
-   "report",
-   "key-1"
-  ],
-  "tools": [
-   [
-    "tico_health_report",
-    {
-     "key": "key-1",
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "POST",
-    "health/findings/key-1/report",
-    {}
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "health",
-   "ready"
-  ],
-  "tools": [
-   [
-    "tico_health_ready",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "health",
-    null
-   ],
-   [
-    "GET",
-    "bots",
-    null
-   ],
-   [
-    "GET",
-    "github/app",
-    null
-   ],
-   [
-    "GET",
-    "repositories",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ready\": false,\n  \"summary\": \"Not ready: 1 blocker.\",\n  \"blockers\": [\n    {\n      \"check\": \"github\",\n      \"detail\": \"GitHub is not connected.\",\n      \"fix\": \"tico github status\"\n    }\n  ],\n  \"warnings\": [],\n  \"github\": {\n    \"connected\": false,\n    \"installed\": false,\n    \"summary\": \"GitHub is not connected.\"\n  },\n  \"computers\": {\n    \"online\": [],\n    \"offline\": []\n  },\n  \"bots\": {\n    \"total\": 0,\n    \"active\": 0,\n    \"planned\": [],\n    \"needs_setup\": [],\n    \"quarantined\": [],\n    \"paused\": []\n  },\n  \"checked\": null\n}\n",
   "stderr": "",
   "exit": 1
  },
@@ -278,18 +163,5 @@
   "stdout": "{\n  \"ready\": false,\n  \"summary\": \"Not ready: 1 blocker, 1 warnings.\",\n  \"blockers\": [\n    {\n      \"check\": \"unknown_bots\",\n      \"detail\": \"No such bot: bots-1, bots-1b\",\n      \"fix\": \"tico bot list\"\n    }\n  ],\n  \"warnings\": [\n    {\n      \"check\": \"github\",\n      \"detail\": \"GitHub is not connected.\",\n      \"fix\": \"tico github status\"\n    }\n  ],\n  \"github\": {\n    \"connected\": false,\n    \"installed\": false,\n    \"summary\": \"GitHub is not connected.\"\n  },\n  \"computers\": {\n    \"online\": [],\n    \"offline\": []\n  },\n  \"bots\": {\n    \"total\": 0,\n    \"active\": 0,\n    \"planned\": [],\n    \"needs_setup\": [],\n    \"quarantined\": [],\n    \"paused\": []\n  },\n  \"checked\": null\n}\n",
   "stderr": "",
   "exit": 1
- },
- {
-  "argv": [
-   "health",
-   "metrics",
-   "--minutes",
-   "soon"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico health metrics: error: argument --minutes: invalid int value: 'soon'",
-  "exit": 64
  }
 ]

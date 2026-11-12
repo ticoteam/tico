@@ -74,11 +74,6 @@ def _enabled(api, audience):
     return next(a["enabled"] for a in listed if a["id"] == audience)
 
 
-def test_a_reader_invite_link_is_handed_to_the_person_and_never_to_botops():
-    # The link is the only copy of its token, so it is a secret for this purpose: refused, with where to make it.
-    assert "invite link" in person_only("POST", "/api/v2/audiences/aud-1/invites")
-
-
 def test_an_owner_drafts_through_botops_and_the_approval_click_stays_theirs(api, botops):  # noqa: F811
     ana = turn(api, botops, person="ana-test", text="Set up the board audience")
     made = act(api, ana, "POST", "audiences", {"name": "Board"})

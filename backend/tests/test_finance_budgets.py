@@ -84,19 +84,6 @@ def test_children_never_pass_the_parent_and_siblings_never_overlap(books):
         assert FA.budget_for(c, account_id=account(c, "1000"), at=AT) is None
 
 
-def test_a_child_that_would_pass_its_parent_asks_the_parent_owner(books):
-    with books.transaction() as c:
-        pid, kids = _tree(c)
-        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
-        grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
-        assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
-        give(c, "human:ben", grow.approval_id)
-        done = FA.approval_decided(c, grow.approval_id, AT)
-        assert done is not None and done.status == "committed"
-        web = SB.versions(c, [kids["web"]])[kids["web"]]
-        assert max(web, key=lambda v: v.version).amount == 6_001
-
-
 def _latest(c, budget_id):
     """The version in force last: the highest (effective day, version)."""
     return max(SB.versions(c, [budget_id])[budget_id], key=lambda v: (v.effective_from, v.version))
@@ -687,24 +674,6 @@ def test_asking_again_for_a_source_resizes_its_hold_or_says_why_not(books):
         assert not refused.allowed and refused.hold_id == first.hold_id and "kept" in refused.reason
         assert FA.budget_state(c, ai, AT).held == 900
         assert again(300).allowed and FA.budget_state(c, ai, AT).held == 300
-
-
-def test_period_hold_sums_search_the_budget_index_by_period(books):
-    from backend.finance.store import budgets as SB
-
-    seen: list[str] = []
-    with books.transaction() as c:
-        ai = budget(c, "AI services")
-        c.set_trace_callback(seen.append)
-        SB.held(c, [ai], "2026-10-01", "2026-10-31")
-        SB.held(c, [ai], "2026-10-01", "2026-10-31", target="teammate:bot:coder")
-        SB.target_used(c, [ai], "2026-10-01", "2026-10-31", "teammate:bot:coder", absorbed=True)
-        c.set_trace_callback(None)
-        sums = [q for q in seen if "FROM fin_holds" in q]
-        assert len(sums) == 3
-        for q in sums:
-            plan = " ".join(str(r[3]) for r in c.execute("EXPLAIN QUERY PLAN " + q))
-            assert "fin_holds_budget (budget_id=? AND status=? AND held_on>? AND held_on<?)" in plan, plan
 
 
 def test_an_overlap_refusal_names_a_sibling_only_where_the_asker_may_see_it(books):

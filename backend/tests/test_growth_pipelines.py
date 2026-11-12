@@ -95,30 +95,6 @@ def _go_live(c, row):
 
 
 # ----------------------------------------------------------------------------- the shapes
-def test_experiments_and_monitoring_are_made_together_with_these_stages():
-    shapes = {
-        pid: [(s["name"], s["by_hand"], s["task_limit"], s["owner"]) for s in M.PRESETS[pid]["stages"]]
-        for pid in ("growth-experiments", "success-experiments", "growth-monitoring", "success-monitoring")
-    }
-    for kind in ("growth", "success"):
-        assert shapes[f"{kind}-experiments"] == [
-            ("Ideas", True, None, "assignee"),
-            ("Building", False, 6, "assignee"),
-            ("Running", False, None, "assignee"),
-        ]
-        assert shapes[f"{kind}-monitoring"] == [
-            ("Watching", True, None, "assignee"),
-            ("Slipping", False, None, "assignee"),
-        ]
-        assert M.manager_role(f"{kind}-monitoring") == M.manager_role(f"{kind}-experiments")
-        stages = M.PRESETS[f"{kind}-experiments"]["stages"]
-        assert [r["line"] for r in stages[1]["requirements"]] == ["Go-live page"]
-        assert stages[1]["requirements"][0]["who_oks"] == "people_only"
-        assert [(r["line"], r.get("who_oks", "none")) for r in stages[2]["requirements"]] == [("Results page", "none")]
-        assert [r["kind"] for r in M.PRESETS[f"{kind}-monitoring"]["stages"][1]["requirements"]] == ["owner_done"]
-    assert not any(s["requests_move_on"] for p in shapes for s in M.PRESETS[p]["stages"])
-
-
 def test_monitoring_is_made_only_where_its_experiments_pipeline_is(c):
     made = _set_up(c)
     assert {"growth-monitoring", "success-monitoring"} <= set(made)

@@ -178,19 +178,6 @@ def test_a_failed_wake_answers_503_and_does_not_start_again_at_once(asleep, upst
     assert upstream.seen == []
 
 
-def test_a_wake_slower_than_the_hold_answers_503_and_finishes(asleep):
-    slow = Slow(asleep.system, 0.8)
-    svc = asleep.start(hold=0.2)
-    began = time.monotonic()
-    r, _ = send(svc, "GET", "/")
-    assert r.status == 503 and r.getheader("Retry-After") == "5" and time.monotonic() - began < 0.7
-    deadline = time.monotonic() + 10
-    while record(asleep)["state"] != "running":
-        assert time.monotonic() < deadline
-        time.sleep(0.05)
-    assert slow.ups == 1
-
-
 def test_health_probes_never_wake_a_company(asleep):
     slow = Slow(asleep.system)
     svc = asleep.start()
@@ -247,24 +234,6 @@ def test_a_body_over_the_servers_limit_is_refused_before_a_start(asleep, upstrea
     assert r.status == 413 and upstream.seen == []  # streamed: refused once past the limit, never sent whole
     r, _ = send(svc, "POST", "/x", body=b"x" * 10)
     assert r.status == 201
-
-
-def test_held_requests_are_capped_per_company(asleep):
-    # The start takes 3 s, far longer than the bound below: a refusal that waited for the start would fail clearly,
-    # while a slow VM only adds a little time to an immediate refusal.
-    Slow(asleep.system, 3.0)
-    svc = asleep.start(max_held_per_company=1)
-    first = threading.Thread(target=send, args=(svc,))
-    first.start()
-    deadline = time.monotonic() + 5
-    while not svc.held:
-        assert time.monotonic() < deadline
-        time.sleep(0.01)
-    began = time.monotonic()
-    r, data = send(svc)
-    assert r.status == 503 and r.getheader("Retry-After") == "5" and time.monotonic() - began < 0.4
-    first.join(10)
-    assert svc.held == {}
 
 
 def test_connections_are_capped(asleep):

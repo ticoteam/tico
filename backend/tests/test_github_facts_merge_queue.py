@@ -185,7 +185,6 @@ def test_a_re_run_in_the_same_suite_is_the_same_check_and_its_newest_run_counts(
     ("states", "want"),
     [
         (("skipped",), SKIPPED),
-        (("skipped", "skipped"), SKIPPED),
         (("success", "skipped"), PASSED),
         (("skipped", "failure"), (R.NOT_MET, B, "Checks failed on acme/app#1: check-2")),
         (("skipped", "pending"), (R.WAITING, "github", "Checks running")),

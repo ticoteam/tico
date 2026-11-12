@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "notice"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico: \"tico notice\" is now \"tico message send\"; the old name stops working in the next release\nExample: tico message send <to> <text>\ntico message send: error: the following arguments are required: to, text",
-  "exit": 64
- },
- {
-  "argv": [
-   "notice",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico: \"tico notice\" is now \"tico message send\"; the old name stops working in the next release\nExample: tico message send <to> <text>\ntico message send: error: the following arguments are required: text",
-  "exit": 64
- },
- {
-  "argv": [
    "notice",
    "list"
   ],

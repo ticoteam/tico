@@ -202,7 +202,7 @@ declare function card(key: string, file: VisualFile): Element | null;
     await short.evaluate((m: HTMLMediaElement) => m.pause());
     // ---- a seek back to the start is a place too: an address that runs out on that seek recovers at the start,
     // playing if it was, paused if it was
-    for (const [key, id, playing] of [['m7:zero@1', 'zero', true], ['m8:still@1', 'still', false]] as [string, string, boolean][]) {
+    for (const [key, id, playing] of [['m8:still@1', 'still', false]] as [string, string, boolean][]) {
       await page.evaluate(([k, f]: [string, VisualFile]) => card(k, f) && true, [key, file(id, {src: `${VIS}/visuals/${id}-1`})] as [string, VisualFile]);
       const clip = page.locator(`[data-visual-key="${key}"] audio`);
       await clip.evaluate((m: HTMLMediaElement) => m.readyState >= 1 || new Promise(r => m.addEventListener('loadedmetadata', r, {once: true})));

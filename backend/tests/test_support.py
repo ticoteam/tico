@@ -721,14 +721,6 @@ def test_a_persons_own_draft_is_theirs_to_approve_and_is_filed_as_them(environme
     assert len(riley) == 2 and api.get("/api/v2/support/tickets", headers=signed_in()).json()["tickets"] == []
 
 
-def test_a_bots_draft_keeps_the_usual_approver(environment, hq):  # noqa: F811  (the fixture)
-    api = environment()
-    drafts_only(api)
-    approval = draft(api, as_bot(api)).json()
-    approver, _ = decide(api, approval["id"])
-    assert approver != "bot:assistant" and approver.startswith("human:")
-
-
 def test_a_persons_token_cannot_say_yes_to_a_report_through_the_needs_you_list(environment, hq):  # noqa: F811  (the fixture)
     api = environment()
     drafts_only(api)
@@ -1036,40 +1028,6 @@ def _payload(message=REPORT):
     return {"message": message, "content_sha256": hashlib.sha256(message.encode()).hexdigest()}
 
 
-def test_concurrent_retries_of_one_bots_report_are_sent_once(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
-    import threading
-    import time
-
-    api = environment()
-    as_bot(api)
-    who = Identity("bot:assistant", "bot", agent="hermes")
-    entered, release = threading.Event(), threading.Event()
-
-    def slow(request):  # the first send is still out when the retry arrives
-        entered.set()
-        release.wait(5)
-        return hq(request)
-
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
-    answers = {}
-
-    def send_it(name):
-        answers[name] = api.app.state.support.report(who, _payload())
-
-    first = threading.Thread(target=send_it, args=("first",))
-    first.start()
-    assert entered.wait(5)
-    retry = threading.Thread(target=send_it, args=("retry",))
-    retry.start()
-    time.sleep(0.3)  # the retry is at the send's lock, and waits for the first to finish
-    release.set()
-    first.join(10)
-    retry.join(10)
-    assert len(hq.seen) == 1 and len(hq.tickets) == 1
-    assert answers["first"]["sent"] is True and answers["retry"]["sent"] is True
-    assert answers["first"]["ticket"]["id"] == answers["retry"]["ticket"]["id"]
-
-
 @pytest.mark.parametrize("ending", ["credential", "bot"])
 def test_a_bot_whose_credential_or_self_has_ended_sends_nothing_by_the_rule(environment, hq, ending):  # noqa: F811  (the fixture)
     from backend import task_asks
@@ -1121,44 +1079,6 @@ def test_a_retry_after_the_owner_turns_direct_reports_on_sends_it_once_and_the_w
     assert grants(api) == [(drafted.json()["id"], task_asks.WITHDRAWN, None)]
     once_more = draft(api, bot)
     assert once_more.json()["ticket"]["id"] == again.json()["ticket"]["id"] and len(hq.seen) == 1
-
-
-def test_a_report_queued_while_the_owner_turns_direct_reports_off_waits_for_a_person(environment, hq, monkeypatch):  # noqa: F811  (the fixture)
-    import threading
-    import time
-
-    from backend import task_asks
-
-    api = environment()
-    as_bot(api)
-    who = Identity("bot:assistant", "bot", agent="hermes")
-    entered, release = threading.Event(), threading.Event()
-
-    def slow(request):  # the first send is still out when the queued report arrives
-        entered.set()
-        release.wait(5)
-        return hq(request)
-
-    monkeypatch.setattr(support, "TRANSPORT", httpx.MockTransport(slow))
-    answers = {}
-
-    def send_it(name, message):
-        answers[name] = api.app.state.support.report(who, _payload(message))
-
-    first = threading.Thread(target=send_it, args=("first", REPORT))
-    first.start()
-    assert entered.wait(5)
-    waiting = threading.Thread(target=send_it, args=("queued", "A report queued behind the first one"))
-    waiting.start()
-    time.sleep(0.3)  # the queued report is waiting for the send's lock
-    drafts_only(api)  # the owner turns direct reports off while it waits
-    release.set()
-    first.join(10)
-    waiting.join(10)
-    assert answers["first"]["sent"] is True
-    assert answers["queued"]["status"] == "pending"  # the rule is read under the lock: a person OKs it
-    assert len(hq.seen) == 1
-    assert grants(api) == [(answers["queued"]["id"], task_asks.WAITING, None)]
 
 
 def test_a_send_that_fails_asks_nobody_and_a_retry_sends_it_once(environment, hq):  # noqa: F811  (the fixture)

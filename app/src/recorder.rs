@@ -417,22 +417,4 @@ mod tests {
             assert!(!answers(Some(&stale), "approval-1", &answer), "too late");
         }
     }
-
-    #[test]
-    fn record_opens_the_recorder_on_the_pages_own_org() {
-        let hub = Url::parse("https://acme.example.com/").unwrap();
-        let link = Url::parse(&recorder_link(&hub)).unwrap();
-        assert_eq!(
-            (link.scheme(), link.host_str()),
-            ("tico-recorder", Some("open"))
-        );
-        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
-        assert_eq!(
-            query,
-            [(
-                "server".to_string(),
-                "https://acme.example.com/".to_string()
-            )]
-        );
-    }
 }

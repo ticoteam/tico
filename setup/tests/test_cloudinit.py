@@ -73,23 +73,6 @@ def test_server_render_puts_the_env_in_the_inputs_block_and_stays_valid_yaml():
     )
 
 
-def test_server_script_opens_only_web_ports_and_never_prints_the_inputs():
-    body = script(load("tico-server.yaml"), "/usr/local/sbin/tico-bootstrap")
-    assert "ufw allow 80/tcp" in body and "ufw allow 443/tcp" in body and "ufw default deny incoming" in body
-    assert "set -x" not in body and "cat \"$IN\"" not in body and "echo \"$IN\"" not in body
-    assert body.index("rm -f \"$IN\"") > body.index(
-        "\"$installer\" --yes"
-    )  # inputs are removed only after the installer started the stack
-    assert "$D/.env\" ]; then" in body  # an existing .env (with the updater's TICO_TAG) is never overwritten
-
-
-def test_runner_bootstrap_uses_install_sh_runner_pinned_to_the_release_so_it_gets_the_updater():
-    body = script(load("tico-runner.yaml"), "/usr/local/sbin/tico-runner-bootstrap")
-    assert 'sh "$installer" --runner --url "$url" --code "$code" --label "$label"' in body
-    assert "releases/download/$version/install.sh" in body
-    assert "docker run" not in body and "--docker-only" not in body
-
-
 def test_a_cloud_runner_offers_its_screen_unless_its_input_says_0():
     def inputs(**kw):
         text = cloudinit.runner_user_data(

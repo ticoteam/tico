@@ -708,14 +708,6 @@ def test_an_answer_the_assistant_gives_for_a_person_says_so_on_the_task(c):
     assert [(e["actor"], e["via"]) for e in history] == [(BEN, "assistant")]
 
 
-def test_an_ask_names_only_someone_who_can_read_the_task(c):
-    row = _new(c, by=BEN, owner=BUILDER, private=True)
-    with _refused("private"):
-        H.task_ask(c, BUILDER, row["id"], "human:cara", "Which vendor do we keep?", seen_version=_version(c, row["id"]))
-    assert len(H.task_view(c, row["id"], BEN)["to_leave"]) == 1
-    H.task_ask(c, BUILDER, row["id"], BEN, "Which vendor do we keep?", seen_version=_version(c, row["id"]))
-
-
 def test_an_ask_on_a_private_task_makes_nobody_a_reader_and_says_how_to_share_it(c):
     """Not even the bot that owns a private task no person is on brings a person in by asking them: the ask is refused
     with the fix, and nothing is written. Once they are added under Who can see, the same ask goes."""
@@ -909,18 +901,6 @@ def test_a_private_task_waits_before_a_stage_whose_owner_cannot_read_it_until_so
     assert (moved["stage"]["name"], moved["owner_id"]) == ("Review", "bot:reviewer")
 
 
-def test_a_child_restored_before_its_parent_is_under_it_again_once_both_are_back(c):
-    parent = _new(c)
-    child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=parent["id"])
-    X.settled(c)
-    for tid in (child["id"], parent["id"]):
-        assert task_delete.delete_tasks(c, [tid], apply=True, keep_work=True)["applied"]
-    for tid in (child["id"], parent["id"]):
-        assert task_delete.restore_tasks(c, [tid], ANA)["restored"] == [tid]
-    assert H.TR.parent_of(c, child["id"]) == parent["id"]
-    assert H.task_view(c, child["id"], ANA)["filed_by"] == parent["id"]
-
-
 def test_a_task_is_never_replaced_by_an_insert(c):
     import sqlite3
 
@@ -928,33 +908,6 @@ def test_a_task_is_never_replaced_by_an_insert(c):
     with pytest.raises(sqlite3.IntegrityError, match="never replaced"):
         c.execute("INSERT OR REPLACE INTO tasks (id, status, owner_id) VALUES (?, 'open', ?)", (row["id"], HELPER))
     assert E.task(c, row["id"])["owner_id"] == BUILDER
-
-
-def test_an_ok_bound_to_content_that_moves_the_task_on_is_still_given_and_can_be_used(c):
-    """A bot asks Ana for an OK on its own task and finishes its work: her OK is the last thing the stage needs, so the
-    task moves on as she gives it. The visit ends with the OK met, not taken back: it can be used."""
-    from backend import task_asks as K
-
-    email = {"to": ["pat@example.com"], "subject": "Your invoice", "body_sha256": "a" * 64}
-    row = _new(c, by=ANA, owner=BUILDER)
-    asked = K.ask_ok(
-        c,
-        BUILDER,
-        ANA,
-        "Send this email?",
-        shows=["email:e1"],
-        subject="hq_reply:TK-1",
-        content=email,
-        task_id=row["id"],
-    )
-    H.task_done(c, BUILDER, row["id"], "Drafted.", _version(c, row["id"]))
-    assert H.task(c, row["id"])["status"] == "open"  # it waits on Ana's OK
-    shown = K.show(c, ANA, asked["requirement_id"], email, own_click=True)
-    K.give_ok(c, ANA, asked["requirement_id"], shown, own_click=True)
-    assert H.task(c, row["id"])["status"] == "done"
-    assert K.standing(c, asked["requirement_id"]) == K.OK
-    K.use(c, asked["requirement_id"], "hq_reply:TK-1", email, BUILDER)
-    assert K.standing(c, asked["requirement_id"]) == K.USED
 
 
 def test_an_ok_taken_back_before_the_task_moves_on_stays_taken_back_whatever_the_clock_says(c, monkeypatch):

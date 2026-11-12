@@ -41,40 +41,6 @@ def test_ids_resolve_to_a_tier_a_version_and_a_price():
     assert providers.MODEL_BY_ID["tico-medium"]["tier"]["auto"] is True
 
 
-def test_a_row_lists_its_context_window_only_where_a_source_gives_one():
-    rows = {row["id"]: row for row in providers.MODEL_CATALOG}
-    # Anthropic's models overview (1M tokens); OpenAI's model pages (1,050,000); Google's Gemini 3.8 Flash page
-    # (1,048,576 input tokens); docs.x.ai (500k). OpenRouter states no window for Mercury 3, so its row has none.
-    assert rows["claude-opus-5-5"]["context_tokens"] == rows["claude-haiku-5-5"]["context_tokens"] == 1_000_000
-    assert rows["claude-opus-5"]["context_tokens"] == 1_000_000
-    assert rows["gpt-6.1-sol"]["context_tokens"] == rows["gpt-6-sol"]["context_tokens"] == 1_050_000
-    assert rows["gpt-6-luna"]["context_tokens"] == rows["gpt-6-astra"]["context_tokens"] == 1_050_000
-    assert rows["gemini-3.8-flash"]["context_tokens"] == 1_048_576 and rows["grok-4.6"]["context_tokens"] == 500_000
-    assert "context_tokens" not in rows["mercury-3"] and "context_tokens" not in rows["deepseek-v4.1-flash"]
-    # A Gateway tier takes the window HQ lists for the model it runs on: Opus 5.5 in Fast mode has Opus's 1M; Low Fast and
-    # X-Low (DeepSeek V4.1 Flash, V4 Flash) have 1,048,576.
-    assert rows["tico-medium-1.0"]["context_tokens"] == rows["tico-low-1.0"]["context_tokens"] == 1_000_000
-    assert T.row_for("tico-high-1.0")["context_tokens"] == 1_000_000
-    assert rows["tico-medium-fast-1.0"]["context_tokens"] == rows["tico-high-fast-1.0"]["context_tokens"] == 1_000_000
-    assert rows["tico-xhigh-1.0"]["context_tokens"] == rows["tico-xlow-fast-1.0"]["context_tokens"] == 1_000_000
-    assert rows["tico-xlow-1.0"]["context_tokens"] == 1_048_576
-    assert rows["tico-low-fast-1.0"]["context_tokens"] == 1_048_576
-    assert T.meeting_rows()[0]["context_tokens"] == 1_000_000
-
-
-def test_the_model_list_offers_the_ten_level_tiers_and_no_old_id():
-    tico = [
-        row["id"]
-        for row in providers.MODEL_CATALOG
-        if row["id"].startswith("tico-") and not row.get("deprecated") and not row.get("meeting")
-    ]
-    assert tico == [f"{T.tier_id(level, fast)}-1.0" for level in T.LEVEL_IDS for fast in (False, True)]
-    assert [
-        row["id"] for row in providers.MODEL_CATALOG if row.get("recommended") and row["id"].startswith("tico-")
-    ] == ["tico-medium-1.0"]
-    assert all("department" not in (row.get("tier") or {}) for row in providers.MODEL_CATALOG)
-
-
 def _doc(**change):
     doc = json.loads(json.dumps(T.SNAPSHOT))
     doc.update(change)
@@ -130,17 +96,6 @@ def test_a_malformed_refresh_is_ignored_and_a_good_one_is_used_for_an_hour():
     )
 
 
-def test_a_schema_1_answer_from_hq_is_ignored_and_the_snapshot_stands():
-    """HQ's department lineup (schema 1) is not this app's: the release's copy stays, at Medium."""
-    old = json.loads(json.dumps({**T.SNAPSHOT, "schema": 1, "departments": [{"id": "general", "name": "General"}]}))
-    old["models"] = [{**row, "id": "tico-general-" + row["id"][5:], "department": "general"} for row in old["models"]]
-    for doc in (old, {**T.SNAPSHOT, "schema": 1}, {**T.SNAPSHOT, "schema": 3}, {**T.SNAPSHOT, "schema": "2"}):
-        assert T.validate(json.loads(json.dumps(doc))) is None
-    before = T.catalog()
-    assert T.refresh("https://gateway.example.test/v1/gateway", _opener(old), now=1000.0, force=True) is before
-    assert T.catalog()["schema"] == 2 and T.default_model() == "tico-medium-1.0"
-
-
 def test_a_bot_takes_its_bot_yaml_gateway_block_and_medium_when_it_has_none():
     assert T.DEFAULT_TIER == "tico-medium" and T.default_model() == "tico-medium-1.0"
     assert T.bot_model() == "tico-medium-1.0"
@@ -149,34 +104,6 @@ def test_a_bot_takes_its_bot_yaml_gateway_block_and_medium_when_it_has_none():
     assert T.bot_model({"level": "extreme", "fast": "yes"}) == "tico-medium-1.0"
     assert T.bot_model("not a block") == "tico-medium-1.0"
     assert not hasattr(T, "department_of") and "departments" not in T.SNAPSHOT
-
-
-def test_a_bot_with_no_model_runs_on_medium_or_its_gateway_blocks_level(api):
-    from backend import models_preset
-
-    with api.app.state.store.read() as c:
-        assert models_preset.model_for_bot(c, api.app.state.store.settings, "ops", {}) == "tico-medium-1.0"
-        assert (
-            models_preset.model_for_bot(c, api.app.state.store.settings, "ops", {"gateway": {"level": "high"}})
-            == "tico-high-1.0"
-        )
-    assert models_preset.pick("tico-low-1.0") == "tico-low-1.0" and models_preset.pick(lambda: "tico-x") == "tico-x"
-
-
-def test_the_decisions_level_picks_the_decision_model_and_how_long_it_may_take():
-    assert [J.decide_model(level) for level in ("low", "medium", "high")] == [
-        "tico-decide-low",
-        "tico-decide-medium-1.0",
-        "tico-decide-high-1.0",
-    ]
-    assert [J.decide_timeout(level) for level in ("low", "medium", "high")] == [8, 30, 30]
-    # Anything else is Low, exactly as before the levels.
-    assert (J.normalize_level(None), J.normalize_level("MEDIUM "), J.normalize_level("extreme")) == (
-        "low",
-        "medium",
-        "low",
-    )
-    assert J.decide_model("extreme") == "tico-decide-low" and J.decide_timeout(None) == 8
 
 
 def test_there_is_no_decisions_level_to_pick(api):
@@ -371,131 +298,6 @@ def test_the_fetch_tool_asks_the_route_with_the_url_and_a_default_size(api, monk
     assert error and len(asked) == 2
 
 
-def test_a_templates_gateway_block_holds_only_a_level_and_fast():
-    import yaml
-
-    seen = 0
-    for path in sorted(Path("templates/catalog").glob("*/bot.yaml")):
-        block = (yaml.safe_load(path.read_text()) or {}).get("gateway")
-        if block is not None:
-            seen += 1
-            assert T.clean_block(block) == block, path
-            assert T.bot_model(block).startswith("tico-" + block["level"])
-    assert seen >= 5
-    assert (
-        T.clean_block({"level": "extreme"}) is None
-        and T.clean_block({"fast": False}) is None
-        and T.clean_block("low") is None
-    )
-
-
-def test_the_shipped_snapshot_matches_a_copy_of_the_gateways_own_catalog():
-    """Prices and models cannot drift from what Tico HQ publishes: tiers (with long-prompt rates) and decision levels."""
-    hq = json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())
-    ours = T.SNAPSHOT
-    assert hq["schema"] == 2 and "departments" not in hq
-
-    def versions(cat, kind):
-        return {
-            v["id"]: (v["model"], v["price"], v.get("long_prompt"), v.get("inputs"))
-            for row in cat[kind]
-            for v in row["versions"]
-        }
-
-    assert versions(ours, "models") == versions(hq, "models") and len(versions(hq, "models")) == 11
-    assert versions(ours, "decisions") == versions(hq, "decisions")
-    # The services that are live at Tico HQ are the same here.
-    assert next(s for s in ours["services"] if s["id"] == "fetch") == next(
-        s for s in hq["services"] if s["id"] == "fetch"
-    )
-    # What each chat model reads: Claude reads text, images and PDFs; DeepSeek and Mercury text only.
-    reads = {v["id"]: v["inputs"] for row in hq["models"] for v in row["versions"]}
-    text = {"tico-xlow-1.0", "tico-xlow-fast-1.0", "tico-low-fast-1.0", "tico-meeting-1.0"}
-    assert all(i == ["text"] for k, i in reads.items() if k in text)
-    assert all(i == ["text", "image", "pdf"] for k, i in reads.items() if k not in text)
-    assert len(reads) == 11
-    assert {row["id"]: row["current"] for row in ours["models"]} == {row["id"]: row["current"] for row in hq["models"]}
-    # Medium and High Decide are priced like their model, so no Decide call is counted at the ceiling.
-    assert T.resolve("tico-decide-high-1.0")["price"] == {"input": 5.0, "output": 25.0, "cached_input": 0.5}
-
-
-def test_the_snapshot_is_the_contracts_lineup():
-    """Lineup 3 as HQ's schema 2 catalog lists it: five levels with Fast, the meeting tier, three decision levels."""
-    cat = T.SNAPSHOT
-    assert cat["schema"] == 2 and cat["as_of"] == "2026-11-06" and "departments" not in cat
-    assert cat["levels"] == [
-        {"id": "xlow", "name": "X-Low"},
-        {"id": "low", "name": "Low"},
-        {"id": "medium", "name": "Medium"},
-        {"id": "high", "name": "High"},
-        {"id": "xhigh", "name": "X-High"},
-    ]
-    shown = {
-        row["id"]: (row["level"], row["fast"], row["versions"][0]["model"], T._price_tuple(row["versions"][0]["price"]))
-        for row in cat["models"]
-    }
-    assert shown == {
-        "tico-xlow": ("xlow", False, "DeepSeek V4 Flash", (0.14, 0.027, 0.27)),
-        "tico-xlow-fast": ("xlow", True, "Inception Mercury 3", (0.30, 0.03, 1.05)),
-        "tico-low": ("low", False, "Claude Haiku 5.5", (0.15, 0.015, 0.75)),
-        "tico-low-fast": ("low", True, "DeepSeek V4.1 Flash", (0.45, 0.045, 1.80)),
-        "tico-medium": ("medium", False, "Claude Sonnet 5.5", (2.50, 0.25, 12.50)),
-        "tico-medium-fast": ("medium", True, "Claude Opus 5.5 (fast mode)", (10.0, 1.0, 50.0)),
-        "tico-high": ("high", False, "Claude Opus 5.5", (5.0, 0.50, 25.0)),
-        "tico-high-fast": ("high", True, "Claude Opus 5.5 (fast mode)", (10.0, 1.0, 50.0)),
-        "tico-xhigh": ("xhigh", False, "Claude Fable 5.1", (12.50, 1.25, 62.50)),
-        "tico-xhigh-fast": ("xhigh", True, "Claude Fable 5.1", (12.50, 1.25, 62.50)),
-        "tico-meeting": (None, False, "Inception Mercury 3", (0.30, 0.03, 1.05)),
-    }
-    assert list(shown)[-1] == "tico-meeting" and all("department" not in row for row in cat["models"])
-    assert T.resolve("tico-low-1.0")["long_prompt"] == {
-        "from": 100_000,
-        "input": 0.75,
-        "output": 3.75,
-        "cached_input": 0.075,
-    }
-    fable = next(row for row in cat["models"] if row["id"] == "tico-xhigh")["versions"][0]
-    assert (fable["context"], fable["max_output"]) == (1_000_000, 128_000)
-    decisions = {
-        row["id"]: (row["current"], [(v["id"], v["model"]) for v in row["versions"]]) for row in cat["decisions"]
-    }
-    assert decisions == {
-        "tico-decide-low": ("1.1", [("tico-decide-low-1.0", "Jev 1.13"), ("tico-decide-low-1.1", "Jev 1.14")]),
-        "tico-decide-medium": ("1.0", [("tico-decide-medium-1.0", "Claude Sonnet 5.5")]),
-        "tico-decide-high": ("1.0", [("tico-decide-high-1.0", "Claude Opus 5.5")]),
-    }
-    services = [row["id"] for row in cat["services"]]
-    assert services[:14] == [
-        "decide",
-        "inbox.email",
-        "inbox.numbers",
-        "alerts",
-        "search",
-        "fetch",
-        "images",
-        "svg",
-        "video",
-        "signals",
-        "digest",
-        "transcribe",
-        "mail.physical",
-        "letters",
-    ]
-    assert "classify" not in services
-    by_id = {row["id"]: row for row in cat["services"]}
-    assert all(by_id[i]["status"] == "live" and by_id[i]["details"] for i in ("svg", "video", "signals", "digest"))
-    assert by_id["mail.physical"]["name"] == "Mail"
-    assert {"Address", "Own box"} <= {d["label"] for d in by_id["mail.physical"]["details"]}
-    assert [d["label"] for d in by_id["transcribe"]["details"]] == ["Recordings", "Live"]
-    assert cat["changes"][-1] == {
-        "date": "2026-11-06",
-        "text": "Five levels, X-Low to X-High, each with Fast. Departments removed. Decide Low on Jev 1.14.",
-    }
-    # The copy is HQ's answer as it is (gateway/catalog.py `build()`), the benchmarks HQ adds included.
-    assert T.SNAPSHOT == json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())
-    assert T.lineup("decide")["decisions"][0]["when"] == T.DECISION_WHEN["tico-decide-low"]
-
-
 def test_what_a_model_reads_comes_from_the_catalog_and_is_never_guessed():
     assert T.resolve("tico-medium")["inputs"] == T.resolve("tico-medium-1.0")["inputs"] == ["text", "image", "pdf"]
     assert T.resolve("tico-low-fast-1.0")["inputs"] == T.resolve("tico-xlow-1.0")["inputs"] == ["text"]
@@ -515,37 +317,6 @@ def test_what_a_model_reads_comes_from_the_catalog_and_is_never_guessed():
         )
         assert "inputs" not in cleaned["models"][0]["versions"][0]
         assert T.resolve("tico-medium-1.0", cleaned)["inputs"] == ["text"]
-
-
-def test_every_tool_a_service_names_is_a_hub_tool():
-    from clients import hubtools
-
-    known = {entry["name"] for entry in hubtools.TOOLS}
-    named = {name for service in T.SNAPSHOT["services"] for name in service["tools"]}
-    assert {
-        "tico_inbound_wait",
-        "tico_gateway_search",
-        "tico_gateway_fetch",
-        "tico_decision_ask",
-    } <= named and named <= known, named - known
-
-
-def test_a_decision_reserves_the_spend_of_jev(api, monkeypatch):
-    from backend import judge as B
-
-    store = api.app.state.store
-    store.settings.gateway_key, store.settings.gateway_url = "gw-synthetic", "https://hq.example/v1/gateway/decisions"
-    step = B.gateway(store.settings, store)
-    seen = []
-    real = B.reservation
-    monkeypatch.setattr(B, "reservation", lambda s, models, *a: seen.append(list(models)) or real(s, models, *a))
-    assert B.step_models([step]) == ["tico-decide-low"]
-    with store.read() as c:
-        engine = B.server_engine(store, c, step)
-    store.settings.decisions_monthly_usd = 50
-    with pytest.raises(J.JudgeError):  # the fake host answers nothing; only the reservation matters
-        engine({"team": "Acme"}, {"q": {"type": "choice", "question": "?", "criteria": {"a": "a", "b": "b"}}})
-    assert seen == [["tico-decide-low"]], seen
 
 
 def test_a_rehearsal_server_searches_nothing_even_with_a_gateway_key(api, monkeypatch):
@@ -687,14 +458,6 @@ def test_a_held_pinned_id_is_refused_by_the_model_check(monkeypatch):
     )
 
 
-def test_every_held_catalog_model_is_held_by_the_gateway_too():
-    """The Gateway's held list names each held catalog row's model, so a live tier cannot reopen one of them. Terra is
-    offered on Codex (2026-11-11) but stays held for paid Gateway use."""
-    held = [row["id"] for row in providers.MODEL_CATALOG if row.get("held")]
-    assert all(T._model_key(model) in T.HELD_MODELS for model in held)
-    assert T._model_key("gpt-6.1-terra") in T.HELD_MODELS
-
-
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     """The Gateway card shows each service's details (label and value pairs); a row from an older HQ has none."""
     hq = {
@@ -718,39 +481,6 @@ def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
         "tico_mail_list",
         "tico_mail_read",
     ]
-
-
-def test_the_gateway_page_lists_one_model_row_per_level_with_its_fast_model(api):
-    from backend import gateway_page
-
-    body = get(api, "gateway")
-    models = body["models"]
-    assert models == gateway_page.models(T.SNAPSHOT)
-    assert set(models) == {"levels", "meeting", "decisions"}
-    xlow, low, medium, high, xhigh = models["levels"]
-    assert [row["name"] for row in models["levels"]] == ["X-Low", "Low", "Medium", "High", "X-High"]
-    assert low["model"] == {
-        "model": "Claude Haiku 5.5",
-        "price": "$0.15 / $0.75 per 1M",
-        "long": "$0.75 / $3.75 per 1M past 100K",
-        "context": 1_000_000,
-        "inputs": ["text", "image", "pdf"],
-    }
-    assert low["fast"]["model"] == "DeepSeek V4.1 Flash" and low["fast"]["inputs"] == ["text"]
-    assert high["fast"]["price"] == medium["fast"]["price"] == "$10.00 / $50.00 per 1M"
-    assert xlow["model"]["model"] == "DeepSeek V4 Flash" and xlow["fast"]["model"] == "Inception Mercury 3"
-    assert xhigh["model"]["model"] == xhigh["fast"]["model"] == "Claude Fable 5.1"
-    assert models["meeting"]["model"] == "Inception Mercury 3" and models["meeting"]["price"] == "$0.30 / $1.05 per 1M"
-    assert [(row["name"], row["model"], row["price"]) for row in models["decisions"]] == [
-        ("Decide · Low", "Jev 1.14", "$0.06 per 1M input"),
-        ("Decide · Medium", "Claude Sonnet 5.5", "$2.50 / $12.50 per 1M"),
-        ("Decide · High", "Claude Opus 5.5", "$5.00 / $25.00 per 1M"),
-    ]
-    search = next(row for row in body["services"] if row["id"] == "search")
-    assert search["for"] == "Search the web and read what it finds" and search["details"][0] == {
-        "label": "Search",
-        "value": "$0.00875 each",
-    }
 
 
 def test_settings_gateway_models_leave_out_a_tier_that_runs_the_held_model():

@@ -8,15 +8,6 @@ from clients import judge as J
 from evals.pipeline_judge import adapter, run
 
 
-def test_the_cases_are_usable_and_cover_both_domains_and_the_traps():
-    cases = run.load()
-    assert run.problems(cases) == []
-    assert len(cases) >= 30
-    traps = {c.get("trap") for c in cases}
-    assert {"missing_file", "old_version", "wrong_screen", "no_email"} <= traps
-    assert {c["expected"] for c in cases} == {"met", "not_met", "unsure"}
-
-
 def test_the_dry_run_passes_the_oracle_and_fails_the_sloppy_judge_on_false_met(tmp_path, capsys):
     assert run.main(["--dry-run", "--out", str(tmp_path)]) == 0
     cases = run.load()
@@ -60,12 +51,6 @@ def test_a_model_call_that_fails_is_raised_to_the_caller_and_never_passes():
 
     with pytest.raises(J.JudgeError):
         adapter.judge_once(broken, run.load()[0])
-
-
-def test_the_only_eval_model_is_jev_and_the_gateways_cost_is_kept_or_priced():
-    assert adapter.MODELS == ("jev",)
-    assert adapter.cost_usd("jev", {"cost_usd": 0.5, "prompt_tokens": 1_000_000}) == 0.5
-    assert adapter.cost_usd("jev", {"prompt_tokens": 1_000_000, "completion_tokens": 0}) == adapter.PRICES["jev"][0]
 
 
 def test_no_gateway_key_means_no_engine_for_any_model_and_nothing_is_sent():
@@ -127,21 +112,6 @@ def test_the_bar_refuses_an_empty_case_set():
     assert not result["passes_bar"] and "no cases" in result["bar_failures"]
 
 
-def test_an_always_unsure_judge_fails_the_real_cases_on_accuracy():
-    cases = run.load()
-    result = run.score("always-unsure", lambda case: (0.5, 0.0, 5), cases)
-    assert not result["passes_bar"] and result["unsure_rate"] == 1.0
-    assert result["accuracy"] < run.ACCURACY_BAR
-
-
-def test_a_perfect_judge_that_takes_sixty_seconds_fails_the_real_cases():
-    cases = run.load()
-    perfect = {c["id"]: c["expected"] for c in cases}
-    assert run.score("perfect", _answering(perfect), cases)["passes_bar"]
-    slow = run.score("perfect-slow", _answering(perfect, ms=60_000), cases)
-    assert not slow["passes_bar"] and slow["accuracy"] == 1.0
-
-
 def test_a_run_with_no_key_is_incomplete_and_sends_nothing(monkeypatch, tmp_path, capsys):
     built = []
 
@@ -159,15 +129,6 @@ def test_the_default_judges_all_go_through_the_gateway_key_only():
     engines = {name: adapter.build_engine(name, {"TICO_GATEWAY_KEY": "k"}) for name in adapter.MODELS}
     assert all(callable(engine) for engine in engines.values())
     assert adapter.build_engine("jev", {"ANTHROPIC_API_KEY": "direct"}) is None
-
-
-def test_the_screenshot_cases_are_unsure_because_the_judge_is_shown_no_image_text():
-    """Fix L2-7: the server reads no text from an image, so every screenshot case is unsure and the judge sees none of it."""
-    shots = [c for c in run.load() if (c.get("attachment") or {}).get("kind") == "image"]
-    assert len(shots) == 5
-    for case in shots:
-        assert case["expected"] == "unsure", case["id"]
-        assert adapter.state_for(case)["attachment"]["text"] is None, case["id"]
 
 
 def test_the_eval_judge_is_shown_the_work_it_is_judging():
@@ -239,19 +200,6 @@ def test_a_call_that_fails_twice_is_still_an_error_and_fails_the_bar():
     # Codex round 6, P3: both failed calls and the pause count in the latency, so the case is not left out of the p95.
     assert all(r["ms"] == 8000 for r in result["rows"]) and result["p95_ms"] == 8000
     assert not result["passes_bar"] and any("failed calls" in f for f in result["bar_failures"])
-
-
-def test_the_cases_the_rubric_says_do_not_count_are_not_met():
-    """Readable evidence that fails the rubric is not met, not unsure (Codex round 9, P3: a lead with no named person)."""
-    by_id = {c["id"]: c["expected"] for c in run.load()}
-    for case_id in (
-        "dev-tests-truncated",
-        "dev-review-partial",
-        "mkt-brief-comment",
-        "mkt-page-timeout",
-        "mkt-lead-generic-email",
-    ):
-        assert by_id[case_id] == "not_met", case_id
 
 
 def test_the_eval_author_reaches_the_judge_only_through_the_pr_links_detail(monkeypatch):

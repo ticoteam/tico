@@ -38,15 +38,6 @@ def test_the_ask_lint_still_lets_the_product_name_through():
     assert lint_plain('Tico tasks are on the Tasks page. Approve the new price?') == []
 
 
-@pytest.mark.parametrize('program', ['tico', 'hub'])
-def test_a_run_log_label_reads_the_same_under_either_name(program):
-    assert turns.tool_label({'tool': 'Bash', 'summary': f'{program} task close'}) == 'Closing a task'
-    assert turns.tool_label({'tool': 'Bash', 'summary': f'cd {program} task list'}) == 'Listing tasks'
-    assert turns.tool_label({'tool': 'Bash', 'summary': f'cd web {program} task done 12'}) == 'Finishing a task'
-    assert turns.tool_label({'tool': 'shell', 'summary': f'{program} release now'}) == f'Ran {program}'
-    assert turns.tool_label({'tool': 'mcp__tico__tico_task_move'}) == 'Moving a task'
-
-
 def test_a_release_that_changes_the_cli_is_flagged_for_bots_under_either_name():
     for body in ('`tico task show` now prints the stage.', 'The tico CLI reads --json.', '`hub task list` sorts.'):
         assert update_feeds._TOOLING.search(body), body

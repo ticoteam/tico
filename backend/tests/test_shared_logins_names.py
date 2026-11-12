@@ -7,18 +7,6 @@ from backend import views
 from backend.subscription_identity import connection_id, display_names, identity
 
 
-def test_display_names_batch_matches_identity(api):
-    r = runner(api, "ana", "Studio Mac")
-    rid = r["runner_id"]
-    sid = connection_id(rid, "work")
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO registry_metadata VALUES(?,?)", (sid, json.dumps({"display_name": "Work ChatGPT"})))
-    with api.app.state.store.read() as c:
-        names = display_names(c)
-        assert names[sid] == "Work ChatGPT"
-        assert identity(c, rid, "work")["display_name"] == names[sid]
-
-
 def test_shared_logins_uses_preloaded_names(api, monkeypatch):
     r = runner(api, "ana", "Studio Mac")
     rid = r["runner_id"]

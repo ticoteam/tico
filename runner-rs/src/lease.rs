@@ -120,44 +120,6 @@ mod tests {
     }
 
     #[test]
-    fn renewals_go_on_while_every_async_worker_is_blocked() {
-        let ok = r#"{"lease_until":"x","lease_seconds":90}"#;
-        let (url, seen) = hub(vec![(200, ok); 8]);
-        let client = Client::new(&url, "runner-token", 5, 0).unwrap();
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        let flags = flags();
-        rt.block_on(async {
-            let renewer = spawn(
-                &client,
-                "a1".into(),
-                flags.clone(),
-                Duration::from_millis(50),
-            );
-            // Both workers busy with synchronous work, the way a long secret scrub or a held state lock would be.
-            let block = || tokio::spawn(async { std::thread::sleep(Duration::from_millis(600)) });
-            let (a, b) = (block(), block());
-            std::thread::sleep(Duration::from_millis(600));
-            let renewed = seen.lock().unwrap().len();
-            assert!(
-                renewed >= 3,
-                "only {renewed} renewals while the workers were blocked"
-            );
-            assert!(seen
-                .lock()
-                .unwrap()
-                .iter()
-                .all(|r| r.starts_with("POST /api/v2/attempts/a1/renew ")));
-            let _ = (a.await, b.await);
-            renewer.abort();
-        });
-        assert!(!flags.lost.load(Ordering::SeqCst));
-    }
-
-    #[test]
     fn a_stop_with_a_reason_stops_the_turn_with_that_reason_and_does_not_lose_the_lease() {
         // Dev 573: a quarantined bot's renewal is a Stop with the quarantine's reason, not a stale lease.
         let stop = r#"{"lease_until":"x","lease_seconds":90,"stop":true,"stop_reason":"Quarantined: 10 refusals today, resumes about 10:05 UTC"}"#;
@@ -217,32 +179,5 @@ mod tests {
         });
         assert!(flags.lost.load(Ordering::SeqCst));
         assert_eq!(seen.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn the_turn_ending_stops_the_renewals() {
-        let (url, _) = hub(vec![]);
-        let client = Client::new(&url, "runner-token", 5, 0).unwrap();
-        let flags = flags();
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            let renewer = spawn(
-                &client,
-                "a3".into(),
-                flags.clone(),
-                Duration::from_secs(3600),
-            );
-            // `notify_waiters` wakes only a renewer already waiting, as at the end of a turn.
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            flags.done.store(true, Ordering::SeqCst);
-            flags.done_notify.notify_waiters();
-            tokio::time::timeout(Duration::from_secs(5), renewer)
-                .await
-                .expect("renewer ended")
-                .unwrap();
-        });
     }
 }

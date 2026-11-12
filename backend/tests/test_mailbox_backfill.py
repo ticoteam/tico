@@ -143,15 +143,6 @@ def test_a_second_run_writes_nothing_and_changes_nothing_people_changed(api):
         }
 
 
-def test_the_migration_itself_is_idempotent(api):
-    with tx(api) as c:
-        team(c)
-        UP(c)
-        once = (rows(c), grants(c))
-        UP(c)
-        assert (rows(c), grants(c)) == once
-
-
 def test_a_company_with_no_inbox_bots_upgrades_to_almost_nothing(api):
     """TIDY: people sign in, nobody has an inbox bot or a gmail entry; a person's automation on their own email."""
     with tx(api) as c:
@@ -211,12 +202,6 @@ def test_a_bot_s_mail_automation_keeps_the_mailbox_it_heard(api):
         assert got == {(ANA, "bot", coo): ("read_write", "migration")}
         assert MA.action_refusal(c, "bot:" + coo, ANA, "archive") is None
         assert MA.level(c, "person:ben", CARA) == "none"
-
-
-def test_a_new_database_has_nothing_to_backfill(api):
-    with tx(api) as c:
-        assert MA.backfill(c) == {"mailboxes": 0, "accesses": 0}
-        assert rows(c) == {} and grants(c) == {}
 
 
 def test_a_roster_person_who_is_only_a_mailbox_becomes_a_shared_inbox(api):

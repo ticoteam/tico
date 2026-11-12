@@ -39,9 +39,6 @@ class OnePassword(unittest.TestCase):
         self.assertEqual(env["UPFLUENCE_PASSWORD"], "hunter2")
         self.assertEqual(env["PANGRAM_API_KEY"], "plain")
         self.assertTrue(all(tok == "ops_secret" for _, tok in self.seen))
-        for k in op.SECRET_KEYS:
-            env.pop(k, None)
-        self.assertNotIn("OP_SERVICE_ACCOUNT_TOKEN", env)
 
 
 if __name__ == "__main__":

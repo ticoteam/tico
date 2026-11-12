@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "editions"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "editions",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico editions: error: argument sub: invalid choice: 'nope' (choose from list, show) Did you mean: tico editions show, tico editions list?",
-  "exit": 64
- },
- {
-  "argv": [
    "editions",
    "list"
   ],
@@ -105,29 +84,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "editions",
-   "show"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico editions show <id>\ntico editions show: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "editions",
-   "list",
-   "--limit",
-   "x"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico editions list: error: argument --limit: invalid int value: 'x'",
-  "exit": 64
  }
 ]

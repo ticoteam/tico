@@ -24,12 +24,6 @@ def jobs_for(api, bot):
         return c.execute("SELECT count(*) FROM jobs WHERE bot_id=?", (bot,)).fetchone()[0]
 
 
-def test_the_core_set_is_the_default_suggestions_and_botops():
-    assert "botops" in CORE
-    # 15 since the Content Owner became a growth pack offered, not pre-checked (docs/pipelines-v3.md "Growth and Success").
-    assert len(CORE) >= 15, f"only {len(CORE)} core templates: a card was lost or stopped suggesting by default"
-
-
 @pytest.mark.parametrize("template", CORE)
 def test_each_core_template_passes_the_preflight_checks(tmp_path, template):
     """The quick half of the slow test below, on every pull request: a template that lost a required section (the

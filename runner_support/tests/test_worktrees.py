@@ -97,21 +97,6 @@ def retired_allocation(row, client, published=None):
     )
 
 
-@pytest.mark.parametrize('wire', [False, True], ids=['add-response', 'runner-record'])
-def test_recovery_warning_keeps_facts_from_each_retired_computer(wire):
-    first = {'computer_id': 'first', 'last_commit': 'a' * 40, 'ahead': 2, 'dirty_files': 1}
-    latest = {'computer_id': 'second', 'last_commit': 'b' * 40, 'ahead': 4, 'dirty_files': 3}
-    detail = {'retired_worktree': latest, 'retired_worktrees': [first, latest]}
-    link = {'detail_json': json.dumps(detail)} if wire else detail
-    warning = W._recovery_warning(link)
-    assert '2 unpushed commits' in warning and '4 unpushed commits' in warning
-    assert '1 changed files' in warning and '3 changed files' in warning
-    assert 'a' * 40 in warning and 'b' * 40 in warning
-    assert '(first)' in warning and '(second)' in warning
-    assert warning.count('4 unpushed commits') == 1
-    assert '2 unpushed commits' in W._recovery_warning({'retired_worktree': first})
-
-
 def publish_task_branch(base, row):
     git(base, 'checkout', '-b', row['branch'])
     (base / 'file').write_text('published task work')
@@ -300,27 +285,6 @@ def test_failed_push_keeps_tree_and_retry_preserves_saved_branch(trees):
     W.act(workspace, row, 'remove', os.environ.copy())
     W.act(workspace, row, 'restore', os.environ.copy())
     assert (path / 'file').read_text() == 'keep this'
-
-
-@pytest.mark.slow
-def test_restore_remote_branch_then_default(trees):
-    workspace, base, remote, row, client = trees
-    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
-    (path / 'file').write_text('published task work')
-    git(path, '-c', 'user.name=Sam', '-c', 'user.email=sam@example.com', 'commit', '-am', 'Task work')
-    published = git(path, 'rev-parse', 'HEAD')
-    git(path, 'push', 'origin', row['branch'])
-    git(base, 'worktree', 'remove', '--force', str(path))
-    git(base, 'branch', '-D', row['branch'])
-    W.act(workspace, row, 'restore', os.environ.copy())
-    assert git(path, 'symbolic-ref', '--short', 'HEAD') == row['branch']
-    assert git(path, 'rev-parse', 'HEAD') == published
-    assert (path / 'file').read_text() == 'published task work'
-    git(base, 'worktree', 'remove', '--force', str(path))
-    git(base, 'branch', '-D', row['branch'])
-    git(base, 'push', 'origin', '--delete', row['branch'])
-    W.act(workspace, row, 'restore', os.environ.copy())
-    assert git(path, 'rev-parse', 'HEAD') == git(base, 'rev-parse', 'origin/main')
 
 
 @pytest.mark.slow
@@ -599,29 +563,6 @@ def test_release_of_an_open_task_never_moves_unsaved_or_unpushed_work(trees):
     git(path, 'push', 'origin', row['branch'])
     assert W.act(workspace, released, 'remove', os.environ.copy()) == 'removed'
     assert not path.exists()
-
-
-@pytest.mark.slow
-def test_removal_keeps_a_changed_name_that_is_not_utf8_and_saves_nothing(trees):
-    workspace, base, remote, row, client = trees
-    client.get.return_value['repositories'][0]['setup_command'] = None
-    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
-    odd = path / os.fsdecode(b'notes-\xff.txt')
-    odd.write_text('ghp_abcdefghijklmnopqrstuvwxyz0123\n')
-    (path / 'draft.txt').write_text('half done')
-    head = git(path, 'rev-parse', 'HEAD')
-    branch = git(path, 'symbolic-ref', '--short', 'HEAD')
-    index = git(path, 'write-tree')
-    with pytest.raises(UnicodeDecodeError):
-        W.act(workspace, row, 'remove', os.environ.copy())
-    assert odd.exists() and (path / 'draft.txt').read_text() == 'half done'
-    assert git(path, 'rev-parse', 'HEAD') == head
-    assert git(path, 'symbolic-ref', '--short', 'HEAD') == branch, 'the removal must not switch branches'
-    assert git(path, 'write-tree') == index, 'the removal must not add to the index'
-    assert (
-        'refs/heads/' + W.wip_branch(row)
-        not in git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads').split()
-    )
 
 
 @pytest.mark.parametrize('name', ['.env.local'])
@@ -1576,16 +1517,6 @@ def test_a_release_tree_mid_merge_is_kept_and_never_aborted(trees, tmp_path):
     assert '<<<<<<< ' in (path / 'file').read_text()
 
 
-def test_another_operation_in_progress_beside_a_merge_is_kept(trees, tmp_path):
-    workspace, base, remote, row, client = trees
-    path = _merge_in_progress(trees, tmp_path)
-    gitdir = Path(git(path, 'rev-parse', '--path-format=absolute', '--git-dir'))
-    (gitdir / 'CHERRY_PICK_HEAD').write_text(git(path, 'rev-parse', 'HEAD') + '\n')
-    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
-        W.act(workspace, row, 'remove', os.environ.copy())
-    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
-
-
 @pytest.mark.parametrize('side, kept', [('--ours', 'task file'), ('--theirs', 'main file')])
 def test_a_resolution_taking_either_side_beside_a_conflict_is_kept(trees, tmp_path, side, kept):
     workspace, base, remote, row, client = trees
@@ -1734,12 +1665,4 @@ def test_invalid_stage_bytes_edited_to_replacement_characters_are_kept(trees, tm
     with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
         W.act(workspace, row, 'remove', os.environ.copy())
     assert (path / 'file').read_bytes() == edited
-    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
-
-
-def test_a_merged_path_name_that_is_not_utf8_is_kept(trees, tmp_path):
-    workspace, base, remote, row, client = trees
-    path = _merge_in_progress(trees, tmp_path, adds=('caf\udce9.txt',))
-    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
-        W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')

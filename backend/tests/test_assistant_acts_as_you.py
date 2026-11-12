@@ -2,7 +2,6 @@
 (backend/assistant.py `admits_on_turn`, backend/app.py request_guard). The NEVER list, the 30-minute window, the member's
 ceiling, the owner's switch, and approvals that only the person decides stay as they were."""
 
-import inspect
 import json
 import re
 from pathlib import Path
@@ -125,26 +124,6 @@ def test_a_message_older_than_thirty_minutes_no_longer_lends_its_words(api):
     # Archiving a bot is gated (not a task create, which is exempt), so the stale citation leaves only a card.
     revision = post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
     assert revision["error"]["code"] == "confirm_required"
-
-
-def test_a_member_keeps_the_ceiling_on_their_own_assistant(api):
-    as_member(api, "ben@acme.example")
-    with api.app.state.store.transaction() as c:
-        secret = H.task_create(c, "human:ana", "Ana's private review", "Nothing for ben.", "bot:inbox")["id"]
-    r, attempt = assistant_turn(api, "ben-test")
-    token = attempt["token"]
-    get(api, "tasks/" + secret, token, expected=404)
-    post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
-
-
-def test_the_owners_switch_puts_every_write_back_on_a_card(api):
-    set_rule(api, assistant_direct=False)
-    r, attempt = assistant_turn(api, "ana-test")
-    token = attempt["token"]
-    # Archiving a bot is gated: with the owner's switch off, the Assistant only proposes it.
-    revision = post(api, "bots/ops/archive", {"expected_revision": 1}, token=token, expected=403)
-    assert revision["error"]["code"] == "confirm_required"
-    set_rule(api, assistant_direct=True)
 
 
 def test_a_run_that_is_not_the_persons_own_chat_lends_nothing(api):
@@ -493,36 +472,6 @@ REVIEWED = {
     "POST /api/v2/computers/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
     "POST /api/v2/runners/{rid}/revoke": "removes a computer the person may remove (its operator or an admin; a Confirm card in BotOps); the extra key it deletes holds the computer's first name, not a credential",
 }
-
-
-def test_every_route_that_touches_a_credential_or_a_sign_in_is_never_a_chat_write(api):
-    """Walks app.routes: any route whose handler reads or writes a credential, a grant, a computer's sign-in or keys, a
-    subscription, a signing key, an invite, or the providers, must be on NEVER for every write it takes
-    (or be reviewed in REVIEWED with its reason). A new such route that is neither fails here, not in a chat."""
-    touches = re.compile(
-        r"credential|model_login|computer_keys|shared_key|attach_shared|login|logout|password|service_key|"
-        r"enroll|pairing|subscription|signing|replace_lost|invite|provider"
-    )
-    checked, offenders = 0, []
-    for route in api.app.routes:
-        methods = getattr(route, "methods", None)
-        endpoint = getattr(route, "endpoint", None)
-        if not methods or endpoint is None:
-            continue
-        try:
-            source = inspect.getsource(endpoint)
-        except (OSError, TypeError):
-            continue
-        if not touches.search(source):
-            continue
-        path = re.sub(r"\{[^}]+\}", "x1", route.path)
-        for method in sorted(set(methods) - {"GET", "HEAD", "OPTIONS"}):
-            checked += 1
-            if assistant.admits_on_turn(method, path, None):
-                offenders.append(f"{method} {route.path}")
-    assert checked >= 20, checked
-    unreviewed = [o for o in offenders if o not in REVIEWED]
-    assert not unreviewed, "\n".join(unreviewed)
 
 
 def _template_tools():

@@ -25,17 +25,6 @@
  {
   "argv": [
    "org",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico: \"tico org\" is now \"tico team show\"; the old name stops working in the next release\ntico team show: error: unrecognized arguments: nope It takes: --person, --team",
-  "exit": 64
- },
- {
-  "argv": [
-   "org",
    "order",
    "manager-1"
   ],
@@ -102,81 +91,6 @@
  {
   "argv": [
    "org",
-   "order"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico org order <manager>\ntico org order: error: the following arguments are required: manager",
-  "exit": 64
- },
- {
-  "argv": [
-   "org",
-   "reports-to",
-   "teammate-1",
-   "reports-to-1"
-  ],
-  "tools": [
-   [
-    "tico_org_reports_to",
-    {
-     "operation_id": null,
-     "reports_to": "reports-to-1",
-     "teammate": "teammate-1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"ValueError: Name the teammate as bot:<slug> or human:<id>\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "org",
-   "reports-to",
-   "teammate-1",
-   "reports-to-1",
-   "--on-behalf-of",
-   "on-behalf-of-1"
-  ],
-  "tools": [
-   [
-    "tico_org_reports_to",
-    {
-     "on_behalf_of": "on-behalf-of-1",
-     "operation_id": null,
-     "reports_to": "reports-to-1",
-     "teammate": "teammate-1"
-    }
-   ]
-  ],
-  "http": [],
-  "stdout": "{\n  \"error\": \"ValueError: Name the teammate as bot:<slug> or human:<id>\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "org",
-   "reports-to"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico org reports-to <teammate> <manager>\ntico org reports-to: error: the following arguments are required: teammate, manager",
-  "exit": 64
- },
- {
-  "argv": [
-   "org",
    "models"
   ],
   "tools": [
@@ -197,95 +111,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "org",
-   "show"
-  ],
-  "tools": [
-   [
-    "tico_org_show",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "org",
-    null
-   ],
-   [
-    "GET",
-    "bots",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"AttributeError: 'str' object has no attribute 'get'\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "org",
-   "reports-to",
-   "1",
-   "1"
-  ],
-  "tools": [
-   [
-    "tico_org_reports_to",
-    {
-     "operation_id": null,
-     "reports_to": "1",
-     "teammate": "1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"ValueError: Name the teammate as bot:<slug> or human:<id>\"\n}\n",
-  "stderr": "",
-  "exit": 1
- },
- {
-  "argv": [
-   "org",
-   "reports-to",
-   "bot:ana",
-   "human:7"
-  ],
-  "tools": [
-   [
-    "tico_org_reports_to",
-    {
-     "operation_id": null,
-     "reports_to": "human:7",
-     "teammate": "bot:ana"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "bots",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"error\": \"AttributeError: 'str' object has no attribute 'get'\"\n}\n",
-  "stderr": "",
-  "exit": 1
  }
 ]

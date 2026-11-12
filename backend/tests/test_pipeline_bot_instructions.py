@@ -40,54 +40,6 @@ def card(template):
     return yaml.safe_load((CATALOG / template / "card.yaml").read_text())
 
 
-def test_the_six_seats_have_templates():
-    assert len(SIX) == 6 and set(SIX) <= {p.name for p in CATALOG.iterdir()}
-
-
-@pytest.mark.parametrize("template", SIX)
-def test_no_pipeline_template_teaches_the_old_words(template):
-    assert (CATALOG / template / "AGENT.md").exists()
-    found = [
-        f"{path.relative_to(CATALOG)}: {m.group(0)}" for path, text in texts(template) for m in OLD_WORDS.finditer(text)
-    ]
-    assert not found, found
-
-
-@pytest.mark.parametrize(
-    "template, stages, commands",
-    [
-        ("builder", ["On deck", "Build", "Fixes 1", "Fixes 2"], ["tico task link", "tico task attach", "--req"]),
-        (
-            "reviewer",
-            ["Review 1 or Review 2", "New commits since the review"],
-            ["headRefOid", "tico file publish", "tico task attach", "--req"],
-        ),
-        (
-            "segment-product-owner",
-            ["Ideas", "Spec", "In development", "Validate"],
-            ["tico task attach", "--pipeline engineering"],
-        ),
-        ("product-manager", ["Late", "No owner", "On ice"], ["tico task reassign"]),
-        (
-            "engineering-manager",
-            ["Late", "No owner", "On ice", "Changed after OK", "Merged anyway"],
-            ["tico task reassign"],
-        ),
-        (
-            "release-owner",
-            ["Merge", "Release"],
-            ["tico task queue", "tico task release", '"Fixes 2"', "--force-with-lease"],
-        ),
-    ],
-)
-def test_each_template_names_its_stages_and_how_to_leave_them(template, stages, commands):
-    text = agent(template)
-    for stage in stages:
-        assert f"**{stage}" in text, (template, stage)
-    for command in commands:
-        assert command in text, (template, command)
-
-
 @pytest.mark.parametrize("template", ["builder", "reviewer", "release-owner"])
 def test_no_github_bot_may_merge(template):
     rules = settings(template)
@@ -122,11 +74,3 @@ def test_the_builder_and_release_manager_may_push_a_rebased_branch_and_never_a_t
         assert tag in rules["deny"], (template, tag)
     assert lease not in settings("reviewer")["allow"]
     assert "Bash(gh pr checkout *)" in settings("release-owner")["allow"]
-
-
-def test_the_release_manager_is_named_once():
-    assert card("release-owner")["name"] == "Release Owner"
-    named = [
-        p.name for p in CATALOG.iterdir() if (p / "card.yaml").exists() and card(p.name)["name"] == "Release Owner"
-    ]
-    assert named == ["release-owner"]

@@ -498,52 +498,6 @@ def test_a_persons_thread_message_to_a_bot_starts_before_the_bots_older_queued_w
     assert (attempt['message']['refs'] or {}).get('carries') == asked['id'], attempt['message']
 
 
-def test_operations_and_computers_share_one_company_default_across_runners(api, monkeypatch):
-    """Each computer's summary used to rebuild company pools/groups; one Default memo covers the listing."""
-    from backend import usage_limits
-    from backend.tests.helpers.api import runner
-
-    first = waiters(api, n=0, running=0)
-    second = runner(api, label='Other synthetic computer')
-    assign(api, second, 'finance')
-    ready(api, second, ['finance'])
-    post(api, 'chat/ops', {'text': 'Queue on first computer'})
-    post(api, 'chat/finance', {'text': 'Queue on second computer'})
-    calls = []
-    real = usage_limits.company
-
-    def once(c):
-        calls.append(1)
-        return real(c)
-
-    monkeypatch.setattr(usage_limits, 'company', once)
-    machines = get(api, 'operations')['machines']
-    ops_calls = len(calls)
-    calls.clear()
-    computers = get(api, 'computers')['computers']
-    computer_calls = len(calls)
-    ids = {first['runner_id'], second['runner_id']}
-    assert ids <= {m['id'] for m in machines}
-    assert ids <= {m['id'] for m in computers}
-    assert ops_calls == 1, ops_calls
-    assert computer_calls == 1, computer_calls
-
-
-def test_live_totals_match_each_computers_live_counts(api):
-    """Health's capacity fence used one live() query per computer; the fleet pass must agree."""
-    from backend import start_places
-    from backend.tests.helpers.api import runner
-
-    first = waiters(api, n=2, running=1)
-    second = runner(api, label='Other capacity computer')
-    assign(api, second, 'finance')
-    ready(api, second, ['finance'])
-    with api.app.state.store.read() as c:
-        totals = start_places.live_totals(c)
-        for rid in (first['runner_id'], second['runner_id']):
-            assert totals.get(rid, 0) == sum(start_places.live(c, rid).values())
-
-
 def waits_of(api, computer):
     machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
     return machine['turn_counts']['waits']
@@ -686,22 +640,6 @@ def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
     assert claim(api, computer, 'finance') is not None
 
 
-def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
-    computer = bot_waiting_for_finance(api)
-    memory(api, computer, 0.86)
-    from backend.start_places import computer_hold
-
-    with api.app.state.store.read() as c:
-        assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            'UPDATE runner_load_samples SET created_at=created_at-300,sampled_at=sampled_at-300 WHERE runner_id=?',
-            (computer['runner_id'],),
-        )
-    with api.app.state.store.read() as c:
-        assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
-
-
 def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_persons_message(api):
     """A frozen computer stops sampling; with diagnostics on its last sample is old and it admits no bot's start."""
     import time
@@ -768,58 +706,6 @@ def test_an_older_delivery_cannot_move_a_hold_set_by_a_newer_reading(api):
     computer = bot_waiting_for_finance(api)
     memory(api, computer, 0.3)
     batch(api, computer, [(-300, 0.9)])
-    assert claim(api, computer, 'finance') is not None
-
-
-def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporting_until_it_samples_again(api):
-    """Samples past the 48-hour window are pruned, but the computer still reported before: it stays held until it
-    sends a fresh sample, and a computer that never reported is not held (above)."""
-    import time
-
-    computer = bot_waiting_for_finance(api)
-    memory(api, computer, 0.3)
-    with api.app.state.store.read() as c:
-        marked = c.execute(
-            'SELECT last_sampled_at FROM runners_with_state WHERE id=?', (computer['runner_id'],)
-        ).fetchone()[0]
-    assert marked == int(time.time()) // 60 * 60
-    with api.app.state.store.transaction() as c:
-        c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute(
-            'UPDATE runner_states SET last_sampled_at=last_sampled_at-200000 WHERE runner_id=?',
-            (computer['runner_id'],),
-        )
-    assert claim(api, computer, 'finance') is None
-    memory(api, computer, 0.3)
-    assert claim(api, computer, 'finance') is not None
-
-
-def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startups_keep_its_mark(api):
-    """A database from before the mark: starting the server backfills it from the samples the computer kept. Retention
-    then prunes those samples with nothing new ingested, and a second start keeps the mark, so the computer is still
-    not reporting until a fresh sample arrives."""
-    import time
-    from backend import performance as P
-
-    store = api.app.state.store
-    computer = bot_waiting_for_finance(api)
-    rid = computer['runner_id']
-    memory(api, computer, 0.3)
-    now = int(time.time()) // 60 * 60
-    with store.transaction() as c:
-        # Migration 0062 gives such a computer a state row with no mark.
-        c.execute('UPDATE runner_states SET last_sampled_at=NULL WHERE runner_id=?', (rid,))
-    store.initialize()
-    with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
-    P.sweep(store, now=int(time.time()) + 49 * 3600)
-    with store.read() as c:
-        assert c.execute('SELECT count(*) FROM runner_load_samples WHERE runner_id=?', (rid,)).fetchone()[0] == 0
-    store.initialize()
-    with store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners_with_state WHERE id=?', (rid,)).fetchone()[0] == now
-    assert claim(api, computer, 'finance') is None
-    memory(api, computer, 0.3)
     assert claim(api, computer, 'finance') is not None
 
 

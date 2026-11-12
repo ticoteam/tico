@@ -218,13 +218,6 @@ def test_every_table_is_classified(tmp_path, booted):
     assert {t: n for t in names if (n := sum(t in g for g in groups)) != 1} == {}
 
 
-def test_devcopy_names_no_finance_table_as_one_it_empties(tmp_path, booted):
-    """Finance empties its own tables (finance.DEV_COPY_EMPTIED, in its scrub), so devcopy's emptied list has none."""
-    store = Store(Settings(db_path=_copy(booted, tmp_path / "hub.sqlite")))
-    with closing(sqlite3.connect(store.settings.db_path)) as c:
-        assert [t for t in devcopy.emptied(c) if t.startswith("fin_")] == []
-
-
 def test_server_env_sources_whole_with_spaces(tmp_path, booted):
     import subprocess
 

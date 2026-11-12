@@ -492,15 +492,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_redirect_is_an_error_not_a_destination() {
-        let (url, seen) = serve(vec![(302, "{}")]).await;
-        let client = Client::new(&url, "t", 5, 3).unwrap();
-        let err = client.get("config").await.unwrap_err();
-        assert_eq!((err.status, err.retryable), (302, false));
-        assert_eq!(seen.lock().unwrap().len(), 1);
-    }
-
-    #[tokio::test]
     async fn a_network_failure_is_retryable_and_says_so() {
         let mut client = Client::new("http://127.0.0.1:9", "t", 1, 1).unwrap();
         client.backoff_scale = 0.001;

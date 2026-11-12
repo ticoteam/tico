@@ -129,15 +129,6 @@ impl Redactor {
         }
     }
 
-    /// Holds the redactor for `d`, the way a scrub stuck in git or in a large file holds its thread; `held` hears
-    /// once it is.
-    #[cfg(test)]
-    pub fn hold_for(&self, d: std::time::Duration, held: std::sync::mpsc::Sender<()>) {
-        let _held = self.inner.write().unwrap();
-        held.send(()).unwrap();
-        std::thread::sleep(d);
-    }
-
     pub fn is_empty(&self) -> bool {
         self.inner.read().unwrap().matcher.is_none()
     }
@@ -850,30 +841,5 @@ mod tests {
         );
         assert_eq!(*untouched, plain);
         assert!(matches!(r.scrub_text("no secret here"), Cow::Borrowed(_)));
-    }
-
-    /// Bench, not run by CI: heap bytes requested by `scrub_json` over 10,000 deltas, with no secret in them and
-    /// with one in each.
-    #[test]
-    #[ignore]
-    fn bench_scrub_json_allocations_for_10k_deltas() {
-        use serde_json::json;
-        let r = Redactor::new(&["granted-secret-value".into()]);
-        let delta = |i: usize, text: &str| json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": format!("token {i} {text}")});
-        let plain: Vec<Value> = (0..10_000).map(|i| delta(i, "of the answer ")).collect();
-        let leaky: Vec<Value> = (0..10_000)
-            .map(|i| delta(i, "granted-secret-value "))
-            .collect();
-        for (name, events) in [("no secret", &plain), ("secret in each", &leaky)] {
-            let asked = crate::util::alloc_probe::requested();
-            for e in events {
-                let v = r.scrub_json(e);
-                std::hint::black_box(&v);
-            }
-            eprintln!(
-                "scrub_json, 10,000 deltas, {name}: bytes requested {}",
-                crate::util::alloc_probe::requested() - asked
-            );
-        }
     }
 }

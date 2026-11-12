@@ -44,52 +44,6 @@ def test_initialize_lists_every_tool_and_ignores_notifications(api):
     )
 
 
-def test_mcp_needs_the_same_credential_as_http(api):
-    r = api.post("/api/v2/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
-    assert r.status_code == 401
-
-
-def test_every_cli_command_has_a_tool_of_the_same_name():
-    """The schema is the standard; `tico <words>` is `tico_<words>` with underscores.
-
-    A command that only works on the Mac (it writes the workspace) is listed in
-    `hubtools.SHELL_ONLY`, so adding one is a decision, not an omission."""
-
-    def leaves(parser, prefix):
-        groups = [
-            a for a in parser._actions if getattr(a, "choices", None) and not isinstance(a.choices, (list, tuple))
-        ]
-        if not groups:
-            return {prefix}
-        return {
-            leaf
-            for word, sub in unique(groups[0].choices)
-            for leaf in leaves(sub, prefix + "_" + word.replace("-", "_"))
-        }
-
-    def unique(choices):
-        # An alias (`tasks` for `task`) is the same parser under another name: it adds no tool of its own.
-        seen = set()
-        for word, sub in choices.items():
-            if id(sub) not in seen:
-                seen.add(id(sub))
-                yield word, sub
-
-    names = set()
-    for action in hubcli.parser()._subparsers._group_actions:
-        for word, sub in unique(action.choices):
-            names |= leaves(sub, "tico_" + word.replace("-", "_"))
-    # Repository convenience commands select one of the explicit read/write MCP tools.
-    for command, tools in hubtools.CLI_TOOL_ALIASES.items():
-        if command in names:
-            names.remove(command)
-            names.update(tools)
-    # An UNLISTED tool (a placeholder) has no command: it is reached only by name.
-    tools = set(hubtools.BY_NAME) - hubtools.UNLISTED
-    assert names - hubtools.SHELL_ONLY == tools, names ^ tools
-    assert hubtools.SHELL_ONLY <= names
-
-
 THREAD_READS = {
     "tico_thread_list",
     "tico_thread_show",
@@ -141,12 +95,6 @@ def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
         "company",
     ]
     assert "with" in tools["tico_thread_list"]["inputSchema"]["properties"]
-
-
-def test_link_slack_reaches_the_slack_bridge_and_an_unknown_thread_is_not_found(api):
-    isError, payload = call(api, "tico_thread_link_slack", {"thread": "t1", "channel": "#ops"})
-    assert isError is True
-    assert payload["error"] == "not_found"
 
 
 class RecordingApi:

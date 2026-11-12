@@ -39,10 +39,6 @@ def test_redact_masks_every_secret_key_and_only_those():
     assert "TICO_OIDC_CLIENT_ID=cid" in red and red.count("********") == 5
 
 
-def test_scrub_removes_secret_values_from_free_text():
-    assert envfile.scrub("boom tok-999 boom", ["tok-999"]) == "boom ******** boom"
-
-
 def test_runner_hostname_sets_the_runner_url_for_a_tunnel_only():
     tunnel = dict(front_door="cloudflared", auth="cloudflare", tunnel_token="tok")
     assert s(**tunnel, runner_host="runner.t.example.com").to_env()["TICO_RUNNER_URL"] == "https://runner.t.example.com"

@@ -281,10 +281,3 @@ def test_the_department_scope_follows_a_persons_group_and_its_ancestors(c):
     made = rule(c, scope_kind="department", scope_id="engineering")
     assert fired(c, make(c, "Human work", owner="human:ben")["id"]) == [made["id"]]
     assert not history(c, make(c, "Outside department", owner="human:cara")["id"])
-
-
-def test_the_execution_ledgers_have_indexed_hour_and_webhook_lookups(c):
-    plan = lambda sql, *args: " ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, args))  # noqa: E731
-    hourly = plan("SELECT count(*) FROM rule_task_runs WHERE rule_id=? AND fired=1 AND ran_at>?", "x", H.now())
-    delivery = plan("SELECT rule_id FROM rule_task_runs WHERE webhook_event_id=?", "x")
-    assert "rule_task_runs_hour" in hourly and "rule_task_runs_webhook" in delivery

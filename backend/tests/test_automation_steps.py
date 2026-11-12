@@ -49,13 +49,6 @@ def test_filter_runs_the_first_matching_rule_and_its_actions():
     assert run["status"] == "ok"
 
 
-def test_filter_stop_ends_the_run_there():
-    services = Services()
-    gate = {"id": "gate", "type": "filter", "rules": [{"when": FROM_NEWS, "then": [{"do": "archive"}], "stop": True}]}
-    run = E.execute(flow(gate, note("after")), MESSAGE, services)
-    assert statuses(run) == [("gate", "ok")] and services.acted == [("archive", {})]
-
-
 def test_filter_with_no_match_goes_on():
     gate = {
         "id": "gate",

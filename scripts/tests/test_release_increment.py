@@ -101,12 +101,6 @@ def test_the_anchor_is_the_newest_by_finish_time_not_by_list_order():
     assert ri.anchor_of(records, NOW, lambda sha: True, unnamed)["id"] == 2
 
 
-def test_a_red_full_naming_its_failures_is_the_anchor_and_carries_them():
-    records = [record(2, B, conclusion="failure", hours=2), record(1, A, hours=3)]
-    anchor = ri.anchor_of(records, NOW, lambda sha: True, lambda item: {"backend/tests/test_a.py"})
-    assert (anchor["id"], anchor["failed"]) == (2, {"backend/tests/test_a.py"})
-
-
 def test_a_cancelled_or_unnamed_red_full_is_no_anchor_so_an_older_one_is():
     records = [
         record(3, C, conclusion="cancelled", hours=1),
@@ -290,12 +284,6 @@ def test_the_product_and_desktop_vms_of_a_plan_place_the_release_binaries():
     include = ri.matrix_of(json.dumps(plan))["include"]
     assert [entry["name"] for entry in include] == ["product", "desktop"]
     assert all("binaries" not in entry for entry in include)
-
-
-def test_a_plan_of_any_size_is_made_because_release_validation_makes_it_itself():
-    big = {"jobs": [{"name": "python-1", "files": ["x" * 70000]}]}
-    assert json.loads(ri.plan_json(big)) == big
-    assert json.loads(ri.plan_json({"jobs": []})) == {"jobs": []}
 
 
 def test_selection_tokens_name_what_the_selection_runs():

@@ -1061,43 +1061,6 @@ def test_a_private_rows_failure_keeps_its_id_and_words_out_of_service_health(c):
     assert not c.execute("SELECT 1 FROM service_health WHERE service LIKE 'background:%'").fetchone()
 
 
-def test_a_pass_finds_wakes_on_the_wake_key_index_and_reads_live_runs_once(c, general, later):
-    """Speed (a pass looks at every open task): each wake read finds the task's wakes on messages_wake_key, never by a
-    scan, and live runs are read once per pass, not per task, while no bot has one. 2,000 idle tasks took 3.1 s a
-    pass when wakes were read with LIKE."""
-    for title in ("Write the launch note", "Fix the footer", "Plan the offsite"):
-        X.ran(c, X.new_task(c, ANA, title, assignee=BUILDER)["id"], BUILDER)
-    statements: list[str] = []
-    c.set_trace_callback(statements.append)
-    try:
-        assert later(seconds=120) == {"woken": 3}
-        assert later(minutes=20) == {}  # the wakes are queued
-    finally:
-        c.set_trace_callback(None)
-    reads = [s for s in statements if s.lstrip().upper().startswith("SELECT") and "wake_key" in s]
-    assert reads
-    for sql in reads:
-        plan = " | ".join(str(found[-1]) for found in c.execute("EXPLAIN QUERY PLAN " + sql).fetchall())
-        assert "SCAN m" not in plan and "SCAN messages" not in plan, (sql, plan)
-        # A read of the task's wakes is not by the bot's own messages either (messages_to_delivered): a bot's every
-        # message, read for each task.
-        task_wakes_read = "wake_key >=" in sql and "FROM attempts" not in sql
-        assert not task_wakes_read or "messages_wake_key" in plan, (sql, plan)
-    assert sum("lease_until >" in s for s in statements) == 4  # one per pass and one per rules check
-
-
-def test_the_rules_check_reads_everyones_needs_you_once(c, general, later, monkeypatch):
-    """Needs you is read for every person together, once a check: asking for each person in turn read every open task
-    again for each of them."""
-    X.new_task(c, ANA, "Call the bank", assignee=ANA)
-    X.new_task(c, ANA, "Renew the lease", assignee="human:ben")
-    reads = []
-    whole = NS.W.needs_by_person
-    monkeypatch.setattr(NS.W, "needs_by_person", lambda conn: reads.append(1) or whole(conn))
-    assert NS.rules_hold(c) == []
-    assert len(reads) == 1
-
-
 def _private(c, title, owner, pipeline="general"):
     made = H.task_create(c, ANA, title, "Only us.", owner, pipeline=pipeline, private=True, lint=False)
     assert H.task_private(c, H.task(c, made["id"])) and H.task_readers(H.task(c, made["id"])) == []

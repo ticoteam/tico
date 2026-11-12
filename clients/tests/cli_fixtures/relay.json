@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "relay"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "relay",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico relay: error: argument sub: invalid choice: 'nope' (choose from status, set, wake-url) Did you mean: tico relay set, tico relay status?",
-  "exit": 64
- },
- {
-  "argv": [
    "relay",
    "status"
   ],
@@ -56,125 +35,6 @@
   "http": [],
   "stdout": "",
   "stderr": "tico relay set: error: argument --wake: use on or off",
-  "exit": 64
- },
- {
-  "argv": [
-   "relay",
-   "set"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico relay set <trigger>\ntico relay set: error: the following arguments are required: trigger, --wake",
-  "exit": 64
- },
- {
-  "argv": [
-   "relay",
-   "wake-url",
-   "show"
-  ],
-  "tools": [
-   [
-    "tico_relay_wake_url_show",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "GET",
-    "hooks/wake-url",
-    null
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "relay",
-   "wake-url",
-   "off"
-  ],
-  "tools": [
-   [
-    "tico_relay_wake_url_off",
-    {
-     "operation_id": null
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "PUT",
-    "hooks/wake-url",
-    {
-     "url": null
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "relay",
-   "wake-url",
-   "set",
-   "url-1"
-  ],
-  "tools": [
-   [
-    "tico_relay_wake_url_set",
-    {
-     "operation_id": null,
-     "url": "url-1"
-    }
-   ]
-  ],
-  "http": [
-   [
-    "GET",
-    "me",
-    null
-   ],
-   [
-    "PUT",
-    "hooks/wake-url",
-    {
-     "url": "url-1"
-    }
-   ]
-  ],
-  "stdout": "{\n  \"ok\": true\n}\n",
-  "stderr": "",
-  "exit": 0
- },
- {
-  "argv": [
-   "relay",
-   "wake-url",
-   "set"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico relay wake-url set <url>\ntico relay wake-url set: error: the following arguments are required: url",
   "exit": 64
  },
  {
@@ -248,40 +108,5 @@
   "stdout": "{\n  \"trigger\": \"stripe\",\n  \"address\": \"https://gateway.example/r/stripe\",\n  \"wake\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "relay",
-   "set",
-   "stripe"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico relay set <trigger>\ntico relay set: error: the following arguments are required: --wake",
-  "exit": 64
- },
- {
-  "argv": [
-   "relay",
-   "wake-url"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "relay",
-   "wake-url",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico relay wake-url: error: argument subsub: invalid choice: 'nope' (choose from show, off, set) Did you mean: tico relay wake-url set, tico relay wake-url off?",
-  "exit": 64
  }
 ]

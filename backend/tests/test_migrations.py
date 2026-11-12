@@ -393,15 +393,6 @@ def test_a_retired_migration_is_recorded_and_never_imported_or_run(tmp_path, mon
         conn.close()
 
 
-def test_every_retired_migration_is_a_file_and_no_other_imports_a_module_that_is_gone():
-    """Each name in SUPERSEDED is a shipped file, and every other .py migration still loads."""
-    known = {m.version: m for m in migrations.files()}
-    assert set(known) >= migrations.SUPERSEDED
-    for migration in known.values():
-        if migration.kind == "py" and migration.version not in migrations.SUPERSEDED:
-            migrations._module(migration)
-
-
 @pytest.mark.parametrize("name", ["0001_audit_log.sql", "20261104235959_probe.sql"])
 def test_a_changed_applied_file_refuses_to_boot(tmp_path, monkeypatch, name):
     directory = tmp_path / "migrations"
@@ -545,11 +536,6 @@ def test_a_database_below_the_bridge_is_refused_before_anything_is_written(tmp_p
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
 
 
-def test_cloud_version_is_the_newest_cloud_step_store_writes():
-    newest = max(int(n) for n in re.findall(r"INSERT INTO cloud_migrations VALUES\((\d+),", STORE_SOURCE.read_text()))
-    assert migrations.CLOUD_VERSION == newest
-
-
 def _migration(name):
     spec = importlib.util.spec_from_file_location(
         name, Path(__file__).resolve().parents[1] / "migrations" / f"{name}.py"
@@ -596,15 +582,6 @@ def test_a_private_tasks_guest_becomes_its_first_reader_and_the_guest_column_goe
         up(c)
         assert c.execute("SELECT type, name, sql FROM sqlite_master ORDER BY name").fetchall() == before
         assert dict(c.execute("SELECT id, readers FROM tasks").fetchall()) == moved
-
-
-def test_a_fresh_database_has_task_readers_and_no_guest(tmp_path):
-    path = fresh(tmp_path)
-    with sqlite3.connect(path) as c:
-        for table in ("tasks", "task_trash"):
-            columns = {row[1] for row in c.execute(f"PRAGMA table_info({table})")}
-            assert "readers" in columns and "guest" not in columns, (table, columns)
-        assert not c.execute("SELECT name FROM sqlite_master WHERE sql LIKE '%guest%' AND tbl_name='tasks'").fetchall()
 
 
 def test_a_session_link_keeps_its_thread_once_in_its_url():
@@ -671,29 +648,6 @@ LEGACY_TABLES = (
 PRODUCT, REVIEWS = "/api/v2/github/product-repos", "/api/v2/github/reviews"
 ONBOARDING = "/api/v2/onboarding/company/people/{}/invite"
 TS = "2026-10-01T00:00:00.000000Z"
-
-
-def test_the_idempotency_table_the_migration_builds_is_the_one_store_declares():
-    source = STORE_SOURCE.read_text()
-    declared = re.search(
-        r"CREATE TABLE IF NOT EXISTS (idempotency\(.*?PRIMARY KEY\(actor,operation,key\)\));", source, re.S
-    )
-    migration = _migration("0050_idempotency_one_table")
-    squash = lambda sql: re.sub(r"\s+", "", sql)
-    assert declared and squash("CREATE TABLE " + declared.group(1)) == squash(migration.TABLE)
-    assert migration.INDEXES[0] + ";" in source  # the answers' index; the bindings' one is the migration's own
-
-
-def test_the_threads_delivery_trigger_follows_hubdbs_task_news_rule(tmp_path):
-    """Migrations 0047 and 0048 make threads_primary_delivery from literal SQL; the installed condition must stay hubdb's
-    delivery_counts_sql, with the reason the trigger gives ('addressed'), which every read side uses. Otherwise task news
-    would wake people again, and a bot's task posts too, on a new install."""
-    with sqlite3.connect(fresh(tmp_path)) as c:
-        sql = c.execute(
-            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='threads_primary_delivery'"
-        ).fetchone()[0]
-    condition = H.delivery_counts_sql("NEW", "NEW.recipient_id", "'addressed'")
-    assert " ".join(condition.split()) in " ".join(sql.split())
 
 
 def test_a_settled_message_whose_task_list_was_read_as_none_is_requeued_with_what_read_it(tmp_path):

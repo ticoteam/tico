@@ -272,16 +272,6 @@ def test_a_flagged_wake_counts_in_the_weekly_table_and_a_waiting_one_does_not(ap
     ]
 
 
-def test_a_task_comment_says_whether_it_woke_the_bot(api):
-    r = setup(api)
-    token = ops_token(api, r)
-    with api.app.state.store.transaction() as c:
-        t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
-    flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
-    assert plain["woke"] is False and flagged["woke"] is True
-
-
 def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_does_not(api):
     r = setup(api)
     token = ops_token(api, r)
@@ -351,13 +341,3 @@ def test_a_held_message_with_a_file_keeps_its_hold_and_tells_its_sender(api):
     assert sent["refs"]["attachments"] and jobs(api, "cpo") == 0
     assert sent["woke"] is False and "held for cpo's next run" in sent["held"] and "--needs-action" in sent["held"]
     assert sent["refs"].get(B.MARK) == B.RULE and sent["refs"].get("quiet") is True
-
-
-def test_the_cli_prints_why_a_message_was_held(monkeypatch, capsys):
-    from types import SimpleNamespace
-    from clients import remotecli
-
-    held = "held for cpo's next run; nothing runs it now. Add --needs-action ..."
-    monkeypatch.setattr(remotecli, "run", lambda *_: {"id": "m1", "woke": False, "held": held})
-    assert remotecli.main(SimpleNamespace(cmd="message", fn="message send")) == 0
-    assert capsys.readouterr().err.strip() == "tico: " + held

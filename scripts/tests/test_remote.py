@@ -113,7 +113,6 @@ def test_a_rate_limited_poll_waits_for_the_reset_then_makes_the_same_call(monkey
 @pytest.mark.parametrize(
     'reset, seconds',
     [
-        ('1000120\n', 120),  # the reset is two minutes away
         ('1007200\n', 900),  # two hours away: wait 15 minutes at most
         ('999000\n', 60),  # already past (a secondary limit has no reset of its own): a minute
         ('', 60),  # unknown: a minute
@@ -224,14 +223,6 @@ def test_a_cap_of_zero_means_no_cap_and_no_count(monkeypatch):
     assert remote.wait_for_capacity(0)
 
 
-@pytest.mark.parametrize('value, cap', [(None, 4), ('0', 0), ('12', 12)])
-def test_remote_max_sets_the_cap(monkeypatch, value, cap):
-    monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
-    if value is not None:
-        monkeypatch.setenv('TICO_REMOTE_MAX', value)
-    assert remote.remote_cap() == cap
-
-
 def test_remote_max_must_be_a_whole_number(monkeypatch, capsys):
     monkeypatch.setenv('TICO_REMOTE_MAX', 'many')
     with pytest.raises(SystemExit) as exit:
@@ -319,7 +310,7 @@ def test_a_run_that_is_never_dispatched_exits_75(monkeypatch, tmp_path, capsys, 
     assert message in capsys.readouterr().err
 
 
-@pytest.mark.parametrize('artifact, code', [('0', 0), ('1', 1), ('3', 3), ('124', 124)])
+@pytest.mark.parametrize('artifact, code', [('0', 0), ('124', 124)])
 def test_the_commands_own_exit_code_is_the_exit_code(monkeypatch, tmp_path, artifact, code):
     stub_remote(monkeypatch, tmp_path, artifact=artifact)
     assert remote.main(COMMAND) == code

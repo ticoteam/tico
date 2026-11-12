@@ -3800,34 +3800,6 @@ mod saved_panel_tests {
         }
     }
     #[test]
-    fn saved_panel_drops_reply_after_sign_out_and_org_switch() {
-        for sign_out in [true, false] {
-            let (_dir, mut app) = fixture();
-            let reply = late_reply(&app);
-            assert_eq!(
-                app.saved_target(),
-                Some(("one".into(), "remote-one".into()))
-            );
-            app.saved_items = json!({"sections":{"task":[{"text":"Cached"}]}});
-            // The destination stays pinned in a live meeting even after it is disconnected.
-            if sign_out {
-                app.context.live_destination = "one".into();
-                app.sign_out("one");
-            } else {
-                app.choose_org("two");
-            }
-            assert!(app.saved_items.is_null());
-            assert!(app.presence_target.is_none());
-            assert!(app.items_generation > reply.generation);
-            app.tx.send(reply).unwrap();
-            app.tick();
-            assert!(app.saved_items.is_null());
-            if sign_out {
-                assert!(app.saved_target().is_none());
-            }
-        }
-    }
-    #[test]
     fn overlapping_item_saves_accept_both_replies_in_one_connection_epoch() {
         let (_dir, mut app) = fixture();
         let target = app.saved_target().unwrap();

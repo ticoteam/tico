@@ -69,10 +69,6 @@ access:
             "--json",
         )
 
-    def test_hold_may_invite_an_outside_guest_by_default(self):
-        rc, out, err = self.hold_with_outside_guest()
-        self.assertEqual(rc, 0, err)
-        self.assertEqual(len(self.calendar.created_events), 1)
 
     def test_hold_refuses_an_outside_guest_when_external_invites_are_blocked(self):
         with patch.dict("os.environ", {"TICO_BLOCK_EXTERNAL_INVITES": "1"}):

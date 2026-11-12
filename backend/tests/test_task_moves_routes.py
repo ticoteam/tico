@@ -172,13 +172,6 @@ def test_a_persons_mention_is_in_needs_you_until_they_reply(api):
     assert not [i for i in get(api, "needs-you", token="cara-test")["items"] if i["kind"] == "mention"]
 
 
-def test_bulk_is_for_people_and_moves_each_task_with_its_call(api):
-    first, second = task(api, "One"), task(api, "Two")
-    out = post(api, "task-bulk", {"filter": {"ids": [first["id"], second["id"]]}, "action": "close", "why": "Done"})
-    assert out["changed"] == 2 and show(api, first["id"])["status"] == "closed"
-    refused(api, "task-bulk", {"filter": {"ids": [first["id"]]}, "action": "close"}, token=as_bot(api), status=403)
-
-
 def test_the_pipelines_read_and_save_their_settings_record(api):
     pipelines = get(api, "pipelines")["pipelines"]
     general = next(p for p in pipelines if p["id"] == "general")

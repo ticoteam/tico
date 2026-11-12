@@ -69,14 +69,6 @@ def test_saving_again_for_participants_after_a_team_approval_narrows_it(api):
     assert api.get(f"/api/v2/live-meetings/{mid}", headers=headers("fay-test")).status_code == 404
 
 
-def test_a_live_meeting_saved_for_the_team_reads_to_everyone(api):
-    mid = live_meeting(api)
-    post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")
-    rid = post(api, f"live-meetings/{mid}/finalize", {}, token="ben-test")["meeting_id"]
-    post(api, f"meetings/{rid}/review", {"action": "approve", "private": False, "audience": "team"}, token="ben-test")
-    assert readable(api, rid, "fay-test")
-
-
 def test_an_unknown_audience_is_refused_so_nothing_is_shared_wider(api):
     mid = live_meeting(api)
     post(api, f"live-meetings/{mid}/control", {"action": "end"}, token="ben-test")

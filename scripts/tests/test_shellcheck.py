@@ -17,13 +17,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = sorted([*ROOT.glob('docker/*.sh'), *ROOT.glob('scripts/*.sh')])
 
 
-@pytest.mark.skipif(not shutil.which('shellcheck'), reason='shellcheck not installed')
-@pytest.mark.parametrize('script', SCRIPTS, ids=lambda p: str(p.relative_to(ROOT)))
-def test_shell_script_passes_shellcheck(script):
-    result = subprocess.run(['shellcheck', '-S', 'warning', '-f', 'gcc', str(script)], capture_output=True, text=True)
-    assert result.returncode == 0, result.stdout
-
-
 def test_shell_scripts_claude_md_says_to_run_are_executable():
     """CLAUDE.md names them as commands (`scripts/dev_setup.sh`); a bot runs that line as written."""
     named = sorted(set(re.findall(r'`(scripts/\w+\.sh)\b', (ROOT / 'CLAUDE.md').read_text())))

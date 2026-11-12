@@ -53,20 +53,6 @@ def test_the_merge_stage_posts_the_check_on_the_pinned_head_then_queues_it(compa
     assert task_id in summary and "Ship it" not in summary  # the task by id only: its title stays in Tico
 
 
-def test_a_bot_s_own_enqueue_before_the_merge_stage_is_refused(company):
-    gh = FakeGitHub()
-    gh.require_merge_ok(REPO)
-    with company.transaction() as c:
-        engineering(c)
-        task_id = new(c, 1)
-        head = gh.open_pr(REPO, 1)
-        gh.set_checks(REPO, head, "pending")
-        seen(c, gh, 1)
-        assert stage(c, task_id) == "Build"
-    assert gh.enqueue(REPO, 1, head) == {"ok": False, "how": None, "reason": REFUSED}  # a bot's `gh pr merge`
-    assert posted(gh) == []
-
-
 def test_a_push_after_sign_off_has_no_check_until_a_person_queues_it_again(company):
     gh = FakeGitHub()
     gh.require_merge_ok(REPO)

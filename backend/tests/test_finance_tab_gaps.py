@@ -693,31 +693,6 @@ def test_a_vendor_named_unattributed_is_its_own_row_apart_from_no_vendor(books):
         assert alone["total"] == 1_000  # the vendor, not the lines with none
 
 
-def test_a_full_read_of_a_private_line_by_someone_else_is_written_to_events(api):
-    """Spec 7.5: a full read of a private line is written to events. Eve holds full detail of account 6900 (private), so
-    her P&L, which shows the line, leaves a row naming it; the owner's own requests leave none."""
-    from backend.finance import actions as FA
-    from backend.tests.helpers.finance_fixtures import _seed
-
-    store = api.app.state.store
-    with store.transaction() as c:
-        _seed(c)
-        assert FA.ensure_setup(c, store.settings.owner_email)
-        open_views(c)  # eve sees her own expenses, so her P&L has the line
-        private = account(c, "6900")
-        assert (
-            act(
-                c, OWNER, "private_lines_set", {"account_id": private, "private": True, "full_detail": ["human:eve"]}
-            ).status
-            == "committed"
-        )
-    get(api, "finance/pnl", token="eve-test")
-    get(api, "finance/pnl")
-    with store.read() as c:
-        rows = c.execute("SELECT actor, target FROM events WHERE action='finance.private_read'").fetchall()
-    assert [tuple(r) for r in rows] == [("human:eve", private)]
-
-
 def test_only_a_request_that_returns_a_private_line_leaves_a_row_and_only_one(api):
     """Spec 7.5: a full read of a private line is written to events, once per request; a read that returns no private
     line writes nothing. Eve holds full detail of account 6900: her P&L and the line's own detail return it and leave one

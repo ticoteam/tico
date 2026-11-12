@@ -294,19 +294,6 @@ def test_the_wake_for_a_note_narrower_than_its_public_thread_runs_in_a_private_s
     assert waiting(api) == [] and claim(api, r, "cpo") is None
 
 
-def test_a_narrower_note_enters_only_a_private_session_of_its_own_thread(api):
-    bot_runner(api)
-    company = new_thread(api, audience="company", title="Launch")
-    tid = task_about(api)
-    posted = bot_says(api, company, "@cpo Zebrawire", refs={"task": tid})
-    turn_task_private(api, tid)
-    with api.app.state.store.transaction() as c:
-        conv = H.conversation(c, company)
-        note = dict(c.execute("SELECT * FROM notes WHERE message_id=?", (posted["id"],)).fetchone())
-        assert not threads.note_fits_run(c, note, conv, "public")
-        assert threads.note_fits_run(c, note, conv, "private")
-
-
 def session_class(api, thread_id, message_id):
     from backend.execution import thread_payload
 

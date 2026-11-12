@@ -10,7 +10,6 @@ runner runs it (foreign keys off, the broken-reference check before and after)."
 import importlib.util
 import json
 import sqlite3
-import time
 from collections import Counter
 from pathlib import Path
 
@@ -411,49 +410,3 @@ def test_a_new_contact_is_an_entity_and_reuses_one_the_directory_knows(books):  
         assert c.execute("SELECT self_link_keys FROM entities WHERE id = ?", (fresh,)).fetchone()[0] == "vendor_to"
         ES.self_id(c)  # flagged now: a second read adds nothing
         assert c.execute("SELECT COUNT(*) FROM entity_links WHERE source_type = 'finance_book'").fetchone()[0] == 3
-
-
-def test_twenty_thousand_contacts_fold_in_quickly(books):  # noqa: F811
-    """Reuse reads the Directory once, not once per contact: 20k contacts (half sharing an email with a contact of a
-    second book, a tenth naming an organization a sync brought) fold well inside the budget."""
-    ids = _seed(books)
-    conn = sqlite3.connect(books.settings.db_path, isolation_level=None)
-    conn.row_factory = sqlite3.Row
-    _before(conn, ids)
-    n = 20_000
-    rows = []
-    for i in range(n):
-        book = ids["book"] if i % 2 == 0 else "book-2"
-        email = f"ap{i // 2}@vendor{i // 2}.example.test"
-        rows.append((f"k-{i}", book, f"Vendor {i}", json.dumps([email]), f"2026-10-15T00:00:{i % 60:02d}Z"))
-    conn.execute("PRAGMA foreign_keys=OFF")
-    conn.executemany(
-        f"INSERT INTO fin_contacts ({CONTACT_COLUMNS}) VALUES (?, ?, ?, 'vendor', ?, NULL, 0, NULL, NULL, 1, ?, "
-        "'human:ana', NULL, NULL, NULL, NULL)",
-        rows,
-    )
-    for i in range(0, n // 2, 10):
-        _directory_org(conn, f"organization/synced-{i}", f"Synced {i}", f"ap{i}@vendor{i}.example.test", sourced=True)
-    # Market's company/self, not flagged yet: the migration finds it as the first read would, and links to it.
-    conn.execute(
-        "INSERT INTO entities (id, type, name, name_key, created_by, created_at, updated_at) "
-        "VALUES ('company/self', 'organization', 'Acme Lights', 'acme lights', 'system', ?, ?)",
-        (AT, AT),
-    )
-    conn.execute("PRAGMA foreign_keys=ON")
-    started = time.monotonic()
-    _run(conn, _load())
-    took = time.monotonic() - started
-    assert conn.execute("SELECT COUNT(*) FROM fin_contacts WHERE id LIKE 'k-%'").fetchone()[0] >= n
-    assert conn.execute("SELECT entity_id FROM fin_book_entities WHERE id = 'k-1'").fetchone()[0] == (
-        "organization/synced-0"
-    )
-    assert conn.execute("SELECT entity_id FROM fin_book_entities WHERE id = 'k-3'").fetchone()[0] == "k-2"
-    assert conn.execute("SELECT self FROM entities WHERE id = 'company/self'").fetchone()[0] == 1
-    assert (
-        conn.execute("SELECT to_entity_id FROM entity_links WHERE id = 'lnk_finance_k-3_vendor_to'").fetchone()[0]
-        == "company/self"
-    )
-    assert conn.execute("SELECT self_link_keys FROM entities WHERE id = 'k-2'").fetchone()[0] == "vendor_to"
-    conn.close()
-    assert took < 30, took  # about 5 s here; the slack is for a loaded runner

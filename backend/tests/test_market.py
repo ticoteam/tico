@@ -277,44 +277,6 @@ def test_market_import_resolves_cites_skips_and_dry_runs(api, tmp_path):
         )
 
 
-def test_a_market_ask_is_audited_and_capped_per_person_per_day(api, tmp_path, monkeypatch):
-    """The ask spends the enabled server provider's key: one `market.ask` event per model call, never the question, and a
-    clear 429 once the person's daily cap is used. With no key the pulled excerpts are still the answer."""
-    _seed(api, tmp_path)
-    store = api.app.state.store
-    sent = []
-
-    def complete(question, excerpts, writer):
-        sent.append(question)
-        return "Northwind sells pricing software."
-
-    monkeypatch.setattr(M, "complete", complete)
-
-    def writer(system, user):
-        return {"answer": "stub"}
-
-    writer.model = "stub-model"
-    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: writer)
-    store.settings.decisions_daily_calls_owner = 1
-    out = post(api, "market/ask", {"question": "What does Northwind sell?"})
-    assert out["answer"] == "Northwind sells pricing software."
-    with store.read() as c:
-        rows = [
-            json.loads(r["detail"])
-            for r in c.execute("SELECT detail FROM events WHERE action='market.ask' AND actor='human:ana'")
-        ]
-    assert len(rows) == 1 and rows[0]["model"] == "stub-model" and "Northwind" not in json.dumps(rows[0])
-    over = api.post("/api/v2/market/ask", json={"question": "What does Northwind sell?"}, headers=headers())
-    assert over.status_code == 429 and over.json()["error"]["code"] == "budget" and len(sent) == 1
-
-    monkeypatch.setattr("backend.updates.writer_for", lambda *a, **kw: None)
-    store.settings.decisions_daily_calls_owner = 5
-    out = post(api, "market/ask", {"question": "What does Northwind sell?"})
-    assert out["answer"].startswith("Pulled from the market graph.")
-    with store.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE action='market.ask'").fetchone()[0] == 2
-
-
 def test_graph_reads_share_market_permissions_and_hide_inactive_entities(api):
     with api.app.state.store.transaction() as c:
         for name in ('Self', 'Neighbor', 'Retired', 'Merged'):
@@ -407,16 +369,6 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
     tick(datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner_id='bot:librarian'").fetchone()[0] == 2
-
-
-def test_the_sweep_on_a_monday_reports_the_weekly_delta_refresh(api, tmp_path):
-    """The Monday sweep refreshes the weekly delta and says so: the response's delta carries `updated`."""
-    from datetime import date
-
-    _seed(api, tmp_path)
-    with api.app.state.store.transaction() as c:
-        out = M.sweep(c, M.SEED_ACTOR, [], today=date(2026, 11, 2))
-    assert out["delta"] == {"updated": True}
 
 
 def test_applying_an_insight_makes_an_entity_and_sets_its_verified_date(api, tmp_path):

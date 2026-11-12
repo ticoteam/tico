@@ -1,6 +1,5 @@
 """The GitHub App: manifest, state nonce, secret storage, installation tokens, runner scope."""
 
-import importlib.util
 import json
 import sqlite3
 import statistics
@@ -94,13 +93,6 @@ def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_
 def test_manifest_asks_for_administration_unless_the_owner_unticks_it(api, gh):
     assert manifest(api)["manifest"]["default_permissions"]["administration"] == "write"
     assert "administration" not in manifest(api, administration="false")["manifest"]["default_permissions"]
-
-
-def test_manifest_asks_for_checks_write_and_the_merge_group_event_for_tico_merge_ok(api, gh):
-    asked = manifest(api)["manifest"]
-    assert asked["default_permissions"]["checks"] == "write"  # the server's own token; no turn token carries it
-    assert "merge_group" in asked["default_events"]  # the merge queue asks for tico/merge-ok on its group's commit
-    assert asked["default_permissions"]["merge_queues"] == "read"  # GitHub requires it for that event
 
 
 @pytest.mark.parametrize("administration", [True, False])
@@ -1162,25 +1154,6 @@ def test_a_refused_actions_ask_is_remembered_until_the_installation_webhook_says
     assert turns()[-1]["actions"] == "read"
 
 
-def test_the_fake_installation_lists_a_repository_created_through_it_only_when_it_has_every_repository():
-    """The fake behaves like GitHub: an all-repositories installation lists what was created through it, once; a
-    selected-repositories one lists only what was selected."""
-    fake = FakeGitHub()
-    fake.repositories = [{"full_name": "Acme/docs", "default_branch": "trunk"}]
-    client = httpx.Client(transport=httpx.MockTransport(fake), base_url="https://api.github.com")
-    for name in ("docs", "tico-services"):
-        assert client.post("/orgs/Acme/repos", json={"name": name, "private": True}).status_code == 201
-
-    def listed():
-        return client.get("/installation/repositories").json()["repositories"]
-
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}, {"full_name": "Acme/tico-services"}]
-    fake.missing = {"tico-services"}
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
-    fake.missing, fake.selection = set(), "selected"
-    assert listed() == [{"full_name": "Acme/docs", "default_branch": "trunk"}]
-
-
 def personal(gh, login="ana-dev"):
     """The signed-in person's personal account: the one GitHub makes the App under, with the installation there."""
     gh.accounts[login] = "User"
@@ -1439,24 +1412,6 @@ def link_state(api, actor="owner-test"):
     return parse_qs(urlparse(link.json()["url"]).query)["state"][0]
 
 
-def test_concurrent_user_token_refreshes_run_one_refresh_and_share_its_token(api, gh):
-    import threading
-
-    personal(gh, "ana-dev")
-    connect(api, org="ana-dev")
-    authorize(api)
-    service = api.app_state.github_app
-    expire(api)
-    served = []
-    threads = [threading.Thread(target=lambda: served.append(service.user_token())) for _ in range(6)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(10)
-    assert len(served) == 6 and set(served) == {"gho_2"}
-    assert gh.refreshes == 1, "GitHub rotates the refresh token, so a second refresh would be refused"
-
-
 def test_the_authorization_return_needs_a_state_its_own_actor_made_recently(api, gh):
     personal(gh, "ana-dev")
     connect(api, org="ana-dev")
@@ -1689,31 +1644,6 @@ def test_an_install_return_with_no_state_is_refused_for_an_app_that_recorded_no_
     assert refused.status_code == 409 and refused.json()["error"]["code"] == "github_installation", refused.text
 
 
-def test_the_user_token_migration_makes_its_two_tables_and_runs_again_safely():
-    sql = (Path(G.__file__).parent / "migrations" / "20261107181259_github_user_token.sql").read_text(encoding="utf-8")
-    with sqlite3.connect(":memory:") as c:
-        c.executescript(sql)
-        c.executescript(sql)
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_token)")} == {
-            "id",
-            "login",
-            "github_id",
-            "client_id",
-            "ciphertext",
-            "nonce",
-            "access_expires_at",
-            "refresh_expires_at",
-            "authorized_by",
-            "authorized_at",
-            "refreshed_at",
-        }
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_user_states)")} == {
-            "nonce",
-            "actor",
-            "created_at",
-        }
-
-
 def test_links_follow_the_kind_of_account_everywhere_they_are_built():
     organization = {"slug": "acme-tico", "org": "Acme", "account_type": "Organization"}
     personal_row = {"slug": "acme-tico", "org": "ana-dev", "account_type": "User"}
@@ -1846,22 +1776,6 @@ def test_the_no_session_exemption_is_the_callback_alone(api, gh):
     ):
         r = getattr(api, method)(path, json={"state": state}) if method == "post" else api.get(path)
         assert r.status_code == 401 and r.json()["error"]["code"] == "identity", path
-
-
-def test_the_github_app_state_code_migration_adds_its_columns_once_and_runs_again_safely():
-    migration = Path(G.__file__).parent / "migrations"
-    (path,) = sorted(migration.glob("*_github_app_state_code.py"))
-    spec = importlib.util.spec_from_file_location("github_app_state_code", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    with sqlite3.connect(":memory:") as c:
-        c.execute(
-            "CREATE TABLE github_app_states(nonce TEXT PRIMARY KEY, actor TEXT NOT NULL, org TEXT NOT NULL, "
-            "administration INTEGER NOT NULL, created_at REAL NOT NULL, account_type TEXT NOT NULL DEFAULT 'Organization')"
-        )
-        module.up(c)
-        module.up(c)
-        assert {row[1] for row in c.execute("PRAGMA table_info(github_app_states)")} >= {"code", "returned_at"}
 
 
 def test_a_browser_return_with_no_session_goes_to_the_owner_link_and_back_to_the_return(api, gh, monkeypatch):

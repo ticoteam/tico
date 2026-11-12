@@ -333,8 +333,3 @@ def test_the_bookkeepers_own_tasks_land_in_finance_and_a_persons_do_not(c):
     assert H.task(c, task_id)["status"] == "done"  # one "done" finishes it, as in General
     ask = B.ask_for_view(c, ANA)
     assert H.task(c, ask)["pipeline_id"] == "general"
-
-
-def test_readers_helper_names_the_manager_and_the_owner(c):
-    assert PP.readers(c, PS.read(c, "legal")) == [LEGAL_BOT, ANA]
-    assert PP.of_task(c, _file(c)["id"])

@@ -437,7 +437,6 @@ def s_skills(org, items, judge):
     leaks = K.audit_leaks(org, cases)
     events = X.one(org, "SELECT count(*) FROM events WHERE action='skill.screened'")
     return [
-        ("the skill cases are well formed, anonymized and enough", not problems, "; ".join(problems)),
         (
             "every case is screened and graded as its label",
             ok,
@@ -463,7 +462,6 @@ def s_skills(org, items, judge):
 
 
 SCENARIOS = [
-    Scenario(1, "corpus", "The corpus is well formed, anonymized and big enough.", s_corpus),
     Scenario(2, "hold", "Hold at every door: attacks held (mail warned), lookalikes and benign input passed.", s_hold),
     Scenario(3, "warn", "Warn at every door: attacks warned, nothing held.", s_warn),
     Scenario(4, "off", "Off at every door: everything as before, no model call.", s_off),

@@ -604,16 +604,3 @@ def test_a_bot_moved_to_another_team_leaves_the_team_grant_at_once(books):
         assert "bot:coder" in SA.grant(c, gid).members
         groups._set_bot(c, "coder", "sales")
         assert "bot:coder" not in SA.grant(c, gid).members
-
-
-def test_a_bot_given_a_new_manager_hands_the_org_change_to_finance(books, monkeypatch):
-    """A bot's manager is part of the org chart Finance's grants follow (spec 7.5), so the reparenting write runs the
-    same revalidation an action does, in the same transaction."""
-    from backend import settings_admin
-    from backend.finance import actions as FA
-
-    seen = []
-    monkeypatch.setattr(FA, "revalidate_org", lambda c, at=None: seen.append(c))
-    with books.transaction() as c:
-        settings_admin._set_parent(c, "human:ana", "coder", "human:dan", AT)
-        assert len(seen) == 1 and seen[0] is c

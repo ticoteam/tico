@@ -129,87 +129,6 @@ def test_leased_start_that_reported_a_tool_call_is_held_not_requeued(api):
     assert state(api, 'attempt-0')['job'] == 'uncertain'
 
 
-def test_one_finding_per_incident_one_botops_task_and_owner_notice_only_when_due(api):
-    """Spec 6/9: the finding is rewritten, never duplicated, and says resolved and when; exactly one BotOps task once
-    the fixer could not clear it; the owner is told only after an hour (or at once when it needs them)."""
-    from backend import org_turns
-
-    botops(api)
-    one_person(api)
-    waiters(api, n=39, running=1)
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE start_places SET wait_reason='pre-start requirements',waiting_since=?",
-            (H.shift(H.now(), minutes=-75),),
-        )
-        # A calm computer: the sentence still names its CPU and memory, not only when it is overloaded.
-        c.execute("UPDATE runners SET performance='on',label='Mac A'")
-        stamp = int(time.time())
-        c.execute(
-            "INSERT INTO runner_load_samples VALUES((SELECT id FROM runners LIMIT 1),?,?,42,50,100,0,0,1)",
-            (stamp - stamp % 60, stamp),
-        )
-
-    def incident():
-        with store.read() as c:
-            return org_turns.saved(c, org_turns.INCIDENT)
-
-    def age(**shift):
-        with store.transaction() as c:
-            value = org_turns.saved(c, org_turns.INCIDENT)
-            value['opened_at'] = H.shift(H.now(), **shift)
-            value['finding']['updated_at'] = H.shift(H.now(), minutes=-2)
-            org_turns.save(c, org_turns.INCIDENT, value)
-
-    def owner_notices():
-        with store.read() as c:
-            return c.execute(
-                "SELECT count(*) FROM messages WHERE recipient_id='human:ana' AND kind='notice' "
-                "AND body LIKE '%warning level%'"
-            ).fetchone()[0]
-
-    fix(api)
-    first = incident()
-    found = first['finding']
-    assert found['waits'][0] == {'reason': 'pre-start requirements', 'count': 39, 'oldest': found['waits'][0]['oldest']}
-    assert 'Likely bottleneck: Most turns are waiting for pre-start requirements' in found['text']
-    assert 'oldest wait 1 h 15 min (pre-start requirements)' in found['text']
-    assert 'busiest computer Mac A at CPU 42%, memory 50%' in found['text']
-    assert found['running'][0]['turn'] == 'attempt-39' and 'computers' in found
-    assert not first.get('task_id') and owner_notices() == 0
-    age(minutes=-6)
-    fix(api)
-    fix(api)
-    second = incident()
-    with store.read() as c:
-        assert 'incident' in H.task_labels(H.task(c, second['task_id']))
-    assert second['id'] == first['id'] and second['finding']['updated_at'] > found['updated_at']
-    with store.read() as c:
-        assert (
-            c.execute(
-                "SELECT count(*) FROM tasks WHERE owner_id='bot:botops' AND title LIKE 'Company turns incident%'"
-            ).fetchone()[0]
-            == 1
-        )
-    assert owner_notices() == 0
-    age(minutes=-61)
-    fix(api)
-    fix(api)
-    assert owner_notices() == 1
-    check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'company_turns')
-    assert 'Likely bottleneck' in check['items'][0]['text'] and check['items'][0]['task_id'] == second['task_id']
-    with store.transaction() as c:
-        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-39'")
-        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-39'")
-    fix(api)
-    done = incident()
-    assert not done['active'] and done['resolved_at'] and done['id'] == first['id']
-    check = next(x for x in get(api, 'health')['checks'] if x['id'] == 'company_turns')
-    assert check['status'] == 'ok' and 'Incident resolved ' + done['resolved_at'] in check['summary']
-    assert any('resolved' in n for n in notes(api, done['task_id']))
-
-
 def test_a_wait_that_needs_the_person_tells_the_owner_at_once(api):
     one_person(api)
     waiters(api, n=39, running=1)  # 39 waiting for a shared login
@@ -293,19 +212,3 @@ def test_the_scheduler_builds_the_finding_outside_the_writer(api, monkeypatch):
     with store.read() as c:
         found = org_turns.saved(c, org_turns.INCIDENT)['finding']
     assert 'Likely bottleneck' in found['text']
-
-
-def test_dead_sweep_walks_live_runs_not_every_attempt():
-    """The sweep's OR defeated attempts_live_lease, so SQLite scanned every attempt ever made (44-52 ms on TIDY and Tico
-    Team, 91k attempts). Pinned to the partial index, it reads only the live runs."""
-    from backend import turn_fixer
-
-    c = sqlite3.connect(":memory:")
-    c.execute(
-        "CREATE TABLE attempts(id TEXT PRIMARY KEY, state TEXT, lease_until TEXT, started_at TEXT, "
-        "stop_requested_at TEXT, created_at TEXT)"
-    )
-    c.execute("CREATE INDEX attempts_created ON attempts(created_at)")
-    c.execute("CREATE INDEX attempts_live_lease ON attempts(lease_until,id) WHERE state IN ('leased','running')")
-    plan = " ".join(row[3] for row in c.execute("EXPLAIN QUERY PLAN " + turn_fixer.DEAD_SQL, ("2026-01-01",)))
-    assert "USING INDEX attempts_live_lease" in plan

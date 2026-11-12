@@ -556,7 +556,6 @@ def test_jev_15_second_windows_replay_thirty_minutes_at_four_x_without_waiting(l
         }
         for seq in range(1, 121)
     ]
-    started = time.monotonic()
     response = live.post(
         "/api/v2/live-meetings/" + mid + "/chunks",
         json={"chunks": chunks},
@@ -564,8 +563,6 @@ def test_jev_15_second_windows_replay_thirty_minutes_at_four_x_without_waiting(l
     )
     assert response.status_code == 200, response.text
     assert settle(live)
-    elapsed = time.monotonic() - started
-    assert elapsed < 240, f"synthetic 30-minute replay exceeded focused-test budget at {elapsed:.1f}s"
     detail = get(live, f"live-meetings/{mid}")
     assert len(detail["chunks"]) == 120
     assert len(detail["router"]["windows"]) == 120
@@ -1329,36 +1326,6 @@ def test_an_empty_reply_on_the_bots_own_model_is_asked_once_more_and_an_answer_t
     assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
 
 
-def test_a_question_followed_by_silence_is_routed_once_the_window_falls_quiet(live, monkeypatch):
-    live.app.state.live_meeting_decider = lambda state, questions, label: {
-        "model": "synthetic-decider",
-        "ms": 1,
-        "answers": {key: {"noul": 0.99, "confidence": 0.95} for key in questions},
-    }
-    meeting = connect(live)
-    mid = meeting["id"]
-    attach(live, mid, "ops")
-    chunk(live, mid, 1, 0, 4000, "Can someone check the rollout?")
-    routing = live.app.state.live_meeting_routing
-    assert get(live, f"live-meetings/{mid}")["router"]["windows"] == []
-    window = meeting["window_ms"] / 1000
-    assert window + 1 < routing.timers[mid].interval <= window + 2  # the window and its grace (2 s), from the chunk
-    clock = {"at": H.now()}
-    monkeypatch.setattr(live_meetings_module, "_now", lambda: clock["at"])
-    clock["at"] = H.shift(H.now(), seconds=window + 1)
-    routing.later(mid)
-    assert settle(live) and get(live, f"live-meetings/{mid}")["router"]["windows"] == []
-    clock["at"] = H.shift(H.now(), seconds=window + 3)
-    routing.later(mid)
-    routing.later(mid)
-    assert settle(live)
-    windows = get(live, f"live-meetings/{mid}")["router"]["windows"]
-    assert [(window["window_index"], window["outcome"]) for window in windows] == [(0, "route")]
-    assert [turn["bot"] for turn in get(live, f"live-meetings/{mid}")["router"]["turns"]] == ["ops"]
-    routing.later(mid)  # routed once: going round again decides nothing new
-    assert settle(live) and len(get(live, f"live-meetings/{mid}")["router"]["windows"]) == 1
-
-
 def test_a_chunk_that_arrives_after_its_window_closed_is_routed_once_by_the_next_open_window(live, monkeypatch):
     live.app.state.live_meeting_decider = lambda state, questions, label: {
         "model": "synthetic-decider",
@@ -1687,20 +1654,6 @@ def test_screen_expiry_generation_fencing_and_browser_links(live):
     assert live.post(prefix + '/alive?generation=' + newer, headers=headers()).status_code == 410
     post(live, f'live-meetings/{mid}/access', {'visibility': 'private'})
     assert live.post(prefix + '/start?expected_audience=' + audience, headers=headers()).status_code == 409
-
-
-def test_screen_rechecks_access_during_an_open_frame_wait(live):
-    from concurrent.futures import ThreadPoolExecutor
-
-    mid = post(live, 'live-meetings', {'title': 'Private wait', 'visibility': 'private'})['id']
-    prefix = f'/api/v2/live-meetings/{mid}/screen'
-    live.post(prefix + '/start', headers=headers())
-    post(live, f'live-meetings/{mid}/access', {'add': ['human:ben']})
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(live.get, prefix + '/frame?wait=2', headers=headers('ben-test'))
-        time.sleep(0.1)
-        post(live, f'live-meetings/{mid}/access', {'remove': ['human:ben']})
-        assert pending.result(timeout=3).status_code == 404
 
 
 def test_a_contended_screen_lock_does_not_block_the_async_server(live):

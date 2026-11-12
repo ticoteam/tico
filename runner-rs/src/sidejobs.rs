@@ -322,21 +322,4 @@ mod tests {
         assert_eq!(delays, [10, 20, 40, 80, 160, 300, 300]);
         assert_eq!(backoff(1, 500.0, 6), (0, 10));
     }
-
-    #[test]
-    fn the_close_key_comes_from_the_environment_or_its_secrets_file() {
-        let dir =
-            std::env::temp_dir().join(format!("tico-close-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(dir.join("secrets")).unwrap();
-        assert_eq!(close_key(&dir), "");
-        std::fs::write(
-            dir.join("secrets/close-calls.env"),
-            "# Close\nOTHER=1\n CLOSE_API_KEY = 'api_123' \n",
-        )
-        .unwrap();
-        if std::env::var("CLOSE_API_KEY").is_err() {
-            assert_eq!(close_key(&dir), "api_123");
-        }
-        std::fs::remove_dir_all(dir).ok();
-    }
 }

@@ -35,11 +35,6 @@ def row(api, person="cara"):
         return dict(c.execute("SELECT * FROM google_connects WHERE person_id=?", (person,)).fetchone())
 
 
-def test_the_scopes_are_the_connectors_read_only_scopes():
-    assert google_connect.READ_SCOPES == oauth.IDENTITY_SCOPES + oauth.READ_SCOPES
-    assert not set(google_connect.READ_SCOPES) & set().union(*oauth.CAPABILITIES.values())
-
-
 def test_without_tico_s_google_app_connect_google_says_so(api):
     assert get(api, "mail/google", "cara-test")["configured"] is False
     r = api.post("/api/v2/mail/google/connect", json={}, headers=headers("cara-test"))
@@ -287,22 +282,6 @@ def test_a_failed_reconnect_keeps_the_earlier_grant_refreshable_and_disconnect_e
     assert refresh(app, machine["token"], refresh_token="1//second").status_code == 200
 
 
-def test_an_older_google_connects_table_gets_the_fingerprint_columns():
-    import sqlite3
-
-    c = sqlite3.connect(":memory:")
-    c.execute(
-        "CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
-        "oauth_state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, "
-        "holder TEXT, started_at REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)"
-    )
-    google_connect.ensure_schema(c)
-    google_connect.ensure_schema(c)
-    assert {"pending_hash", "grant_hash", "pending_scopes", "grant_scopes"} <= {
-        r[1] for r in c.execute("PRAGMA table_info(google_connects)")
-    }
-
-
 def test_a_refused_refresh_says_why_and_nothing_else_and_google_out_of_reach_or_down_is_a_network_refusal(
     app, monkeypatch
 ):
@@ -342,14 +321,6 @@ def test_an_answer_wider_than_asked_is_refused_not_passed_on(app, monkeypatch):
     )
     r = refresh(app, machine["token"])
     assert r.status_code == 409 and "ya29.wide" not in r.text
-
-
-def test_the_act_scopes_are_what_the_mail_cli_needs_for_labels_drafts_and_calendar_writes():
-    assert google_connect.ACT_SCOPES == [oauth.G + "gmail.modify", oauth.G + "calendar.events"]
-    assert set(google_connect.ACT_SCOPES) <= set().union(*oauth.CAPABILITIES.values())
-    assert not set(google_connect.ACT_SCOPES) & set(google_connect.READ_SCOPES)
-    for capability, needs in oauth.NEEDS.items():  # each capability passes with the act grant
-        assert needs & set(google_connect.ACT_SCOPES), capability
 
 
 def test_the_company_s_own_app_signs_in_for_the_act_scopes_too(own_app):

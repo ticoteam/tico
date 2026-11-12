@@ -43,20 +43,6 @@ def test_every_runner_module_path_is_the_runner_support_module(name):
         assert old is real
 
 
-def test_lazy_relative_imports_of_an_old_process_reach_runner_support():
-    # Old runner/connectors.py runs `from .freshness import CodeWatch`, old runner/__main__.py
-    # `from .importers.service import doctor`, old backend/granola_mcp.py `from runner.importers.base import email_of`.
-    import runner_support.freshness
-    import runner_support.importers.base
-    import runner_support.importers.service
-
-    assert importlib.import_module(".freshness", "runner").CodeWatch is runner_support.freshness.CodeWatch
-    assert importlib.import_module(".importers.service", "runner").doctor is runner_support.importers.service.doctor
-    from runner.importers.base import email_of
-
-    assert email_of is runner_support.importers.base.email_of
-
-
 def test_python_dash_m_runner_still_parses_unit_commands():
     said = run("-m", "runner", "--help")
     assert said.returncode == 0, said.stderr

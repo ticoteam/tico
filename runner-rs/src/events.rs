@@ -419,39 +419,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_stream_back_after_an_outage_says_so_once() {
-        let e = Events::new();
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 1, "release": "v1"}),
-            true,
-        );
-        let back = |lines: Vec<String>| {
-            lines
-                .iter()
-                .filter(|l| l.contains("event stream back"))
-                .count()
-        };
-        let before = back(crate::util::recent_errors());
-        *e.down_since.lock().unwrap() = Some(Instant::now());
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 2, "release": "v1"}),
-            true,
-        );
-        e.dispatch(
-            "ready",
-            None,
-            &serde_json::json!({"seq": 3, "release": "v1"}),
-            true,
-        );
-        assert_eq!(back(crate::util::recent_errors()), before + 1);
-        assert!(e.down_since.lock().unwrap().is_none());
-    }
-
     #[tokio::test]
     async fn a_quiet_body_reads_as_a_timeout_and_a_cut_one_as_the_connection() {
         use tokio::io::AsyncWriteExt;

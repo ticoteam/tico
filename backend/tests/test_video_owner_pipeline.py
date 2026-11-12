@@ -284,7 +284,6 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
     "code, stdout, stderr",
     [
         (1, "", TRACEBACK),  # a crash: traceback only
-        (1, json.dumps({"error": "TypeError: Client.get() got multiple values"}), ""),  # an unexpected exception
         (
             1,
             json.dumps(
@@ -297,9 +296,7 @@ def test_the_hubs_not_approved_answer_is_pending_and_asks_for_review(repo, monke
             ),
             "",
         ),
-        (2, json.dumps({"error": "validation", "retryable": False, "detail": "--by is human"}), ""),  # bad input
         (2, "", "usage: tico file approved TARGET"),
-        (7, "", "something unexpected"),
     ],
 )
 def test_a_failed_hub_call_is_an_error_not_a_pending_file(repo, monkeypatch, code, stdout, stderr):

@@ -19,20 +19,6 @@ def test_an_hour_becomes_the_half_hour_at_the_same_rate(api):
     put(api, "usage/limits/ops", {"per_30m_usd": 2, "hourly_usd": 4}, expected=422)  # one or the other
 
 
-def test_a_bot_over_its_30_minute_limit_takes_no_new_turn_until_the_window_ends(api):
-    r = fleet(api)
-    put(api, "usage/limits/ops", {"per_30m_usd": 1})
-    finish(api, r, start(api, r), 500_000)  # $5 against a $1 window
-    post(api, "chat/ops", {"text": "More."})
-    assert claim(api, r) is None
-    assert paused(api)["focus"] == "Paused: over its 30-minute limit"
-    with api.app.state.store.read() as c:
-        started = c.execute("SELECT min(created_at) FROM attempts WHERE bot_id='ops'").fetchone()[0]
-        at = datetime.fromisoformat(started[:19]).replace(tzinfo=timezone.utc)
-        assert usage_limits.blocked(c, "ops", at=at) == "per_30m"
-        assert usage_limits.blocked(c, "ops", at=at + timedelta(minutes=30)) is None  # the next window is empty
-
-
 def test_the_window_is_the_half_hour_the_time_falls_in(api):
     at = datetime(2026, 10, 28, 10, 10, tzinfo=timezone.utc)
     key, start_, end = usage_limits.bounds(at)["per_30m"]

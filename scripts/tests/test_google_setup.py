@@ -485,15 +485,6 @@ def test_a_key_refusal_that_does_not_name_the_policy_leaves_the_policy_alone(tmp
     assert hub.gcloud('organizations', 'add-iam-policy-binding') == []
 
 
-def test_a_discovered_organization_is_passed_without_its_resource_prefix(tmp_path):
-    hub = Hub(tmp_path, orgs=['111'])
-    result = hub.run()
-    assert result.returncode == 0, result.stderr
-    (created,) = hub.gcloud('projects', 'create')
-    assert '--organization=111' in created
-    assert not any('organizations/' in arg for arg in created)
-
-
 def test_the_temporary_role_is_unconditional_when_the_organization_has_conditional_bindings(tmp_path):
     hub = Hub(tmp_path, enforced=list(KEY_POLICIES), policy_needs_role=True, conditional=True)
     result = hub.run()

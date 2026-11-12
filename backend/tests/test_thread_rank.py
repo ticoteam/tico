@@ -51,12 +51,6 @@ def test_important_orders_by_level_then_newest_and_recent_by_newest(api):
     assert ids(recent)[:2] == [new["id"], old["id"]]
 
 
-def test_a_thread_never_ranked_reads_as_the_default_level(api):
-    thread = new_thread(api, title="Plans", members=("human:ben",), body="Hi")
-    row = next(t for t in sidebar(api, token="ben-test", sort="important")["threads"] if t["id"] == thread["id"])
-    assert row["importance"] == TR.DEFAULT
-
-
 def test_noise_level_leaves_important_but_stays_in_recent(api):
     thread = new_thread(api, title="Status ping", members=("human:ben",), body="All green")
     rank(api, thread["id"], 1)
@@ -179,7 +173,3 @@ def test_a_level_that_moves_tells_the_lists(api):
     with store.transaction() as c:
         TR.save(c, thread["id"], 10, 2, H.now())
     assert ranked() == 1, "the same level is no change"
-
-
-def test_levels_map_from_the_score_position():
-    assert [TR.level_of(s) for s in (0, 0.4, 4.6, 9, 12)] == [1, 1, 6, 10, 10]

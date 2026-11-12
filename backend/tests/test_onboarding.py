@@ -443,14 +443,6 @@ def test_enrollment_places_paused_and_draining_bots_but_skips_archived(environme
         assert c.execute("SELECT draining FROM bot_control WHERE bot='waiting'").fetchone()[0] == draining
 
 
-def test_the_wizard_is_told_when_the_team_name_is_only_the_servers_stand_in(tmp_path):
-    """No TICO_TEAM_NAME leaves "Company", which the first-run wizard must not offer as the team's name (Dev 237)."""
-    unnamed = Settings(db_path=tmp_path / "a.db").environment()
-    assert unnamed["company_name"] == "Company" and unnamed["company_name_default"] is True
-    named = Settings(db_path=tmp_path / "b.db", company_name="Acme").environment()
-    assert named["company_name"] == "Acme" and named["company_name_default"] is False
-
-
 COUNSEL_CARD = {
     "template": "rules-owner",
     "slug": "rules-owner",

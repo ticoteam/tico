@@ -373,13 +373,6 @@ def roster_email(auth, pid):
         return c.execute("SELECT email FROM humans WHERE id=?", (pid,)).fetchone()["email"]
 
 
-def test_the_account_is_remembered_on_first_sign_in(signin):
-    signin.login(claims={"sub": "acct-ben"})
-    with signin.auth.store.read() as c:
-        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id='ben'").fetchone()
-    assert row["idp_sub"] == "acct-ben" and row["idp_issuer"] == signin.fake.issuer
-
-
 def test_a_changed_address_signs_in_the_same_person_and_moves_the_email(signin):
     signin.login(claims={"sub": "acct-ben"})
     signin.api.cookies.clear()

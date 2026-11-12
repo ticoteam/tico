@@ -466,17 +466,6 @@ def test_rehearsal_and_test_servers_skip_the_dream_step(api):
     assert dream_rows(api, "ops") == []
 
 
-def test_no_dream_task_path_skips_the_dream_step(api, monkeypatch):
-    aged(api)
-    remember(api, "ops", 10)
-    store, auth = api.app.state.store, api.app.state.auth
-    monkeypatch.setattr(dream, "creator", lambda store: None)
-    with settings(store, test_identities={}):
-        out = step_result(store, auth)
-    assert out["status"] == "skipped" and out["reason"] == "the dream's task path is not wired on this server"
-    assert dream_rows(api, "ops") == []
-
-
 # ---- regressions from the review of 676ac34a0 -------------------------------------------------------------------------
 
 

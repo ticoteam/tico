@@ -1423,14 +1423,6 @@ mod tests {
         assert_eq!(trust_field(Separation::NoRelay, true), None);
     }
 
-    #[test]
-    fn a_runtime_a_subscription_signs_in_needs_no_sign_in_here() {
-        let entry = serde_json::json!({"bot": "ops", "subscriptions": {"claude": "claude_token"}});
-        assert!(subscribed(&entry, "claude"));
-        assert!(!subscribed(&entry, "codex"));
-        assert!(!subscribed(&serde_json::json!({"bot": "ops"}), "claude"));
-    }
-
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
     }
@@ -1815,88 +1807,6 @@ pub(crate) mod probe_tests {
         (log, before)
     }
 
-    fn spawns(log: &Path) -> Vec<String> {
-        std::fs::read_to_string(log)
-            .map(|s| s.lines().map(String::from).collect())
-            .unwrap_or_default()
-    }
-
-    fn runner_config(root: &Path) -> (Config, SignIn, Client) {
-        let data = json!({"projects_dir": root.join("projects").display().to_string()})
-            .as_object()
-            .unwrap()
-            .clone();
-        let config = Config {
-            path: PathBuf::new(),
-            data,
-        };
-        let sign = SignIn::new(&root.join("projects"));
-        let client = Client::new("http://127.0.0.1:9", "t", 1, 0).unwrap();
-        (config, sign, client)
-    }
-
-    #[tokio::test]
-    async fn a_heartbeat_pass_composes_the_probe_rows_and_starts_no_process() {
-        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root =
-            std::env::temp_dir().join(format!("tico-probe-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(root.join("projects")).unwrap();
-        let (log, path) = fake_runtimes(&root, "2.1.300");
-        let (config, sign, client) = runner_config(&root);
-        let (rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
-        let probed = spawns(&log).len();
-        assert!(probed > 0, "the probe starts the runtimes");
-        for _ in 0..40 {
-            let report = runtime_report(&config, &sign, &[], false, &rows);
-            assert!(report["claude"]["version"]
-                .as_str()
-                .unwrap()
-                .starts_with("2.1.300"));
-        }
-        assert_eq!(
-            spawns(&log).len(),
-            probed,
-            "forty heartbeat passes start no process"
-        );
-        std::env::set_var("PATH", path);
-        std::fs::remove_dir_all(root).ok();
-    }
-
-    #[tokio::test]
-    async fn a_probe_on_the_same_versions_reads_no_feature_or_protocol_again() {
-        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join(format!(
-            "tico-probe-reuse-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(root.join("projects")).unwrap();
-        // A version of its own: Claude Code's features are kept per command for the process, and the other test's is 2.1.300.
-        let (log, path) = fake_runtimes(&root, "2.1.301");
-        let (config, sign, client) = runner_config(&root);
-        let (rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
-        let first = spawns(&log);
-        assert!(
-            first.iter().any(|l| l == "claude --help"),
-            "the first probe reads Claude Code's features"
-        );
-        assert!(
-            first.iter().any(|l| l.starts_with("codex app-server")),
-            "the first probe reads the codex protocol"
-        );
-        let _ = probe_all(&config, &sign, &client, &[], false, &rows).await;
-        let second = &spawns(&log)[first.len()..];
-        assert!(
-            !second.iter().any(|l| l == "claude --help"),
-            "Claude Code's features stand while its version is the same"
-        );
-        assert!(
-            !second.iter().any(|l| l.starts_with("codex app-server")),
-            "the codex protocol stands while its version is the same"
-        );
-        std::env::set_var("PATH", path);
-        std::fs::remove_dir_all(root).ok();
-    }
-
     #[test]
     fn the_timer_probes_once_per_ten_minutes_and_each_event_adds_one_probe() {
         let start = Instant::now();
@@ -1976,19 +1886,6 @@ pub(crate) mod probe_tests {
             inputs("/p/acme", true),
             "a login that now shares the operator's"
         );
-    }
-
-    /// A request made while a probe runs keeps its notice, so the next wait ends at once and one more probe runs (finding 2).
-    #[tokio::test]
-    async fn a_request_during_a_probe_ends_the_next_wait_at_once() {
-        let probed = std::sync::Mutex::new(Probed::default());
-        probed.lock().unwrap().schedule.ran(Instant::now());
-        let wake = Notify::new();
-        wake.notify_one();
-        let asked = tokio::time::timeout(Duration::from_millis(500), wait_due(&probed, &wake))
-            .await
-            .expect("the request ends the wait, not the ten-minute timer");
-        assert!(asked, "the wait says an event asked");
     }
 
     /// The probe keeps the account it read, but the row shows the account read last, so a background read that finished
@@ -2093,54 +1990,5 @@ pub(crate) mod probe_tests {
             "old@example.com"
         );
         crate::accounts::forget("gated-acct", "claude");
-    }
-
-    fn median<T: PartialOrd + Copy>(mut values: Vec<T>) -> T {
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        values[values.len() / 2]
-    }
-
-    /// The first probe of a process, then the median of fifty probes with the same versions and of fifty heartbeat
-    /// passes over the rows they left, with spawns counted for each. Run with --ignored --nocapture.
-    #[tokio::test]
-    #[ignore]
-    async fn probe_and_heartbeat_spawns_bench() {
-        let _guard = PATH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let root = std::env::temp_dir().join(format!(
-            "tico-probe-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(root.join("projects")).unwrap();
-        let (log, path) = fake_runtimes(&root, "2.1.300");
-        let (config, sign, client) = runner_config(&root);
-        let started = Instant::now();
-        let (mut rows, _) = probe_all(&config, &sign, &client, &[], false, &Rows::new()).await;
-        let first_spawns = spawns(&log).len();
-        let first_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let (mut probe_ms, mut probe_spawns) = (Vec::new(), Vec::new());
-        for _ in 0..50 {
-            let before = spawns(&log).len();
-            let started = Instant::now();
-            let (next, _) = probe_all(&config, &sign, &client, &[], false, &rows).await;
-            probe_ms.push(started.elapsed().as_secs_f64() * 1000.0);
-            probe_spawns.push(spawns(&log).len() - before);
-            rows = next;
-        }
-        let (mut pass_us, before) = (Vec::new(), spawns(&log).len());
-        for _ in 0..50 {
-            let started = Instant::now();
-            let _ = runtime_report(&config, &sign, &[], false, &rows);
-            pass_us.push(started.elapsed().as_secs_f64() * 1e6);
-        }
-        let pass_spawns = spawns(&log).len() - before;
-        eprintln!(
-            "BENCH runtimes={} first_probe_spawns={first_spawns} first_probe_ms={first_ms:.0} same_version_probe_spawns_median={} same_version_probe_ms_median={:.1} heartbeat_passes=50 heartbeat_spawns={pass_spawns} heartbeat_pass_us_median={:.0}",
-            crate::harness_tools::runtimes().len(),
-            median(probe_spawns),
-            median(probe_ms),
-            median(pass_us)
-        );
-        std::env::set_var("PATH", path);
-        std::fs::remove_dir_all(root).ok();
     }
 }

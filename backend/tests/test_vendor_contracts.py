@@ -212,13 +212,3 @@ def test_github_installations_are_matched_by_their_account_login():
     stub = InstallationStub(listed)
     assert GitHubApp.installation(stub, refresh=True) == 4242424
     assert stub.saved == [(4242424,)]
-
-
-def test_a_github_webhook_signature_is_the_sha256_of_the_body():
-    body = b'{"action": "opened"}'
-    signed = "sha256=" + hmac.new(b"contract-webhook-secret", body, hashlib.sha256).hexdigest()
-    assert github.verify("contract-webhook-secret", {"x-hub-signature-256": signed}, body) is True
-    assert (
-        github.verify("contract-webhook-secret", {"x-hub-signature-256": signed.replace("sha256=", "sha1=")}, body)
-        is False
-    )

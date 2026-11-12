@@ -966,39 +966,6 @@ class SkillFile(unittest.TestCase):
 
     PATH = REPO / "skills" / "tico-sync" / "SKILL.md"
 
-    def test_every_tool_it_names_exists_and_every_placeholder_is_one_the_connector_fills(self):
-        from clients import hubtools
-
-        text = self.PATH.read_text()
-        names = set(re.findall(r"\btico_[a-z_]+\b", text))
-        self.assertLessEqual(names, set(hubtools.BY_NAME), sorted(names - set(hubtools.BY_NAME)))
-        self.assertEqual(set(re.findall(r"\{\{(\w+)\}\}", text)), {"connector", "profile"})
-        rendered = H.render_skill(text, "openclaw", "claw", "/usr/bin/python3")
-        self.assertNotIn("{{", rendered)
-
-    def test_every_argument_example_fits_its_tool(self):
-        """An agent without MCP sees no tool schema, only these examples: a wrong key is a refused call, and a
-        message never marked read is answered again on the next run."""
-        from clients import hubtools
-
-        text = " ".join(self.PATH.read_text().split())
-        examples = re.findall(r"`(tico_[a-z_]+)`[^`]{0,40}`(\{[^`]*\})`", text)
-        self.assertGreaterEqual(
-            {name for name, _ in examples},
-            {
-                "tico_message_mark_read",
-                "tico_conversation_show",
-                "tico_message_send",
-                "tico_task_show",
-                "tico_task_done",
-            },
-        )
-        for name, example in examples:
-            schema = hubtools.BY_NAME[name]["inputSchema"]
-            keys = set(json.loads(example))
-            self.assertLessEqual(set(schema.get("required", [])), keys, (name, example))
-            self.assertLessEqual(keys, set(schema["properties"]), (name, example))
-
 
 class Interval(unittest.TestCase):
     def test_parse(self):

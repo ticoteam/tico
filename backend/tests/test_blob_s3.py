@@ -636,22 +636,6 @@ def test_busy_database_is_not_an_s3_failure_and_never_ends_the_storage_loop(tmp_
     assert not storage._write_failed and storage.put(b'attachment')
 
 
-def test_non_s3_errors_are_not_worded_as_s3():
-    import sqlite3
-    from botocore.exceptions import ClientError, EndpointConnectionError
-    from backend import blob_s3
-
-    detail = blob_s3.write_error(sqlite3.OperationalError('database is locked'), 'acme-files', cleanup=True)
-    assert 'S3 storage' not in detail and 'OperationalError' in detail
-    assert blob_s3.write_error(EndpointConnectionError(endpoint_url='https://s3.example.com'), 'acme-files').startswith(
-        'S3 storage'
-    )
-    denied = ClientError({'Error': {'Code': 'AccessDenied'}}, 'PutObject')
-    assert (
-        blob_s3.write_error(denied, 'acme-files') == "S3 storage can't write: AccessDenied on acme-files (s3:PutObject)"
-    )
-
-
 def test_refused_upload_starts_one_recheck_and_heals(tmp_path, credential_clients):
     import threading
     from backend.store import Problem

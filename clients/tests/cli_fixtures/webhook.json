@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "webhook"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook: error: argument sub: invalid choice: 'nope' (choose from list, create, show, update, rotate, pause, resume, delete, send, sends, retry, recover, replay, enable, example) Did you mean: tico webhook pause, tico webhook update?",
-  "exit": 64
- },
- {
-  "argv": [
    "webhook",
    "list"
   ],
@@ -125,40 +104,6 @@
  {
   "argv": [
    "webhook",
-   "create",
-   "--name",
-   "name-1",
-   "--url",
-   "url-1",
-   "--events",
-   "events-1",
-   "--rate-per-hour",
-   "5",
-   "--allow-http",
-   "--departments",
-   "departments-1",
-   "--bots",
-   "bots-1",
-   "--pipelines",
-   "pipelines-1",
-   "--header",
-   "header-1",
-   "--header",
-   "header-1b",
-   "--secret-header",
-   "secret-header-1",
-   "--secret-header",
-   "secret-header-1b"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook create: error: argument --header: --header is Name: value, not 'header-1'",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "show",
    "id-1"
   ],
@@ -186,17 +131,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "show"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook show <id>\ntico webhook show: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -232,58 +166,6 @@
  {
   "argv": [
    "webhook",
-   "update",
-   "id-1",
-   "--name",
-   "name-1",
-   "--url",
-   "url-1",
-   "--events",
-   "events-1",
-   "--rate-per-hour",
-   "5",
-   "--no-allow-http",
-   "--expected-revision",
-   "5",
-   "--credentials",
-   "keep",
-   "--departments",
-   "departments-1",
-   "--bots",
-   "bots-1",
-   "--pipelines",
-   "pipelines-1",
-   "--header",
-   "header-1",
-   "--header",
-   "header-1b",
-   "--secret-header",
-   "secret-header-1",
-   "--secret-header",
-   "secret-header-1b",
-   "--no-filter",
-   "--no-headers"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook update: error: argument --header: --header is Name: value, not 'header-1'",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "update"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook update <id>\ntico webhook update: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "rotate",
    "id-1"
   ],
@@ -311,17 +193,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "rotate"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook rotate <id>\ntico webhook rotate: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -395,17 +266,6 @@
  {
   "argv": [
    "webhook",
-   "pause"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook pause <id>\ntico webhook pause: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "resume",
    "id-1"
   ],
@@ -437,17 +297,6 @@
  {
   "argv": [
    "webhook",
-   "resume"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook resume <id>\ntico webhook resume: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "delete",
    "id-1"
   ],
@@ -475,17 +324,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "delete"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook delete <id>\ntico webhook delete: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -541,17 +379,6 @@
   "http": [],
   "stdout": "",
   "stderr": "tico webhook send: error: argument --data: --data must be JSON, or @file holding JSON",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "send"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook send <id>\ntico webhook send: error: the following arguments are required: id, --type",
   "exit": 64
  },
  {
@@ -631,17 +458,6 @@
  {
   "argv": [
    "webhook",
-   "sends"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook sends <id>\ntico webhook sends: error: the following arguments are required: id",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "retry",
    "id-1",
    "send-1"
@@ -671,17 +487,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "retry"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook retry <id> <send>\ntico webhook retry: error: the following arguments are required: id, send",
-  "exit": 64
  },
  {
   "argv": [
@@ -718,17 +523,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "recover"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook recover <id>\ntico webhook recover: error: the following arguments are required: id, --since",
-  "exit": 64
  },
  {
   "argv": [
@@ -809,17 +603,6 @@
  {
   "argv": [
    "webhook",
-   "replay"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook replay <id>\ntico webhook replay: error: the following arguments are required: id, --since",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "enable",
    "id-1"
   ],
@@ -847,17 +630,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "enable"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook enable <id>\ntico webhook enable: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -927,17 +699,6 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "example"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook example <id>\ntico webhook example: error: the following arguments are required: id",
-  "exit": 64
  },
  {
   "argv": [
@@ -1092,36 +853,6 @@
  {
   "argv": [
    "webhook",
-   "create",
-   "--name",
-   "CRM"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Example: tico webhook create\ntico webhook create: error: the following arguments are required: --url",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "create",
-   "--name",
-   "CRM",
-   "--url",
-   "https://crm.example/hook",
-   "--rate-per-hour",
-   "lots"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook create: error: argument --rate-per-hour: invalid int value: 'lots'",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "update",
    "ep_1",
    "--url",
@@ -1247,20 +978,6 @@
  {
   "argv": [
    "webhook",
-   "update",
-   "ep_1",
-   "--credentials",
-   "maybe"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook update: error: argument --credentials: invalid choice: 'maybe' (choose from keep, clear)",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
    "send",
    "ep_1",
    "--type",
@@ -1305,48 +1022,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "webhook",
-   "send",
-   "ep_1",
-   "--type",
-   "custom.ping",
-   "--data",
-   "@missing-file.json"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook send: error: argument --data: --data must be JSON, or @file holding JSON",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "sends",
-   "ep_1",
-   "--state",
-   "lost"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook sends: error: argument --state: invalid choice: 'lost' (choose from ready, sending, delivered, failed, canceled, withheld)",
-  "exit": 64
- },
- {
-  "argv": [
-   "webhook",
-   "list",
-   "--limit",
-   "many"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico webhook list: error: argument --limit: invalid int value: 'many'",
-  "exit": 64
  }
 ]

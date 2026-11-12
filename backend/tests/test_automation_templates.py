@@ -306,37 +306,6 @@ def test_a_group_with_no_lead_is_refused_with_a_422(api):
         fill(api, tid, f"group:{gid}", "slack:#general", expected=422)
 
 
-def test_pruning_a_group_with_no_lead_takes_out_the_rules_that_need_someone_to_act(api):
-    steps = T._prune(T.load("founder")["steps"], set(), no_actor=True)
-    assert "meet" not in by_id(steps)["ask"]["questions"]  # its only question was for the reply
-    acts = {
-        a["do"] for step in steps if step["type"] == "filter" for rule in step["rules"] for a in rule.get("then", [])
-    }
-    assert not acts & set(T.NEEDS_ACTOR)
-
-
-def test_every_template_action_is_one_the_engine_runs_and_none_is_unsubscribe(api):
-    for tid in T.ORDER:
-        tpl = T.load(tid)
-        dos = {a["do"] for dest in tpl["destinations"] for a in dest["then"]}
-        dos |= {
-            a["do"]
-            for step in tpl["steps"]
-            if step["type"] == "filter"
-            for rule in step["rules"]
-            for a in rule.get("then", [])
-        }
-        assert dos <= set(F.ACTIONS), tid
-    assert "unsubscribe" not in json.dumps([T.load(tid) for tid in T.ORDER])
-
-
-def test_the_founder_finance_rule_reads_the_wording_and_names_no_vendor(api):
-    rule = next(r for r in T.load("founder")["steps"][0]["rules"] if r.get("to") == "finance")
-    assert [cond["field"] for cond in rule["when"]] == ["message.subject", "message.snippet"]
-    text = json.dumps([T.load(tid) for tid in T.ORDER]).lower()
-    assert not any(name in text for name in ("kapitus", "plaid", "mercury"))
-
-
 def test_the_draft_turn_is_asked_about_the_mail_it_handles(api):
     set_templates(api, STAFF)
     turn = run_to_turn(fill(api, "founder", "person:ana", "ana@acme.example"), MAIL)

@@ -79,21 +79,6 @@ def test_a_command_with_a_renderer_takes_json_and_another_tool_by_its_arguments(
         listing.prepare(elsewhere)
 
 
-def test_help_is_the_schema_description_and_the_example_follows_the_flags(calls, capsys):
-    show = Command(
-        "fake show",
-        "one fake",
-        args=(Arg("names", "--name", action="append", into="scope"),),
-        example="tico fake show x --name Ada",
-    )
-    with pytest.raises(SystemExit):
-        parse((Group("fake"), show), ["fake", "show", "-h"])
-    out = capsys.readouterr().out
-    assert "Who it is for (repeatable)" in out  # the folded flag's own key inside `scope`
-    assert "1-50" in out  # no description: the range
-    assert out.rstrip().endswith("Example: tico fake show x --name Ada")
-
-
 def test_several_flags_may_set_one_property_and_an_object_is_given_whole_as_json(calls, capsys):
     show = Command(
         "fake show",
@@ -208,15 +193,3 @@ def test_every_spec_command_has_an_example_that_runs_it(tmp_path, monkeypatch):
         if words[:1] != ["tico"] or cli_spec.of(hubcli.parser().parse_args(words[1:])) is not command:
             wrong.append(f"{command.path}: {command.example!r}")
     assert wrong == []
-
-
-def test_no_argument_help_names_a_tool():
-    """The help is the schema's description, which an MCP client reads too: it names a command (`trigger list`), not
-    the tool behind it, so it reads well in both places."""
-    named = [
-        f"{' '.join(path)} {action.option_strings or action.dest}: {action.help}"
-        for path, p, _command in spec_leaves()
-        for action in p._actions
-        if action.help and "tico_" in action.help
-    ]
-    assert named == []

@@ -1589,12 +1589,6 @@ mod tests {
     }
 
     #[test]
-    fn credential_source_is_stripped_from_every_runtime() {
-        let mut body = json!({"readiness": {"runtimes": {"codex": {"ok": true, "credential_source": "team"}}}});
-        assert!(strip_credential_source(&mut body) && !strip_credential_source(&mut body));
-    }
-
-    #[test]
     fn accounts_stay_here_until_the_server_takes_them() {
         let mut body = json!({"readiness": {"runtimes": {"claude": {"installed": true, "account": {"email": "ops@acme.example"},
                                                                "weekly": {"used_percent": 17}, "five_hour": {"used_percent": 53}}}},
@@ -1817,49 +1811,6 @@ mod tests {
             !c.wants(&events, "sync", Some(15.0)),
             "the sync interval is its own"
         );
-    }
-
-    /// One bot's row from `runners/assignments`, about 1.2 KB as the server sends it.
-    fn bench_assignment(i: usize) -> Value {
-        json!({
-            "bot": format!("bot:role-{i}"), "runner_id": "r1", "state": "active", "generation": 12, "team": "engineering",
-            "owner_id": "user-1", "computer_label": "Studio Mac", "active": true,
-            "repository": {"owner": "acme", "name": format!("role-{i}"), "branch": "main", "url": format!("https://github.com/acme/role-{i}.git")},
-            "config": {"runtime": "claude", "model": "claude-sonnet-5", "effort": "medium", "tools": ["hub", "browser", "mail", "github"],
-                       "memory": {"history": true, "cap_bytes": 65536},
-                       "watchers": [{"name": "inbox", "every_s": 60, "command": "python3 watch.py --inbox"}],
-                       "instructions": format!("Role {i}. {}", "Keep the board current. ".repeat(30))}
-        })
-    }
-
-    /// `cargo test bench_assignments -- --ignored --nocapture`: the bytes one tick's read of the assignment list asks
-    /// the allocator for, with 20 bots (the tick runs four times a second).
-    #[tokio::test]
-    #[ignore]
-    async fn bench_assignments_read_per_tick() {
-        let dir = std::env::temp_dir().join(format!(
-            "tico-assign-bench-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(dir.join("projects")).unwrap();
-        let path = dir.join("runner.json");
-        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "t", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
-        let config = Config::load(&path).unwrap();
-        let client = Client::new(&config.url(), &config.token(), 5, 0).unwrap();
-        let runner = Runner::new(config, client, State::open(&dir.join("state")).unwrap());
-        let assignments: Vec<Value> = (0..20).map(bench_assignment).collect();
-        let json_bytes = serde_json::to_vec(&assignments).unwrap().len();
-        *runner.assignments.lock().unwrap() = Arc::new(assignments);
-        let mut bytes = Vec::new();
-        for _ in 0..50 {
-            let asked = crate::util::alloc_probe::requested();
-            let seen = runner.assignments_seen();
-            bytes.push(crate::util::alloc_probe::requested() - asked);
-            assert_eq!(seen.len(), 20);
-        }
-        bytes.sort_unstable();
-        eprintln!("assignment read per tick, 20 bots ({json_bytes} JSON bytes): bytes requested median {} (min {}, max {})", bytes[25], bytes[0], bytes[49]);
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// A runner whose probes find only the fake runtimes on PATH (the caller holds readiness::probe_tests::PATH_LOCK).

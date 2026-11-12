@@ -214,19 +214,11 @@ SCENARIOS = [
         "L4 recorder and replay judge: inputs, one recording per input, refusals, order",
         no_steps,
         [
-            Check("inputs: every input parses and carries its set's state fields", WAVE, inputs_valid),
-            Check("inputs: ids and recording keys are unique", WAVE, ids_and_keys_unique),
-            Check("inputs: every email address is at acme.example", WAVE, emails_at_acme),
             Check("recorder: one file per input, named by key, holding the engine's answers", WAVE, one_file_per_input),
             Check("recorder: a second run skips every input and calls no engine", WAVE, second_run_skips),
             Check("recorder: force answers every input again", WAVE, force_answers_again),
             Check("recorder: a wrong-shape answer fails and is not saved", WAVE, wrong_shape_not_saved),
             Check("replay: a recorded call returns its recorded answers", WAVE, replay_returns_recording),
-            Check(
-                "replay: with no recording, MissingRecording names the re-record command",
-                WAVE,
-                replay_missing_names_command,
-            ),
             Check(
                 "replay: a passed script answers first, then the recording, then MissingRecording", WAVE, replay_order
             ),

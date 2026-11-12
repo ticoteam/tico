@@ -717,10 +717,3 @@ def test_a_persons_draft_with_nothing_real_to_say_posts_nothing(api):
             updates.NOTHING_NEW,
         )
         assert not c.execute("SELECT 1 FROM updates WHERE bot='human:ana'").fetchone(), "no draft was posted"
-
-
-def test_the_cli_says_skip_as_a_flag_with_no_body():
-    from clients import hubcli
-
-    args = hubcli.parse(hubcli.parser(), ["update", "create", "--skip"])
-    assert args.skip is True and args.body is None

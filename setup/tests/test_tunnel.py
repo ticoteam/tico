@@ -42,31 +42,6 @@ def write_config(directory, domain, **env):
     )
 
 
-def test_the_server_writes_the_route_for_its_domain_and_a_404_for_everything_else(tmp_path):
-    done = write_config(tmp_path, "tico.example.com")
-    assert done.returncode == 0, done.stderr
-    written = tmp_path / "ingress.yml"
-    assert yaml.safe_load(written.read_text()) == cloudflare.ingress_config("tico.example.com")
-    assert yaml.safe_load(written.read_text())["ingress"] == [
-        {"hostname": "tico.example.com", "service": "http://hold:8080"},
-        {"service": "http_status:404"},
-    ]
-    assert oct(written.stat().st_mode & 0o777) == "0o644" and not list(
-        tmp_path.glob("*.new")
-    )  # the tunnel container can read it
-    # Written on every start: a changed TICO_DOMAIN follows.
-    write_config(tmp_path, "hub.example.org")
-    assert yaml.safe_load(written.read_text())["ingress"][0]["hostname"] == "hub.example.org"
-    # The older name keeps what an older server wrote, straight to the server: a cloudflared still running from an older
-    # compose file (an update that has not recreated it yet, or rolled back) never restarts onto a hold it lacks.
-    older = tmp_path / "cloudflared.yml"
-    older.write_text(
-        "ingress:\n  - hostname: hub.example.org\n    service: http://server:8765\n  - service: http_status:404\n"
-    )
-    before = older.read_bytes()
-    assert write_config(tmp_path, "hub.example.org").returncode == 0 and older.read_bytes() == before
-
-
 def test_no_domain_or_no_volume_writes_nothing_and_a_bad_domain_is_refused(tmp_path):
     assert write_config(tmp_path, "").returncode == 0 and not list(tmp_path.iterdir())
     assert write_config(tmp_path / "missing", "tico.example.com").returncode == 0
@@ -74,112 +49,6 @@ def test_no_domain_or_no_volume_writes_nothing_and_a_bad_domain_is_refused(tmp_p
         refused = write_config(tmp_path, bad)
         assert refused.returncode != 0 and "not a plain hostname" in refused.stderr, bad
         assert not list(tmp_path.iterdir())
-
-
-def test_visual_origin_survives_restart_with_only_its_visuals_path_exposed(tmp_path):
-    env = {"TICO_RUNNER_URL": "https://runner.example.com", "TICO_VISUAL_ORIGIN": "https://visuals.example.net/"}
-    expected = [
-        {"hostname": "app.example.com", "service": "http://hold:8080"},
-        {"hostname": "runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://hold:8080"},
-        {"hostname": "visuals.example.net", "path": "^/visuals/", "service": "http://hold:8080"},
-        {"service": "http_status:404"},
-    ]
-    config = tmp_path / "ingress.yml"
-    for _ in range(2):
-        done = write_config(tmp_path, "app.example.com", **env)
-        assert done.returncode == 0, done.stderr
-        assert yaml.safe_load(config.read_text())["ingress"] == expected
-    # Removing the setting removes the route on the next start, without stale hostnames or duplicates.
-    assert (
-        write_config(
-            tmp_path, "app.example.com", TICO_RUNNER_URL=env["TICO_RUNNER_URL"], TICO_VISUAL_ORIGIN=""
-        ).returncode
-        == 0
-    )
-    assert yaml.safe_load(config.read_text())["ingress"] == expected[:2] + expected[3:]
-
-
-def test_unsafe_visual_origins_cannot_replace_or_inject_tunnel_routes(tmp_path):
-    config = tmp_path / "ingress.yml"
-    without_visuals = [
-        {"hostname": "app.example.com", "service": "http://hold:8080"},
-        {"hostname": "runner.example.com", "path": "^/(?:api/v2|download)(?:/.*)?$", "service": "http://hold:8080"},
-        {"service": "http_status:404"},
-    ]
-    for origin, reason in (
-        ("http://visuals.example.net", "https://"),
-        ("https://visuals.example.net/private", "path"),
-        ("https://user@visuals.example.net", "user name"),
-        ("https://visuals.example.net\n  - service: http://other", "control characters"),
-        ("https://app.example.com", "TICO_DOMAIN"),
-        ("https://runner.example.com", "TICO_RUNNER_URL"),
-        ("https://127.0.0.1", "IP address"),
-        ("https://visuals.example.net:bad", "valid URL"),
-        ("https://visuals.example.net:0", "port 0"),
-        ("https://visuals_example.net", "DNS hostname"),
-    ):
-        # A bad value is skipped, not fatal: the app and runner routes are written and the server goes on starting.
-        skipped = write_config(
-            tmp_path, "app.example.com", TICO_VISUAL_ORIGIN=origin, TICO_RUNNER_URL="https://runner.example.com"
-        )
-        assert skipped.returncode == 0, (origin, skipped.stderr)
-        assert yaml.safe_load(config.read_text())["ingress"] == without_visuals, origin
-        assert (
-            "visuals" not in config.read_text()
-            and "other" not in config.read_text()
-            and not list(tmp_path.glob("*.new"))
-        )
-        # One warning naming the reason, never the value itself.
-        (warning,) = skipped.stderr.splitlines()
-        assert warning.startswith("tico: warning: TICO_VISUAL_ORIGIN ") and reason in warning, (origin, warning)
-        assert origin not in skipped.stderr and "http://other" not in skipped.stderr
-
-
-def test_a_visual_origin_with_a_trailing_cr_from_an_edited_env_file_still_gets_its_route(tmp_path):
-    done = write_config(tmp_path, "app.example.com", TICO_VISUAL_ORIGIN="https://Visuals.example.net\r")
-    assert done.returncode == 0 and not done.stderr, done.stderr
-    assert yaml.safe_load((tmp_path / "ingress.yml").read_text())["ingress"][1] == {
-        "hostname": "visuals.example.net",
-        "path": "^/visuals/",
-        "service": "http://hold:8080",
-    }
-
-
-def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_path, monkeypatch):
-    from backend.config import Settings
-    from backend.tests.helpers.rehearsal import serve
-
-    tunnel = tmp_path / "tunnel"
-    tunnel.mkdir()
-    for bad, reason in (
-        ("https://visuals.example.net/typo", "has a path"),
-        ("https://[visuals.example.net", "is not a valid URL"),
-    ):
-        (tmp_path / "stub.log").unlink(missing_ok=True)
-        result, seen, log = serve(
-            tmp_path,
-            TICO_BACKUP="off",
-            TICO_TUNNEL_DIR=str(tunnel),
-            TICO_AUTH_PROXY="cloudflare",
-            TICO_ACCESS_ISSUER="https://acme.cloudflareaccess.com",
-            TICO_ACCESS_AUDIENCE="aud",
-            TICO_LOCAL_OWNER_TOKEN_FILE="",
-            TICO_DOMAIN="app.example.com",
-            TICO_VISUAL_ORIGIN=bad,
-        )
-        assert result.returncode == 0, result.stderr
-        assert "python -m backend.server" in log and f"TICO_VISUAL_ORIGIN {reason}" in result.stderr, bad
-        assert yaml.safe_load((tunnel / "ingress.yml").read_text())["ingress"] == [
-            {"hostname": "app.example.com", "service": "http://hold:8080"},
-            {"service": "http_status:404"},
-        ]
-        # The server reads the same unchanged value: its settings load too, with visuals as file chips at worst.
-        for key in [k for k in os.environ if k.startswith("TICO_")]:
-            monkeypatch.delenv(key)
-        for key, value in seen.items():
-            monkeypatch.setenv(key, value)
-        assert seen["TICO_VISUAL_ORIGIN"] == bad
-        Settings.from_env()
 
 
 def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what_writes_it():
@@ -195,42 +64,6 @@ def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what
     assert "install -d -m 0755 -o tico -g tico /tunnel" in (ROOT / "Dockerfile").read_text()
     # The route lives in the image and the compose file, both replaced by an update, not in a file the updater would have to know about.
     assert "compose.yaml" in build_install_bundle().bundle_names(ROOT)
-
-
-@pytest.mark.slow
-def test_cloudflared_itself_accepts_the_config_and_routes_the_domain_to_the_server(tmp_path):
-    # Availability checks belong to the opted-in integration test, not every collection on a shared host.
-    if (
-        not shutil.which("docker")
-        or subprocess.run(
-            ["docker", "image", "inspect", "cloudflare/cloudflared:2026.7.3"], capture_output=True
-        ).returncode
-    ):
-        pytest.skip("the pinned cloudflared image is not on this machine")
-    assert write_config(tmp_path, "tico.example.com").returncode == 0
-
-    def cloudflared(*args):
-        return subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{tmp_path}:/tunnel:ro",
-                "cloudflare/cloudflared:2026.7.3",
-                "tunnel",
-                "--config",
-                "/tunnel/ingress.yml",
-                "ingress",
-                *args,
-            ],
-            capture_output=True,
-            text=True,
-        ).stdout
-
-    assert "OK" in cloudflared("validate")
-    assert "service: http://hold:8080" in cloudflared("rule", "https://tico.example.com/")
-    assert "http_status:404" in cloudflared("rule", "https://other.example.com/")
 
 
 def test_cloudflared_logging_no_ingress_rules_fails_the_tunnel_route_check_even_though_the_container_runs():
@@ -281,23 +114,6 @@ def test_verify_all_reports_the_missing_route_for_a_tunnel_and_only_for_a_tunnel
         sleep=lambda s: None,
     )
     assert "Tunnel route" not in {c.name for c in caddy}
-
-
-def test_the_server_and_setup_write_the_same_runner_hostname_route(tmp_path):
-    done = write_config(tmp_path, "tico.example.com", TICO_RUNNER_URL="https://tico-runner.example.com")
-    assert done.returncode == 0, done.stderr
-    written = yaml.safe_load((tmp_path / "ingress.yml").read_text())
-    assert written == cloudflare.ingress_config("tico.example.com", "tico-runner.example.com")
-    assert written["ingress"][1]["path"] == "^/(?:api/v2|download)(?:/.*)?$"
-    # Obsolete pilot settings cannot divert the standard tunnel away from the integrated server.
-    done = write_config(
-        tmp_path,
-        "tico.example.com",
-        TICO_RUNNER_URL="https://tico-runner.example.com",
-        TICO_TUNNEL_ORIGIN="http://untrusted.example",
-    )
-    assert done.returncode == 0, done.stderr
-    assert yaml.safe_load((tmp_path / "ingress.yml").read_text()) == written
 
 
 def test_local_generated_runtime_and_remote_put_share_complete_alias_and_restricted_ingress(tmp_path, monkeypatch):

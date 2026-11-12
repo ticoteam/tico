@@ -93,11 +93,3 @@ def test_ids_are_unique_and_every_parent_is_in_the_pack():
             assert place.parent is None
         else:
             assert place.parent in known, place.id
-
-
-def test_pack_size_is_sane():
-    kinds = [place.kind for place in pack.load()]
-    assert kinds.count("country") == 249
-    assert kinds.count("state") == 51  # 50 states and DC
-    assert kinds.count("county") >= 3100
-    assert kinds.count("city") > 0

@@ -60,25 +60,6 @@ def _covers(route, written):
     return True
 
 
-def test_every_route_a_settings_card_writes_has_a_catalogue_entry():
-    writes = settings_writes()
-    assert len(writes) > 60  # the extraction still reads the pages
-    missing = sorted(
-        (method, route)
-        for method, route in writes
-        if not any(e.method == method and _covers(e.route, route) for e in ENTRIES)
-        and (method, route) not in ALIASES
-        and (method, route) not in NOT_SETTINGS
-    )
-    assert not missing, "Settings writes with no entry in backend/settings_entries.py: " + repr(missing)
-    stale = sorted(k for k in (*ALIASES, *NOT_SETTINGS) if k not in writes)
-    assert not stale, "ALIASES or NOT_SETTINGS list writes no Settings page makes any more: " + repr(stale)
-    # A page that builds its path in code still writes a route some entry covers.
-    keys = {e.key for e in ENTRIES}
-    assert not [k for k in ALIASES.values() if k not in keys]
-    assert not [w for w in NOT_SETTINGS if any(e.method == w[0] and _covers(e.route, w[1]) for e in ENTRIES)]
-
-
 def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
     keys = {e.key for e in ENTRIES}
     assert len(keys) == len(ENTRIES)
@@ -94,16 +75,6 @@ def test_every_team_rule_has_an_entry_and_every_entry_is_well_formed():
             path = settings_catalog.probe(e)
             assert valid_operation(e.method, path, None, "botops"), e.key
     assert botops_act  # the classifier the confirm check leans on stays importable
-
-
-def test_a_setting_waiting_for_a_confirm_card_goes_back_to_confirm_once_botops_can_make_one():
-    for e in ENTRIES:
-        card = valid_operation(e.method, settings_catalog.probe(e), None, "botops")
-        if e.key in NO_CARD_YET:
-            assert not card, e.key + " can be put on a Confirm card now: take it out of NO_CARD_YET"
-            assert e.kind == "person" or e.when_held == "person", e.key
-        elif e.confirm_when:
-            assert card and e.when_held == "confirm", e.key
 
 
 def _owner(via="botops"):

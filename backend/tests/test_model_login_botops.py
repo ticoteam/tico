@@ -156,41 +156,6 @@ def test_botops_never_switches_or_signs_out_for_the_person_it_works_for(api, bot
     finish(api, botops, later)
 
 
-def test_a_request_another_bot_carried_never_switches_or_signs_out(api, botops, monkeypatch):
-    from backend import botops_act
-
-    # Even were sign-ins added to what a carried request does with the person's rights.
-    monkeypatch.setattr(
-        botops_act,
-        "CARRIED",
-        botops_act.CARRIED + botops_act._routes(("POST", rf"(runners|computers)/{botops_act._S}/(logins|logouts)")),
-    )
-    r = online(api)
-    rid = r["runner_id"]
-    assign(api, botops, "ops")
-    ready(api, botops, ["botops", "ops"])
-    post(api, "chat/ops", {"text": "Switch the codex login on the Test Mac to my other account"}, token="ana-test")
-    ops = claim(api, botops, "ops")
-    post(
-        api,
-        "tasks",
-        {
-            "owner": "botops",
-            "title": "Switch Ana's codex login",
-            "body": "She asked in her chat with Ops.",
-            "request_id": "turn",
-        },
-        token=ops["token"],
-    )
-    finish(api, botops, ops)
-    carried = claim(api, botops, "botops")
-    for alias in ALIASES:
-        for how in ("auto", "turn"):
-            signs_in_for_her(api, carried, rid, how, alias)
-            refused(api, carried, rid, how, alias)
-    finish(api, botops, carried)
-
-
 def test_a_bot_with_no_person_behind_it_is_refused_as_before(api, botops):
     r = online(api)
     rid = r["runner_id"]

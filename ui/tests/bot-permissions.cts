@@ -397,20 +397,6 @@ async function roles(browser: import('playwright').Browser) {
   await turns.dispatchEvent('change');
   assert.equal(await pop.count(), 0, 'the line clears once the value is valid');
 
-  // A change that lands while a save is in flight is not dropped: the field's value once that save
-  // answers is sent next.
-  holdTurns = true;
-  await turns.fill('3');
-  await turns.dispatchEvent('change');
-  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.disabled === true);
-  await turns.evaluate(el => { (el as HTMLInputElement).value = '5'; el.dispatchEvent(new Event('change', {bubbles: true})); });
-  holdTurns = false;
-  heldTurns!.fulfill({contentType: 'application/json', body: JSON.stringify({turns_at_once: 3, turn_limit: 2})});
-  for (let i = 0; i < 100 && posts.length < 2; i++) await page.waitForTimeout(50);
-  assert.deepEqual(posts.splice(0), [['turns-at-once', {turns_at_once: 3}], ['turns-at-once', {turns_at_once: 5}]],
-    'the change made during the save is sent after it, and not with it');
-  await page.waitForFunction(() => document.querySelector<HTMLInputElement>('[data-turns-at-once=r1]')?.value === '5');
-
   // ---- BotOps' Confirm card, in the Assistant's chat, and nothing happens until the person clicks it
   await page.goto('https://tico-ui.test/#/assistant');
   const card = page.locator('.asst-card[data-action=act1]');

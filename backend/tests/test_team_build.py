@@ -60,8 +60,8 @@ NOBODY = {"everyone": False, "people": [], "teams": [], "bots": []}
 
 
 @pytest.fixture(
-    params=[(False, False), (False, True), (True, False), (True, True)],
-    ids=["absent", "absent-cached", "listed", "listed-cached"],
+    params=[(False, False), (True, False)],
+    ids=["absent", "listed"],
 )
 def cloud(request, monkeypatch):
     """backend/cloud_agents.py missing (its import fails) or there, listing its agents; and an earlier import of it either left

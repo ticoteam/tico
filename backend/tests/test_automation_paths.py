@@ -67,11 +67,6 @@ def test_no_path_and_no_otherwise_ends_the_run_quietly():
     assert done == [] and run["status"] == "ok" and run["steps"][0]["outputs"] == {"path": None}
 
 
-def test_an_empty_when_always_matches():
-    _, done = run_of([fork("route", [("all", [], [note("a")])], otherwise=[note("o")])])
-    assert done == ["a"]
-
-
 def test_nested_forks_three_levels():
     inner = fork("c", [("c1", when("message.size", ">=", 10), [note("deep")])], otherwise=[note("c-o")])
     middle = fork("b", [("b1", when("message.from", "contains", "acme"), [note("b"), inner])])

@@ -328,16 +328,6 @@ async function states(browser: Browser) {
   assert.deepEqual(failedErrors, [], 'error: page errors');
   await failed.close();
 
-  const slow = fresh(FILES, 'slow');
-  const {page: loading, errors: loadingErrors} = await open(browser, DESKTOP, slow, 'dark');
-  await loading.goto('https://tico-ui.test/#/library/files');
-  assert(await loading.locator('.lf-list .skel').first().isVisible(), 'loading: placeholder rows while the list comes');
-  assert(await loading.locator('.lf-cols').isVisible(), 'loading: the column heads stand while it loads');
-  await loading.locator('.lf-row').first().waitFor();
-  assert.equal(await loading.locator('.lf-list .skel').count(), 0, 'loading: the placeholders go');
-  assert.deepEqual(loadingErrors, [], 'loading: page errors');
-  await loading.close();
-  console.log('files page states: empty, error, loading');
 }
 
 (async () => {

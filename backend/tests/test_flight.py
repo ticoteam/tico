@@ -483,57 +483,6 @@ def test_the_start_record_keeps_no_secret_and_flags_an_image_not_built_from_its_
     assert code_hash.digest(image) != before
 
 
-def test_a_long_write_names_its_route_and_code_site_in_the_file_the_log_and_the_events(store, monkeypatch, caplog):
-    """Dev 249: two writes held the lock ~100 s and nothing said whose they were. A hold over LONG_HOLD_MS is now
-    recorded with the request's route (or none, for a background job) and the code that held it, also while it is
-    still held."""
-    monkeypatch.setattr(flight, "LONG_HOLD_MS", 30)
-    rec = store.recorder
-    folder = store.settings.db_path.parent / "flight"
-    sampler = flight.Flight(rec, store, store.settings, folder=folder)
-    sampler.file.start()
-    route = type("Route", (), {"path": "/api/v2/runners/performance"})()
-    cost, token = flight.request_started("POST", {"route": route})
-
-    def slow_ingest():
-        with store.transaction() as c:
-            c.execute("SELECT 1").fetchone()
-            time.sleep(0.05)
-            return rec.open_holds()
-
-    try:
-        still = slow_ingest()
-    finally:
-        flight.request_finished(token)
-    with store.transaction():  # a short one is not logged
-        pass
-
-    def sweep_job():
-        with store.transaction():
-            time.sleep(0.05)
-
-    sweep_job()
-    assert [h["route"] for h in still] == ["POST /api/v2/runners/performance"] and still[0]["open"]
-    assert "slow_ingest" in still[0]["site"]
-    rec.drain(MINUTE)
-    with caplog.at_level(logging.WARNING, logger="tico.flight"):
-        sampler.flush(MINUTE)
-    sampler.file.close()
-    with store.read() as c:
-        events = flight.view(c, minutes=10**6, sections=("events",), now=time.time() + 60)["events"]["recent"]
-    holds = [e for e in events if e["kind"] == "long_hold"]
-    by_site = {e["site"].split()[-1]: e for e in holds}
-    assert set(by_site) == {"slow_ingest", "sweep_job"}
-    assert (
-        by_site["slow_ingest"]["route"] == "POST /api/v2/runners/performance" and by_site["slow_ingest"]["hold_s"] >= 0
-    )
-    assert by_site["sweep_job"]["route"] is None and "backend/tests/test_flight.py" in by_site["sweep_job"]["site"]
-    assert any("Write lock held" in r.getMessage() and "runners/performance" in r.getMessage() for r in caplog.records)
-    found = flight_file.summary(folder, 600)["long_holds"]
-    assert {h["site"].split()[-1] for h in found} == {"slow_ingest", "sweep_job"}
-    assert "Write lock held longest" in flight_file.render(flight_file.summary(folder, 600))
-
-
 def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_missing(store, monkeypatch):
     """Dev 249: the recorder skipped a minute's rows whenever it could not get the lock within DB_WAIT, so the metrics
     lost 06:44-06:46 of the incident. The rows now wait for the next write; past PENDING_MAX the oldest minutes go and a

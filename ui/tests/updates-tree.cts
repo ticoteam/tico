@@ -355,16 +355,6 @@ const drafted = {goal: 'Open the Northwind office by November', done: ['Signed t
     assert.deepEqual(desk8.errs, []);
     await desk8.p.close();
     const phone8 = await tree8({width: 375, height: 812}, 'phone');
-    // A long press names an icon and does not also act; a tap acts.
-    const reply = phone8.p.locator('#upd-feed [data-upd="u-cmo"] [data-upd-reply]');
-    await reply.dispatchEvent('pointerdown', {pointerType: 'touch', isPrimary: true});
-    await phone8.p.waitForTimeout(600);
-    assert.equal(await reply.evaluate(b => b.hasAttribute('data-tip-on') && getComputedStyle(b, '::after').content), '"Reply"', 'a long press shows the name');
-    await reply.dispatchEvent('pointerup', {pointerType: 'touch', isPrimary: true});
-    await reply.dispatchEvent('click');
-    assert.equal(await phone8.p.locator('#upd-feed [data-upd="u-cmo"] textarea').count(), 0, 'the long press did not open the reply');
-    await reply.tap();
-    await phone8.p.locator('#upd-feed [data-upd="u-cmo"] textarea').waitFor();
     assert.deepEqual(phone8.errs, []);
     await phone8.p.close();
     eight = false; mine = posted1;

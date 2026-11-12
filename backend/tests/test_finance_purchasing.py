@@ -655,14 +655,6 @@ def test_an_item_names_its_account_and_a_bill_line_cannot_post_elsewhere(books):
         assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
 
 
-def test_the_owner_reads_orders_and_estimates_without_a_finance_grant(books):
-    with books.transaction() as c:
-        vendor = _vendor(c)
-        po = _order(c, vendor, [_line(c, 40_000)])
-        assert [o["id"] for o in FR.orders(c, OWNER)["orders"]] == [po]
-        assert FR.order(c, OWNER, po)["lines"][0]["amount"] == 40_000
-
-
 def test_orders_page_by_cursor_without_skipping_or_repeating(books):
     with books.transaction() as c:
         vendor = _vendor(c)

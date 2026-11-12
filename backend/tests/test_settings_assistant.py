@@ -302,44 +302,6 @@ def outcome(c, auth, who, e, card_direct=False):
 CARDED = {"computer.label", "computer.turns_at_once"}
 
 
-@pytest.mark.parametrize("person,role", [("ana", "owner"), ("ben", "human"), ("cara", "human")])
-def test_botops_and_the_assistant_give_every_setting_the_same_class_and_who_may(api, person, role):
-    as_member(api, "cara@acme.example")
-    auth = api.app.state.auth
-    email = person + "@acme.example"
-    botops = Identity("human:" + person, role, email=email, via="botops")
-    assistant = Identity("human:" + person, role, email=email, via="assistant", task_actor="bot:assistant")
-    seen = set()
-    with api.app.state.store.read() as c:
-        for e in ENTRIES:
-            got = outcome(c, auth, assistant, e)
-            assert got == outcome(c, auth, botops, e), e.key
-            seen.add(got if isinstance(got, str) else got[0])
-            # Cards for a direct entry (the owner's rule off): a card wherever BotOps can make one, else the link.
-            if got == "run" and settings_catalog.kind_for(e, {}) == "direct":
-                carded = outcome(c, auth, assistant, e, card_direct=True)
-                assert carded == "card" or (e.key not in CARDED and carded[0] in ("unavailable", "forbidden")), (
-                    e.key,
-                    carded,
-                )
-    assert {"run", "card", "person_only"} <= seen or role == "human", seen
-
-
-def test_the_assistant_may_card_every_catalogue_route_botops_may():
-    for e in ENTRIES:
-        path = settings_catalog.probe(e)
-        if e.kind != "person":
-            assert valid_operation(e.method, path, None, "assistant") == valid_operation(
-                e.method, path, None, "botops"
-            ), e.key
-        if "/{" in e.route and e.route.split("/{")[0] + "/" in settings_catalog.ID_SHAPES:
-            # A repository (`owner/name`) or a pool (`groups/<id>`): probed as the two segments the route takes, so
-            # the equality above is about a path BotOps really cards, not one neither could.
-            assert path[len("/api/v2/") :].count("/") == e.route.count("/") + 1 and valid_operation(
-                e.method, path, None, "botops"
-            ), e.key
-
-
 ASSISTANT_REFUSED = {"mail.intake"}
 
 

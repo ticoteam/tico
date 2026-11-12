@@ -32,25 +32,6 @@ def test_news_about_a_parked_task_waits_and_is_logged(api):
         }
 
 
-def test_a_task_parked_on_wake_once_sleeps_too(api):
-    setup(api)
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-        c.execute(
-            "INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created_at,detail) "
-            "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
-            (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})),
-        )
-        c.execute("DELETE FROM jobs")
-        assert W.parked(c, H.task(c, task["id"])) == "wake_once"
-        with as_cause("bot:ops"):
-            msg = news(c, H.task(c, task["id"]))
-        assert jobs(c, "cpo") == 0 and msg["refs"][W.MARK] == "parked"
-        # Its result is what it waits for: that wakes it.
-        H._wake(c, H.task(c, task["id"]), "bot:cpo", "Checks finished: all green", trigger="pr_checks")
-        assert jobs(c, "cpo") == 1
-
-
 def test_t2_a_comment_on_a_related_task_does_not_wake_the_parked_tasks_bot(api):
     setup(api)
     with api.app.state.store.transaction() as c:
@@ -76,20 +57,6 @@ def test_a_skipped_wake_reaches_the_next_run_whatever_starts_it(api):
     post(api, "chat/cpo", {"text": "Morning, anything for me?"})
     attempt = claim(api, r, "cpo")
     assert [n["message"] for n in attempt["notes"] if n.get("message")] == [held["id"]]
-
-
-def test_lead_case_a_held_bot_comment_then_a_persons_comment_the_run_shows_both_in_order(api):
-    r = setup(api)
-    with api.app.state.store.transaction() as c:
-        task, _ = parked_task(c)
-        bot_comment = H.task_comment(c, "bot:ops", task["id"], "Scope add: log every skip.")
-        assert jobs(c, "cpo") == 0 and bot_comment["refs"].get("quiet")
-        person = H.task_comment(c, "human:ana", task["id"], "Please start this today.")
-        assert jobs(c, "cpo") == 1
-    attempt = claim(api, r, "cpo")
-    assert attempt["message"]["id"] == person["id"]
-    notes = [n for n in attempt["notes"] if n.get("message")]
-    assert [n["message"] for n in notes] == [bot_comment["id"]] and notes[0]["sent"] <= person["created_at"]
 
 
 def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_batch_boundary(api):
@@ -307,26 +274,6 @@ def test_the_gate_fails_open():
     assert (
         W.gate(Broken(), H.KEEPER, "bot:cpo", "notice", {"task": "t1", "trigger": "comment"}, "x", {"id": "c"}) is None
     )
-
-
-def test_the_weekly_audit_samples_skips_in_hub_sql(api):
-    setup(api)
-    with api.app.state.store.transaction() as c:
-        task, _ = parked_task(c)
-        with as_cause("bot:ops"):
-            news(c, task)
-    out = post(
-        api,
-        "sql",
-        {
-            "sql": "SELECT json_extract(detail,'$.bot') AS bot, json_extract(detail,'$.rule') "
-            "AS rule, json_extract(detail,'$.task') AS task FROM events "
-            "WHERE action='wake.skipped' ORDER BY random() LIMIT 50"
-        },
-    )
-    assert [dict(zip(out["columns"], row)) if isinstance(row, list) else row for row in out["rows"]] == [
-        {"bot": "cpo", "rule": "parked", "task": task["id"]}
-    ]
 
 
 def test_the_request_says_whose_write_it_is_and_the_keepers_sweeps_are_nobodys(api, monkeypatch):

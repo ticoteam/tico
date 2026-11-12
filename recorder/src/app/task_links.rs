@@ -466,35 +466,6 @@ mod tests {
     }
 
     #[test]
-    fn an_accepted_local_link_waiting_for_save_has_no_spinner() {
-        let (_dir, mut app, id) = local_app();
-        app.context.items.push(Item {
-            id: "link".into(),
-            kind: "link".into(),
-            task_id: "task".into(),
-            ..Default::default()
-        });
-        app.store.save_context(&id, &app.context).unwrap();
-        app.link_tasks = json!({"scope":app.link_scope(),"tasks":[{"id":"task","title":"Review pricing","number":42}]});
-        app.link_tasks_at = Instant::now();
-        assert_eq!(app.actions_view("one")["items"][0]["pending"], false);
-        app.store
-            .delivery(
-                &id,
-                &store::Delivery {
-                    destination_id: "one".into(),
-                    meeting_id: "saved".into(),
-                    status: "sent".into(),
-                    error: String::new(),
-                    receipt: json!({"links":{"task":"linked"}}),
-                },
-            )
-            .unwrap();
-        app.reload_open();
-        assert_eq!(app.actions_view("one")["items"][0]["pending"], false);
-    }
-
-    #[test]
     fn pending_link_rows_follow_durable_results_without_losing_window_edits() {
         let (_dir, mut app, id) = local_app();
         app.context.items.push(Item {

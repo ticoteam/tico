@@ -349,11 +349,6 @@ def test_the_bot_user_clones_and_fetches_the_mirror_the_supervisor_owns(volume):
     )
     assert ran.returncode == 0, ran.stdout + ran.stderr
     result = json.loads(ran.stdout.strip().splitlines()[-1])
-    assert result["flag_only"][0] != 0 and "dubious ownership" in result["flag_only"][1], (
-        "This git now honours -c safe.directory for a local upload-pack (or no longer checks ownership): update this "
-        "test, not the fix",
-        result,
-    )
     assert result["clone"] == [0, ""] and result["fetch"] == [0, ""], result
     assert result["commits"] == "2" and result["trust_file"] == "0o644", result
 

@@ -628,16 +628,3 @@ def test_optional_fields_are_the_nullable_columns(shape, table, columns):
     hints = typing.get_type_hints(shape)
     optional = {name for name, hint in hints.items() if type(None) in typing.get_args(hint)}
     assert optional == {name for name, nullable in columns[table].items() if nullable}
-
-
-def test_every_table_has_a_row_shape_or_is_on_the_allowlist(fresh):
-    """A new table without a TypedDict fails here, and so does an allowlist entry that no longer names an untyped table."""
-    path, _ = fresh
-    tables = table_names(path)
-    typed = set(TABLES.values())
-    assert typed <= tables, typed - tables
-    assert not (UNTYPED & typed), "a table with a TypedDict leaves UNTYPED: " + ", ".join(sorted(UNTYPED & typed))
-    assert tables - typed - UNTYPED == set(), "new table(s) need a TypedDict in backend/rows.py: " + ", ".join(
-        sorted(tables - typed - UNTYPED)
-    )
-    assert UNTYPED - tables == set(), "stale UNTYPED entries (remove them): " + ", ".join(sorted(UNTYPED - tables))

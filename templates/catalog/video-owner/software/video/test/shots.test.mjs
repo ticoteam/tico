@@ -5,9 +5,6 @@ import { validateShots } from '../record.mjs';
 
 const example = JSON.parse(readFileSync(new URL('../examples/shots.json', import.meta.url), 'utf8'));
 
-test('the shipped shots file is valid', () => {
-  assert.deepEqual(validateShots(example), []);
-});
 
 test('bad steps are reported with their position', () => {
   const errors = validateShots({

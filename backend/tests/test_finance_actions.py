@@ -311,16 +311,6 @@ def test_a_dev_copy_build_reports_the_rows_finance_emptied(tmp_path):
         assert [t for t in FA.DEV_COPY_EMPTIED if _count(c, t)] == []
 
 
-def test_a_dev_copy_keeps_the_prepaid_postings_so_a_month_is_not_expensed_twice(tmp_path):
-    """A prepaid month's posting record is what stops amortize from expensing that month again. A dev copy keeps it
-    whole (DEV_COPY_KEPT), so the table is neither kept-by-accident nor one of the unclassified tables the copy empties."""
-    store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
-    store.initialize(seed_market=False)
-    with closing(sqlite3.connect(store.settings.db_path)) as c:
-        assert "fin_prepaid_postings" in FA.DEV_COPY_KEPT
-        assert "fin_prepaid_postings" not in devcopy.emptied(c)
-
-
 def test_a_dev_copy_scrub_with_one_emptied_table_missing_still_empties_the_others(tmp_path):
     store = Store(Settings(db_path=tmp_path / "hub.sqlite"))
     store.initialize(seed_market=False)

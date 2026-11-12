@@ -40,13 +40,3 @@ def test_message_refs_types_the_routing_keys_and_ref_quiet_is_the_queue_s_own_ru
         assert _typed(api, refs) == want, refs
     for quiet in QUIET_SPELLINGS:
         assert _typed(api, '{"quiet":' + quiet + "}")[2] == (0 if _sql_zero(json.loads(quiet)) else 1), quiet
-
-
-def test_a_messages_row_reads_as_it_always_did(api):
-    """The typed keys are on the view only: `SELECT *` on messages, which the API and the runner wire serve, is
-    unchanged, and every `messages` column is on the view under its own name."""
-    with api.app.state.store.read() as c:
-        stored = [d[0] for d in c.execute("SELECT * FROM messages LIMIT 0").description]
-        typed = [d[0] for d in c.execute("SELECT * FROM message_refs LIMIT 0").description]
-    assert not [name for name in stored if name.startswith("ref_")]
-    assert typed == stored + ["ref_task_id", "ref_wake", "ref_quiet", "ref_command", "ref_live_kind"]

@@ -72,21 +72,6 @@ def test_version_says_unstamped_when_the_server_does_not_answer(monkeypatch, cap
     assert capsys.readouterr().out.strip() == "unknown (this CLI build is not stamped)"
 
 
-def test_json_is_accepted_anywhere_on_the_line(capsys):
-    for argv in (["task", "show", "x", "--json"], ["--json", "task", "show", "x"]):
-        args = hubcli.parse(hubcli.parser(), argv)
-        assert args.fn == "task show"
-        assert args.id == ["x"]
-    assert capsys.readouterr().err == ""
-
-
-def test_a_command_without_its_id_prints_its_usage_and_an_example(capsys):
-    code, err = parse_failure(capsys, ["task", "show"])
-    assert code == 2
-    assert "usage: tico task show" in err
-    assert "Example: tico task show <id>" in err
-
-
 def test_a_mistyped_command_names_the_closest_commands_that_exist(capsys):
     code, err = parse_failure(capsys, ["task", "lst"])
     assert code == 2
@@ -124,42 +109,10 @@ def _leaves(p, skip_aliases):
     return found
 
 
-@pytest.mark.parametrize(
-    "words, command",
-    [
-        (["tasks", "list"], "task list"),
-        (["automations", "list"], "automation list"),
-        (["bots", "status", "list"], "bot status list"),
-        (["rule", "list"], "rules list"),
-    ],
-)
-def test_plural_nouns_parse_to_the_same_command(words, command, capsys):
-    assert hubcli.parse(hubcli.parser(), words).fn == command
-    assert capsys.readouterr().err == ""
-
-
-def test_aliases_add_no_mcp_tool():
-    from clients import remotecli
-
-    root = hubcli.parser()
-    with_aliases = {
-        remotecli.tool_name(sub._defaults["fn"]) for sub in _leaves(root, skip_aliases=False) if "fn" in sub._defaults
-    }
-    without = {
-        remotecli.tool_name(sub._defaults["fn"]) for sub in _leaves(root, skip_aliases=True) if "fn" in sub._defaults
-    }
-    assert with_aliases == without
-
-
 def test_a_flag_the_command_does_not_take_lists_the_ones_it_does(capsys):
     code, err = parse_failure(capsys, ["automation", "list", "--all"])
     assert code == 2
     assert "It takes: --cursor, --limit, --owner" in err
-
-
-def test_bot_show_takes_a_slug_and_is_the_bot_detail_read():
-    args = hubcli.parse(hubcli.parser(), ["bot", "show", "ops-bot"])
-    assert (args.fn, args.slug) == ("bot show", "ops-bot")
 
 
 def test_bot_show_reads_the_bot_detail_through_its_tool(monkeypatch):

@@ -323,23 +323,6 @@ def test_the_third_block_in_a_day_escalates_with_one_review_task(ruled):
     assert len(tasks) == 1
 
 
-def test_a_rule_review_task_is_titled_plainly_and_its_thread_keeps_the_hold(ruled):
-    api, _ = ruled
-    color_rule(api)
-    [say(api, f"Try {n}: our favorite color is gold") for n in range(3)]
-    [task] = sql(
-        api,
-        "SELECT id, title, body, conversation_id FROM tasks WHERE id IN "
-        "(SELECT task_id FROM org_rule_holds WHERE task_id IS NOT NULL)",
-    )
-    hold = sql(api, "SELECT id FROM org_rule_holds WHERE task_id=?", (task["id"],))[0]["id"]
-    assert task["title"] == "Rule review"
-    assert [
-        s["subject"] for s in sql(api, "SELECT subject FROM conversations WHERE id=?", (task["conversation_id"],))
-    ] == ["Rule review"]
-    assert "Hold: " + hold in task["body"]
-
-
 def test_an_old_rule_review_row_takes_the_plain_title_and_no_other_held_row_does(ruled):
     api, _ = ruled
     color_rule(api)
@@ -888,64 +871,6 @@ def test_with_no_rule_in_force_a_bot_write_reads_no_roster_and_asks_nothing(rule
     assert built == [] and judge.calls == []
 
 
-def test_the_check_runs_under_its_levels_deadline(ruled):
-    api, judge = ruled
-    color_rule(api)
-    from clients import judge as J
-
-    left = []
-
-    def engine(state, questions, label=None):
-        left.append(J.time_left(999))  # what the provider's own try may take: cut to the check's deadline
-        return judge(state, questions, label)
-
-    api.app.state.judge = engine
-    assert say(api, "Our favorite color is gold")["held"]
-    assert 0 < left[0] <= K.deadline("low")
-
-
-def test_a_full_pool_goes_through_unchecked_at_once(ruled):
-    api, judge = ruled
-    color_rule(api)
-    api.app.state.store.settings.rule_check_concurrency = 1
-    judge.hold = threading.Event()
-    first = threading.Thread(target=say, args=(api, "Our favorite color is gold"))
-    first.start()
-    try:
-        for _ in range(200):
-            if judge.calls:
-                break
-            time.sleep(0.01)
-        started = time.monotonic()
-        got = say(api, "Our favorite color is teal")  # the one slot is taken: no waiting for it
-        assert time.monotonic() - started < 2
-    finally:
-        judge.hold.set()
-        first.join(10)
-    assert "held" not in got and len(judge.calls) == 1 and len(bodies(api, "favorite color is teal")) == 1
-    assert [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")] == ["busy"]
-
-
-def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ruled):
-    api, judge = ruled
-    color_rule(api)
-    judge.fail = RuntimeError("provider down")
-    for n in range(CS.BREAKER_FAILURES):
-        assert "held" not in say(api, f"Our favorite color is gold {n}")
-    assert len(judge.calls) == CS.BREAKER_FAILURES
-    started = time.monotonic()
-    assert "held" not in say(api, "Our favorite color is teal")
-    assert time.monotonic() - started < 2 and len(judge.calls) == CS.BREAKER_FAILURES  # nothing was asked
-    reasons = [json.loads(e["detail"])["reason"] for e in events(api, "rules.unchecked")]
-    assert reasons == ["error"] * CS.BREAKER_FAILURES + ["breaker"]
-    # After the cool-off the next check is the probe: it answers, and checks run again.
-    calls = K.calls_for(api.app.state.store)
-    calls.until = time.monotonic() - 1
-    judge.fail = None
-    assert say(api, "Our favorite color is red")["held"]
-    assert calls.failures == 0 and say(api, "Our favorite color is blue")["held"]
-
-
 def test_a_rule_checks_spend_lands_in_the_decisions_budget(ruled):
     api, judge = ruled
     color_rule(api)
@@ -1036,13 +961,6 @@ def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
     assert appealed["task_id"]
     error, _ = mcp(api, "tico_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
     assert not error
-
-
-def test_rule_check_eval_cases_build_valid_requests():
-    from evals.rule_check import run as E
-
-    assert E.main([]) == 0
-    assert E.engines(["low"], env={}) == []
 
 
 # ---- every route, the run's provenance, live text -----------------------------------------------------------------

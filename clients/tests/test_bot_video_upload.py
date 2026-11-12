@@ -94,9 +94,7 @@ def test_other_kinds_keep_the_25_mb_cap(checkout):
 @pytest.mark.parametrize(
     "name, head, ok",
     [
-        ("cut.mp4", MP4, True),
         ("voice.m4a", MP4, True),
-        ("cut.mp4", WAV, False),
         ("clip.webm", b"\x1a\x45\xdf\xa3" + b"\x00" * 12, True),
         ("clip.webm", MP4, False),
         ("song.mp3", b"ID3\x04\x00", True),

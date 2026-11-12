@@ -1000,42 +1000,6 @@ async fn pump(
     }
 }
 
-/// Test benches count the allocations a call makes, on the thread that makes it (the runner's `util::alloc_probe`
-/// counts bytes the same way). Per thread, so the tests running beside a bench do not count in it.
-#[cfg(test)]
-pub(super) mod alloc_probe {
-    use std::alloc::{GlobalAlloc, Layout, System};
-    use std::cell::Cell;
-
-    thread_local! {
-        static ALLOCS: Cell<u64> = const { Cell::new(0) };
-    }
-
-    pub struct Counting;
-
-    unsafe impl GlobalAlloc for Counting {
-        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            ALLOCS.with(|n| n.set(n.get() + 1));
-            unsafe { System.alloc(layout) }
-        }
-        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-            unsafe { System.dealloc(ptr, layout) }
-        }
-        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-            ALLOCS.with(|n| n.set(n.get() + 1));
-            unsafe { System.realloc(ptr, layout, new_size) }
-        }
-    }
-
-    #[global_allocator]
-    static GLOBAL: Counting = Counting;
-
-    /// Allocation calls this thread has made so far.
-    pub fn count() -> u64 {
-        ALLOCS.with(|n| n.get())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1554,40 +1518,6 @@ mod tests {
         assert_eq!(
             exits.usage_batch().unwrap().rows,
             [row("ops", "www.acme.example", "2026-11-02", 5, 0)]
-        );
-    }
-
-    /// Per binary frame: 1M `spend` calls on one live tunnel, allocations per call and the median wall time per call
-    /// over 50 runs. Uses the real clock (the test day override allocates by itself).
-    /// `cargo test --release bench_spend_1m -- --ignored --nocapture`.
-    #[test]
-    #[ignore]
-    fn bench_spend_1m() {
-        const CALLS: u64 = 1_000_000;
-        let mut nanos = Vec::new();
-        let mut allocs = Vec::new();
-        for _ in 0..50 {
-            let mut exits = Exits::default();
-            let _opens = exits.connect_link("laptop");
-            let mut g = grant("t1", "ops", 1, 0);
-            g.policy.cap = u64::MAX;
-            exits.admit(&g).unwrap();
-            let usage = exits.tunnels["t1"].usage;
-            let (allocs_before, start) = (alloc_probe::count(), Instant::now());
-            for _ in 0..CALLS {
-                std::hint::black_box(exits.spend_row(usage, 1500)).unwrap();
-            }
-            nanos.push(start.elapsed().as_nanos() as f64 / CALLS as f64);
-            allocs.push((alloc_probe::count() - allocs_before) as f64 / CALLS as f64);
-        }
-        nanos.sort_by(f64::total_cmp);
-        allocs.sort_by(f64::total_cmp);
-        eprintln!(
-            "bench_spend_1m: allocations per call {:.3}, median ns per call {:.1} (p10 {:.1}, p90 {:.1}), 50 runs",
-            allocs[25],
-            nanos[25],
-            nanos[5],
-            nanos[45]
         );
     }
 }

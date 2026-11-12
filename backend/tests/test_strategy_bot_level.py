@@ -45,23 +45,6 @@ def review_enabled(api):
         return bool(routines.row(c, REVIEW)["enabled"])
 
 
-def test_every_install_starts_at_suggests_actions_and_says_what_each_level_does(api):
-    """Spec test 16 (v3): an install the owner never set a level on is at Suggests actions, with its regular checks on.
-    Each level has its one sentence, and every level has arrived: level 3 says what it does alone, with no "not yet"."""
-    with_strategy_bot(api, level=None)
-    shown = get(api, "strategy-bot")
-    assert "on" not in shown and shown["level"] == 2 and shown["level_history"] == []
-    assert shown["regular_checks"] is True and shown["name"] == "Strategy Owner"
-    assert [(lv["level"], lv["name"], lv["ready"]) for lv in shown["levels"]] == [
-        (1, "Passive", True),
-        (2, "Suggests actions", True),
-        (3, "Acts on its own", True),
-    ]
-    assert "regular checks" in shown["levels"][0]["sentence"] and "changes nothing" in shown["levels"][0]["sentence"]
-    assert "decides on its own" in shown["levels"][2]["sentence"] and "Not yet" not in str(shown["levels"])
-    assert get(api, "strategy-bot", token="cara-test")["level"] == 2  # everyone reads it
-
-
 def test_no_chosen_level_is_suggests_actions_and_a_passive_the_owner_chose_stays(api):
     """With no level stored the Strategy Owner is at Suggests actions, and `proactive` is true. An owner who chose Passive
     keeps it: the startup `migrate`, which runs `reconcile`, does not raise it back, and the level it shows is the

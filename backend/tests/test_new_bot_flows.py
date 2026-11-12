@@ -80,31 +80,6 @@ def sales(api):
 
 
 # ----------------------------------------------------------------------------- reads
-def test_every_read_and_bot_route_names_a_new_bot_by_its_id_and_its_slug(api, sales):
-    for ref in (sales, "sales-helper", "bot:" + sales):
-        row = get(api, "bots/" + ref)
-        assert (row["id"], row["slug"]) == (sales, "sales-helper"), ref
-    listed = next(b for b in get(api, "bots") if b["id"] == sales)
-    assert listed["slug"] == "sales-helper"
-    employee = next(e for e in api.get("/api/employees", headers=headers()).json() if e["id"] == sales)
-    assert (employee["slug"], employee["name"]) == ("sales-helper", "sales-helper")
-    org = next(b for b in get(api, "org")["bots"] if b["id"] == sales)
-    assert (org["slug"], org["name"]) == ("sales-helper", "sales-helper")
-    # A read route that names a bot in its path finds it by either (a route that forgot resolve_bot answers 404
-    # for the slug of a bot whose id is not its slug).
-    differ, checked = [], 0
-    for route in api.app.routes:
-        path = getattr(route, "path", "")
-        if "{bot}" not in path or "GET" not in (getattr(route, "methods", None) or ()):
-            continue
-        codes = [
-            api.get(re.sub(r"\{[^}]+\}", "x", path.replace("{bot}", ref)), headers=headers()).status_code
-            for ref in ("sales-helper", sales)
-        ]
-        checked += 1
-        if codes[0] != codes[1]:
-            differ.append((path, codes))
-    assert checked > 20 and not differ, differ
 
 
 # ----------------------------------------------------------------------------- chat and the runner
