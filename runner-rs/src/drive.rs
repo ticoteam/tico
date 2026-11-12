@@ -565,9 +565,11 @@ impl Runner {
                 tokens = json!({});
             }
             // Taken before any request, so a notice that lands while one is out is acted on at the next step.
+            // A notice is acted on at the next 1-second step, never sooner: a burst of notices for one bot costs at
+            // most one ask a second, as the old poll did.
             let heard = self.events.heard(d.bot);
-            let noticed = asked != Some(heard);
-            if noticed || last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+            if last_flush.is_none_or(|t| t.elapsed() >= Duration::from_secs(1)) {
+                let noticed = asked != Some(heard);
                 let ask = noticed || !self.events.live() || Instant::now() >= recovery_at;
                 if ask {
                     asked = Some(heard);
@@ -1416,16 +1418,104 @@ mod tests {
                     &json!({"kind": "work", "bots": ["cpo", "acme"]}),
                     false,
                 );
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                // At the next 1-second step (plus at most one 100 ms receive wait).
+                tokio::time::sleep(Duration::from_millis(1200)).await;
                 assert_eq!(asks(&seen), (2, 2));
                 // Anything that means "read everything again" asks too: a reset after a gap.
                 events.dispatch("reset", None, &json!({}), false);
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                tokio::time::sleep(Duration::from_millis(1200)).await;
                 assert_eq!(asks(&seen), (3, 3));
             },
         )
         .await;
         assert_eq!(counts, (3, 3));
+    }
+
+    #[tokio::test]
+    async fn a_burst_of_notices_for_the_bot_costs_at_most_one_ask_a_second() {
+        // Twenty jobs queued for the bot in two seconds (a routine fanning out): no more asks than the old poll.
+        let counts = idle_turn(
+            true,
+            None,
+            Duration::from_secs(10),
+            |events, _| async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                for _ in 0..20 {
+                    events.dispatch(
+                        "runner",
+                        None,
+                        &json!({"kind": "work", "bots": ["acme"]}),
+                        false,
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                tokio::time::sleep(Duration::from_millis(1200)).await;
+            },
+        )
+        .await;
+        assert!(counts.0 <= 4 && counts.0 == counts.1, "{counts:?}");
+    }
+
+    #[tokio::test]
+    async fn an_ask_the_hub_failed_is_asked_again_at_the_next_step() {
+        // The notice count is taken before the request; a 503 on the inputs read must not leave the follow-up for
+        // the recovery check, 15 s away.
+        let failed = Arc::new(AtomicBool::new(false));
+        let (url, seen) = hub_answering(move |path, body| {
+            if path.ends_with("/goal") {
+                ("200 OK", json!({"goal": acme_goal()}))
+            } else if path.ends_with("/inputs") {
+                if failed.swap(true, Ordering::SeqCst) {
+                    ("200 OK", json!({"attempt_id": "acme-late", "messages": []}))
+                } else {
+                    (
+                        "503 Service Unavailable",
+                        json!({"error": {"code": "unavailable", "detail": "Busy", "retryable": true}}),
+                    )
+                }
+            } else {
+                events_taken(body)
+            }
+        })
+        .await;
+        let (runner, dir) = runner_at(&url);
+        runner
+            .events
+            .dispatch("ready", None, &json!({"seq": 1, "release": "v1"}), false);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let claude = ClaudeHost::new("acme", vec![], tx.clone());
+        claude.pretend_up(true);
+        let host = Host::Claude(claude);
+        let watched = seen.clone();
+        let feed = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(2600)).await;
+            let counts = asks(&watched);
+            for ev in answer_events("th-retry", "turn-1") {
+                tx.send(ev).unwrap();
+            }
+            counts
+        });
+        let f = flags(false);
+        let (drove, _, _) = drive_with(
+            &runner,
+            &host,
+            &mut rx,
+            &f,
+            "th-retry",
+            "claude",
+            Some(acme_goal()),
+            BTreeMap::new(),
+        )
+        .await;
+        let counts = feed.await.unwrap();
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(drove.outcome, "completed");
+        assert_eq!(
+            counts,
+            (2, 2),
+            "the failed first ask is asked again a second later, then not again"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
