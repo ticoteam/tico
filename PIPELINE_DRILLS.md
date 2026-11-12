@@ -2,3 +2,4 @@
 
 ## Log
 - drill B1: Ideas wait in the first stage until a person starts them.
+- drill B2: Spec turns an idea into a page a person can OK in a minute.
