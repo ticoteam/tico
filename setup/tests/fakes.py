@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from setup import dns as dnsmod
 from setup.remote import Result
 from setup.ui import IO
@@ -62,8 +64,15 @@ class FakeShell:
         return [c for c, _ in self.calls]
 
 
+SERVER_RELEASE = "v0.9.0"
+
+
 def deps(ns=None, records=None, **kw) -> Deps:
     r = FakeResolver(records, ns or {"example.com": NETLIFY_NS})
+    # No git, no network: a checkout on no release tag, and a server that reports the release SERVER_RELEASE.
+    kw.setdefault("checkout_version", lambda: "")
+    kw.setdefault("server_release", lambda url: SERVER_RELEASE)
+    kw.setdefault("latest_release", lambda: pytest.fail("unit tests never ask GitHub for its latest release"))
     return Deps(
         resolver=r,
         public_resolvers=lambda: [("Google", r), ("Cloudflare", r)],
