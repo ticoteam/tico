@@ -201,17 +201,88 @@ def test_a_skipped_check_fails_nothing_but_alone_it_is_not_passing(c, states, wa
 
 
 def test_neutral_and_skipped_runs_read_as_skipped_and_a_tico_run_does_not_rescue_them(c):
-    assert [F.check_state("completed", r) for r in ("success", "neutral", "skipped", "cancelled")] == [
+    assert [F.check_state("completed", r) for r in ("success", "neutral", "skipped")] == [
         "success",
         "skipped",
         "skipped",
-        "failure",
     ]
     engineering(c)
     task_id = new(c, 1)
     checks = [{"name": "lint", "state": "skipped"}, {"name": "t", "state": "success", "tico": True}]
     F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "a", "checks": checks}, 1)
     assert line(c, task_id, "checks_pass") == SKIPPED
+
+
+CANCELLED = (
+    R.NOT_MET,
+    B,
+    "Checks on acme/app#1 were cancelled, not failed: checks. Re-run them; there is no code to fix",
+)
+
+
+def test_a_cancelled_or_stale_run_is_not_a_failure_and_a_failed_or_timed_out_one_is():
+    """Nov 12 stress run, I38: a run GitHub cancelled (a concurrency group's duplicate) read as a failed check."""
+    states = ("cancelled", "stale", "failure", "timed_out", "action_required", "startup_failure")
+    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 4
+
+
+@pytest.mark.parametrize(
+    ("runs", "want"),
+    [
+        # A concurrency group cancels the older duplicate run; the newer one, in its own suite, is the check.
+        ((("cancelled", 1), ("success", 2)), PASSED),
+        ((("cancelled", 1), ("pending", 2)), (R.WAITING, "github", "Checks running")),
+        ((("cancelled", 1), ("failure", 2)), FAILED),
+        # The newest run was cancelled with none after it: say so, so the owner re-runs it instead of fixing code.
+        ((("cancelled", 1),), CANCELLED),
+        ((("success", 1), ("cancelled", 2)), CANCELLED),
+        ((("stale", 1),), CANCELLED),
+        # A red run of the same name in another suite is never hidden behind a newer cancel.
+        ((("failure", 1), ("cancelled", 2)), FAILED),
+        ((("timed_out", 1),), FAILED),
+    ],
+)
+def test_a_cancelled_run_is_not_a_failed_check(c, runs, want):
+    engineering(c)
+    task_id = new(c, 1)
+    gh = FakeGitHub()
+    head = gh.open_pr(REPO, 1)
+    for conclusion, suite in runs:
+        gh.run(REPO, head, "checks", F.check_state("completed", conclusion), suite=suite)
+    read(c, gh)
+    assert line(c, task_id, "checks_pass") == want
+
+
+def test_a_cancelled_run_wakes_its_owner_to_re_run_it_and_a_newer_run_supersedes_it(c, monkeypatch):
+    engineering(c)
+    new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": []}, 1)
+
+    def hook(run_id, suite, conclusion):
+        run = {
+            "id": run_id,
+            "name": "checks",
+            "head_sha": "h1",
+            "status": "completed",
+            "conclusion": conclusion,
+            "app": {"slug": "github-actions"},
+            "check_suite": {"id": suite},
+        }
+        F.webhook(c, "check_run", {"check_run": run, "repository": {"full_name": REPO}})
+        return F.pr(c, REPO, 1)["checks_state"]
+
+    assert hook(10, 1, "cancelled") == "cancelled"
+    after = F.pr(c, REPO, 1)
+    assert F.CHECKS_DONE.count("cancelled") == 1 and F.runs_checks(c, REPO)
+    told: list[str] = []
+    monkeypatch.setattr(F, "snooze_news", lambda conn, task_id, key, lead: told.append(lead) or True)
+    assert F.checks_news(c, ["t"], after, None) == 1
+    assert told == [
+        "The checks on acme/app#1 were cancelled at h1, not failed: checks. Re-run them; there is no code to fix."
+    ]
+    assert hook(11, 2, "success") == "success"  # the newer run of `checks`, in its own suite
+    assert hook(10, 1, "cancelled") == "success"  # the cancelled one, delivered again late, stays superseded
+    assert [x["state"] for x in F.pr(c, REPO, 1)["checks"]] == ["success"]
 
 
 def test_check_run_webhooks_keep_two_suites_apart_and_a_late_older_run_changes_nothing(c):

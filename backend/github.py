@@ -759,6 +759,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             if detail.get("head_sha") != head_sha:
                 detail.pop("checks", None)
                 detail.pop("checks_dropped", None)
+                detail.pop(SUITE_RUNS, None)
                 detail.pop(DROPPED_PENDING, None)
                 detail.pop("head_login", None)
                 detail.pop("conflict_head", None)
@@ -978,23 +979,72 @@ def _suite_key(suite, run):
 
 
 def _check_state(result):
-    """One check's result as the link keeps it: passing, skipped, pending or failing."""
+    """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
+    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand."""
     return (
         "passing"
         if result in ("success", "neutral")
         else "skipped"
         if result == "skipped"
+        else "cancelled"
+        if result in ("cancelled", "stale")
         else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
     )
 
 
-def _overall(checks):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing. A head
-    whose every check was skipped has not been checked (a draft pull request's run skips every job, and nothing on
-    main requires a check), so it reads pending: an all-skipped head never reads green."""
-    states = set(checks.values())
+# A link's `detail` key: {suite key: names of the check runs seen in that suite}, so a cancelled suite is superseded
+# only by a newer run of the same workflow (`_counted`). GitHub Actions makes one suite per workflow run, and a check
+# suite names no workflow, so its runs' names are what tie two suites to one workflow.
+SUITE_RUNS = "suite_runs"
+SUITE_RUN_NAMES = 20  # names kept per suite: one shared name is enough to tie two suites
+
+
+def _add_suite_run(suite_runs, suite_key, name):
+    names = suite_runs.setdefault(suite_key, [])
+    if name not in names and len(names) < SUITE_RUN_NAMES:
+        names.append(name)
+
+
+def _counted(checks, suite_runs=None):
+    """A head's checks without each cancelled suite that a newer suite of the same workflow superseded: a concurrency
+    group cancels the older duplicate workflow run when the newer one starts (Nov 12 stress run, I38). The same
+    workflow is a newer suite (ids only grow) of the same App with a check run of the same name (`SUITE_RUNS`). A
+    suite with no id, or whose runs were never seen, is never superseded: a cancelled workflow is never hidden behind
+    another workflow of the same App."""
+    suite_runs = suite_runs or {}
+
+    def split(key):
+        app, _, sid = key[6:].partition("#")
+        return app, int(sid) if sid.isdigit() else 0
+
+    def superseded(key):
+        app, sid = split(key)
+        names = set(suite_runs.get(key) or ())
+        return bool(sid and names) and any(
+            other.startswith("suite:")
+            and split(other)[0] == app
+            and split(other)[1] > sid
+            and names & set(suite_runs.get(other) or ())
+            for other in checks
+        )
+
+    return {k: v for k, v in checks.items() if not (v == "cancelled" and k.startswith("suite:") and superseded(k))}
+
+
+def _overall(checks, suite_runs=None):
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else cancelled if one
+    was cancelled with no newer run of its workflow after it (`_counted`), else passing. A head whose every check was
+    skipped has not been checked (a draft pull request's run skips every job, and nothing on main requires a check), so
+    it reads pending: an all-skipped head never reads green."""
+    states = set(_counted(checks, suite_runs).values())
     return (
-        "failing" if "failing" in states else "pending" if "pending" in states or states <= {"skipped"} else "passing"
+        "failing"
+        if "failing" in states
+        else "pending"
+        if "pending" in states or states <= {"skipped"}
+        else "cancelled"
+        if "cancelled" in states
+        else "passing"
     )
 
 
@@ -1025,13 +1075,25 @@ def _dropped(checks, kept):
     """The worst state of a non-passing check that the stored copy `kept` leaves out, or None. The copy cannot show it,
     so the link keeps this marker (`checks_dropped`) until a fresh read from GitHub (`apply_checks`) stores the head's
     whole list again: the head reads no better than this while the copy's own checks turn green."""
-    gone = [state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped")]
+    gone = [
+        state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped", "cancelled")
+    ]
     return "failing" if "failing" in gone else "pending" if gone else None
 
 
 def _with_dropped(state, dropped):
     """A head's state as a webhook reads it from the stored copy: the copy's state, or the dropped check's if worse."""
-    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else "passing"
+    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else state
+
+
+def _set_suite_runs(detail, suite_runs):
+    """Keep the run names of at most `CHECKS_KEPT` suites, the newest added last, and none when there are none. A
+    suite not in the stored copy keeps its names too: a run's webhook can come before its suite's own."""
+    kept_runs = dict(list(suite_runs.items())[-CHECKS_KEPT:])
+    if kept_runs:
+        detail[SUITE_RUNS] = kept_runs
+    else:
+        detail.pop(SUITE_RUNS, None)
 
 
 def _worst(a, b):
@@ -1069,24 +1131,44 @@ def _still_going(detail):
 
 def _finish(c, task, link, detail, full, checks):
     """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
-    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
-    either way."""
-    failed = list(
-        dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing")
-    )
-    outcome = "fail" if failed else "pass"
+    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. A head whose only
+    non-passing check was cancelled (and not superseded, `_counted`) says so: re-run it, there is no code to fix.
+    Returns (head, outcome) either way."""
+    counted = _counted(checks, detail.get(SUITE_RUNS))
+
+    def named(state):
+        return list(
+            dict.fromkeys(
+                k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in counted.items() if v == state
+            )
+        )
+
+    failed, cancelled = named("failing"), named("cancelled")
+    outcome = "fail" if failed else "cancelled" if cancelled else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
         return full, outcome
     detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
     sha = full[:12]
-    done = (
-        f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
-        f"{link['url']}/checks" + (f" at {sha}" if sha else "")
+    said = (
+        "failed (" + ", ".join(failed) + ")"
+        if failed
+        else "cancelled, not failed (" + ", ".join(cancelled) + "); re-run them, there is no code to fix"
+        if cancelled
+        else "passed"
     )
+    done = f"Checks finished on {link['title']}: {said} {link['url']}/checks" + (f" at {sha}" if sha else "")
     armed = fire_once(detail, done)
     queue_checks_done(c, task, full, outcome, done, armed)
     return full, outcome
+
+
+class ReadChecks(dict):
+    """`read_checks`' answer: {check key: state}, and `suite_runs` ({suite key: its check runs' names}, `SUITE_RUNS`)."""
+
+    def __init__(self, checks, suite_runs):
+        super().__init__(checks)
+        self.suite_runs = suite_runs
 
 
 # A check suite GitHub queued for a head that has had no check run for this long never started: an installed App (a
@@ -1133,13 +1215,15 @@ def read_checks(service, headers, repo, head):
         ):
             continue
         checks[_suite_key(suite, suite)] = _check_state(suite.get("conclusion") or suite.get("status") or "pending")
+    suite_runs = {}
     for run in runs:
-        checks[str(run.get("name") or "Checks")[:200]] = _check_state(
-            run.get("conclusion") or run.get("status") or "pending"
-        )
+        name = str(run.get("name") or "Checks")[:200]
+        checks[name] = _check_state(run.get("conclusion") or run.get("status") or "pending")
+        if (run.get("check_suite") or {}).get("id"):
+            _add_suite_run(suite_runs, _suite_key(run["check_suite"], run), name)
     for status in statuses:
         checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
-    return checks or None
+    return ReadChecks(checks, suite_runs) if checks else None
 
 
 def _fresh_checks(service, repo, head):
@@ -1224,7 +1308,12 @@ def apply_checks(c, link_id, head, checks, since=None):
     if since is not None and link.get("updated_at") != since:
         return None
     # The state and the failures named come from the whole read; only the stored copy is cut.
-    state, kept = _overall(checks), _kept(checks)
+    suite_runs = getattr(checks, "suite_runs", None)
+    if suite_runs is not None:
+        suite_runs = {k: v for k, v in suite_runs.items() if k in checks}
+    else:
+        suite_runs = detail.get(SUITE_RUNS) or {}
+    state, kept = _overall(checks, suite_runs), _kept(checks)
     dropped, dropped_pending = _dropped(checks, kept), _dropped_pending(checks, kept)
     # The stored copy still held a running check (kept or left out): a read that finds none going finishes the head
     # even when its state stays the same.
@@ -1234,10 +1323,12 @@ def apply_checks(c, link_id, head, checks, since=None):
         and link.get("checks") == state
         and detail.get("checks_dropped") == dropped
         and bool(detail.get(DROPPED_PENDING)) == dropped_pending
+        and (detail.get(SUITE_RUNS) or {}) == suite_runs
         and not held
     ):
         return state
     detail["checks"] = kept
+    _set_suite_runs(detail, suite_runs)
     _set_dropped(detail, dropped, dropped_pending)
     changed = state != link.get("checks")
     # As the webhook: a head finishes only once no check on it is still going, whatever has failed already.
@@ -1322,12 +1413,16 @@ def pr_signal(c, event, payload):
                 # that is still going reopens it (a re-run keeps the suite id); a finished run delivered after its
                 # suite completed is a stale snapshot and does not.
                 checks[_suite_key(own, signal)] = "pending"
+            suite_runs = detail.get(SUITE_RUNS) or {}
+            if own.get("id"):
+                _add_suite_run(suite_runs, _suite_key(own, signal), name)
             kept = _kept(checks)
             dropped = _worst(detail.get("checks_dropped"), _dropped(checks, kept))
             pending = bool(detail.get(DROPPED_PENDING)) or _dropped_pending(checks, kept)
             detail["checks"] = kept
             _set_dropped(detail, dropped, pending)
-            fields["checks"] = _with_dropped(_overall(checks), dropped)
+            _set_suite_runs(detail, suite_runs)
+            fields["checks"] = _with_dropped(_overall(checks, suite_runs), dropped)
             # One check finishing writes nothing (rule `pr_check`). A suite completes once all of its runs have; a
             # single run or commit status may be one of many. A run or status that finishes after a suite already has
             # can be the last one, so it counts too.
