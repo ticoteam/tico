@@ -204,15 +204,23 @@ const decideGoThrough = () => decideOpen('');
 /** A task page's Answer: the Needs you item that is this task's ask for requirement `rid`. Items are keyed by their own
     id (`<ask id>:<requirement id>`) and a stage's requirement is the same on every task in the stage, so both the task
     and the requirement must match. Not in the list held: read it once more. Still not: say why, never nothing. The Tasks
-    page's own copy is not read again behind an open task, so the shared list is looked in too. */
+    page's own copy is not read again behind an open task, so the shared list is looked in too. The list is read a page
+    at a time and the newest ask sorts last in its group, so a miss reads on through the pages (up to DEC_ASK_PAGES). */
+const DEC_ASK_PAGES = 20;
 async function decideOpenAsk(taskId: string, rid: string): Promise<boolean> {
   const mine = (it: NeedsEntry) => it.kind === 'ask' && decideTaskId(it) === taskId && decideRid(it) === rid;
   const find = () => [decideSource(), needsHeld()].map(items => ({items, it: items.find(mine)})).find(x => x.it);
   let at = find();
   if (!at) { await v2Refresh(); at = find(); }
+  for (let i = 0; !at && !needsAll() && i < DEC_ASK_PAGES; i++) {
+    if (!await v2NeedsMore()) break;
+    at = find();
+  }
   if (at?.it && decideOpen(at.it.id, at.items)) return true;
+  // Found but not opened: only a bot's decideOpen refuses, and a bot has no Answer; kept as a guard.
   toast(at ? 'This ask could not be opened here. Open it from Needs you.'
-    : 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.', true);
+    : needsAll() ? 'This ask is no longer in your Needs you list: it may have been answered or withdrawn. Reload the task to see where it is.'
+      : 'This ask was not found in the part of your Needs you list read so far. Open it from Needs you.', true);
   return false;
 }
 function decideStop() {

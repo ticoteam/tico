@@ -3,6 +3,7 @@
 // matches the task and the requirement, never the requirement alone:
 // - two tasks ask one stage requirement: Answer on the second task's page opens the second task's ask;
 // - an ask not yet in the held list: Answer reads Needs you once more, then opens it;
+// - an ask past the first page of Needs you: Answer reads on, page by page, then opens it;
 // - an ask that is not in the list at all: Answer says why, never nothing.
 // Fixtures only (tasks-page.cts).
 import type {Need, Task} from './tasks-page.cts';
@@ -53,6 +54,31 @@ const need = (t: Task, ask: string, line: string): Need => ({kind: 'ask', id: `$
         await card.waitFor({timeout: 5000});
         assert.ok(readsAfter >= 1, 'Needs you was read again');
         assert.equal(await card.locator('.dc-q').innerText(), 'Is the pricing spec OK?');
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+
+    // Past the first page: with more than a page of Needs you, the ask that came last is past it. Answer reads on
+    // through the pages (the server's limit and cursor) until it finds it.
+    {
+      let added = false;
+      const many = Array.from({length: 60}, (_, i) => asking(`t-${i + 10}`, `Task ${i + 10}`));
+      const d = asking('t-99', 'Refund page'), held = many.map((t, i) => need(t, `ask-${i}`, `Is spec ${i} OK?`));
+      const all = () => added ? [...held, need(d, 'ask-d', 'Is the refund spec OK?')] : held;
+      const {page, errors} = await open(browser, {hash: '#/task/t-99', tasks: [...many, d], needs: held, beforeGoto: async p => {
+        await p.route(u => u.pathname === '/api/v2/needs-you', route => {
+          const q = new URL(route.request().url()).searchParams, items = all(), version = 'v' + items.length;
+          const from = Number((q.get('cursor') || '').split('.')[1] || 0), limit = Number(q.get('limit') || items.length);
+          const next = from + limit < items.length ? `${version}.${from + limit}` : null;
+          return route.fulfill({json: {actor: 'human:ana', count: items.length, items: items.slice(from, from + limit), version, next}});
+        });
+      }});
+      try {
+        added = true;
+        await page.locator('#task-modal[open] [data-task-answer]').click();
+        const card = page.locator('#need-card[open]');
+        await card.waitFor({timeout: 5000});
+        assert.equal(await card.locator('.dc-q').innerText(), 'Is the refund spec OK?');
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
