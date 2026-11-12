@@ -159,6 +159,11 @@ async function makePage({hub, browser, phone}: PassContext) {
     });
     const section = page.locator('[data-task-pages]'), field = section.getByRole('textbox', {name: 'Describe the page'});
     await field.fill('The alert flow: three scenarios as tabs.');
+    await go(page, '#/tasks');
+    await section.waitFor({state: 'hidden', timeout: t(10000)});
+    await go(page, '#/task/' + id);
+    await field.waitFor();
+    assert.equal(await field.inputValue(), 'The alert flow: three scenarios as tabs.', 'closing and reopening the task restores the unsent prompt');
     await section.getByRole('button', {name: 'Make page', exact: true}).click();
     const card = section.locator('.tp-making');
     await card.filter({hasText: 'Making page…'}).waitFor({timeout: t(10000)});
