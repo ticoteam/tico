@@ -146,8 +146,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   9.*
 - **C26.** Done and Closed are not columns on a pipeline. They are behind the archive button, with Snoozed.
 - **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. Against a limit
-  the number counts tasks that hold a slot, and beside it "15 wait on a person" counts those waiting only on a person's
-  OK or answer. The setting is called Limit. The word "pool" is gone.
+  the number counts tasks that hold a slot, and beside it a person mark and a number count those waiting only on a
+  person's OK or answer; the words ("15 wait on a person") are its label and tooltip only, on desktop and phone. The
+  setting is called Limit. The word "pool" is gone.
 - **C28.** Needs you is the one place to check. It holds every requirement with your name, every task you own, and every
   @ of you by a person, on a task or in a channel, until you reply. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
@@ -1420,8 +1421,9 @@ Rules:
 
 Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
 
-- A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then "n wait on a
-  person" when any wait only on a person's OK or answer (C27).
+- A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then a person
+  mark and how many wait only on a person's OK or answer, when any do (C27). Its label and tooltip say "15 wait on a
+  person"; the phone's head shows the same mark for the stage on screen.
 - No other words. Tapping it opens the stage's settings (S11).
 
 ### S9. A pipeline's state

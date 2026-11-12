@@ -215,7 +215,6 @@ def brief(c, rows, visible_sql="1"):
     neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed turn's
     line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
     keeps it whole."""
-    from . import task_engine as E
     from . import waiting_on as W
     from .store import H
 
@@ -255,12 +254,8 @@ def brief(c, rows, visible_sql="1"):
         else set()
     )
     turns = {tid: W.view(head, shown.__contains__) if head else None for tid, head in heads.items()}
-    # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person).
-    person = {
-        tid
-        for tid, found in waits.items()
-        if found and found[0].state == W.PERSON and (task := E.task(c, tid)) and W.on_person(c, task, found)
-    }
+    # Waits only on a person's OK or answer: it holds no slot in a stage with a limit (waiting_on.on_person_many).
+    person = W.on_person_many(c, waits)
     running = _running(c, {tid: t["who"] for tid, t in turns.items() if t and t["state"] == "bot" and t["who"]})
     for row in rows:
         turn = turns.get(row["id"])

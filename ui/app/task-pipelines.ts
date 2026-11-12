@@ -69,9 +69,18 @@ function pvPersonCount(state: PvState, stage: PipelineStageRec): number {
   return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t)).length;
 }
 
-/** "15 wait on a person" beside a limited stage's number; '' when none do. */
-const pvPersonHTML = (n: number): string =>
-  n ? `<span class="pv-stage-person tnum">${n} ${n === 1 ? 'waits' : 'wait'} on a person</span>` : '';
+/** A person, as the mark beside a limited stage's number. */
+const PV_PERSON_ICON = '<svg viewBox="0 0 14 14" width="11" height="11" aria-hidden="true" focusable="false">'
+  + '<circle cx="7" cy="4.6" r="2.3" fill="none" stroke="currentColor" stroke-width="1.4"/>'
+  + '<path d="M2.6 12c.5-2.4 2.1-3.7 4.4-3.7s3.9 1.3 4.4 3.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>';
+
+/** Beside a limited stage's number, a person mark and how many wait only on a person: a mark, not words (S8); its
+ * label and title say "15 wait on a person". '' when none do. */
+function pvPersonHTML(n: number): string {
+  if (!n) return '';
+  const words = `${n} ${n === 1 ? 'waits' : 'wait'} on a person`;
+  return `<span class="pv-stage-person tnum" role="img" aria-label="${words}" title="${words}">${PV_PERSON_ICON}${n}</span>`;
+}
 
 /** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. Against a
  * limit it counts the tasks that hold a slot: one waiting only on a person's OK or answer does not (`pvPersonCount`). */
@@ -81,7 +90,7 @@ function pvStageCount(state: PvState, stage: PipelineStageRec): string {
 }
 
 /** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise.
- * Beside a limited stage's number, "15 wait on a person" keeps the tasks that hold no slot in view. */
+ * Beside a limited stage's number, a person mark and a count keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
   const pill = pvPersonHTML(pvPersonCount(state, stage));
   const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>${pill}`;

@@ -22,7 +22,7 @@ The nine states, in headline order:
 """
 
 import json
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -546,6 +546,28 @@ def on_person(
         return False
     owner = row.get("owner_id")
     return not (is_bot(owner) and task_wakes.cannot_run(conn, owner, _seen(conn) if seen is None else seen))
+
+
+def on_person_many(conn: "sqlite3.Connection", waits: Mapping[str, Sequence[Wait]]) -> set[str]:
+    """`on_person` for each task of a list, from its waits (`waiting_on_many`): the ids of those that wait only on a
+    person's OK or answer. One read of the tasks whose every wait is an ask of a person (their owner, open visit's level
+    and open snooze, all `on_person` reads of a task), and "can this bot run" once per owner bot: never a read per row,
+    with or without a snapshot's cache (list rows, task_reads.brief)."""
+    asked = [task_id for task_id, found in waits.items() if found and all(w.state == PERSON and w.ask for w in found)]
+    if not asked:
+        return set()
+    seen = _seen(conn)
+    out: set[str] = set()
+    for task_id, owner, level, snoozed in conn.execute(
+        "SELECT t.id, t.owner_id, v.level, EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id "
+        "AND s.ended_at IS NULL) FROM tasks t LEFT JOIN visits v ON v.task_id = t.id AND v.left_at IS NULL "
+        "WHERE t.id IN (SELECT value FROM json_each(?))",
+        (json.dumps(asked),),
+    ).fetchall():
+        row: Row = {"owner_id": owner, "visit": {"level": level} if level else None, "snooze": snoozed or None}
+        if on_person(conn, row, waits[str(task_id)], seen):
+            out.add(str(task_id))
+    return out
 
 
 @dataclass(frozen=True)
