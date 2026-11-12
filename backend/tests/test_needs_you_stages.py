@@ -17,7 +17,10 @@ def product(api):
 
 def test_a_page_counts_each_stages_items_over_the_whole_list(api):
     product(api)
-    made = [post(api, "tasks", {"title": f"Spec {n}", "body": "As discussed.", "owner": "ana", "pipeline": "product"}) for n in range(3)]
+    made = [
+        post(api, "tasks", {"title": f"Spec {n}", "body": "As discussed.", "owner": "ana", "pipeline": "product"})
+        for n in range(3)
+    ]
     post(api, f"tasks/{made[0]['id']}/move", {"to": "build", "why": "The spec is in the PR"})
     page = get(api, "needs-you?limit=1")
     assert len(page["items"]) == 1 and page["next"]
