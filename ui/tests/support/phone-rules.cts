@@ -101,7 +101,8 @@ function audit(where: string): {rule: number; element: string; why: string}[] {
     for (let p = el.parentElement; p; p = p.parentElement) if (p.hasAttribute('inert') || p.hasAttribute('hidden')) return false;
     return r.right > 0 && r.left < innerWidth;   // a closed drawer waits off screen
   };
-  const dialogs = [...document.querySelectorAll('dialog[open]')].filter(shown);
+  // A native modal makes the page inert even at opacity zero, the first frame of its opening fade.
+  const dialogs = [...document.querySelectorAll('dialog[open]')].filter(d => d.matches(':modal') || shown(d));
   const top = dialogs[dialogs.length - 1] || null;
   // What a person can act on now: the top modal when one is open, else the page.
   const scope: Element = top || document.body;
@@ -476,6 +477,6 @@ async function run(state: string) {
   console.log(`phone-dead-ends ${state}: ok`);
 }
 
-const api = {run: (state: string) => run(state).catch(error => { console.error(error); process.exit(1); })};
+const api = {audit, run: (state: string) => run(state).catch(error => { console.error(error); process.exit(1); })};
 export type Api = typeof api;
 module.exports = api;
