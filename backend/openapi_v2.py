@@ -219,6 +219,31 @@ STABLE = [
         "BotBrowserExitView",
     ),
     (
+        "/api/v2/bots/{bot}/app-view",
+        "get",
+        "Bots",
+        "getBotAppView",
+        "Whether the bot may view the app read only, for its own screenshots, and who turned that on",
+        None,
+    ),
+    (
+        "/api/v2/bots/{bot}/app-view",
+        "post",
+        "Bots",
+        "setBotAppView",
+        "Turn Can view the app (read only) on or off for a bot: an owner or admin, as themselves. Off ends its open views",
+        None,
+    ),
+    (
+        "/api/v2/app-view",
+        "post",
+        "Bots",
+        "openAppView",
+        "A bot, from inside its run, opens a read-only view of the app: a token for 15 minutes that reads as the bot and "
+        "is refused every write",
+        None,
+    ),
+    (
         "/api/v2/bots/{bot}/subscription",
         "get",
         "Subscriptions",

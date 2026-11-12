@@ -2509,3 +2509,37 @@ def test_bots_and_the_assistant_may_book_and_every_caller_may_read_the_calendar(
         assert {"bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
     for name in ("tico_calendar_events", "tico_calendar_free", "tico_calendar_search"):
         assert {"owner", "member", "bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
+
+
+def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_the_command_line(monkeypatch, tmp_path):
+    import subprocess
+
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    sent = []
+    monkeypatch.setitem(BY_NAME['tico_bot_app_view'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'app-view', 'cpo'], ['bot', 'app-view', 'cpo', 'on'], ['bot', 'app-view', 'cpo', 'off']):
+        args = hubcli.parser().parse_args(argv)
+        cli_spec.of(args).call(None, args) if cli_spec.of(args) else remotecli.via_tool(None, args)
+    assert ['on' in row for row in sent] == [False, True, True] and [r.get('on') for r in sent[1:]] == [True, False]
+
+    class Api:
+        url = 'https://team.example'
+
+        def post(self, path, body=None, key=None):
+            assert path == 'app-view'
+            return {'id': 'v1', 'token': 'tico_av_secret', 'expires_at': 'later', 'read_only': True}
+
+    ran = []
+
+    def run(command, env, **kw):
+        ran.append((command, env))
+        return subprocess.CompletedProcess(command, 0, stdout='{"file": "x.png", "width": 390, "height": 844}\n')
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    out = BY_NAME['tico_bot_app_shot']['fn'](Api(), {'path': '/#/tasks', 'out': str(tmp_path / 'x.png'), 'width': 390})
+    command, env = ran[0]
+    assert command[2] == 'https://team.example/#/tasks' and command[4] == '390'
+    assert 'tico_av_secret' not in ' '.join(command) and env['TICO_VIEW_TOKEN'] == 'tico_av_secret'
+    assert out['view'] == 'v1' and out['read_only'] is True

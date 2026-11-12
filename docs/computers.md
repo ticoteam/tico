@@ -438,6 +438,21 @@ API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}
 `GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](api.md#the-contract)). Hub: `tico computer browser-exit` and
 `tico bot browser-exit`.
 
+## Let a bot view the app (read only)
+
+A bot can open the app signed in as itself and take screenshots, so a Product Owner shows what it checked in
+production on its own page instead of asking a person to look. It is off for every bot until an owner or admin turns
+on **Can view the app (read only)** for that bot: `tico bot app-view <bot> on` (`off` turns it off and ends any view
+it has open).
+
+The bot then runs `tico bot app-shot /#/task/<id> --width 390 --out shot.png` (390 for a phone, 1280 for a desktop)
+on its computer, which needs Chrome. Each shot opens a view for at most 15 minutes, bound to the run that opened it.
+The view sees only what that bot already reads, never another person's view, and every write is refused with
+"Read-only view": a button, a form, marking something read. Reads that make or show a token, key or credential are
+refused too. Each view, and each time the setting changes, is a line in the audit log.
+
+API: `GET/POST /api/v2/bots/{bot}/app-view`, `POST /api/v2/app-view` ([OpenAPI](api.md#the-contract)).
+
 ## Add a connection
 
 ### Subscription or API key?

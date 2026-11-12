@@ -416,6 +416,28 @@ def human_only(who):
         raise Problem("identity", "This frontend endpoint requires a person", 403)
 
 
+def person_or_view(who):
+    """The page's own start-up reads: a person, or a bot's read-only view of the app (backend/app_view.py), which reads
+    them as that bot."""
+    if not who.view:
+        human_only(who)
+
+
+# What a bot's read-only view is never offered in /api/me, whatever the bot may do elsewhere.
+VIEW_OFF = (
+    "can_create_bots",
+    "can_add_people",
+    "bot_admin",
+    "credential_admin",
+    "can_see_sql",
+    "can_create_tokens",
+    "has_tokens",
+    "credential_access",
+    "mail_access",
+    "mover",
+)
+
+
 def may_chat(c, auth, who, bot):
     """Whether the caller may send this bot messages: Write on it (backend/bot_access.py). Who a
     bot "works for" (Can use) no longer decides it."""
@@ -2720,7 +2742,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/me")
     def me(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r = roster(c)
             person = P.person(H.actor_id(who.actor), r) or {}
@@ -2770,11 +2792,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "mail_access": can_access(c, who),
                 # may move any task on the board
                 "mover": who.role == "owner" or H.can_move(c, who.actor),
-            }
+            } | (
+                {key: False for key in VIEW_OFF} | {"read_only_view": True, "name": H.actor_name(c, who.actor)}
+                if who.view
+                else {}
+            )
 
     @app.get("/api/employees")
     def employees(request: Request):
-        human_only(request.state.identity)
+        person_or_view(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
             from . import teammate_access
@@ -2787,7 +2813,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/people")
     def people(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         with store.read() as c:
             r, configs = roster(c), entries(c)
             from . import people_photos
@@ -3125,7 +3151,7 @@ def install_views(app, store, auth, mutate, task_view):
     @app.get("/api/status")
     def status(request: Request):
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         # One snapshot from the start, so the roster and access rows are read once (read_cache), not again
         # after the first privacy check opens a transaction.
         with store.read_transaction() as c:
@@ -3500,7 +3526,7 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list. A cursor from an older version starts again from the top (`restart`)."""
         who = request.state.identity
-        human_only(who)
+        person_or_view(who)
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):

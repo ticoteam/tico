@@ -2960,6 +2960,12 @@ class BrowserExitPolicy(Contract):
     daily_cap_bytes: Annotated[int, Field(strict=True, ge=100_000_000, le=10_000_000_000_000)] | None = None
 
 
+class BotAppView(Contract):
+    """“Can view the app (read only)” for one bot (backend/app_view.py)."""
+
+    on: bool
+
+
 class BotBrowserExit(Contract):
     """The computer a bot's browser reaches the web through; null is its own."""
 
