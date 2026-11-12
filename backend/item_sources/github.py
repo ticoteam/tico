@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -122,9 +123,16 @@ class GitHub(Protocol):
         ...
 
 
+_last_version = [0]
+_version_lock = threading.Lock()
+
+
 def version_now() -> int:
-    """Metadata version for a read or webhook that begins now: the time in ms."""
-    return time.time_ns() // 1_000_000
+    """Metadata version for a read or webhook that begins now: the time in ms, never the same twice in this process.
+    Two of Tico's own reads are ordered by when they began; only GitHub's same-second stamps tie (item_metadata.save)."""
+    with _version_lock:
+        _last_version[0] = max(time.time_ns() // 1_000_000, _last_version[0] + 1)
+        return _last_version[0]
 
 
 def sent_version(payload: Row, arrived: int) -> int:
@@ -249,7 +257,8 @@ def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, v
         "failing_check_url": merged.get("failing_check_url") if queue == "removed" else None,
     }
     key = str(old["repo"]) if old else repo
-    return IM.save(conn, SOURCE, PR, pr_key(key, number), values, version, final=values["state"] != "open")
+    # Only a merge is for good: a closed PR can be reopened, so it stays read again while a task waits on it.
+    return IM.save(conn, SOURCE, PR, pr_key(key, number), values, version, final=values["state"] == "merged")
 
 
 def _checks_state(checks: list[Row]) -> str:
@@ -780,7 +789,7 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
     out: list[int] = []
     for (key,) in conn.execute(
         "SELECT item_key FROM item_metadata WHERE source=? AND json_extract(fields, '$.head_sha')=? "
-        "AND final_at IS NULL AND item_type=? ORDER BY created_at, id",
+        "AND final_at IS NULL AND json_extract(fields, '$.state')='open' AND item_type=? ORDER BY created_at, id",
         (SOURCE, sha, PR),
     ).fetchall():
         found_repo, number = split_key(str(key))
@@ -792,8 +801,8 @@ def _open_at_head(conn: "sqlite3.Connection", repo: str, sha: str) -> list[int]:
 def due_reads(conn: "sqlite3.Connection", now: str, limit: int = REREAD_BATCH) -> list[tuple[str, int]]:
     """The PRs an open task waits on whose metadata is missing or older than REREAD_S, oldest read first, at most
     `limit`.
-    A merged or closed PR is final for what a task waits on, so it is not read again (a webhook still brings a reopen).
-    An open PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
+    A merged PR is final, so it is not read again; a closed one can be reopened, so it is read like an open one.
+    A PR marked for a full read (`read_at` '') is read once more whatever links it: a task closed while GitHub
     merged its PR anyway (Tico's dequeue said merged) so leaves no metadata saying "open, queued" for ever.
     """
     return [split_key(key) for key in IM.due_reads(conn, SOURCE, PR, now, limit)]

@@ -628,7 +628,9 @@
     "error": null
    }
   ],
-  "due": [],
+  "due": [
+   "acme/app#1"
+  ],
   "github_calls": [
    [
     "ready",
@@ -844,7 +846,9 @@
   ],
   "releases": {},
   "effects": [],
-  "due": [],
+  "due": [
+   "acme/app#1"
+  ],
   "github_calls": [],
   "wakes": [
    [
@@ -7608,7 +7612,10 @@
   ],
   "releases": {},
   "effects": [],
-  "due": [],
+  "due": [
+   "acme/app#1",
+   "acme/app#2"
+  ],
   "github_calls": [],
   "wakes": [
    [
@@ -7736,6 +7743,7 @@
   "releases": {},
   "effects": [],
   "due": [
+   "acme/app#1",
    "acme/app#2"
   ],
   "github_calls": [],
