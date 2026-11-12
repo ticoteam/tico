@@ -43,6 +43,10 @@ def test_a_reported_update_shows_its_source_only_to_readers_of_that_chat(api):
 
     mine = history(api, "ben-test")["updates"][0]
     assert mine["source"]["conversation"] and "live PR" in mine["source"]["excerpt"]
+    # The shape the Learnings panel links from (ui/app/bot-learnings.ts learnSource, ui/tests/bot-learnings-source-unit.cts).
+    assert (
+        sorted(mine["source"]) == ["bot_id", "conversation", "excerpt", "message"] and mine["source"]["bot_id"] == "ops"
+    )
     assert mine["when"] == "2026-10-05T08:00:00.000000Z" and mine["shared"] and mine["diff"]
     with api.app.state.store.transaction() as c:  # a repository on GitHub gives each pushed commit a link
         c.execute("UPDATE bot_config SET repo='acme/bot-ops' WHERE bot='ops'")
