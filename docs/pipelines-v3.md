@@ -1086,6 +1086,11 @@ late. Nothing depends on the exact 10 seconds.
   the task back to Fixes 2, where Reviewer 2 reads them."), and while Tico has not read what it changes yet ("Try
   again in a minute"). Tico reads that from GitHub once per commit (its compare from where the commit branched off),
   for the PRs of a task a person OK'd or in Merge whose commits moved.
+  A PR GitHub says conflicts with its base branch is never queued, by the stage or by a queue-again: Tico reads
+  GitHub's `mergeable` right before it queues, and a conflict fails the queue at once while `UNKNOWN` (GitHub still
+  working it out) is read again 1, 5 and 15 minutes later. Queuing again is refused while the PR's link says it
+  conflicts. The refusal, and a removal for a conflict, tell the owner to send the task back to Fixes 2, where the
+  Builder rebases it ("No merge conflict" before Merge).
 - **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise Reviewer 2
   reads it in Fixes 2 (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,

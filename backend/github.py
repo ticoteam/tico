@@ -2270,7 +2270,7 @@ def install_github(app, settings, store):
 FACT_READ = """query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){
 mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
 pullRequest(number:$number){id state merged isDraft headRefOid mergedAt mergeCommit{oid} isInMergeQueue
-isMergeQueueEnabled autoMergeRequest{enabledAt}
+isMergeQueueEnabled autoMergeRequest{enabledAt} mergeable mergeStateStatus
 timelineItems(last:1,itemTypes:[ADDED_TO_MERGE_QUEUE_EVENT,REMOVED_FROM_MERGE_QUEUE_EVENT,AUTO_MERGE_ENABLED_EVENT,
 AUTO_MERGE_DISABLED_EVENT]){nodes{__typename ... on RemovedFromMergeQueueEvent{reason createdAt}
 ... on AutoMergeDisabledEvent{reason reasonCode createdAt}}}}}}"""
@@ -2513,6 +2513,15 @@ class AppGitHub:
             return {"ok": True, "how": "queued", "reason": ""}
         if found.get("autoMergeRequest"):
             return {"ok": True, "how": "auto_merge", "reason": ""}
+        # A PR that conflicts with its base branch would only come back out of the queue: the Builder rebases it first.
+        # Reading `mergeable` also starts GitHub's work on it when it has none yet, so the next try has the answer.
+        from .item_sources import github as GS
+
+        mergeable = str(found.get("mergeable") or "").upper()
+        if mergeable == "CONFLICTING" or str(found.get("mergeStateStatus") or "").upper() == "DIRTY":
+            return {"ok": False, "how": None, "reason": GS.CONFLICTS}
+        if mergeable == "UNKNOWN":
+            raise GitHubRefused(GS.MERGEABLE_UNKNOWN)
         ids = {"id": found["id"], "head": head_sha}
         if found.get("isMergeQueueEnabled"):
             _, errors = self._graphql(repo, WRITE_PERMISSIONS, FACT_ENQUEUE, ids)

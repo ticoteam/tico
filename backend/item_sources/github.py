@@ -90,7 +90,9 @@ class GitHub(Protocol):
     def enqueue(self, repo: str, number: int, head_sha: str) -> Row:
         """Put the PR in the merge queue at exactly `head_sha`, or turn on auto-merge where the repo has no queue, or
         merge it where it has neither. {ok, how: queued|auto_merge|merged, reason}. A head that moved, a draft, or a
-        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason."""
+        PR the base branch's rules refuse (a required review or check) is not ok, with GitHub's reason; one that
+        conflicts with its base branch is not ok with `CONFLICTS`. Raises `MERGEABLE_UNKNOWN` while GitHub has not
+        worked out whether it merges cleanly."""
         ...
 
     def dequeue(self, repo: str, number: int) -> Row:
@@ -569,6 +571,12 @@ REMOVAL_WORDS = {
     "invalid_merge_commit": "GitHub could not build the merge",
 }
 MERGED_REASONS = ("merge", "merged", "already_merged")
+# What `enqueue` answers for a PR GitHub says conflicts with its base branch (`mergeable` CONFLICTING, or
+# `mergeStateStatus` DIRTY): it is not queued, since the queue would only take it out again.
+CONFLICTS = REMOVAL_WORDS["merge_conflict"]
+# What `enqueue` raises while GitHub has not worked out whether the PR merges cleanly (`mergeable` UNKNOWN): a failed
+# call, so the queue action reads it again after source_actions.RETRY_S instead of queuing on a guess.
+MERGEABLE_UNKNOWN = "GitHub has not worked out yet whether it merges cleanly"
 
 
 def removal_words(reason: object) -> str:
@@ -1042,6 +1050,10 @@ def seen_delivery(conn: "sqlite3.Connection", delivery_id: str | None, event: st
 #   visit (any PR, counted from the `pr_queue_removed` history rows) goes up the never-stuck ladder instead: the
 #   pipeline's manager bot has it on its 3 tries; a removal after that goes to a person. A second removal for failed
 #   checks at the same head is not queued again: its wake says to send the task back to Fixes 2, and `requeue` refuses it.
+# - A PR that conflicts with its base branch is never queued: `enqueue` reads GitHub's `mergeable` first and answers
+#   CONFLICTS (the action fails at once; the owner is told to send it back to Fixes 2, where the Builder rebases), or
+#   raises while GitHub still works it out (UNKNOWN: read again after RETRY_S). `requeue` refuses while the PR's link
+#   says it conflicts, and a removal for a conflict wakes the owner with the same send-back (SENT_BACK_FOR_CONFLICT).
 # - The owner (Release Owner, who may push to PR branches) then: queues it again as it is (`requeue`: CLI
 #   `tico task queue <task>`, MCP `tico_task_queue`, `POST /api/v2/tasks/{tid}/queue`); or pushes its own fix commits to
 #   the PR branch and then queues again; or sends the task back to Fixes 2 with the ordinary move
@@ -1078,6 +1090,13 @@ DROPS = 3  # removals in one visit before the task goes up the ladder instead of
 # Why a bot may not queue again a PR with commits after the person's OK (`requeue`).
 SENT_BACK_FOR_NEW = (
     "{ref} has new changes since the person's OK. Move the task back to Fixes 2, where Reviewer 2 reads them."
+)
+# Why nobody queues a PR GitHub says conflicts with its base branch (`requeue`, a refused queue, a removal): the queue
+# would only take it out again. The Builder rebases it in Fixes 2.
+SENT_BACK_FOR_CONFLICT = (
+    "{ref} conflicts with its base branch, so it is not queued: the merge queue would only take it out again. Move the "
+    'task back to Fixes 2 for the Builder to rebase it: `tico task move {task} "Fixes 2" -m "{ref} conflicts with its '
+    'base branch: rebase it" --version N`.'
 )
 # GitHub's removal reasons for a check that failed in the queue's run, as `removal_words` words them. Taken out this way
 # twice at one head in one visit, that head is not queued again: the task goes back to Fixes 2.
@@ -1157,17 +1176,29 @@ def failing_names(metadata: Row) -> str:
     return ", ".join(names) or "a check"
 
 
+def conflicts(conn: "sqlite3.Connection", task_id: str, repo: str, number: int) -> bool:
+    """Whether GitHub last said the task's open PR conflicts with its base branch: its link's `mergeable` (kept by
+    backend/github.py from webhooks and its read of PRs whose base moved; a new commit sets it back to unknown)."""
+    found = conn.execute(
+        "SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft') AND mergeable='conflict' "
+        "AND lower(repo)=lower(?) AND number=?",
+        (task_id, repo, int(number)),
+    ).fetchone()
+    return found is not None
+
+
 def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: int | None = None) -> list[Row]:
     """Queue again: the stage owner's action on the Merge stage after GitHub removed a PR (or refused to queue it).
     Owes a new `queue` for each such PR at its newest saved head: the old action is moot, and one for that same head
     is owed again. Refuses `task_stage` (not on a stage whose on_enter queues PRs), `task_requirement` when no PR was
     removed or refused, while the PR's own checks on its newest commit are running ("The checks on <ref> are still
-    running") or failing ("Checks failed on <ref>: <names>"), and when the caller may not; `task_changed` (a bot's
-    stale `seen_version`), `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it
-    back to Fixes 2). Who may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest
-    commit changes other lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was
-    for that one. A rebase that changes the same lines (`same_changes`) it may; while Tico has not read what the new
-    commit changes yet, it is asked to try again (`COMPARING`)."""
+    running") or failing ("Checks failed on <ref>: <names>"), while GitHub says it conflicts with its base branch
+    (`SENT_BACK_FOR_CONFLICT`), and when the caller may not; `task_changed` (a bot's stale `seen_version`),
+    `task_ended`. A head taken out for failed checks twice in this visit is refused too (send it back to Fixes 2). Who
+    may: the stage owner, the pipeline's manager, any person. A bot may not queue a PR whose newest commit changes other
+    lines than the one the task came into Merge with (`SENT_BACK_FOR_NEW`): the person's OK was for that one. A rebase
+    that changes the same lines (`same_changes`) it may; while Tico has not read what the new commit changes yet, it is
+    asked to try again (`COMPARING`)."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row:
@@ -1213,6 +1244,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
                 refuse("task_requirement", COMPARING.format(ref=ref))
             if not same:
                 refuse("task_requirement", SENT_BACK_FOR_NEW.format(ref=ref))
+        if conflicts(conn, task_id, str(link["repo"]), int(link["number"])):
+            refuse("task_requirement", SENT_BACK_FOR_CONFLICT.format(ref=ref, task=task_id))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
@@ -1325,6 +1358,8 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
                 f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
                 f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
             )
+        elif metadata.get("removed_reason") == CONFLICTS:
+            lead = f"GitHub took {ref} out of the merge queue. {SENT_BACK_FOR_CONFLICT.format(ref=ref, task=task_id)}"
         else:
             lead = (
                 f"GitHub took {ref} out of the merge queue. {removed_line(metadata)}.{link} Queue it again with "
@@ -1583,13 +1618,14 @@ def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
     if row and row["status"] == "open" and visit.get("id") == effect["visit_id"]:
         ref = pr_ref(*_pr_of(effect))
         E.changed(conn, str(row["id"]), E.SYSTEM)
-        E.tell_owner(
-            conn,
-            str(row["id"]),
-            f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
-            "it can merge, or move it back.",
-            f"{WAKE_REFUSED}:{ref}:{effect['pinned']}",
-        )
+        if reason == CONFLICTS:
+            text = SENT_BACK_FOR_CONFLICT.format(ref=ref, task=row["id"])
+        else:
+            text = (
+                f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
+                "it can merge, or move it back."
+            )
+        E.tell_owner(conn, str(row["id"]), text, f"{WAKE_REFUSED}:{ref}:{effect['pinned']}")
 
 
 def recorded(conn: "sqlite3.Connection", effect: Row, said: Row, state: str, version: int) -> bool:
