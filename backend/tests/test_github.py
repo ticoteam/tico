@@ -1279,6 +1279,81 @@ def test_draft_failures_stay_visible_until_the_branch_pr_is_linked(api, monkeypa
     assert _prs(api, task['id'])[8]['state'] == 'draft' and 'pr_error' not in _worktree_detail(api, tree)
 
 
+@pytest.mark.parametrize('tico_first', [False, True])
+def test_a_bot_pr_racing_tico_s_draft_settles_on_the_earliest_and_the_other_closes_quietly(
+    api, monkeypatch, tico_first
+):
+    """GitHub accepted a bot's `gh pr create` and Tico's draft on one head in the same second. Tico reads the branch
+    again after its draft, keeps the earliest, closes the later one with a note, and the task keeps one link; the
+    later one's late webhooks never link it again and its close wakes nobody. Synthetic: no real GitHub call."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Race', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-race"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    hook(
+        api,
+        'push',
+        {
+            'ref': 'refs/heads/' + branch,
+            'repository': {'full_name': 'ticoteam/tico'},
+            'after': 'f' * 40,
+            'head_commit': {'id': 'f' * 40},
+        },
+    )
+    mine, bots = (3399, 3400) if tico_first else (3400, 3399)
+    later = max(mine, bots)
+    calls = []
+
+    def fetch(method, path, headers=None, params=None, json=None):
+        calls.append((method, path, json))
+        if method == 'POST' and path.endswith('/pulls'):
+            # Both webhooks land while Tico's request is still out.
+            for n in (bots, mine):
+                hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(n, branch, draft=True)})
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(mine, branch, draft=True))
+        if method in ('POST', 'PATCH'):
+            return SimpleNamespace(status_code=200 if method == 'PATCH' else 201, json=lambda: {})
+        if '/compare/' in path:
+            return SimpleNamespace(status_code=200, json=lambda: {'ahead_by': 1})
+        if params and params.get('state') == 'open':
+            return SimpleNamespace(status_code=200, json=lambda: [_branch_pr(n, branch) for n in (3400, 3399)])
+        return SimpleNamespace(status_code=200, json=lambda: [])
+
+    _, run = _reconciler(api, monkeypatch, fetch)
+    run()
+    assert list(_prs(api, task['id'])) == [3399]
+    closes = [(m, p, j) for m, p, j in calls if m == 'PATCH' or '/issues/' in p]
+    assert [(m, p) for m, p, _ in closes] == [
+        ('POST', f'/repos/ticoteam/tico/issues/{later}/comments'),
+        ('PATCH', f'/repos/ticoteam/tico/pulls/{later}'),
+    ]
+    assert '#3399' in closes[0][2]['body'] and closes[1][2] == {'state': 'closed'}
+    # The later one's late webhooks: the open one never links again, and its close is no news to the task.
+    hook(api, 'pull_request', {'action': 'synchronize', 'pull_request': _branch_pr(later, branch)})
+    hook(api, 'pull_request', {'action': 'closed', 'pull_request': _branch_pr(later, branch, state='closed')})
+    assert list(_prs(api, task['id'])) == [3399] and _burst(api, task['id']) == []
+
+
+def test_two_live_prs_on_one_task_branch_settle_on_the_earliest_whichever_webhook_comes_first(api):
+    """Webhooks alone, with no draft of Tico's: the later live PR on a task branch is unlinked when the earlier one
+    arrives, a later one never joins, and a closed PR on another branch or a lone one still links as before."""
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Twice', 'body': 'x'})
+    branch = f"tico/{task['id'][:8]}-twice"
+    _worktree(api, task['id'], 'ticoteam/tico', branch)
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(21, branch)})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(20, branch)})
+    assert list(_prs(api, task['id'])) == [20]
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(22, branch)})
+    hook(api, 'pull_request', {'action': 'reopened', 'pull_request': _branch_pr(21, branch)})
+    assert list(_prs(api, task['id'])) == [20]
+    # Closed and replaced on purpose: the closed link stays, the replacement links, and nothing is unlinked.
+    hook(api, 'pull_request', {'action': 'closed', 'pull_request': _branch_pr(20, branch, state='closed')})
+    hook(api, 'pull_request', {'action': 'opened', 'pull_request': _branch_pr(30, branch)})
+    prs = _prs(api, task['id'])
+    assert {n: l['state'] for n, l in prs.items()} == {20: 'closed', 30: 'open'}
+
+
 def test_a_burst_wakes_only_a_bot_whose_turn_it_is_and_never_messages_a_person(api):
     """GitHub news goes through the engine's keyed wake: the bot owner on its turn gets one run; a bot whose task
     waits on a person gets the news as a note and no run; a person who owns the task is told nothing (it is in
