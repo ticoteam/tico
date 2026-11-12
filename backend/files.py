@@ -12,6 +12,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -33,6 +34,29 @@ from . import read_cache
 from . import task_privacy as privacy
 from . import task_wakes
 from clients import bot_files as BF
+
+LOG = logging.getLogger("tico.files")
+# Why Files.serve answered 404, one word each (logged, never sent: every refusal answers the same).
+REFUSALS = ("no_row", "audience", "blob_fence", "scan", "file_fence", "rules_read", "no_version")
+
+
+def refuse_serve(c, who, fid, number, category, version=None, message="File not found"):
+    """Log which check refused a version read, then raise the caller's unchanged 404. A fence refusal also names the
+    version's run and whether it is still running and readable to the caller: a run's tasks and inputs move while it
+    is live, the likeliest reason a just-published page reads as missing. No page text, names or tokens are logged."""
+    fields = {"category": category, "file": fid, "version": number, "actor": who.actor, "role": who.role}
+    aid = version["attempt_id"] if version is not None and category in ("blob_fence", "file_fence") else None
+    if aid:
+        state = c.execute("SELECT state,finished_at FROM attempts WHERE id=?", (aid,)).fetchone()
+        fields.update(
+            attempt=aid,
+            attempt_state=state["state"] if state else None,
+            attempt_running=bool(state and state["state"] in ("leased", "running") and not state["finished_at"]),
+            attempt_readable=privacy.attempt_readable(c, privacy.actor(who), aid),
+        )
+    LOG.warning("file version read refused %s", encode(fields), extra={"file_refusal": fields})
+    raise Problem("not_found", message, 404)
+
 
 # A video or audio file spooled to disk by publish_stream: its digest and size, hashed as it arrived.
 Staged = namedtuple("Staged", "stream digest size")
@@ -2076,11 +2100,13 @@ class Files:
             return {"file": fid, "activity": rows}
 
     def serve(self, who, fid, version=None, meta=False, request=None, derivative=None):
-        """The bytes of one version through Tico, never a storage address."""
+        """The bytes of one version through Tico, never a storage address. Each refusal logs its check (refuse_serve)."""
         with self.store.read() as c:
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
-            if not row or not page_audience_visible(c, self.auth, who, row, {}):
-                raise Problem("not_found", "File not found", 404)
+            if not row:
+                refuse_serve(c, who, fid, version, "no_row")
+            if not page_audience_visible(c, self.auth, who, row, {}):
+                refuse_serve(c, who, fid, version, "audience")
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
             v = c.execute(
@@ -2089,19 +2115,27 @@ class Files:
                 (fid, number),
             ).fetchone()
             if v and not page_blob_visible(c, self.auth, who, v["blob_id"]):
-                raise Problem("not_found", "File not found", 404)
+                refuse_serve(c, who, fid, number, "blob_fence", v)
             from . import postal_mail
 
             scan = postal_mail.scan_access(c, self.auth, who, v["blob_id"]) if v else None
             if scan is not None:
                 if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
-                    raise Problem("not_found", "File not found", 404)
+                    refuse_serve(c, who, fid, number, "scan")
             else:
-                self.visible_file(c, who, fid)
+                if not self.visible(c, who, row, {}):
+                    refuse_serve(c, who, fid, number, "file_fence", v)
                 if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
-                    raise Problem("not_found", "File not found", 404)  # the Rules Owner's read names one version of it
+                    refuse_serve(c, who, fid, number, "rules_read")  # the Rules Owner's read names one version of it
             if not v or row["locator"] != "tico_blob":
-                raise Problem("not_found", "This file has no stored copy to open" if not v else "File not found", 404)
+                refuse_serve(
+                    c,
+                    who,
+                    fid,
+                    number,
+                    "no_version",
+                    message="This file has no stored copy to open" if not v else "File not found",
+                )
             if meta:
                 return {
                     "id": fid,
