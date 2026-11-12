@@ -1,3 +1,4 @@
+# pyright: strict
 """The server's slow drains, beside the 10-second loop (backend/app.py `schedule_loop`), not inside it.
 
 The automation queue (its runs, then their Workspace Gmail actions), the server's own email sends and the Workspace key
@@ -17,6 +18,8 @@ Without workers (tests, a demo, a server whose scheduler is off) every caller dr
 import logging
 import threading
 import time
+from collections.abc import Callable
+from typing import Any, Protocol
 
 from .store import H, encode
 
@@ -26,19 +29,31 @@ BUDGET = 5.0  # seconds a pass may claim new work for
 MANUAL_WAIT = 60.0  # how long a manual run's answer waits for the worker's pass that takes it
 QUIET_HEALTH = 60.0  # an idle pass rewrites its health row at most this often
 # Each drain's failures go to telemetry under the name they had on the loop.
-TELEMETRY = {"automations": "automations", "email": "email_drain", "workspace_check": "google_workspace"}
+TELEMETRY: dict[str, str] = {
+    "automations": "automations",
+    "email": "email_drain",
+    "workspace_check": "google_workspace",
+}
+
+
+class Stop(Protocol):
+    def is_set(self) -> bool: ...
+
+
+Work = Callable[["Budget"], Any]
+OnError = Callable[[str, BaseException], Any]
 
 
 class Budget:
     """A pass's elapsed-time budget: `left()` is False once `seconds` have gone by or the server is stopping. None
     seconds is no limit (an inline drain, as before). `spent` says whether the budget, not the queue, ended the pass."""
 
-    def __init__(self, seconds: float | None = None, stop=None):
+    def __init__(self, seconds: float | None = None, stop: Stop | None = None) -> None:
         self.seconds, self.stop = seconds, stop
         self.until = None if seconds is None else time.monotonic() + seconds
         self.spent = False
 
-    def left(self):
+    def left(self) -> bool:
         if (self.stop is not None and self.stop.is_set()) or (
             self.until is not None and time.monotonic() >= self.until
         ):
@@ -46,12 +61,12 @@ class Budget:
             return False
         return True
 
-    def again(self):
+    def again(self) -> "Budget":
         """A fresh budget of the same length, for the next stage of the same pass."""
         return Budget(self.seconds, self.stop)
 
 
-def left(budget):
+def left(budget: Budget | None) -> bool:
     """True when there is time to claim one more row; no budget is no limit."""
     return budget is None or budget.left()
 
@@ -59,21 +74,30 @@ def left(budget):
 class Worker:
     """One drain on one thread. `work(budget)` is one pass; it returns how many rows it did (or None)."""
 
-    def __init__(self, name, work, *, store=None, budget: float | None = BUDGET, on_error=None, stopping=None):
+    def __init__(
+        self,
+        name: str,
+        work: Work,
+        *,
+        store: Any = None,
+        budget: float | None = BUDGET,
+        on_error: OnError | None = None,
+        stopping: Callable[[], bool] | None = None,
+    ) -> None:
         self.name, self.work, self.store, self.budget, self.on_error = name, work, store, budget, on_error
         self.stopping = stopping  # the server's own stop, read as well as `stop` (an asyncio.Event's is_set)
         self._wake = threading.Event()
         self._cond = threading.Condition()
         self._asked = 0  # wakes asked so far
         self._covered = 0  # the wakes the last finished pass answered
-        self._failures = []  # failures not yet on the scheduler's health row
-        self._written = None  # when this drain's health row was last written (monotonic)
+        self._failures: list[dict[str, str]] = []  # failures not yet on the scheduler's health row
+        self._written: float | None = None  # when this drain's health row was last written (monotonic)
         self._failed = False  # whether that row shows a failure (the next pass clears it)
         self.stop = threading.Event()
         self.passes = 0
-        self.last: dict = {}  # the last pass: started, ms, done, spent, failure
+        self.last: dict[str, Any] = {}  # the last pass: started, ms, done, spent, failure
 
-    def wake(self):
+    def wake(self) -> int:
         """Ask for a pass; returns a ticket for `wait`. While a pass runs, this is the one more pass after it."""
         with self._cond:
             self._asked += 1
@@ -81,17 +105,17 @@ class Worker:
         self._wake.set()
         return ticket
 
-    def wait(self, ticket, timeout):
+    def wait(self, ticket: int, timeout: float | None) -> bool:
         """Wait until a pass that started after the wake with `ticket` has finished; False when `timeout` ran out."""
         with self._cond:
             return self._cond.wait_for(lambda: self._covered >= ticket, timeout)
 
-    def take_failures(self):
+    def take_failures(self) -> list[dict[str, str]]:
         with self._cond:
             out, self._failures = self._failures, []
         return out
 
-    def pass_once(self):
+    def pass_once(self) -> dict[str, Any]:
         """One pass, on the calling thread (the worker's own, or a test's)."""
         self._wake.clear()  # before reading the count: a wake after this point is the next pass's
         with self._cond:
@@ -122,7 +146,7 @@ class Worker:
         self._health(self.last)
         return self.last
 
-    def _health(self, last):
+    def _health(self, last: dict[str, Any]) -> None:
         """This drain's last pass on its own service_health row (`drain:<name>`): when, how long, how much, and its
         failure. A quiet pass (nothing done, nothing failed) rewrites it at most once a minute."""
         if self.store is None:
@@ -156,11 +180,16 @@ class Worker:
         except Exception as exc:  # noqa: BLE001 - the row waits for the next pass
             LOG.warning("%s drain health not written: %s", self.name, type(exc).__name__)
 
-    def is_set(self):
+    def halt(self) -> None:
+        """Stop the worker: no new claims, and its thread ends after the pass in progress."""
+        self.stop.set()
+        self._wake.set()
+
+    def is_set(self) -> bool:
         """Whether the worker is stopping: its own stop, or the server's."""
         return self.stop.is_set() or bool(self.stopping and self.stopping())
 
-    def run(self):
+    def run(self) -> None:
         """The worker's thread until `stop`: a pass per wake, and straight away another while the budget, not the
         queue, ended the last one."""
         while not self.is_set():
@@ -178,7 +207,15 @@ class Drains:
     """The server's drain workers: `automations` (the queue's runs, then their Gmail actions), `email` (Workspace
     inboxes' queued sends) and `workspace_check` (a pending or failing Workspace key, checked again)."""
 
-    def __init__(self, store, auth, *, budget=BUDGET, on_error=None, stopping=None):
+    def __init__(
+        self,
+        store: Any,
+        auth: Any,
+        *,
+        budget: float | None = BUDGET,
+        on_error: OnError | None = None,
+        stopping: Callable[[], bool] | None = None,
+    ) -> None:
         from . import email_sending, system_routines
         from . import google_workspace as workspace_checks
 
@@ -193,7 +230,7 @@ class Drains:
         )
         self.email = Worker(
             "email",
-            lambda budget: email_sending.drain(store, auth, budget=budget),
+            lambda budget: email_sending.drain(store, auth, budget=budget),  # pyright: ignore[reportUnknownMemberType]
             store=store,
             budget=budget,
             on_error=on_error,
@@ -201,7 +238,12 @@ class Drains:
         )
         self.workspace_check = Worker(
             "workspace_check",
-            lambda budget: system_routines.pass_of(store, "workspace_check", workspace_checks.tick, store),
+            lambda budget: system_routines.pass_of(  # pyright: ignore[reportUnknownMemberType]
+                store,
+                "workspace_check",
+                workspace_checks.tick,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+                store,
+            ),
             budget=None,
             on_error=on_error,
             stopping=stopping,
@@ -209,9 +251,9 @@ class Drains:
         self.all = (self.automations, self.email, self.workspace_check)
         self.hub = hub
 
-    def start(self):
+    def start(self) -> "Drains":
         """Each worker on a daemon thread of its own; the automation hub's doorbell and manual run wake its worker."""
-        self.threads = []
+        self.threads: list[threading.Thread] = []
         for worker in self.all:
             thread = threading.Thread(target=worker.run, name="tico-drain-" + worker.name, daemon=True)
             thread.start()
@@ -219,20 +261,19 @@ class Drains:
         self.hub.worker = self.automations
         return self
 
-    def wake(self):
+    def wake(self) -> None:
         for worker in self.all:
             worker.wake()
 
-    def take_failures(self):
+    def take_failures(self) -> list[dict[str, str]]:
         return [f for worker in self.all for f in worker.take_failures()]
 
-    def stop(self, timeout=None):
+    def stop(self, timeout: float | None = None) -> None:
         """No new claims from here; a call already started finishes within its own timeout (or, past `timeout`, is
         left as a restart leaves it, for the leases' upkeep)."""
         if getattr(self.hub, "worker", None) is self.automations:
             self.hub.worker = None
         for worker in self.all:
-            worker.stop.set()
-            worker._wake.set()
+            worker.halt()
         for thread in getattr(self, "threads", ()):
             thread.join(timeout)
