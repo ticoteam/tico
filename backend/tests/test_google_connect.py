@@ -821,6 +821,19 @@ def test_a_sign_in_nobody_finishes_expires(app):
     assert seen["kind"] == "expired" and row(app)["verifier"] is None
 
 
+def test_a_claim_its_computer_never_answers_expires_without_leaving_its_grant_waiting(app, monkeypatch):
+    machine, google = holding(app, monkeypatch)  # "1//grant" connected
+    monkeypatch.setattr(google_connect, "post_token", FakeGoogle(grant("1//A")))
+    a = signed_in(app, machine, "c-A")
+    assert exchange(app, machine, a).status_code == 200
+    with app.app.state.store.transaction() as c:
+        c.execute("UPDATE google_connects SET started_at=? WHERE person_id='cara'", (time.time() - 3600,))
+    assert get(app, "mail/google", "cara-test")["kind"] == "unknown"
+    stored = row(app)
+    assert stored["pending_hash"] is None and stored["pending_scopes"] is None
+    assert stored["grant_hash"] == google_connect.fingerprint("1//grant")  # the grant connected before stays
+
+
 def test_admin_policy_at_refresh_reaches_health_as_the_admin_s():
     assert (
         failure_reason(

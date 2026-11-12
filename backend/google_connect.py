@@ -403,8 +403,9 @@ def expire(c):
         (H.now(), now - SIGN_IN_SECONDS),
     )
     c.execute(
+        # A grant exchanged for the claim that timed out is not left waiting: only a result commits a grant.
         "UPDATE google_connects SET status='failed',kind='unknown',oauth_state=NULL,verifier=NULL,code=NULL,"
-        "updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?",
+        "pending_hash=NULL,pending_scopes=NULL,updated_at=? WHERE status IN ('finishing','revoking') AND started_at<?",
         (H.now(), now - CLAIM_SECONDS),
     )
 
@@ -858,6 +859,7 @@ def install(app, store, member, mutate):
             row = c.execute("SELECT * FROM google_connects WHERE operation_id=?", (operation_id,)).fetchone()
             if not row:
                 raise stale("stale_result", operation_id)
+            # A repeat is answered before the checks below because it writes nothing; keep every write after them.
             if row["answered"] is not None and row["runner_id"] == runner["id"]:
                 if row["answered"] != body.status:
                     raise Problem("state", "This Google connect was already answered differently", 409)
