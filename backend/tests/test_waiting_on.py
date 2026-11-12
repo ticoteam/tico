@@ -29,8 +29,9 @@ def c(company):
     with company.transaction() as conn:
         yield conn
         every = W.needs_by_person(conn)
-        for person in every:
-            assert W.needs(conn, person) == every[person], person
+        people = {f"human:{found[0]}" for found in conn.execute("SELECT id FROM humans").fetchall()}
+        for person in sorted(people | set(every)):
+            assert W.needs(conn, person) == every.get(person, []), person
 
 
 @pytest.fixture

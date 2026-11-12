@@ -682,9 +682,11 @@ def _ladder_people(conn: "sqlite3.Connection", person: str) -> tuple[bool, set[s
     return company, pipelines
 
 
-# Every bot the company has, and every bot an open task, a stage, a pipeline or an ask names, as bot ids.
+# Every bot the company has, and every bot an open task (owner or assignee: a conflicting PR's builder), a stage, a
+# pipeline or an ask names, as bot ids.
 _NAMED_BOTS = (
     "SELECT id FROM bots UNION SELECT substr(owner_id, 5) FROM tasks WHERE owner_id LIKE 'bot:%' AND status='open' "
+    "UNION SELECT substr(assignee_id, 5) FROM tasks WHERE assignee_id LIKE 'bot:%' AND status='open' "
     "UNION SELECT substr(person_id, 5) FROM requirements WHERE person_id LIKE 'bot:%' AND withdrawn_at IS NULL "
     "UNION SELECT substr(manager_id, 5) FROM pipelines WHERE manager_id LIKE 'bot:%' "
     "UNION SELECT substr(owner, 5) FROM stages WHERE owner LIKE 'bot:%' AND retired_at IS NULL "
