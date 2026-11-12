@@ -1,5 +1,6 @@
 /* ui/app/decide.ts — the ask screen (docs/pipelines-v3.md, S3): one item of Needs you at a time, over the page. A modal
-   on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕. The thing asked about is on
+   on a wide screen, the whole screen on a phone. The top bar is "2 of 7", then 👍 👎 ‹ › ✕ (‹ › on a wide screen only;
+   Skip, in the answer row, steps on at every width). The thing asked about is on
    the left, shown in full (the page, the email, what an OK is for); the sentence asked, who asks, Notes and the buttons
    are on the right. A stage's typed answer asks its question: a choice is its buttons, a number a whole-number box
    with its range, text a box; a value the server refuses stays typed, under the server's line.
@@ -294,6 +295,12 @@ function decideStep(st: DecState, dir: number) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
   if (next) decideGo(st, next);
 }
+/** Skip (every width; a phone has no ‹ ›): the next item, nothing answered; from the last, the first one still waiting,
+    which is the first one skipped. */
+function decideSkip(st: DecState) {
+  const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + 1] || live[0];
+  if (next && next !== st.at) decideGo(st, next);
+}
 /** After an answer: the next item, else the one before, else All caught up. */
 function decideAfter(st: DecState, id: string) {
   st.gone.add(id);
@@ -435,6 +442,12 @@ function decidePaintSide(st: DecState) {
   // What was typed stays through a redraw of the same item (busy, then a refusal in the server's words).
   const held = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
+  // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
+  if (!st.sheet && decideLive(st).length > 1) {
+    const card = host.firstElementChild!, row = card.querySelector<HTMLElement>(':scope > .dc-acts');
+    const skip = decideBtn('skip', 'Skip', false, busy);
+    if (row) row.insertAdjacentHTML('beforeend', skip); else card.insertAdjacentHTML('beforeend', `<div class="dc-acts">${skip}</div>`);
+  }
   const box = host.querySelector<HTMLInputElement>('#dc-other');
   if (box && held) box.value = held;
   decideNeedsText($('.decide')!);
@@ -718,6 +731,7 @@ async function decideClick(st: DecState, ev: MouseEvent) {
   const what = b.dataset.dc || '';
   if (what === 'close') { decideStop(); return; }
   if (what === 'prev' || what === 'next') { decideStep(st, what === 'prev' ? -1 : 1); return; }
+  if (what === 'skip') { decideSkip(st); return; }
   if (what === 'undo') return;            // the bar's own handler
   const it = decideCurrent(st);
   if (!it) return;
