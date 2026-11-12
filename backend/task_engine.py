@@ -225,10 +225,27 @@ def depth(conn: "sqlite3.Connection", task_id: str) -> int:
         levels += 1
 
 
-def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0) -> bool:
-    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit."""
+# The task that filed this one, on the visit it filed it in, is still on that visit and in that stage.
+_FILER_IN = (
+    "SELECT 1 FROM links l JOIN tasks p ON p.id = l.from_task_id AND p.status='open' AND p.stage_id=? "
+    "JOIN visits v ON v.id = l.visit_id AND v.task_id = p.id AND v.left_at IS NULL WHERE l.to_task_id=?"
+)
+
+
+def rides_with_filer(conn: "sqlite3.Connection", task_id: str, stage_id: str) -> bool:
+    """A sub-task filed by a task that is still in `stage_id`, on the visit that filed it: it goes into that stage on
+    its filer's slot. The filer waits on it, so making it wait for room there could hold both forever."""
+    return conn.execute(_FILER_IN, (stage_id, task_id)).fetchone() is not None
+
+
+def has_room(conn: "sqlite3.Connection", stage_row: Row, extra: int = 0, task_row: Row | None = None) -> bool:
+    """A stage has room when it has no limit, or holds fewer open tasks that are not snoozed than its limit. For
+    `task_row`, it also has room when the task that filed it is there (`rides_with_filer`): the stage may then hold one
+    over its limit, and takes no other task until it is under again."""
     limit = stage_row.get("task_limit")
     if stage_row["kind"] != "work" or not limit:
+        return True
+    if task_row and rides_with_filer(conn, str(task_row["id"]), str(stage_row["id"])):
         return True
     held = conn.execute(
         "SELECT COUNT(*) FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
@@ -836,7 +853,7 @@ def move(
             decided = [s for s in missing if R.asked_to_decide(s, by)]
             missing = [s for s in missing if not R.asked_to_decide(s, by)]
         _may_push_past(conn, by, row, why, missing, target["id"])
-        if target["kind"] == "work" and not has_room(conn, target):
+        if target["kind"] == "work" and not has_room(conn, target, task_row=row):
             # From a stage tasks leave by hand the task stays put until someone moves it again, unless it is a
             # person's request that moves on by itself (`not_held_by_hand`).
             held_here = bool(row["stage"].get("by_hand")) and not not_held_by_hand(conn, row)
@@ -1055,7 +1072,7 @@ def advance(conn: "sqlite3.Connection", task_id: str) -> Row | None:
     if not row or row["status"] != "open" or row.get("snooze") or row["stage"].get("by_hand"):
         return None
     target = next_stage(conn, row)
-    if not target or R.unmet(conn, row) or not has_room(conn, target) or shut_out(conn, row, target):
+    if not target or R.unmet(conn, row) or not has_room(conn, target, task_row=row) or shut_out(conn, row, target):
         return None
     return move(conn, task_id, target["id"], SYSTEM, seen_version=row.get("version"))
 

@@ -155,7 +155,7 @@ def task(conn, task_id) -> dict | None
     # None for a task that is not on the engine.
 def pipeline(conn, pipeline_id), stages(conn, pipeline_id), stage(conn, stage_id)
 def next_stage(conn, task_row) -> dict | None      # the next work stage, or Done after the last
-def has_room(conn, stage_row, extra=0) -> bool     # snoozed tasks hold no slot
+def has_room(conn, stage_row, extra=0, task_row=None) -> bool  # snoozed tasks hold no slot; a sub-task rides its filer's
 def owner_for(stage_row, assignee, current=None)   # who owns a task in a stage
 def depth(conn, task_id) -> int
 def check_version(conn, by, task_row, seen_version, cascade=False) -> None   # task_changed; a bot must send one
@@ -420,7 +420,8 @@ It is the only caller of `move()` with `by=SYSTEM`, through `advance`.
 
 What `rules_hold` reads for each rule:
 
-1. Every open task has at least one wait.
+1. Every open task has at least one wait, and no `tasks` wait names a sub-task whose `room` wait is for the full stage
+   the filer is in.
 2. Every bot's turn on a task that is not snoozed has a live run, a queued wake, a next try time, or a level above
    `owner`.
 3. Every person's turn is in that person's `needs` exactly once: one `task` entry for the task's own work, and one
@@ -430,7 +431,7 @@ What `rules_hold` reads for each rule:
 5. At most one handoff per visit; no handed-off task still open after its visit was left by Back or Close; no
    `queue_pr` effect of such a visit without its `dequeue_pr`.
 6. In a stage with a limit, the open tasks that came in by a forward move since the stage last changed, and were never
-   snoozed there, number at most the limit.
+   snoozed there, number at most the limit. A sub-task filed while its filer was in the stage is not counted.
 7. No wake is queued for a task that is snoozed, Done or Closed.
 
 ## answers.py

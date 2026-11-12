@@ -435,7 +435,7 @@ def of(
         # A person's request is not held by hand: it waits for room in the next stage (never_stuck._requests).
         ahead = E.next_stage(conn, row)
         name = ahead["name"] if ahead else "the next stage"
-        full = bool(ahead) and not E.has_room(conn, ahead)
+        full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
         line = f"No room in {name}" if full else f"Moving to {name}"
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered))
     elif by_hand:
@@ -443,7 +443,7 @@ def of(
     elif not unmet:
         # Everything is met. It waits for a slot in the next stage; with room, the engine takes it on its next pass.
         ahead = E.next_stage(conn, row)
-        full = bool(ahead) and not E.has_room(conn, ahead)
+        full = bool(ahead) and not E.has_room(conn, ahead, task_row=row)
         name = ahead["name"] if ahead else "the next stage"
         line = f"No room in {name}" if full else f"Moving to {name}"
         held = E.shut_out(conn, row, ahead) if ahead and not full else None
