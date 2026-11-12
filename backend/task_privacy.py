@@ -1392,11 +1392,14 @@ def page_content_readable(c, actor, payload):
     )
 
 
-def content_readable(c, actor, payload):
+def content_readable(c, actor, payload, decoded=None):
+    """`decoded`: `payload` with its JSON text columns already decoded, which the page and task checks read without
+    decoding them again. The meeting check reads `payload` as stored: it never looks inside a text column of a row."""
+    inner = payload if decoded is None else decoded
     return (
-        page_content_readable(c, actor, payload)
+        page_content_readable(c, actor, inner)
         and meeting_sources(c).readable(actor, meeting_sources(c).references(payload))
-        and readable(c, actor, references(c, payload))
+        and readable(c, actor, references(c, inner))
     )
 
 

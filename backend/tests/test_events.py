@@ -740,3 +740,22 @@ def test_capped_reads_send_the_same_events_in_the_same_order_as_one_uncapped_rea
     whole, whole_end = _drain(api, cursor, **kw)
     assert len(whole) == 1 and capped_end == whole_end
     assert split(capped) == split(whole)
+
+
+def test_a_run_output_naming_a_meeting_inside_its_payload_is_sent_as_the_run_page_shows_it(api):
+    """Decoding a run output once must not widen the meeting check: like the run page, it reads the stored row, whose
+    payload text it does not look inside. A meeting named there leaves the live decision as it was."""
+    _, _, attempt = setup_attempt(api)
+    with api.app.state.store.read() as c:
+        cursor = E.latest(c)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,1000,'delta',?,?)",
+            (
+                attempt["id"],
+                json.dumps({"delta_kind": "text", "text": "notes", "live_meeting": {"meeting_id": "elsewhere"}}),
+                H.now(),
+            ),
+        )
+    reads, _ = _drain(api, cursor, topics=("runs",))
+    assert _texts(reads) == ["notes"]

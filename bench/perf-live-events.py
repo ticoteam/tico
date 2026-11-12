@@ -118,37 +118,36 @@ def test_light_viewers_wait_behind_one_heavy_viewer(api):
             self.cursor = cursor
 
     def round_(heavy):
+        """(the last light viewer's wait from the round's start, the heavy viewer's own read in that round)."""
         polls = ([Poll(heavy_cursor)] if heavy else []) + [Poll(light_cursor) for _ in rooms]
-        waits = []
+        waits, prepare = [], 0.0
         with store.read() as c:
             c.execute("BEGIN")
             start = time.perf_counter()
             snapshot = E._Snapshot(c, polls)
             if heavy:
+                began = time.perf_counter()
                 E._between_viewers(c)
                 read(c, snapshot, heavy_cursor, topics=("runs",))
+                prepare = time.perf_counter() - began
             for room in rooms:
                 E._between_viewers(c)
                 events, _, _, _ = read(c, snapshot, light_cursor, topics=("messages",), conversations=(room,))
                 assert events, "each light viewer gets its message"
                 waits.append(time.perf_counter() - start)
             c.rollback()
-        return waits
+        return max(waits), prepare
 
-    def one_read():
-        with store.read() as c:
-            c.execute("BEGIN")
-            start = time.perf_counter()
-            read(c, E._Snapshot(c), heavy_cursor, topics=("runs",))
-            c.rollback()
-        return time.perf_counter() - start
-
-    rounds = 5
-    alone = statistics.median(max(round_(False)) for _ in range(rounds))
-    behind = statistics.median(max(round_(True)) for _ in range(rounds))
-    prepare = statistics.median(one_read() for _ in range(rounds))
+    round_(False), round_(True)  # warm both before timing
+    rounds, lone, timed = 15, [], []
+    for _ in range(rounds):  # alternated, so drift on a shared computer falls on both alike
+        lone.append(round_(False)[0])
+        timed.append(round_(True))
+    alone = statistics.median(lone)
+    behind = statistics.median(wait for wait, _ in timed)
+    prepare = statistics.median(read_ for _, read_ in timed)
     print(
         f"\nMeasure 2: last light viewer's wait alone_ms={alone * 1000:.1f} behind_heavy_ms={behind * 1000:.1f} "
-        f"one_heavy_read_ms={prepare * 1000:.1f} target: behind<=alone+one_read={(alone + prepare) * 1000:.1f}",
+        f"heavy_read_in_round_ms={prepare * 1000:.1f} target: behind<=alone+one_read={(alone + prepare) * 1000:.1f}",
         flush=True,
     )

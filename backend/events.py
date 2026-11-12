@@ -2537,11 +2537,11 @@ def _runs(view, rows):
             if event is None:
                 continue
             event = dict(event)
-            # The intact stored text is decoded once: every privacy check below and the event sent read that value.
-            decoded = H._json(event["payload"], None)
-            if isinstance(decoded, (dict, list)):
-                event["payload"] = decoded
-            if not privacy.content_readable(c, view.principal, event):
+            # The intact stored text is decoded once: the page and task checks and the event sent read that value. The
+            # meeting check reads the row as stored, as every other reader of run output does (run_view, turns).
+            value = H._json(event["payload"], None)
+            decoded = event | {"payload": value} if isinstance(value, (dict, list)) else None
+            if not privacy.content_readable(c, view.principal, event, decoded):
                 continue
             if event["kind"] in ("delta", "message"):
                 # A reply is not live for a bot org rules apply to: it shows once checked and delivered.
@@ -2551,7 +2551,8 @@ def _runs(view, rows):
                     watched[bot] = rules_watch(c, bot)
                 if watched[bot]:
                     continue
-            event["payload"] = H._json(event.pop("payload"), {})
+            stored = event.pop("payload")
+            event["payload"] = value if decoded is not None else H._json(stored, {})
             entry["output"] = event
         elif row["kind"] == "job":
             job = c.execute(
@@ -2753,7 +2754,8 @@ class _Snapshot:
 def _within_budget(c, rows):
     """The leading `rows` whose events one read can send, decided before any is checked or built, so a reader behind
     on large run outputs has only what READ_BYTES carries prepared, not the whole batch on every read. A run output
-    counts its stored payload's bytes, every row ROW_BYTES more. The first row always goes, however large; a row
+    counts its stored payload's bytes, every row ROW_BYTES more: only run outputs are sized here, so a large message
+    or task still relies on read_in's final byte cut. The first row always goes, however large; a row
     this viewer may not see still counts, as its size is known before its check."""
     outputs = [str(row["ref"]) for row in rows if row["topic"] == "runs" and row["kind"] == "output"]
     if not outputs:
