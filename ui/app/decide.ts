@@ -16,7 +16,8 @@ type AskKind = 'ok' | 'question' | 'yours' | 'stuck' | 'fix' | 'mention';
 /** What an OK shows, as it was read: `hash` is the hash of exactly this content, the one Approve sends. `none` is an OK
     with no bound grant (a stage's OK of a page): Approve is a plain answer. `missing`: a part of what it shows did not
     load, so Approve stays off. `urls`: the object URLs of bytes read for it (a proof, a file), let go with it. `page`: on
-    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. */
+    a page requirement, the page this content is (`<file id>@<version>`), the one an answer is for. `shows`: the refs it
+    was read from. Held per ask (decideOkKey): a stage's requirement is the same on every task in the stage. */
 interface AskOkView {
   state: 'loading' | 'ready' | 'none' | 'failed';
   hash: string | null;
@@ -27,6 +28,7 @@ interface AskOkView {
   missing: boolean;
   urls: string[];
   page: string;
+  shows: string;
 }
 /** The 👎 sheet: what was wrong, then (Make a rule) the rule drafted from it. */
 interface AskSheet {
@@ -77,6 +79,13 @@ function decideKind(it: NeedsEntry): AskKind {
   return it.task?.turn?.state === 'paused' || it.task?.late?.level === 'person' ? 'stuck' : 'yours';
 }
 const decideRid = (it: NeedsEntry) => it.requirement_id || it.id;
+const decideTaskId = (it: NeedsEntry) => it.task_id || it.task?.id || '';
+/** One ask: its task and its requirement. A stage's requirement ("OK Chris") is the same on every task in the stage, so
+    the requirement alone would show one task's page on another's ask. */
+const decideOkKey = (it: NeedsEntry) => `${decideTaskId(it)}\n${decideRid(it)}`;
+const decideShows = (it: NeedsEntry) => (it.ask?.shows || []).join('\n');
+/** What is held for an ask was read from other refs than it has now (a new page version, another page). */
+const decideOkStale = (v: AskOkView, it: NeedsEntry) => v.page !== decidePage(it) || v.shows !== decideShows(it);
 const decideLive = (st: DecState) => st.order.filter(k => !st.gone.has(k) && st.items.has(k));
 const decideCurrent = (st: DecState) => st.at && !st.gone.has(st.at) ? st.items.get(st.at) || null : null;
 function decideSync(st: DecState, items: NeedsEntry[]) {
@@ -271,7 +280,10 @@ function decideRender(st: DecState) {
     $('.dc-side', root)!.innerHTML = '<div class="dc-done"><h2>All caught up</h2><button type="button" class="ghost" data-dc="close">Close</button></div>';
     return;
   }
-  if (decideKind(it) === 'ok' && !st.ok.has(decideRid(it))) void decideOkLoad(st, it, false);
+  // Coming to an ask: what it shows is read once; held content from other refs (a new version came while it was off
+  // screen) is read again and marked as changed. While it is on screen, a refresh never reads it again (decideShownPage).
+  const held = decideKind(it) === 'ok' ? st.ok.get(decideOkKey(it)) : undefined;
+  if (decideKind(it) === 'ok' && (!held || decideOkStale(held, it))) void decideOkLoad(st, it, !!held);
   decidePaintBody(st);
   decidePaintSide(st);
 }
@@ -282,7 +294,7 @@ function decidePaintBody(st: DecState) {
   const kind = decideKind(it);
   let html = '';
   if (kind === 'ok') {
-    const v = st.ok.get(decideRid(it));
+    const v = st.ok.get(decideOkKey(it));
     html = !v || v.state === 'loading' ? skelRows(4)
       : v.state === 'failed' ? `<p class="err" role="alert">${esc(v.error)}</p>`
       : (v.changed ? '<p class="dc-changed" role="alert">It changed. Look again.</p>' : '') + `<div class="dc-doc">${v.html}${v.pages.map((_, i) => `<div data-dc-page="${i}"></div>`).join('')}</div>`;
@@ -296,7 +308,7 @@ function decidePaintBody(st: DecState) {
   if (host.dataset.html === html && host.dataset.key === it.id) return;
   host.dataset.html = html; host.dataset.key = it.id;
   host.innerHTML = html;
-  const v = kind === 'ok' ? st.ok.get(decideRid(it)) : null;
+  const v = kind === 'ok' ? st.ok.get(decideOkKey(it)) : null;
   if (v && typeof window.pageCard === 'function')
     v.pages.forEach((p, i) => host.querySelector(`[data-dc-page="${i}"]`)?.replaceWith(window.pageCard(p, {size: 'full'})));
 }
@@ -309,13 +321,19 @@ function decidePaintSide(st: DecState) {
   const kind = decideKind(it), asker = decideAsker(it);
   const stage = decideStageName(it.task?.stage_id);
   const typed = kind === 'question' ? it.ask?.typed : undefined;
-  const head = `<h3 class="dc-q">${esc(typed?.question || it.line)}</h3><p class="dc-sub">${[asker ? esc(actorLabel(asker)) : '', esc(stage)].filter(Boolean).join(' · ')}</p>`;
+  // A page's OK is about the task's page: its title heads it, with the version under it. The stage's own line ("OK Chris
+  // (version 3)") names the person asked, so only what it says before that (Jev's reason, a send back) is kept.
+  const page = it.ask?.page, title = page ? it.task?.title || '' : '';
+  const said = title ? it.line.replace(/\s*OK [^()]* \(version \d+\)$/, '').trim() : '';
+  const sub = [asker ? esc(actorLabel(asker)) : '', esc(stage), page ? `Version ${esc(String(page.version))}` : ''].filter(Boolean).join(' · ');
+  const head = `<h3 class="dc-q">${esc(title || typed?.question || it.line)}</h3><p class="dc-sub">${sub}</p>`
+    + (said && said !== title ? `<p class="dc-said">${esc(said)}</p>` : '');
   const err = st.error ? `<p class="err" role="alert">${esc(st.error)}</p>` : '';
   const busy = st.busy ? ' disabled' : '';
   let body = '';
   if (st.sheet) body = decideSheetHTML(st, it);
   else if (kind === 'ok') {
-    const v = st.ok.get(decideRid(it)), may = it.ask?.may || [];
+    const v = st.ok.get(decideOkKey(it)), may = it.ask?.may || [];
     const ready = !!v && !v.missing && (v.state === 'ready' && !!v.hash || v.state === 'none');
     body = `<label class="dc-notes"><span>Notes</span><textarea id="dc-notes" rows="3" maxlength="4000"></textarea></label>
       <div class="dc-acts">${decideBtn('approve', 'Approve', true, !ready || !may.includes('ok') || st.busy ? ' disabled' : '')}${decideBtn('sendback', 'Send back', false, ` data-dc-needs="#dc-notes" disabled`)}</div>`;
@@ -407,11 +425,12 @@ function decideBar(label: string, undo: (() => Promise<unknown>) | null) {
 // ---- an OK: what it shows
 /** Reads what an OK is for, once, and holds it. `changed`: read again after the engine said it changed. */
 async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
-  const rid = decideRid(it);
-  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [], page: decidePage(it)};
-  const before = st.ok.get(rid);
+  const rid = decideRid(it), key = decideOkKey(it);
+  const v: AskOkView = {state: 'loading', hash: null, html: '', pages: [], changed, error: '', missing: false, urls: [],
+    page: decidePage(it), shows: decideShows(it)};
+  const before = st.ok.get(key);
   if (before) decideOkLet(before);
-  st.ok.set(rid, v);
+  st.ok.set(key, v);
   if (DEC === st && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
   try {
     // No grant (404): a stage's OK, which shows what its requirement names.
@@ -438,7 +457,7 @@ async function decideOkLoad(st: DecState, it: NeedsEntry, changed: boolean) {
     }
     v.state = shown ? 'ready' : 'none';
   } catch (e) { v.state = 'failed'; v.error = errorMessage(e, 'It did not load.'); }
-  if (DEC === st && st.ok.get(rid) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
+  if (DEC === st && st.ok.get(key) === v && st.at === it.id) { decidePaintBody(st); decidePaintSide(st); }
 }
 /** Lets go of the bytes an OK's view held. */
 function decideOkLet(v: AskOkView) {
@@ -574,7 +593,7 @@ const decidePage = (it: NeedsEntry): string => it.ask?.page ? `${it.ask.page.fil
 /** The page on screen, which an answer is for. A refresh that brought another page leaves the screen as it was read:
     that page is read and shown with "It changed. Look again." and nothing is sent (null). */
 async function decideShownPage(st: DecState, it: NeedsEntry): Promise<string | undefined | null> {
-  const v = st.ok.get(decideRid(it));
+  const v = st.ok.get(decideOkKey(it));
   if (!v || v.page === decidePage(it)) return v?.page || undefined;
   await decideOkLoad(st, it, true);
   return null;
@@ -583,7 +602,7 @@ const decideUndoAnswer = (r: unknown) => { const id = (r as TaskMoved | null)?.a
 const decideUndoReopen = (taskId: string) => () => () => taskMove(taskId, 'reopen', null);
 /** Approve: the person's own OK of exactly what is on screen. A change since it was read is shown, never OK'd. */
 async function decideApprove(st: DecState, it: NeedsEntry) {
-  const rid = decideRid(it), v = st.ok.get(rid), taskId = it.task_id;
+  const rid = decideRid(it), v = st.ok.get(decideOkKey(it)), taskId = it.task_id;
   if (!v || !taskId || st.busy) return;
   if (v.state === 'none') {
     const page = await decideShownPage(st, it);
