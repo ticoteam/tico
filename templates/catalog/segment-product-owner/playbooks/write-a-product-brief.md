@@ -52,5 +52,5 @@ task instead of filing a new one. Record the brief in `knowledge/briefs.md`: the
 ## 5. Stop there
 
 Do not tell a customer, a salesperson or a marketer that the problem will be fixed. Your manager's decision comes back
-on the task, and the next weekly review records it. Your brief waits in Ideas until a person picks it; then it moves
-to Spec by itself when Spec has room. Nobody is told when Spec has room.
+on the task, and the next weekly review records it. Your brief waits in Ideas until a person moves it to Spec.
+Nobody is told when Spec has room.
