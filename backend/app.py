@@ -2941,6 +2941,8 @@ def create_app(settings=None):
             raise Problem("status", "status is open, done or closed", 422)
         if snoozed not in (None, "hide", "only", "all"):
             raise Problem("snoozed", "snoozed is hide, only or all", 422)
+        if status == "all" and snoozed is None:
+            snoozed = "all"  # every task means the snoozed ones too: they are open, only set aside
         if number is not None and not 1 <= number <= 999_999_999:
             raise Problem("number", "number is a task number, from 1", 422)
         since = H.parse_ts(updated_since) if updated_since else None

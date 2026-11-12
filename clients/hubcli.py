@@ -1208,7 +1208,9 @@ def parser():
         "--waiting-on", help="only open tasks whose turn is this person's or bot's: me, a human id, a bot slug"
     )
     s.add_argument("--brief", action="store_true", help="leave out bodies")
-    s.add_argument("--all", action="store_true", help="every task and every bot you may see, as {tasks, bots}")
+    s.add_argument(
+        "--all", action="store_true", help="every task (snoozed ones too) and every bot you may see, as {tasks, bots}"
+    )
     s.add_argument(
         "--snoozed",
         choices=["only", "all"],

@@ -632,7 +632,7 @@ def task_file(api, args):
         "all": {
             "type": "boolean",
             "default": False,
-            "description": "Every task and every bot you may see, as `{tasks, bots}`",
+            "description": "Every task (snoozed ones too) and every bot you may see, as `{tasks, bots}`",
         },
         "snoozed": {
             "type": "string",
@@ -657,6 +657,8 @@ def task_list(api, args):
         for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage")
         if args.get(name)
     }
+    if args.get("all") and not args.get("snoozed"):
+        more["snoozed"] = "all"  # every task you may see: the snoozed ones too
     if args.get("waiting_on"):
         more["waiting_on"] = _target(api, args["waiting_on"])
     paged = args.get("limit") is not None or args.get("offset") is not None
