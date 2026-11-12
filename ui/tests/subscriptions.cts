@@ -893,11 +893,16 @@ async function sheetScreens(browser: Browser) {
 // A phone (390 px): each plan's reason and its one action sit under the plan's name, inside the screen, with no sideways
 // scroll to find them (validation of #3370 found the Usage column off-screen to the right). Desktop keeps its columns.
 async function phoneReasons(browser: Browser) {
-  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}});
+  // Two more rows: a plan given to no computer, and one whose state the page cannot name (on a computer that is online).
+  const extra = (id: string, name: string, status: string, computers: string[]): Sub => ({id, name, kind: 'claude_token', runtime: 'claude',
+    label: 'Claude plan', status, status_detail: '', computers, usage: null, added_by: 'ana'});
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844},
+    mutate: d => { d.subs.push(extra('s7', 'Claude Max (Eve)', 'working', []), extra('s8', 'Claude Max (Flo)', 'failing', ['r1'])); }});
   await modelsReady(page);
   const width = 390;
   for (const [id, reason] of [['s1', /Computer offline: Cloud · Video Owner · Bring it online/], ['s4', /Sign-in expired\s*Sign in again/],
-    ['s6', /Computer offline: Cloud · Video Owner · Bring it online/]] as [string, RegExp][]) {
+    ['s6', /Computer offline: Cloud · Video Owner · Bring it online/], ['s7', /No computer assigned\s*Assign this plan to a computer in Settings → Computers\./],
+    ['s8', /^Connection unavailable on Tico Team box$/]] as [string, RegExp][]) {
     const row = page.locator(`[data-subs-row=${id}]`);
     await row.scrollIntoViewIfNeeded();
     const name = (await row.locator('.subs-name').boundingBox())!, use = (await row.locator('.subs-use').boundingBox())!;
