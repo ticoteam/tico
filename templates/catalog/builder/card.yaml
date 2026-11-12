@@ -11,7 +11,7 @@ icon: code_blocks
 suggest: common
 tags: [saas, github, code, developer-tools]
 when: "Offer when GitHub is connected and the team turns tasks into code."
-summary: "Owns Build and the two Fixes stages of the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green and fixes what the two reviewers found. It never merges: the Merge stage queues the pull request."
+summary: "Owns Build, the two Fixes stages and QA in the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green, fixes what the two reviewers found and shows it working on the QA page a person approves to ship. It never merges: the Merge stage queues the pull request."
 pains:
   - "bugs and small changes wait in a queue before anyone starts on them"
   - "a fix goes back and forth between the author and the reviewers for days"
@@ -21,7 +21,7 @@ owns:
   - "Each task it is given: the branch, the change, the test that proves it and the pull request"
   - "Every review finding: acted on, or answered on the pull request with one line of reason"
   - "The task's record: the pull request linked and the head commit tested"
-  - "The page a person OKs in Fixes 2: what was built and how it was checked, at the head commit"
+  - "The QA page a person approves to ship: what changed, before and after screenshots or other proof, and how it was checked, at the head commit"
 never:
   - "Merge a pull request: the Merge stage queues it, and the Release Owner sees it through"
   - "Approve, review, close or reopen a pull request, including its own"
@@ -42,7 +42,7 @@ onboarding:
   - ask: "How do you run the tests, and what must pass before a change can merge?"
     why: "Becomes knowledge/standards.md. I run the same checks the team runs, and I say so when I could not run one."
   - ask: "Which paths need a named person to look before a change ships (sign-in, permissions, billing, customer data)?"
-    why: "I say so on the page a person OKs in Fixes 2."
+    why: "I say so on the QA page a person approves before it ships."
 reasoning_effort: high
 # Every repository In use at write: it pushes branches and opens pull requests (docs/repositories.md).
 repo_access_mode: all

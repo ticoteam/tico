@@ -722,9 +722,9 @@ def test_a_review_page_counts_only_for_the_newest_commit(c, store):
     assert _standing(c, row).line == "Jev is checking"
 
 
-def _in_fixes_2(c, store, *more):
-    """Review (Reviewer's page at 62de57f, Jev passed it), then Fixes 2: the Writer (the Builder) owns it, and a person
-    OKs its Pre-release page (people only). `more`: Fixes 2's other requirements. Returns (task, Pre-release id)."""
+def _in_qa(c, store, *more):
+    """Review (Reviewer's page at 62de57f, Jev passed it), then QA: the Writer (the Builder) owns it, and a person
+    OKs its Pre-release page (people only). `more`: QA's other requirements. Returns (task, Pre-release id)."""
     made = X.pipeline(
         c,
         "eng",
@@ -736,19 +736,19 @@ def _in_fixes_2(c, store, *more):
                 "requirements": [{"kind": "page", "line": "Review", "settings": {"at_head": True}}],
             },
             {
-                "name": "Fixes 2",
+                "name": "QA",
                 "owner": WRITER,
                 "requirements": [{"kind": "page", "line": "Pre-release", "who_oks": "people_only"}, *more],
             },
         ),
         manager="bot:manager",
     )
-    rid = made["requirements"]["Fixes 2"][0]
+    rid = made["requirements"]["QA"][0]
     row = X.new_task(c, ANA, "Absolute value", "eng", assignee=REVIEWER)
     _link_pr(c, row["id"], "acme/app", 45, "62de57f623fc")
     review, _ = _page(c, store, "<p>Reviewed 62de57f</p>")
     _say(c, _attach(c, row, "page:" + review, by=REVIEWER, requirement="Review"), "met")
-    assert E.advance(c, row["id"])["stage"]["name"] == "Fixes 2"
+    assert E.advance(c, row["id"])["stage"]["name"] == "QA"
     assert R.unreviewed(c, E.task(c, row["id"])) is None, "the head is the reviewed one"
     return row, rid
 
@@ -771,13 +771,13 @@ def _review_wakes(c, row):
 
 
 def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked(c, store):
-    """Live, rc.7 (Nov 12, 00:48Z): the Builder pushed dce5a62 in Fixes 2, after both reviews; Jev was unsure (p 0.51)
+    """Live, rc.7 (Nov 12, 00:48Z): the Builder pushed dce5a62 in QA, after both reviews; Jev was unsure (p 0.51)
     and the pre-release OK went to the person with no bot's review of that commit, which broke an acceptance criterion.
     Now the bot that wrote the newest review reads only the new commits first; the person is asked after it OKs them."""
     from backend import task_wakes as TW
     from backend import waiting_on as W
 
-    row, rid = _in_fixes_2(c, store)
+    row, rid = _in_qa(c, store)
     _push(c, "acme/app", 45, "dce5a62aa000")
     told = TW.body(c, E.task(c, row["id"]), to=WRITER)
     assert R.NOT_REVIEWED not in told, "the reviewer reviews them: the Builder's page need not say so"
@@ -803,11 +803,11 @@ def test_commits_after_review_2_are_reviewed_by_a_bot_before_the_person_is_asked
         "Jev is unsure: Can't tell"
     )
     A.answer(c, row["id"], rid, BEN, "ok")
-    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
-def test_a_fixes_2_with_no_new_commits_goes_straight_to_the_person(c, store):
-    row, _ = _in_fixes_2(c, store)
+def test_a_qa_with_no_new_commits_goes_straight_to_the_person(c, store):
+    row, _ = _in_qa(c, store)
     _pre_release(c, store, row)
     standing = _f2(c, row)
     assert (standing.state, standing.on, standing.line) == (R.WAITING, None, "OK someone (version 1)")
@@ -815,7 +815,7 @@ def test_a_fixes_2_with_no_new_commits_goes_straight_to_the_person(c, store):
 
 
 def test_the_reviewers_send_back_is_the_builders_and_after_two_rounds_the_person_is_asked_anyway(c, store):
-    row, rid = _in_fixes_2(c, store)
+    row, rid = _in_qa(c, store)
     _push(c, "acme/app", 45, "bbbbbbb00000")
     _pre_release(c, store, row)
     _bot(c, row, rid, REVIEWER, "no", "offline.length === computers.length became offline.length.")
@@ -840,9 +840,9 @@ def test_the_reviewers_send_back_is_the_builders_and_after_two_rounds_the_person
 
 
 def _oked_at_bbbbbbb(c, store):
-    """Fixes 2 with the Builder's own "done" still to come, so the task stays: bbbbbbb pushed after the review, read and
+    """QA with the Builder's own "done" still to come, so the task stays: bbbbbbb pushed after the review, read and
     OK'd by the reviewer, then Ben's OK. Returns (task, Pre-release id, done id)."""
-    row, rid = _in_fixes_2(c, store, {"kind": "owner_done"})
+    row, rid = _in_qa(c, store, {"kind": "owner_done"})
     done_id = next(r["id"] for r in R.for_visit(c, E.task(c, row["id"])["visit"]) if r["kind"] == "owner_done")
     _push(c, "acme/app", 45, "bbbbbbb00000")
     _pre_release(c, store, row)
@@ -875,7 +875,7 @@ def test_a_rebase_after_the_ok_keeps_it_and_asks_nobody(c, store):
     assert standing.met and standing.line == "OK'd by Ben; the commits since change the same lines"
     assert not _ben_asked(c, row) and not [k for k, _ in _review_wakes(c, row) if k.endswith("@ccccccc00000")]
     _bot(c, row, done_id, WRITER, "done")
-    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
 def test_a_conflict_fix_after_the_ok_is_read_by_the_reviewer_and_asks_nobody(c, store):
@@ -887,10 +887,10 @@ def test_a_conflict_fix_after_the_ok_is_read_by_the_reviewer_and_asks_nobody(c, 
     assert (standing.state, standing.on) == (R.WAITING, REVIEWER)
     assert standing.line.startswith(f"{R.REVIEW_NEW} since the reviews (now at ccccccc)")
     _bot(c, row, done_id, WRITER, "done")
-    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2", "the OK'd commit is not this one"
+    assert E.task(c, row["id"])["stage"]["name"] == "QA", "the OK'd commit is not this one"
     _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc: the conflict in sign() kept both changes.")
     assert not _ben_asked(c, row)
-    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2", "Ben's OK stands on the reviewer's"
+    assert E.task(c, row["id"])["stage"]["name"] != "QA", "Ben's OK stands on the reviewer's"
 
 
 def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the_next_read(c, store):
@@ -915,9 +915,9 @@ def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the
         "New commits since Ben's OK. reviewer reviewed the commits since the reviews: Read ddddddd: 0 is back. "
         "OK Ben (version 1)"
     )
-    assert E.task(c, row["id"])["stage"]["name"] == "Fixes 2"
+    assert E.task(c, row["id"])["stage"]["name"] == "QA"
     A.answer(c, row["id"], rid, BEN, "ok")
-    assert E.task(c, row["id"])["stage"]["name"] != "Fixes 2"
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
 def _bodies(c, row):

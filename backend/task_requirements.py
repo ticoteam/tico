@@ -396,7 +396,7 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
     decides, once per visit:
     after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
-    list. On a page a person OKs that is not a review (Fixes 2's), commits pushed after the reviews are a bot's to
+    list. On a page a person OKs that is not a review (QA's), commits pushed after the reviews are a bot's to
     review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
     since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
     with the task from Merge (`page_for`)."""
@@ -538,11 +538,11 @@ NEW_REVIEWED_SQL = (
     "AND a.undone_at IS NULL AND a.heads IS NOT NULL AND (r.who_oks = 'people_only' OR r.person_id IS NOT NULL)"
 )
 # What the bot that wrote the newest review is asked when commits came after it, before a person OKs a page that is not
-# a review (Fixes 2's Review page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
+# a review (QA's page). It does so DELTA_ROUNDS times a visit at most: after that the person is asked, told
 # that the newest commits had no bot's review. The Builder's fixes after a send back each start a round.
 REVIEW_NEW = "Review the new commits"
 # What the Builder is told when the person's OK, brought back from Merge, lapsed: the page is OK'd again.
-ATTACH_AGAIN = "Attach the Review page again"
+ATTACH_AGAIN = "Attach the QA page again"
 DELTA_ROUNDS = 2
 
 
@@ -719,7 +719,7 @@ def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) 
 def _new_commits(
     conn: "sqlite3.Connection", task: Row, requirement: Row, asked: str, reviews: list[Row] | None = None
 ) -> tuple[Standing | None, str]:
-    """Before a person OKs a page that is not a review (Fixes 2's Review page): the commits no bot reviewed since the
+    """Before a person OKs a page that is not a review (QA's page): the commits no bot reviewed since the
     reviews (`_new_heads`) go to the bot that wrote the newest review (`delta_reviewer`), which reads only them against
     what the reviews found and the spec, and OKs them or sends them back as an answer on this page, at the commits it
     read (answers.heads). Its send back is the owner's turn to fix them; the next commits are a new round. After

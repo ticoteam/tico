@@ -17,7 +17,13 @@ from backend.tests.helpers.sample_company import (  # noqa: F401
 
 PRESETS = ("product", "engineering")
 TM = "general-manager"
-BUILDER_STAGES = ("engineering-on-deck", "engineering-build", "engineering-fixes-1", "engineering-fixes-2")
+BUILDER_STAGES = (
+    "engineering-on-deck",
+    "engineering-build",
+    "engineering-fixes-1",
+    "engineering-fixes-2",
+    "engineering-qa",
+)
 
 
 def _sample_company(environment):

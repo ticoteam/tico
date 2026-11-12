@@ -4,7 +4,7 @@ Triggered by a task asking for a named release, or by a person asking for one. B
 checklist with a go or no-go, the notes, a suggested version, and an ask for the owner's OK. Nothing is tagged until the owner OKs
 that exact version.
 
-Engineering tasks waiting in Release need none of this: a person already signed each off in Fixes 2, and that is the OK.
+Engineering tasks waiting in Release need none of this: a person already signed each off in QA, and that is the OK.
 Cut their release with `tico task release <id> --version N` (with `--tag <version>` where the repository releases from a
 tag), once for the repository; every task waiting on it moves on when the release is published. The daily release hour's
 task is the same: ask once for a task in Release, then close the hour's task. Where the stage has no "Release with" set
