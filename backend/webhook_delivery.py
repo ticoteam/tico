@@ -200,25 +200,18 @@ def withhold(store, now=None):
 
 
 def claim(store, now):
-    """The next due send, now `sending` and committed, or None. Skips a host that already has PER_HOST in flight and
-    holds an endpoint past its hourly rate until its hour is over (its sends wait; none is dropped)."""
+    """The next due send, now `sending` and committed, or None. Skips a host that already has PER_HOST in flight (before
+    the candidate limit, so a busy host's backlog never hides another host's due send) and holds an endpoint past its
+    hourly rate until its hour is over (its sends wait; none is dropped)."""
     with store.transaction() as c:
         rows = c.execute(
             "SELECT s.id, s.webhook_id, w.host, w.rate_per_hour, w.window_start, w.window_count FROM webhook_sends s "
             "JOIN webhooks w ON w.id=s.webhook_id WHERE s.state='ready' AND s.next_attempt_at<=? AND w.deleted_at IS NULL "
-            "AND w.enabled=1 ORDER BY s.next_attempt_at LIMIT 100",
-            (now,),
+            "AND w.enabled=1 AND w.host NOT IN (SELECT bw.host FROM webhook_sends bs JOIN webhooks bw ON bw.id=bs.webhook_id "
+            "WHERE bs.state='sending' GROUP BY bw.host HAVING count(*) >= ?) ORDER BY s.next_attempt_at LIMIT 100",
+            (now, PER_HOST),
         ).fetchall()
-        busy = {}
         for row in rows:
-            if row["host"] not in busy:
-                busy[row["host"]] = c.execute(
-                    "SELECT count(*) FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id "
-                    "WHERE s.state='sending' AND w.host=?",
-                    (row["host"],),
-                ).fetchone()[0]
-            if busy[row["host"]] >= PER_HOST:
-                continue
             start_, count = row["window_start"], row["window_count"]
             if not start_ or start_ <= H.shift(now, hours=-1):
                 start_, count = now, 0
