@@ -1,7 +1,8 @@
 //! One claimed turn (`Runner.execute` in the old Python runner): lanes, the subscription profile, environment and
 //! credentials, the host, the drive loop (runner-rs/src/drive.rs), a fallback harness, and the result. Events
-//! stream to the server as they arrive: a flusher posts the outbox at most every STREAM_WINDOW, where Python
-//! posts it on a 1 s tick.
+//! stream to the server as they arrive: a flusher posts the outbox paced by crate::upload_pace (first text and
+//! control events at once, later deltas in a 50 ms to 1 s window that widens with load), where Python posts it on
+//! a 1 s tick.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -28,7 +29,6 @@ use crate::runner::{describe, Runner};
 use crate::util::{log, mark, text_of, truthy};
 use crate::wire::{decode, StartPlaceAnswer};
 
-pub const STREAM_WINDOW: Duration = Duration::from_millis(50);
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const CONTINUE_LOST: &str = "This turn continues one the model's capacity stopped after it acted, but its thread could not be resumed on this computer; a fresh thread could repeat what it did, so the run is held for review";
 const HELD_AT_LOGIN_CAP: &str = "Interrupted at the end of the shared login's grace; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
@@ -1450,33 +1450,57 @@ impl Runner {
         }
     }
 
-    /// Posts the outbox as events land: at once for the first, then at most once per STREAM_WINDOW, so a
-    /// burst of deltas is one request and a lone first delta waits for nothing.
-    async fn stream_loop(self: Arc<Self>, aid: String, wake: Arc<Notify>, flags: Arc<Flags>) {
-        // The earliest the next post may go: STREAM_WINDOW after the last, or a second after a failed one.
-        let mut next: Option<Instant> = None;
+    /// Posts the outbox as events land, paced by crate::upload_pace: the turn's first text and every control event
+    /// at once, later deltas together once the load-aware window, their age or their size says so. Every row still
+    /// goes up once, in order, through `flush`.
+    pub(crate) async fn stream_loop(
+        self: Arc<Self>,
+        aid: String,
+        wake: Arc<Notify>,
+        flags: Arc<Flags>,
+    ) {
+        let mut active = crate::upload_pace::Active::new(&self.upload_load);
+        let bounds = self.upload_bounds;
+        let mut pacer = crate::upload_pace::Pacer::default();
+        // When to look at the outbox again without a new event: its rows' due time, or None to wait for one.
+        let mut due: Option<Instant> = None;
         loop {
-            wake.notified().await;
+            match due {
+                None => wake.notified().await,
+                Some(at) => {
+                    tokio::select! {
+                        _ = wake.notified() => {}
+                        _ = tokio::time::sleep_until(at.into()) => {}
+                    }
+                }
+            }
             if flags.done.load(Ordering::SeqCst) {
                 return;
             }
-            if let Some(at) = next {
-                let wait = at.saturating_duration_since(Instant::now());
-                if !wait.is_zero() {
-                    tokio::time::sleep(wait).await;
-                }
-            }
-            // A failed post leaves the events in the outbox for the next one or the drive loop's 1 s pass; it is
-            // tried again a second later, not on every event (service.py drive).
-            let ok = self.flush(&aid).await.is_ok();
-            next = Some(
-                Instant::now()
-                    + if ok {
-                        STREAM_WINDOW
-                    } else {
-                        Duration::from_secs(1)
-                    },
+            let waiting = self.state.outbox.waiting(&aid);
+            let shown = self.first_posted.lock().unwrap().contains(&aid);
+            let now = Instant::now();
+            // Counted in before the window is taken, so a turn that starts streaming paces with itself included.
+            let recheck = active.update(now, waiting.count > 0, pacer.last_post());
+            due = pacer.due(
+                now,
+                &waiting,
+                shown,
+                self.upload_load.window(&bounds),
+                &bounds,
             );
+            if due.is_none_or(|at| at > now) {
+                due = match (due, recheck) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                continue;
+            }
+            // A failed post leaves the events in the outbox; they are tried again a second later (or by the drive
+            // loop's 1 s pass), not on every event (service.py drive). Events that landed meanwhile woke `wake`.
+            let ok = self.flush(&aid).await.is_ok();
+            pacer.posted(Instant::now(), ok);
+            due = Some(Instant::now());
         }
     }
 

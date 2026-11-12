@@ -89,9 +89,14 @@ pub struct Runner {
     /// The server takes the signed-in account and the 5-hour window (its heartbeat reply said so); until then
     /// they stay on this computer.
     accounts: AtomicBool,
-    flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// One upload at a time per attempt. The lock holds the highest seq the server acknowledged to this process,
+    /// which can be ahead of the stored ack while that is being written (`Bounds::ack_unlocked`).
+    flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<i64>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
+    /// Turns streaming on this runner and recent upload times: how long later text waits (crate::upload_pace).
+    pub upload_load: crate::upload_pace::Load,
+    pub upload_bounds: crate::upload_pace::Bounds,
     /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
     assignments: Mutex<Arc<Vec<Value>>>,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
@@ -207,6 +212,8 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
+            upload_load: crate::upload_pace::Load::default(),
+            upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
@@ -363,6 +370,15 @@ impl Runner {
     }
 
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
+    /// Only the events recorded when it starts (once it holds the attempt's flush lock): one recorded during an
+    /// upload waits for the next flush, which its append's wake asks for, so a slow server does not turn one flush
+    /// into back-to-back uploads of a few deltas each (crate::upload_pace paces those).
+    ///
+    /// With `Bounds::ack_unlocked`, the store's slow steps stay off the next upload's path: the rows are read on the
+    /// store's reader connection, and the lock is released as soon as the server answers, before the ack is written
+    /// (an fsync queued behind every turn's appends). A tool line or a turn's first text recorded meanwhile then
+    /// waits only for the upload in flight. The ack the lock holds keeps the next read from sending those rows again;
+    /// if the process dies before the stored ack catches up, they are sent again and the server skips them.
     pub async fn flush(&self, aid: &str) -> Result<(), ApiError> {
         let lock = self
             .flush_locks
@@ -371,14 +387,33 @@ impl Runner {
             .entry(aid.to_string())
             .or_default()
             .clone();
-        let _held = lock.lock().await;
+        let unlocked = self.upload_bounds.ack_unlocked;
+        let mut held = Some(lock.lock().await);
+        // Rows from before a restart are not in the in-memory outbox: then everything pending.
+        let upto = if self.upload_bounds.flush_snapshot {
+            self.state.outbox.last_seq(aid).unwrap_or(i64::MAX)
+        } else {
+            i64::MAX
+        };
         loop {
+            let acked = match held.as_mut() {
+                Some(guard) => guard,
+                None => held.insert(lock.lock().await),
+            };
+            let after = **acked;
             let id = aid.to_string();
-            let batch = self
+            let mut batch = self
                 .state
-                .off(move |s| s.pending(&id))
+                .off(move |s| {
+                    if unlocked {
+                        s.pending_after(&id, after)
+                    } else {
+                        s.pending(&id)
+                    }
+                })
                 .await
                 .map_err(|e| ApiError::new("state", e, 0, false))?;
+            batch.retain(|e| e["seq"].as_i64().is_some_and(|seq| seq <= upto));
             if batch.is_empty() {
                 return Ok(());
             }
@@ -390,6 +425,7 @@ impl Runner {
             let had_text = batch
                 .iter()
                 .any(|e| e["kind"] == "delta" || e["kind"] == "message");
+            let began = Instant::now();
             let result = self
                 .client
                 .post(
@@ -397,21 +433,33 @@ impl Runner {
                     &json!({"events": batch}),
                     Some(&key),
                 )
-                .await?;
+                .await;
+            self.upload_load.observe(began.elapsed());
+            let result = result?;
             if had_text && self.first_posted.lock().unwrap().insert(aid.to_string()) {
                 mark("first_delta_posted", aid);
             }
             let ack = decode::<EventsAnswer>(result)?.ack_seq;
+            if unlocked {
+                **acked = (**acked).max(ack);
+                self.state.outbox.acked(aid, ack);
+                held = None;
+            }
             let id = aid.to_string();
             self.state
                 .off(move |s| s.ack(&id, ack))
                 .await
                 .map_err(|e| ApiError::new("state", e, 0, false))?;
+            // Everything this flush took is acknowledged: done, without another read of the store.
+            if ack >= upto {
+                return Ok(());
+            }
         }
     }
 
     pub fn forget_flush(&self, aid: &str) {
         self.flush_locks.lock().unwrap().remove(aid);
+        self.state.outbox.forget(aid);
         self.first_posted.lock().unwrap().remove(aid);
     }
 
