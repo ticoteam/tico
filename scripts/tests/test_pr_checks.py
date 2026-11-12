@@ -2410,7 +2410,7 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*sorted(files), far], "reason": "measured", "uncertain": []}
 
@@ -2498,7 +2498,7 @@ def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_wit
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     size = {"n": 14}
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
 
@@ -2563,7 +2563,7 @@ def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_sm
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
 
-    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+    def fake_selection(changed_files, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
 
@@ -2608,7 +2608,7 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
         json.dumps({**{name: 25800 / 930 for name in files}, **{f"ui/tests/{n}.cjs": 60 for n in names}})
     )
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": list(files), "browser": list(names), "reason": "measured", "uncertain": []}
 
