@@ -1334,6 +1334,53 @@ def test_a_bot_pr_racing_tico_s_draft_settles_on_the_earliest_and_the_other_clos
     assert list(_prs(api, task['id'])) == [3399] and _burst(api, task['id']) == []
 
 
+@pytest.mark.parametrize('own_work', [False, True])
+def test_a_worktree_branch_pushed_at_the_tasks_open_pr_head_gets_no_draft(api, monkeypatch, own_work):
+    """The Release Owner rebased the task's PR (on a branch of the Builder's own name) from its own worktree: the PR's
+    branch and the worktree's branch were pushed at one commit, and the worktree branch got a second, draft PR. A
+    branch whose work is all in an open PR of the same task gets none; one with work of its own still does."""
+    _app(api)
+    pr = 'https://github.com/ticoteam/tico/pull/3391'
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Phone buttons', 'body': 'x', 'links': [pr]})
+    theirs, canonical = f"tico/{task['id'][:8]}-prop-add", f"tico/{task['id'][:8]}-phone-buttons"
+    if own_work:  # a PR whose head no webhook has told yet is read
+        assert not _prs(api, task['id'])[3391]['detail'].get('head_sha')
+    else:
+        hook(api, 'pull_request', {'action': 'synchronize', 'pull_request': _branch_pr(3391, theirs)})
+    _worktree(api, task['id'], 'ticoteam/tico', canonical)
+    hook(
+        api,
+        'push',
+        {
+            'ref': 'refs/heads/' + canonical,
+            'repository': {'full_name': 'ticoteam/tico'},
+            'after': 'b' * 40,
+            'head_commit': {'id': 'b' * 40},
+        },
+    )
+    calls = []
+
+    def fetch(method, path, headers=None, params=None, json=None):
+        calls.append((method, path))
+        if method == 'POST':
+            return SimpleNamespace(status_code=201, json=lambda: _branch_pr(3421, canonical, draft=True))
+        if path.endswith('/pulls/3391'):
+            return SimpleNamespace(status_code=200, json=lambda: _branch_pr(3391, theirs))
+        if '/compare/' in path:
+            beyond_pr = path.split('/compare/')[1].startswith('b' * 40)
+            return SimpleNamespace(status_code=200, json=lambda: {'ahead_by': int(own_work or not beyond_pr)})
+        return SimpleNamespace(status_code=200, json=lambda: [])
+
+    _, run = _reconciler(api, monkeypatch, fetch)
+    run()
+    posts = [c for c in calls if c[0] == 'POST']
+    assert ('GET', f"/repos/ticoteam/tico/compare/{'b' * 40}...{quote(canonical, safe='')}") in calls
+    if own_work:
+        assert posts == [('POST', '/repos/ticoteam/tico/pulls')] and sorted(_prs(api, task['id'])) == [3391, 3421]
+    else:
+        assert posts == [] and list(_prs(api, task['id'])) == [3391]
+
+
 def test_two_live_prs_on_one_task_branch_settle_on_the_earliest_whichever_webhook_comes_first(api):
     """Webhooks alone, with no draft of Tico's: the later live PR on a task branch is unlinked when the earlier one
     arrives, a later one never joins, and a closed PR on another branch or a lone one still links as before."""
