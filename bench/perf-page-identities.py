@@ -110,7 +110,9 @@ def whole_table_reads(db_path, statements):
                 plan = " | ".join(r[3] for r in c.execute("EXPLAIN QUERY PLAN " + q))
             except sqlite3.Error:
                 continue
-            if WHOLE.search(plan):
+            # A subquery the statement names itself (CO-ROUTINE p) is not the pages table.
+            own = set(re.findall(r"(?:CO-ROUTINE|MATERIALIZE) (\w+)", plan))
+            if any(m.group(0).split()[1] not in own for m in WHOLE.finditer(plan)):
                 found.append((q[:140], plan[:200]))
     return found
 
