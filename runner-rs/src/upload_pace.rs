@@ -131,6 +131,9 @@ pub struct Bounds {
     /// One flush sends only what was recorded when it began (Runner::flush); the old runner drained the outbox
     /// until empty, so under a slow server one flush became back-to-back uploads of whatever streamed meanwhile.
     pub flush_snapshot: bool,
+    /// Runner::flush reads on the store's reader connection and releases the attempt's lock before writing the ack,
+    /// so the next upload (a control event, a turn's first text) does not wait for the store's queue of fsyncs.
+    pub ack_unlocked: bool,
 }
 
 pub const ADAPTIVE: Bounds = Bounds {
@@ -143,6 +146,7 @@ pub const ADAPTIVE: Bounds = Bounds {
     full: 100,
     urgent_at_once: true,
     flush_snapshot: true,
+    ack_unlocked: true,
 };
 
 /// The runner before adaptive pacing: the first event at once, then at most one upload per fixed 50 ms, whatever
@@ -158,6 +162,7 @@ pub const FIXED: Bounds = Bounds {
     full: usize::MAX,
     urgent_at_once: false,
     flush_snapshot: false,
+    ack_unlocked: false,
 };
 
 /// The runner-wide load signal: turns streaming now, and the smoothed time of recent uploads.
