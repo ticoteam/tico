@@ -20,6 +20,7 @@ class Sources:
         self.selected = None
         self._clients = {}
         self._building = {}
+        self._generation = 0  # forget() moves it on: a build started before then caches nothing
         self._regions = {}
         self._region_misses = {}
         self._lock = threading.Lock()
@@ -33,6 +34,7 @@ class Sources:
         with self._lock:
             self._clients.clear()
             self._building.clear()
+            self._generation += 1
 
     def client_for(self, kind, reads=False, region_name=None):
         cache_key = (kind, reads) if region_name is None else (kind, reads, region_name)
@@ -41,8 +43,8 @@ class Sources:
                 return self._clients[cache_key]
             task = self._building.get(cache_key)
             if task is None or (task[0].is_set() and time.monotonic() - task[2] >= 30):
-                done, errors = threading.Event(), []
-                task = self._building[cache_key] = done, errors, time.monotonic()
+                done, errors, made, generation = threading.Event(), [], [], self._generation
+                task = self._building[cache_key] = done, errors, time.monotonic(), made
 
                 def build():
                     try:
@@ -53,8 +55,10 @@ class Sources:
                             s3 = client(self.settings, kind=kind, config=config, region_name=region_name)
                         else:
                             s3 = client(self.settings, kind=kind, region_name=region_name)
+                        made.append(s3)
                         with self._lock:
-                            self._clients[cache_key] = s3
+                            if self._generation == generation:
+                                self._clients[cache_key] = s3
                     except Exception as exc:
                         errors.append(exc)
                     finally:
@@ -63,13 +67,13 @@ class Sources:
                 # Credential providers (including IMDS) run before SDK socket timeouts apply.
                 # At most one construction per kind/access mode survives a caller timeout.
                 threading.Thread(target=build, name="tico-s3-client", daemon=True).start()
-        done, errors, _ = task
+        done, errors, _, made = task
         if not done.wait(CLIENT_BUILD_TIMEOUT):
             raise TimeoutError("S3 credential lookup timed out")
         if errors:
             raise errors[0]
         with self._lock:
-            return self._clients[cache_key]
+            return self._clients.get(cache_key, made[0])
 
     @property
     def s3(self):
