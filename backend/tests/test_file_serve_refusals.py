@@ -176,4 +176,7 @@ def test_a_page_published_inside_a_live_run_reads_at_once_during_and_after_the_r
             c.execute("UPDATE attempt_inputs SET attempt_id=? WHERE message_id='read-input'", (second["id"],))
         for number in (1, 2):
             assert version(api, fid, number, reader).status_code == 200, refusals(caplog)
+            # A bot reads a page input as its run (bot role with a task actor), not as a person: the publishing
+            # bot's next run reads both versions too.
+            assert version(api, fid, number, second["token"]).status_code == 200, refusals(caplog)
     assert refusals(caplog) == []
