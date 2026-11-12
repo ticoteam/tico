@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -428,6 +429,52 @@ def removal_words(reason: object) -> str:
         return "GitHub gave no reason"
     words = text.replace("_", " ")
     return words[:1].upper() + words[1:].lower() if words.isupper() else words[:1].upper() + words[1:]
+
+
+# What failed in a merge queue run, for a removal's `failing_check`. The workflow's `checks` job (pr-checks.yml) names the
+# same legs in its error line, "Failed: <job>: <step>. Fail fast then cancelled the other legs.", or says "No step failed"
+# when the run was cancelled from outside (a superseded queue group, or by hand).
+CHECKS_JOB = "checks"
+LEG_FAILURES = ("failure", "timed_out", "startup_failure")  # a leg that ended in failure; a fail-fast cancel is not one
+CANCELLED_FROM_OUTSIDE = "no step failed: the run was cancelled from outside"
+FAILED_LINE = "Failed: "
+FAIL_FAST = ". Fail fast"
+
+
+def failing_leg(jobs: list[Row], checks_line: Callable[[Row], str | None]) -> tuple[str, str | None] | None:
+    """What made a merge queue run fail, as a removal names it: the legs that ended in failure (each job, with the steps
+    that failed in it), never a leg a fail-fast cancel stopped. With none, the checks job's "Failed: ..." line, which
+    `checks_line` reads and is called only then. Else that no step failed. Returns (name, url) with the url of the first
+    failing leg, or of the checks job; None when the run's jobs are not known."""
+    if not jobs:
+        return None
+    legs: list[str] = []
+    leg_url: str | None = None
+    checks: Row = {}
+    for job in jobs:
+        if job.get("name") == CHECKS_JOB:
+            checks = job
+            continue
+        job_steps: list[Row] = job.get("steps") or []
+        steps = [str(step.get("name") or "") for step in job_steps if step.get("conclusion") == "failure"]
+        if job.get("conclusion") not in LEG_FAILURES and not steps:
+            continue
+        name = str(job.get("name") or "A check")
+        legs.append(f"{name}: {', '.join(steps)}" if steps else name)
+        leg_url = leg_url or job.get("html_url") or None
+    if legs:
+        return "; ".join(legs)[:200], leg_url
+    checks_url = checks.get("html_url") or None
+    line = checks_line(checks) or ""
+    if line.startswith(FAILED_LINE):
+        return line.removeprefix(FAILED_LINE).split(FAIL_FAST, 1)[0][:200], checks_url
+    return CANCELLED_FROM_OUTSIDE, checks_url
+
+
+def real_failure(check: object) -> bool:
+    """Whether a removal's `failing_check` names a check that really failed in the queue's run. The cancelled-from-outside
+    line does not, and nor does a removal whose run was not read (no name): those keep the count (`requeue`)."""
+    return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
 
 
 def check_state(status: object, conclusion: object) -> str:
@@ -996,7 +1043,15 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
-        if failed_checks_removals(conn, task_id, visit_id, str(metadata["head_sha"])) >= 2:
+        removals = failed_checks_removals(conn, task_id, visit_id, str(metadata["head_sha"]))
+        named = [removal for removal in removals if removal.get("real")]
+        if named:
+            refuse(
+                "task_requirement",
+                f"GitHub took {ref} out of the merge queue for failed checks ({named[0].get('check')}). Send the task back "
+                "to Fixes 2 instead.",
+            )
+        if len(removals) >= 2:
             refuse(
                 "task_requirement",
                 f"GitHub took {ref} out of the merge queue for failed checks twice at this commit. Send the task back "
@@ -1061,6 +1116,7 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             continue
         head = str(metadata.get("head_sha") or "")
         failed = metadata.get("removed_reason") in FAILED_CHECKS
+        real = failed and real_failure(metadata.get("failing_check"))
         data = {
             "key": key,
             "visit": visit["id"],
@@ -1070,6 +1126,7 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             "url": metadata.get("failing_check_url"),
             "head": head,
             "checks_failed": failed,
+            "real": real,
         }
         E._event(conn, task_id, E.SYSTEM, "pr_queue_removed", None, ref, removed_line(metadata), data)
         E.changed(conn, task_id, E.SYSTEM)
@@ -1083,7 +1140,12 @@ def removed(conn: "sqlite3.Connection", metadata: Row) -> int:
             )
             continue
         link = f" {metadata['failing_check_url']}" if metadata.get("failing_check_url") else ""
-        if failed and failed_checks_removals(conn, task_id, str(visit["id"]), head) >= 2:
+        if failed and real:
+            lead = (
+                f"GitHub took {ref} out of the merge queue for failed checks. {removed_line(metadata)}.{link} It is not "
+                "queued again as it is: send the task back to Fixes 2 with the failing step and the run link."
+            )
+        elif failed and len(failed_checks_removals(conn, task_id, str(visit["id"]), head)) >= 2:
             lead = (
                 f"GitHub took {ref} out of the merge queue for failed checks again at the same commit. It is not queued "
                 f"again as it is: send the task back to Fixes 2 with the failing step and the run link.{link}"
@@ -1111,16 +1173,16 @@ def drops_in_visit(conn: "sqlite3.Connection", task_id: str, visit_id: str) -> i
     return int(found[0]) if found else 0
 
 
-def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: str, head: str) -> int:
-    """How many times GitHub took a PR of the task out of the merge queue for failed checks at `head` during this visit
-    (`pr_queue_removed` rows with `checks_failed`, written by `removed`)."""
+def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: str, head: str) -> list[Row]:
+    """The removals of the task's PRs for failed checks at `head` during this visit, one `pr_queue_removed` row each
+    (`removed` writes them): `check` is the check named there and `real` whether it really failed."""
     found = conn.execute(
-        "SELECT COUNT(*) FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
+        "SELECT data FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' "
         "AND json_valid(data) AND json_extract(data, '$.visit')=? AND json_extract(data, '$.head')=? "
         "AND json_extract(data, '$.checks_failed')=1",
         (task_id, visit_id, head),
-    ).fetchone()
-    return int(found[0]) if found else 0
+    ).fetchall()
+    return [cast(Row, json.loads(row[0])) for row in found]
 
 
 def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:

@@ -2273,7 +2273,6 @@ FACT_AUTO_OFF = """mutation($id:ID!){disablePullRequestAutoMerge(input:{pullRequ
 MERGE_GROUP_READ = """query($owner:String!,$name:String!,$branch:String!){repository(owner:$owner,name:$name){
 mergeQueue(branch:$branch){entries(first:100){nodes{position headCommit{oid} pullRequest{number headRefOid}}}}}}"""
 WRITE_PERMISSIONS = {"contents": "write", "pull_requests": "write", "metadata": "read"}
-FAILED_JOBS = ("failure", "timed_out", "startup_failure", "cancelled")
 
 
 class GitHubRefused(RuntimeError):
@@ -2365,8 +2364,11 @@ class AppGitHub:
         return meta
 
     def _queue_failure(self, repo, number, before):
-        """(name, url) of the first failed job of the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
-        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`, or None when GitHub will not say."""
+        """(name, url) of what failed in the PR's newest merge-queue run (GitHub Actions `merge_group`, on its
+        `gh-readonly-queue/<base>/pr-<number>-<sha>` branch) up to `before`: its failing legs, else the checks job's line
+        (`item_sources.github.failing_leg`). None when GitHub will not say."""
+        from .item_sources import github as GS
+
         try:
             runs = (
                 self._get(
@@ -2393,11 +2395,29 @@ class AppGitHub:
                 )
                 if jobs.status_code != 200:
                     return None
-                for job in jobs.json().get("jobs") or []:
-                    if job.get("conclusion") in FAILED_JOBS:
-                        return str(job.get("name") or "A check")[:200], job.get("html_url") or None
+                return GS.failing_leg(jobs.json().get("jobs") or [], lambda job: self._checks_line(repo, job))
         except Exception:  # noqa: BLE001 - the removal stands without its check
             logging.getLogger("tico.github").info("No merge-queue run read for %s #%s", repo, number)
+        return None
+
+    def _checks_line(self, repo, job):
+        """The `Failed: ...` error line the workflow's checks job printed (an annotation on its check run), or None when
+        there is none or GitHub will not say. The removal names the run without it."""
+        url = str(job.get("check_run_url") or "")
+        if not url:
+            return None
+        try:
+            notes = self.service._call(
+                "GET", url + "/annotations", headers=self._headers(repo, {"checks": "read", "metadata": "read"})
+            )
+            if notes.status_code != 200:
+                return None
+            for note in notes.json() or []:
+                message = str(note.get("message") or "")
+                if message.startswith("Failed: "):
+                    return message
+        except Exception:  # noqa: BLE001 - the removal names the run's outcome without the line
+            logging.getLogger("tico.github").info("No checks line read for %s", repo)
         return None
 
     def read_checks(self, repo, sha):
