@@ -351,6 +351,66 @@ def test_in_development_files_one_engineering_task_with_the_product_text_and_the
     assert len(_filed(c, row["id"])) == 2
 
 
+def _queued_wakes(c, task_id):
+    return c.execute(
+        "SELECT j.bot_id, m.body FROM messages m JOIN jobs j ON j.message_id = m.id "
+        "WHERE m.wake_key LIKE ? AND j.state='queued' ORDER BY m.created_at, m.id",
+        (f"{task_id}:%",),
+    ).fetchall()
+
+
+def _assignee_owned_handoff(c):
+    """A Product task moved into In development where Engineering's On deck and Build belong to the task's assignee;
+    the Engineering task it filed."""
+    row = _product_task(c)
+    X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
+    c.execute("UPDATE stages SET owner='assignee' WHERE id IN ('engineering-on-deck', 'engineering-build')")
+    E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    return E.task(c, _filed(c, row["id"])[0][0])
+
+
+def test_a_handoff_into_assignee_owned_stages_has_no_owner_and_the_manager_is_woken_to_pick_one(c):
+    """The filed task's requester is the Product Owner, never its assignee: where Engineering's stages belong to the
+    task's assignee, it has nobody, and the Engineering manager is woken to pick a builder (C25)."""
+    eng = _assignee_owned_handoff(c)
+    assert (eng["stage_id"], eng["requester_id"], eng["assignee_id"], eng["owner_id"]) == (
+        "engineering-on-deck",
+        "bot:pm",
+        None,
+        None,
+    )
+    built = E.advance(c, eng["id"])  # Build has room: in it goes, as the never-stuck check moves it
+    assert (built["stage_id"], built["assignee_id"], built["owner_id"]) == ("engineering-build", None, None)
+    assert E._turn_of(c, built) == (f"bot:{EPM}", "This task has no owner. Pick one and reassign it.")
+    wakes = _queued_wakes(c, eng["id"])
+    assert [bot for bot, _ in wakes] == [EPM], wakes
+    assert wakes[0][1].startswith("This task has no owner. Pick one and reassign it."), wakes[0][1]
+    picked = E.reassign(c, eng["id"], "bot:builder", f"bot:{EPM}", "Builder takes it", built["version"])
+    assert (picked["assignee_id"], picked["owner_id"]) == ("bot:builder", "bot:builder")
+
+
+def test_the_builder_the_manager_picks_on_deck_owns_the_handoff_in_build(c):
+    eng = _assignee_owned_handoff(c)
+    E.reassign(c, eng["id"], "bot:builder", f"bot:{EPM}", "Builder takes it", eng["version"])
+    built = E.advance(c, eng["id"])
+    assert (built["stage_id"], built["assignee_id"], built["owner_id"]) == (
+        "engineering-build",
+        "bot:builder",
+        "bot:builder",
+    )
+    assert [bot for bot, _ in _queued_wakes(c, eng["id"])] == ["builder"]
+
+
+def test_a_handoff_into_a_pipeline_with_no_manager_keeps_the_filer_as_assignee(c):
+    """Nobody could pick an owner there: an assignee-owned first stage gets the filer, as before."""
+    row = _product_task(c)
+    c.execute("UPDATE stages SET owner='assignee' WHERE id='engineering-on-deck'")
+    c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='engineering'")
+    E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    eng = E.task(c, _filed(c, row["id"])[0][0])
+    assert (eng["requester_id"], eng["assignee_id"], eng["owner_id"]) == ("bot:pm", "bot:pm", "bot:pm")
+
+
 def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     row = _product_task(c)
     c.execute("UPDATE bots SET state='paused' WHERE id='pm'")
@@ -411,11 +471,14 @@ def test_not_validated_files_a_new_task_each_time_even_with_the_same_title(c):
     ops = PS.save(c, ANA, record)
     do, check = ops["stages"][1]["id"], ops["stages"][2]["id"]
     row = X.new_task(c, ANA, "Order chairs", ops["id"])
+    X.bot(c, "gm")
+    c.execute("UPDATE pipelines SET manager_id='bot:gm' WHERE id='general'")  # a team with a General Manager
     for n in (1, 2):
         E.move(c, row["id"], do, ANA, "Go")
         filed = _filed(c, row["id"])
         assert len(filed) == n
         child = E.task(c, filed[-1][0])
+        assert (child["assignee_id"], child["owner_id"]) == ("bot:pm", "bot:pm")  # General keeps the filer
         X.say_done(c, child)
         assert E.advance(c, child["id"])["status"] == "done"
         assert E.task(c, row["id"])["stage_id"] == check  # Linked work done moved it on
