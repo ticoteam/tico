@@ -10,6 +10,7 @@ from . import lifecycle
 from . import org_rule_check
 from . import task_privacy as privacy
 import base64
+from typing import Any
 import json
 import re
 from . import reach
@@ -124,7 +125,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 if restrict is not None:
                     chosen = set(restrict)
                     kw["ids"] = [t for t in kw["ids"] if t in chosen] if "ids" in kw else list(restrict)
-                candidates = H.tasks(
+                candidates: Any = H.tasks(
                     c,
                     owner=owner,
                     requester=requester,
