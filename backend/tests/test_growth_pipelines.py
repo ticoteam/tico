@@ -174,6 +174,26 @@ def test_a_persons_idea_rests_in_growth_ideas_while_in_product_it_still_moves_on
     assert wait.state == W.BY_HAND
 
 
+def test_a_freed_slot_in_building_wakes_nobody_even_though_ideas_is_the_assignees(c):
+    """C10 skips an assignee-owned by-hand stage whose requests do not move on: Growth's Ideas wakes no idea's owner
+    when Building has room, from the start or after a slot frees. Product's Ideas does wake its owner
+    (test_product_engineering_presets.py)."""
+    _set_up(c)
+    stage = c.execute("SELECT owner, requests_move_on FROM stages WHERE id=?", (IDEAS,)).fetchone()
+    assert tuple(stage) == ("assignee", 0)
+    waiting = _idea(c, OWNER, "Bot's idea")
+    started = _idea(c, ANA, "Ana's idea", assignee=OWNER)
+    _move(c, started["id"], BUILDING, OWNER)
+    _move(c, started["id"], IDEAS, ANA, "Not yet")
+    X.settled(c)
+    before = X.wakes(c, waiting["id"])
+    N.check(c)
+    N.check(c)
+    assert _room_wakes(c) == 0
+    assert X.wakes(c, waiting["id"]) == before
+    assert E.task(c, waiting["id"])["stage_id"] == IDEAS
+
+
 # ----------------------------------------------------------------------------- (c) resting
 def test_nothing_wakes_chases_or_marks_late_a_task_resting_in_ideas_or_watching(c, later):
     _set_up(c)

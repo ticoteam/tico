@@ -451,6 +451,50 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     assert N.rules_hold(c) == []
 
 
+def _left_spec(c, task_id):
+    return c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (task_id,)).fetchone()[0]
+
+
+def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_freed_slot(c):
+    """C10 when a customer points Product's Ideas at "the task's assignee" (one Product Owner per area): a request moved
+    back into Ideas is held by hand, so its own owner is woken once when Spec has room, once per freed slot. Growth's
+    Ideas, whose requests do not move on, still wakes nobody (test_growth_pipelines.py)."""
+    _team(c)
+    _answers(c, software="yes")
+    PS.ensure_presets(c)
+    area = X.bot(c, "app-owner")
+    c.execute("UPDATE stages SET owner='assignee' WHERE id='product-ideas'")
+    c.execute("UPDATE stages SET task_limit=1 WHERE id='product-spec'")
+    bug = X.new_task(c, ANA, "Saved carts lose items", "product", assignee=area)
+    X.settled(c)
+    N.check(c)  # a person's request: it moves on into Spec by itself
+    assert E.task(c, bug["id"])["stage_id"] == "product-spec"
+    E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
+    first = N.room_key("product-spec", _left_spec(c, bug["id"]))
+    row = E.task(c, bug["id"])
+    assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
+    (held,) = W.of(c, row)
+    assert held.state == W.BY_HAND
+    X.settled(c)
+    N.check(c)
+    N.check(c)
+    rows = c.execute("SELECT wake_key, recipient_id, body FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(first, area)]
+    assert rows[0][2].startswith("Spec has room.")
+    assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: the wake only tells
+    # A slot frees: one more wake, to the owner of the task that has waited longest.
+    other = X.new_task(c, ANA, "Export to CSV", "product", assignee=area)
+    X.settled(c)
+    N.check(c)
+    assert E.task(c, other["id"])["stage_id"] == "product-spec"
+    E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
+    N.check(c)
+    N.check(c)
+    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")
+    assert [tuple(r) for r in rows] == [(first, area), (N.room_key("product-spec", _left_spec(c, other["id"])), area)]
+    assert N.rules_hold(c) == []
+
+
 def _ideas_moves(c):
     return {
         row[0]: row[1]
