@@ -430,3 +430,33 @@ def test_health_and_queued_labels_do_not_classify_the_fleet_for_at_stop(api, mon
         }
         label, _ = views.queued_label(c, 'finance', location, api.app.state.store.settings, human=True)
     assert label == 'Saved — ' + org_turns.REASON
+
+
+def test_company_turns_row_says_when_in_clock_time_never_an_iso_stamp(api):
+    """Health reads "Incident opened 07:52 UTC" like its other rows, not "2026-11-12T07:52:57.536188Z"."""
+    import re
+
+    from backend import org_turns
+
+    iso = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d")
+    one_person(api)
+    waiters(api, n=39, running=1)
+    with api.app.state.store.transaction() as c:
+        org_turns.observe(c, api.app.state.store.settings)
+        opened = org_turns.saved(c, org_turns.INCIDENT)['opened_at']
+
+    def row():
+        return next(x for x in get(api, 'health')['checks'] if x['id'] == 'company_turns')
+
+    live = row()
+    assert not iso.search(live['summary']) and not iso.search(live['items'][0]['text'])
+    assert f"Incident opened {opened[11:16]} UTC" in live['summary']
+    assert live['items'][0]['opened_at'] == opened  # the machine field keeps its stamp
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-39'")
+        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-39'")
+        org_turns.observe(c, api.app.state.store.settings)
+        resolved = org_turns.saved(c, org_turns.INCIDENT)['resolved_at']
+    done = row()
+    assert not iso.search(done['summary'])
+    assert done['summary'].endswith(f"Incident resolved {resolved[11:16]} UTC")

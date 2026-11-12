@@ -1600,9 +1600,13 @@ def _token_heavy(c, threshold):
     return answer
 
 
+# A bot removed since its record was written: a person reads this, never the bot's id.
+DELETED_BOT = "Deleted bot"
+
+
 def _bot_name(c, bot):
     row = c.execute("SELECT display_name,slug FROM bots WHERE id=?", (bot,)).fetchone()
-    return (row["display_name"] or row["slug"]) if row else bot
+    return (row["display_name"] or row["slug"]) if row else DELETED_BOT
 
 
 def _bot_names(c, bots):
@@ -1617,7 +1621,18 @@ def _bot_names(c, bots):
                 f"SELECT id,display_name,slug FROM bots WHERE id IN ({','.join('?' * len(part))})", part
             )
         )
-    return {bot: found.get(bot, bot) for bot in bots}
+    return {bot: found.get(bot, DELETED_BOT) for bot in bots}
+
+
+def _clock(at):
+    """A stored time as Health's rows say one: "07:52 UTC" today, "Nov 11 07:52 UTC" on an earlier day, never the
+    ISO stamp. Text that is not a stamp is returned as it is."""
+    try:
+        when = datetime.fromisoformat(str(at).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return str(at or "")
+    day = "" if when.date() == datetime.now(timezone.utc).date() else f"{when:%b} {when.day} "
+    return f"{day}{when:%H:%M} UTC"
 
 
 def _tokens_words(n):
@@ -1985,7 +2000,7 @@ def _backups(config, settings):
             "backups",
             "Backups",
             checked,
-            f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+            f"Backup status not checked since {_clock(backup.get('checked_at'))}; the backup location may be unreachable.",
             [fix],
         )
     behind = _age_status(since) if mode == "remote" else "ok"
@@ -2033,8 +2048,8 @@ def _backups(config, settings):
             "backups",
             "Backups",
             behind,
-            f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
-            f"{last}.",
+            f"Copies to {target or 'the remote'} have been behind the database since {_clock(since)}. The newest copy is "
+            f"from {_clock(last)}.",
             [fix],
         )
     if key_here and not key_copied:
@@ -2960,9 +2975,9 @@ def view(c, who, settings, auth, github, config):
                 )
                 + ' '
                 + (
-                    'Incident opened ' + incident['opened_at']
+                    'Incident opened ' + _clock(incident['opened_at'])
                     if incident.get('active')
-                    else 'Incident resolved ' + incident.get('resolved_at', '')
+                    else 'Incident resolved ' + _clock(incident.get('resolved_at', ''))
                 )
             )
             fixes = [_fix(*COMPUTERS)]
@@ -3470,13 +3485,14 @@ def view(c, who, settings, auth, github, config):
 
             overload = overloads[computer["id"]]
             if overload:
+                names = _bot_names(c, [b["bot"] for b in overload["bots"]])
                 checks.append(
                     _check(
                         "performance:" + computer["id"],
                         "Load",
                         "warn",
                         f"{computer['label']}: {'overloaded now' if not overload['ended_at'] else 'was overloaded'}"
-                        f" ({describe(overload)}).",
+                        f" ({describe(overload, names.get)}).",
                         [_fix("Open Performance", "#/computers/" + computer["id"] + "/performance")],
                     )
                 )
