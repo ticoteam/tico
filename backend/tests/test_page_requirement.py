@@ -1221,6 +1221,25 @@ def test_a_verdict_no_open_task_waits_on_is_put_off_not_judged(store, seeded, mo
         assert r.execute("SELECT next_try_at FROM page_verdicts").fetchone()[0] > H.shift(now, hours=23)
 
 
+def test_a_page_for_an_ok_must_be_html_and_one_that_is_not_is_refused_in_the_same_call(c, store):
+    """The decide view draws a page for an OK as HTML: a Markdown one read as one run-on paragraph with raw `##`. The
+    attach refuses it at once, with what to do instead, as a writing correction (no wake, no quarantine count); a
+    page already attached stays where it is."""
+    _pipeline(c)
+    row = _task(c)
+    fid, _ = _page(c, store, "## What was built\n\n- **Retry** on a failed paste\n")
+    with _refused("lint") as refused:
+        _attach(c, row, f"page:{fid}@1")
+    assert refused.value.detail == P.NOT_HTML and "build-the-spec-page" in P.NOT_HTML
+    assert P.current(c, row["visit"]["id"], _standing(c, row).requirement["id"]) is None
+    assert "page_attached" not in X.events(c, row["id"])
+    _page(c, store, "\ufeff\n  <!doctype html><title>Built</title><p>Retry on a failed paste.</p>", fid=fid)
+    assert _attach(c, row, f"page:{fid}@2")["version"] == 2
+    _page(c, store, "<p>Version three</p>", fid=fid)
+    assert _attach(c, row, f"page:{fid}@3")["version"] == 3
+    assert (P.is_html("<section>x</section>"), P.is_html("Plain words"), P.is_html("")) == (True, False, False)
+
+
 # ----------------------------------------------------------------------------- the route and the task's read
 def test_the_route_attaches_a_readable_page_and_the_task_read_shows_it(api):
     store = api.app.state.store
@@ -1310,6 +1329,24 @@ def test_a_refused_attach_on_a_private_task_keeps_none_of_its_words(api):
         events = [" ".join(map(str, x)) for x in conn.execute("SELECT * FROM events").fetchall()]
     assert any("Private task write refused" in d for d in refusals), refusals
     assert not [line for line in refusals + events if "acme/secret" in line]
+
+
+def test_the_route_refuses_a_markdown_page_with_a_422_the_bot_can_act_on(api):
+    store = api.app.state.store
+    store.blobs = store.blobs or Blobs(store.settings)
+    with store.transaction() as conn:
+        for slug in ("writer", "manager"):
+            X.bot(conn, slug)
+        _pipeline(conn, person=ANA)
+        row = _task(conn)
+        fid, _ = _page(conn, store, "# Spec\n\nBuild the importer.\n")
+    r = api.post(
+        f"/api/v2/tasks/{row['id']}/pages",
+        json={"requirement": "Spec page", "page": "page:" + fid},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "lint" and r.json()["error"]["detail"] == P.NOT_HTML
 
 
 # ----------------------------------------------------------------------------- the CLI and the bot tool

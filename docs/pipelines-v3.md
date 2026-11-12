@@ -216,7 +216,8 @@ That gives three kinds of stage, and no others:
 1. **Owner says done.** The owner marks the stage's work finished. This is the whole of General.
 2. **OK from someone.** A named person or bot approves. Nothing is attached.
 3. **A page.** The owner attaches a page or file. Jev checks it against a "what to check" line. Optionally a person then
-   OKs it.
+   OKs it. The page is HTML: the attach refuses a version that is not (Markdown or plain text) with what to do instead,
+   and a person's OK view draws a non-HTML page attached before that as Markdown.
 4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
    under `backend/item_sources/`; GitHub is the only one. Its item is a PR and its conditions are:
    - **PR open.** At least one PR is linked, and none was closed without merging.

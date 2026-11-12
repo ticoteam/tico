@@ -72,8 +72,10 @@ one file per call. The review page shows only what is attached here. If the diff
 
 ## 5. Finish
 
-In a review stage: publish and attach the page. `tico file publish reports/reviews/<file>.md --task <id>` prints the
-file id; then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
+In a review stage: publish and attach the page. It is HTML (`reports/reviews/<task>-<first 7 of the commit>.html`): Tico
+refuses a Markdown or plain-text page for a requirement. At the top, two or three lines say which commit it reviews and
+what it found (blocking or not); then the sections above, with simple inline CSS and nothing from elsewhere.
+`tico page publish reports/reviews/<file>.html --task <id>` prints the file id; then `tico task attach <id> page:<file id> --req "<requirement>" --version N`, using the requirement `tico task show`
 names. The page is the whole hand-off: the stage moves on when it covers the newest commit, and every finding on the pull
 request goes to the Builder through it, never to your Manager or a person as a separate task. Commit this repository.
 

@@ -637,10 +637,13 @@ async function decideSupportHTML(content: unknown): Promise<string> {
   return `<pre class="dc-raw">${esc(c.message)}</pre>${ids ? `<p class="dc-line">${ids}</p>` : ''}`;
 }
 /** A page at the exact version an OK of it is for (`page:<id>@<n>`, a page requirement): its HTML read from that version
-    and drawn sandboxed, as the page viewer draws it. */
+    and drawn sandboxed, as the page viewer draws it. A version that is not HTML (one attached before pages for an OK had
+    to be, often Markdown) is drawn as Markdown, so it reads as a document rather than one run-on paragraph. */
 async function decidePageHTML(fid: string, version: number): Promise<string> {
   const file = await viewFile(fid, 'page.html', version);
-  const doc = htmlPreviewDoc(await file.blob.text());
+  const text = await file.blob.text();
+  if (!text.replace(/^[\uFEFF\s]+/, '').startsWith('<')) return `<div class="md dc-page-md">${md(text)}</div>`;
+  const doc = htmlPreviewDoc(text);
   return `<iframe class="html-view dc-page" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerpolicy="no-referrer" title="Version ${version}" srcdoc="${esc(doc)}"></iframe>`;
 }
 /** A stage's OK shows what the requirement names: pages in full (a page requirement's at its pinned version), an email

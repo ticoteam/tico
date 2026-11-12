@@ -8,23 +8,28 @@ yes or no in a minute.
 
 ## 1. Write the page
 
-`reports/<task id>-built.md`, at the head commit you pushed:
+`reports/<task id>-built.html`, at the head commit you pushed. A page for an OK is HTML: Tico refuses a Markdown or
+plain-text one. Keep it short and readable, with simple inline CSS (a `<style>` block, Tico's colour tokens such as
+`var(--ink)` and `var(--line)`) and nothing from elsewhere: no script, no outside image, font or stylesheet. The spec
+page skill (`build-the-spec-page`, the Product Owner's) is the model for its look.
 
-- First line: the pull request link and the head commit.
+- At the top, two or three lines: what this page is (the change, for which task) and what the person decides (OK it,
+  or send it back with what to fix), with the pull request link and the head commit.
 - What changed, for the person who asked: what they can now do or see, in two or three sentences.
 - How it was checked: the tests added, the commands run and their results, and what was not checked.
 - The checks at the head commit: passing, with the link.
-- What it looks like: a screenshot, a short recording or the command output, where there is anything to see.
+- What it looks like: real screenshots as images where there is anything to see (`<img src="<task id>-shots/x.png">`,
+  saved next to the page in the checkout: publishing embeds them), or the command output in a `<pre>`.
 - What Reviewer 1 and Reviewer 2 found, and what you did about each finding, one line each. Both Review pages and your
   Fixes 1 note are under "From earlier stages" in `tico task show`.
 - Anything the person should decide: a risk, a follow-up, a path that needs a named person.
 
 ## 2. Publish and attach
 
-    tico file publish reports/<task id>-built.md --task <id>
+    tico page publish reports/<task id>-built.html --task <id>
     tico task attach <id> page:<file id> --req "<requirement>" --version N
 
-`tico file publish` prints the file id. The requirement's name is the one `tico task show` lists for Fixes 2.
+`tico page publish` prints the file id. The requirement's name is the one `tico task show` lists for Fixes 2.
 
 ## 3. When it comes back
 
