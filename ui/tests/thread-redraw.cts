@@ -16,13 +16,14 @@ type Page = import('playwright').Page;
 type Json = Record<string, unknown>;
 type Live = [string, Json];
 // Browser-side globals the page defines (ui/app) and the counters this file adds to window.
-interface View { key: number; id: string; host: HTMLElement; el: HTMLElement; gone: boolean; later: unknown; messages: Json[]; botStatus: Json[] }
+interface View { key: number; id: string; host: HTMLElement; el: HTMLElement; gone: boolean; later: unknown; messages: Json[]; botStatus: Json[]; readSent: Map<string, number> }
 declare var THV_VIEWS: Set<View>;
 declare var thvRowsHTML: (view: View) => string;
 declare var patchHTMLTail: (root: Element, head: string, tail: string, full?: unknown) => boolean | null;
 declare var thvDraw: (view: View, opts?: Json) => void;
 declare var threadViewsLive: (topic: string, event: unknown) => void;
 declare var threadMount: (host: HTMLElement, opts: Json) => View;
+declare var thvMarkRead: (view: View) => void;
 declare const window: Window & typeof globalThis & {
   __rows: Map<number, number>; __tails: number; __drawMs: number; __errors: string[];
 };
@@ -212,6 +213,32 @@ let browser: import('playwright').Browser | null = null;
   await frame(page);
   assert.ok(await page.locator('.thv-list [data-th-reply]').count() > 0);
 
+  // A thread with no name is named by who wrote in it: a new author's message changes the header too.
+  await burst(page, [['threads', {thread_id: T, thread: {title: '', audience: 'participants', dm_with: [], dm_with_count: 0}}]]);
+  await frame(page);
+  const untitled = await page.locator('.thv-title').innerText();
+  assert.doesNotMatch(untitled, /\+1/);
+  await burst(page, [['messages', {id: 'u1', thread_id: T, root_id: T, message: {id: 'u1', seq: 900, thread_id: T, sender_id: 'human:cy', body: 'A new author', created_at: at(0), revision: 0}}]]);
+  await frame(page);
+  assert.match(await page.locator('.thv-title').innerText(), /\+1/, `the header names the new author: ${untitled}`);
+  await burst(page, [['threads', {thread_id: T, thread: {title: 'Launch review, renamed', audience: 'team'}}]]);
+  await frame(page);
+  // Routing alone, with no message event in the burst, draws the line under that person's message.
+  assert.equal(await page.locator(`.th-msg[data-mid="m${N - 4}"] .th-routed`).count(), 0);
+  await burst(page, [['threads', {kind: 'routed', thread_id: T, message_id: 'm' + (N - 4), routed: {to: [{actor: 'bot:ops', name: 'Ops'}]}}]]);
+  await frame(page);
+  assert.match(await page.locator(`.th-msg[data-mid="m${N - 4}"] .th-routed`).innerText(), /Asked Ops/);
+  // Read marks wait for the draw that shows the messages: a mark asked for meanwhile (a tab coming back) is sent by the frame.
+  const marks = await page.evaluate(([k, ev]) => {
+    const view = [...THV_VIEWS].find(v => v.key === k)!;
+    threadViewsLive(ev[0], ev[1]);
+    thvMarkRead(view);
+    return view.readSent.get('t-big') || 0;
+  }, [A, ['messages', {id: 'u2', thread_id: T, root_id: T, message: {id: 'u2', seq: 901, thread_id: T, sender_id: 'bot:fin', body: 'Read after the draw', created_at: at(0), revision: 0}}]] as [number, Live]);
+  assert.ok(marks < 901, `not marked read before it is drawn: ${marks}`);
+  await frame(page);
+  assert.equal(await page.evaluate(k => [...THV_VIEWS].find(v => v.key === k)!.readSent.get('t-big'), A), 901, 'marked read by the frame that drew it');
+
   // ---- AC-5: a draw someone's action makes shows at once and takes the frame's waiting draw with it.
   await reset(page);
   // In one task, so no frame comes between the event and the action.
@@ -263,8 +290,9 @@ let browser: import('playwright').Browser | null = null;
   }, [A, B]);
   const snap = (k: number) => page.evaluate(key => {
     const v = [...THV_VIEWS].find(x => x.key === key)!;
-    // Clocks and "5m ago" read the time of their draw, which differs between the two views by a few milliseconds.
-    const norm = (s: string) => s.replaceAll(`th-upd-${v.key}-`, 'th-upd-K-').replace(/(data-th-since="[^"]*">)[^<]*/g, '$1').replace(/(<time\b[^>]*>)[^<]*/g, '$1');
+    // Clocks and "5m ago" read the time of their draw, which differs between the two views by a few milliseconds; links
+    // get `data-mi` from a pass after the draw (mediaInline, viewer.ts), which may not have reached the newer copy yet.
+    const norm = (s: string) => s.replaceAll(`th-upd-${v.key}-`, 'th-upd-K-').replace(/(data-th-since="[^"]*">)[^<]*/g, '$1').replace(/(<time\b[^>]*>)[^<]*/g, '$1').replaceAll(' data-mi="1"', '');
     return {list: norm(v.el.querySelector('.thv-list')!.innerHTML), title: v.el.querySelector('.thv-title')!.outerHTML, pin: v.el.querySelector('[data-thv-pin]')?.outerHTML,
       placeholder: v.el.querySelector('.thv-composer .p-text')?.getAttribute('placeholder')};
   }, k);
