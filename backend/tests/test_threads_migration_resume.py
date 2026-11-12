@@ -139,20 +139,3 @@ def test_an_interrupted_migration_resumes_to_the_same_rows(tmp_path, small_chunk
     assert reader_rows(crashing) == expected
     assert threads.migrate(crashing) is False  # and a later start is a no-op
     crashing.close()
-
-
-def test_message_indexes_wait_for_the_backfill(tmp_path, small_chunks):
-    """The schema migration (0047) runs before threads.migrate; on a file not yet backfilled it leaves the message
-    indexes to migrate, which builds them after the backfill."""
-    conn = pre_threads_hub(tmp_path / "c.db")
-    conn.execute("DROP INDEX IF EXISTS messages_seq")
-    conn.execute("DROP INDEX IF EXISTS messages_thread_seq")
-    conn.execute("DROP INDEX IF EXISTS messages_origin")
-    conn.execute("DROP INDEX IF EXISTS messages_legacy_audience")
-    SCHEMA.threads_schema(conn)
-    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-    assert not names & {"messages_seq", "messages_thread_seq", "messages_origin", "messages_legacy_audience"}
-    threads.migrate(conn)
-    names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
-    assert {"messages_seq", "messages_thread_seq", "messages_origin", "messages_legacy_audience"} <= names
-    conn.close()

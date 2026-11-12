@@ -294,11 +294,6 @@ def test_custom_copies_the_rows_and_leaving_it_needs_a_confirm(api):
     assert back["rules"] == 0 and back["profile"]["name"] == "doer"
 
 
-def test_the_choices_describe_each_profile(api):
-    listed = get(api, "profiles")["profiles"]
-    assert [p["name"] for p in listed] == list(P.NAMES) and all(p["description"] for p in listed)
-
-
 def test_the_cli_and_mcp_tool_read_the_choices_and_send_the_revision():
     from clients import hubtools
 

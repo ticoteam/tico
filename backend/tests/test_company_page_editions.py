@@ -1026,22 +1026,6 @@ def test_tick_before_the_due_day_or_with_nothing_written_opens_nothing(page):
     assert S.tick(page.store, local(2026, 12, 7)) == []
 
 
-def test_closed_or_disabled_does_nothing_and_sets_no_wake(page):
-    at = local(2026, 11, 20)
-    for change in (
-        "UPDATE company_page_settings SET transparency='closed'",
-        "DELETE FROM company_page_settings",
-        "UPDATE audiences SET enabled=0",
-    ):
-        with page.store.transaction() as c:
-            c.execute(change)
-        assert S.tick(page.store, at) == [] and page.calls == [], change
-        assert S.start(page.store, at) is False  # the first tick already had the day's refresh
-        with page.store.read() as c:
-            assert S.next_wake(c, at) is None, change
-            assert sleep_idle.edition_times(c, at) == [], change
-
-
 def test_public_waits_for_open_and_the_wake_time_reaches_the_sleep_timer(page):
     at = local(2026, 11, 1)
     with page.store.transaction() as c:

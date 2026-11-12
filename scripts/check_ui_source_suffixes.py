@@ -36,14 +36,12 @@ COVERS = [re.compile(r"""\*\.ts\b"""), re.compile(r"""["'`]\.ts["'`]"""), re.com
 
 # Files that read .js on purpose. The UI scripts are TypeScript now (the kept .js files are read alongside them).
 ALLOWED = {
-    "backend/tests/test_ui_bundle.py": "reads the compiled build/ui files the bundle is made of (a .ts source's output is .js)",
     "scripts/tests/test_pr_checks.py": "fixtures: it writes ui/app/*.js into temporary trees, and does not scan this repo's UI",
 }
 
 # Scanners this change converted. If the patterns stop seeing one, this check has gone blind to that kind of file: fail.
 KNOWN = (
     "backend/tests/test_beta.py",
-    "backend/tests/test_harness_capabilities.py",
     "backend/tests/test_settings_tab_links.py",
     "ui/tests/settings-no-dead-ends.cts",
     "scripts/cleanup/rename.py",

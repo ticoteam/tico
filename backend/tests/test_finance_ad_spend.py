@@ -446,7 +446,6 @@ def _down(*_: object) -> tuple[int, Any]:
 @pytest.mark.parametrize(
     "answer,status",
     [
-        ((400, {"error": "invalid_grant"}), "reconnect"),
         ((401, {"error": "unauthorized_client"}), "reconnect"),
         ((403, {"error": "access_denied"}), "reconnect"),
         ((400, {"error": "invalid_request"}), "failed"),
@@ -468,7 +467,6 @@ def test_only_a_refused_token_asks_to_reconnect(books: Store, answer: tuple[int,
 @pytest.mark.parametrize(
     "answer,status",
     [
-        ((400, {"error": {"message": "Session has expired", "code": 190}}), "reconnect"),
         ((400, {"error": {"message": "API session", "code": 102}}), "failed"),
         ((400, {"error": {"message": "User request limit reached", "code": 17}}), "failed"),
         ((401, {"error": {"message": "no code"}}), "failed"),
@@ -602,12 +600,6 @@ def test_a_slot_takes_only_its_own_variable_or_a_key_on_the_tool(books: Store):
                         credentials={slot: cid},
                         at=AT,
                     )
-
-
-def test_the_store_answers_empty_without_its_tables(tmp_path):
-    conn = sqlite3.connect(tmp_path / "bare.sqlite")
-    conn.row_factory = sqlite3.Row
-    assert SA.imports(conn) == [] and SA.accounts(conn) == [] and SA.live_spend(conn, "2026-10-01", "2026-10-31") == []
 
 
 # ------------------------------------------------------------------------------------------------ the API

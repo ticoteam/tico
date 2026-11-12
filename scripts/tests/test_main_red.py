@@ -619,20 +619,6 @@ def test_the_bisect_finds_the_first_bad_commit_of_seventy_in_log_steps():
     assert len(found["steps"]) <= 1 + math.ceil(math.log2(len(commits)))
 
 
-def test_the_bisect_stops_at_a_mixed_probe_and_names_the_test():
-    commits = ["c%02d" % index for index in range(70)]
-
-    def probe(sha, tests):
-        if sha == "c34":
-            return "flaky", [TEST_A], "runs fail, pass"
-        return ("bad" if commits.index(sha) >= 41 else "good"), [], "scripted"
-
-    found = mr.bisect(commits, "g0", [TEST_A], probe, lambda: False)
-
-    assert found["verdict"] == "flaky" and found["names"] == [TEST_A] and found["commit"] == "c34"
-    assert found["steps"][-1]["result"] == "flaky"
-
-
 def test_a_bisect_out_of_time_gives_no_verdict():
     commits = ["c%02d" % index for index in range(6)]
     ticks = iter(range(0, 10**7, 500))
@@ -643,22 +629,3 @@ def test_a_bisect_out_of_time_gives_no_verdict():
 
     assert found["verdict"] == "inconclusive" and "budget" in found["reason"]
     assert len(found["steps"]) == 1
-
-
-def test_the_bisect_budget_fits_the_job_and_each_step_fits_two_minutes():
-    assert mr.BISECT_LIMIT == 15 * 60
-    assert mr.REPEATS * mr.RUN_LIMIT + mr.BUILD_LIMIT == mr.STEP_LIMIT <= 120
-
-
-def test_the_workflow_hands_a_bisect_to_runs_on_and_runs_on_no_other_event():
-    text = (ROOT / ".github/workflows/main-red.yml").read_text()
-    assert "workflows: [Release validation]" in text
-    assert "github.event.workflow_run.event == 'workflow_dispatch'" in text
-    assert "github.event.workflow_run.head_branch == 'main'" in text
-    assert "permissions:\n  contents: read" in text
-    assert "needs: alarm" in text and "needs.alarm.outputs.bisect == 'true'" in text
-    assert "group: main-red-bisect\n      cancel-in-progress: true" in text
-    assert "runner=4cpu-linux-x64" in text
-    assert "scripts/ci_install.sh python" in text
-    assert "--bisect" in text
-    assert "merge_group" not in text

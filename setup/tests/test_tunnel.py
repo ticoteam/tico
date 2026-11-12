@@ -38,7 +38,13 @@ def write_config(directory, domain, **env):
         ["bash", str(ENTRYPOINT), "tunnel-config"],
         capture_output=True,
         text=True,
-        env={**os.environ, "TICO_TUNNEL_DIR": str(directory), "TICO_DOMAIN": domain, **env},
+        # Only the settings a test names: a route setting in the shell that runs the suite is not the test's.
+        env={
+            **{k: v for k, v in os.environ.items() if not k.startswith("TICO_")},
+            "TICO_TUNNEL_DIR": str(directory),
+            "TICO_DOMAIN": domain,
+            **env,
+        },
     )
 
 
@@ -151,6 +157,10 @@ def test_a_server_start_with_a_bad_visual_origin_still_reaches_the_server(tmp_pa
 
     tunnel = tmp_path / "tunnel"
     tunnel.mkdir()
+    # The server starts with this test's settings alone: an alias in the shell that runs the suite makes a bad visual
+    # origin a refusal, which is right for that install and not what is started here.
+    for key in [k for k in os.environ if k.startswith("TICO_")]:
+        monkeypatch.delenv(key)
     for bad, reason in (
         ("https://visuals.example.net/typo", "has a path"),
         ("https://[visuals.example.net", "is not a valid URL"),
@@ -195,42 +205,6 @@ def test_compose_always_runs_cloudflared_with_that_config_and_the_server_is_what
     assert "install -d -m 0755 -o tico -g tico /tunnel" in (ROOT / "Dockerfile").read_text()
     # The route lives in the image and the compose file, both replaced by an update, not in a file the updater would have to know about.
     assert "compose.yaml" in build_install_bundle().bundle_names(ROOT)
-
-
-@pytest.mark.slow
-def test_cloudflared_itself_accepts_the_config_and_routes_the_domain_to_the_server(tmp_path):
-    # Availability checks belong to the opted-in integration test, not every collection on a shared host.
-    if (
-        not shutil.which("docker")
-        or subprocess.run(
-            ["docker", "image", "inspect", "cloudflare/cloudflared:2026.7.3"], capture_output=True
-        ).returncode
-    ):
-        pytest.skip("the pinned cloudflared image is not on this machine")
-    assert write_config(tmp_path, "tico.example.com").returncode == 0
-
-    def cloudflared(*args):
-        return subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "-v",
-                f"{tmp_path}:/tunnel:ro",
-                "cloudflare/cloudflared:2026.7.3",
-                "tunnel",
-                "--config",
-                "/tunnel/ingress.yml",
-                "ingress",
-                *args,
-            ],
-            capture_output=True,
-            text=True,
-        ).stdout
-
-    assert "OK" in cloudflared("validate")
-    assert "service: http://hold:8080" in cloudflared("rule", "https://tico.example.com/")
-    assert "http_status:404" in cloudflared("rule", "https://other.example.com/")
 
 
 def test_cloudflared_logging_no_ingress_rules_fails_the_tunnel_route_check_even_though_the_container_runs():

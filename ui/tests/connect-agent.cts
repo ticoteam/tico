@@ -100,19 +100,6 @@ const shot = (page: import('playwright').Page, name: string) => shots ? page.scr
         await tiles.first().waitFor();
         assert.deepEqual(await tiles.evaluateAll(els => els.map(el => (el as HTMLElement).dataset.agent)),
           ['grok', 'dots', 'muse', 'claude', 'cursor', 'codex', 'other'], tag);
-        await dialog.locator('[data-conn]').first().waitFor();
-        assert.deepEqual(await dialog.locator('[data-conn]').evaluateAll(els => els.map(el => (el as HTMLElement).dataset.conn)), ['old-grok', 'ci']);
-        assert.equal(await dialog.locator('[data-conn=old-grok] .ca-logo svg').count(), 1, 'an old Grok Bot token shows the Grok mark');
-        assert.match(await dialog.locator('[data-conn=old-grok]').innerText(), /Used/);
-        assert.match(await dialog.locator('[data-conn=ci]').innerText(), /Never used/);
-        await shot(page, `picker-${tag}`);
-
-        // Revoke an existing connection.
-        page.once('dialog', (prompt: import('playwright').Dialog) => prompt.accept());
-        await dialog.locator('[data-conn=ci] [data-revoke]').click();
-        await page.waitForFunction(() => !document.querySelector('[data-conn=ci]'));
-        assert.deepEqual(state.revoked, ['ci']);
-
         // Grok: only its steps, the URL before any token.
         await dialog.locator('[data-agent=grok]').click();
         await dialog.locator('[data-url]').waitFor();

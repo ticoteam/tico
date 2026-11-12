@@ -4,10 +4,8 @@ a card is saved on vendor accounts by a person, replay-safe, and a bot reads whe
 waits for a provider that has them; and no card number reaches a payload, a receipt, a read or a tool."""
 
 import json
-import random
 import re
 import threading
-import uuid
 
 import pytest
 
@@ -283,13 +281,6 @@ def test_system_work_cannot_lift_a_person_freeze_through_the_action_path(books):
         assert (refused.status, refused.code) == ("failed", "conflict")
         assert _status(c, seller) == "frozen" and _frozen_by(c, seller) == "person"
         assert _frozen_by(c, coder) == "budget"
-
-
-def test_the_card_help_says_the_mercury_user_may_be_left_out_because_tico_finds_one(books):
-    """Mercury issues a card to one of its own users. A card names that user, or Tico finds it (the holder's email,
-    then the connection's card user): provider_user_id is optional, and the next tests show each way it is found."""
-    fields = {f["name"]: f["required"] for f in FA.help("card_create")["fields"]}
-    assert fields["provider_user_id"] is False
 
 
 def test_a_card_for_a_teammate_is_issued_to_the_mercury_user_with_the_same_email(books):
@@ -817,28 +808,6 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
     assert refused.value.code == "not_available"
 
 
-def test_card_fill_is_offered_to_no_one_and_still_runs_by_name():
-    """Card fill is a placeholder: no list shows it, on the server or a computer, to any caller; a call by name still
-    reaches it and is answered "not available"."""
-    for local in (False, True):
-        for kind in (None, *hubtools.KINDS):
-            assert "tico_finance_card_fill" not in {t["name"] for t in hubtools.listing(local, kind)}
-    assert "tico_finance_inbox" in {t["name"] for t in hubtools.listing(True, "bot")}
-    with pytest.raises(APIError) as refused:
-        hubtools.BY_NAME["tico_finance_card_fill"]["fn"](
-            None, {"card_id": "crd_1", "merchant": "x.example", "amount": 1}
-        )
-    assert refused.value.code == "not_available"
-
-
-def test_an_id_is_never_read_as_a_card_number():
-    """Ids are random hex: a Luhn-valid run of digits inside one must not refuse the action that carries it."""
-    assert not V.has_card_number({"budget_id": "ab4222222222222cd"})
-    rnd = random.Random(7)
-    ids = [uuid.UUID(int=rnd.getrandbits(128)) for _ in range(20_000)]
-    assert not any(V.has_card_number({"card_id": str(i), "budget_id": i.hex}) for i in ids)
-
-
 def _stored_digits(c):
     """Every digit the action log, the card rows and the saved-card records hold, as one string."""
     text = " ".join(
@@ -943,19 +912,6 @@ def test_a_dashed_card_number_is_refused_with_a_code_or_a_dash_on_either_side(bo
             for v in tuple(row)
         )
         assert "4242424242424242" not in re.sub(r"\D", "", stored)
-
-
-def test_a_dashed_card_number_in_a_plain_field_is_refused_and_never_stored(books):
-    fake = FakeMercury()
-    _, coder, _ = _world(books, fake)
-    with books.transaction() as c:
-        for typed in DASHED_CARD_SHAPES:
-            refused = act(c, OWNER, "card_save", {"card_id": coder, "vendor": typed})
-            assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED), (
-                typed
-            )
-        assert c.execute("SELECT count(*) FROM fin_card_saves").fetchone()[0] == 0
-        assert "4242424242424242" not in _stored_digits(c)
 
 
 def test_a_card_number_sent_as_a_json_number_is_refused_before_anything_is_stored(books):

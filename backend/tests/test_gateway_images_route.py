@@ -140,7 +140,7 @@ def test_the_images_route_answers_429_with_retry_after_while_its_slots_are_full(
     assert not slots.acquire(blocking=False)
 
 
-def test_a_video_production_budget_at_its_cutoff_refuses_new_images(api, monkeypatch):
+def test_a_video_production_budget_at_its_cutoff_refuses_new_images(inside_one_half_hour, api, monkeypatch):
     from datetime import datetime, timezone
 
     from backend.finance import actions as FA

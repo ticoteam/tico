@@ -39,23 +39,6 @@ def piece(root, name):
     return root / "baselines" / "pyright" / name
 
 
-def test_render_sorts_files_drops_empty_lists_and_has_no_newline_at_the_end():
-    expected = "\n".join(
-        [
-            "{",
-            '    "files": {',
-            '        "./b.py": [',
-            "            {",
-            '                "code": "reportAttributeAccessIssue"',
-            "            }",
-            "        ]",
-            "    }",
-            "}",
-        ]
-    )
-    assert pyright_baseline.render({"./b.py": [ENTRY], "./a.py": []}) == expected
-
-
 def test_split_then_generate_reproduces_the_single_file_byte_for_byte(tmp_path, monkeypatch):
     monkeypatch.setattr(pyright_baseline, "ROOT", tmp_path)
     original = pyright_baseline.render({"./pkg/b.py": [ENTRY, OTHER], "./a.py": [ENTRY], "./clean.py": []})

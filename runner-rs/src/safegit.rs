@@ -330,7 +330,7 @@ fn neutralize_repositories(
     ca: Option<String>,
 ) -> std::io::Result<()> {
     use crate::gitcred::push_config;
-    let runner = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let runner = supervisor_var;
     // An empty http.proxy turns every proxy off, the turn environment's included.
     let proxy = proxy
         .or_else(|| runner("HTTPS_PROXY"))
@@ -460,6 +460,15 @@ fn neutralize_repositories(
         push_config(env, "protocol.file.allow", "never");
     }
     Ok(())
+}
+
+/// One of the supervisor's own proxy or CA variables, when set (a test sets its own, tests::SUPERVISOR_ENV).
+fn supervisor_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(env) = tests::SUPERVISOR_ENV.with(|e| e.borrow().clone()) {
+        return env.get(name).filter(|v| !v.is_empty()).cloned();
+    }
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Whether a `url.<base>.insteadOf` prefix would match a URL on the GitHub host (TICO_GITHUB_HOST), in any form.
@@ -640,6 +649,32 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    thread_local! {
+        /// The supervisor's proxy and CA variables as this test sets them (`supervisor_var`), in place of the
+        /// process environment the test happens to run in. Each #[test] runs on a thread of its own.
+        pub(super) static SUPERVISOR_ENV: std::cell::RefCell<Option<Env>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Runs the supervisor's side of a test with exactly `vars` as its proxy and CA settings; cleared when dropped.
+    struct Supervisor;
+
+    impl Supervisor {
+        fn with(vars: &[(&str, &str)]) -> Self {
+            let env: Env = vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            SUPERVISOR_ENV.with(|e| *e.borrow_mut() = Some(env));
+            Supervisor
+        }
+    }
+
+    impl Drop for Supervisor {
+        fn drop(&mut self) {
+            SUPERVISOR_ENV.with(|e| e.borrow_mut().take());
+        }
+    }
+
     #[test]
     fn a_turn_users_git_runs_no_repository_program_and_reads_no_wider_trust() {
         let dir =
@@ -752,6 +787,17 @@ mod tests {
         env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         env.insert("GIT_AUTHOR_NAME".into(), "Ops Bot".into());
         env.insert("GIT_AUTHOR_EMAIL".into(), "ops@bots.invalid".into());
+        // The supervisor's own settings are the test's, not whatever proxy or CA the machine running it has.
+        let supervisor_ca = dir.join("supervisor-ca.pem");
+        std::fs::write(&supervisor_ca, "synthetic supervisor CA\n").unwrap();
+        let supervisor_certs = dir.join("supervisor-certs");
+        std::fs::create_dir_all(&supervisor_certs).unwrap();
+        let (ca, certs) = (
+            supervisor_ca.display().to_string(),
+            supervisor_certs.display().to_string(),
+        );
+        let supervisor = Supervisor::with(&[("SSL_CERT_FILE", &ca), ("SSL_CERT_DIR", &certs)]);
+        let before = env.clone();
         let global = dir.join("turn.gitconfig");
         for_turn_user(&mut env, &[dir.join("repo")], &global, None).unwrap();
         let written = std::fs::read_to_string(&global).unwrap();
@@ -777,6 +823,46 @@ mod tests {
             !listed.contains("127.0.0.1") && !listed.contains("sibling-ca"),
             "the turn user's git sees a sibling's http settings: {listed}"
         );
+        assert_eq!(
+            (
+                env["GIT_SSL_CAINFO"].as_str(),
+                env["GIT_SSL_CAPATH"].as_str()
+            ),
+            (ca.as_str(), certs.as_str())
+        );
+        // A proxy the supervisor itself runs with is the one the turn's git routes through, never the sibling's.
+        drop(supervisor);
+        let trusted = "http://proxy.supervisor.invalid:3128";
+        let _supervisor = Supervisor::with(&[
+            ("HTTPS_PROXY", trusted),
+            ("SSL_CERT_FILE", &ca),
+            ("SSL_CERT_DIR", &certs),
+        ]);
+        let mut routed = before;
+        for_turn_user(
+            &mut routed,
+            &[dir.join("repo")],
+            &dir.join("routed.gitconfig"),
+            None,
+        )
+        .unwrap();
+        for url in [
+            "https://github.com/o/r.git/info/refs",
+            "https://example.invalid/x",
+        ] {
+            let proxy = std::process::Command::new("git")
+                .args(["config", "--get-urlmatch", "http.proxy", url])
+                .current_dir(&dir)
+                .env_clear()
+                .envs(&routed)
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&proxy.stdout).trim(),
+                trusted,
+                "{url}"
+            );
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -791,6 +877,14 @@ mod tests {
         let mut env = Env::new();
         env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         env.insert("HOME".into(), dir.display().to_string());
+        // The supervisor runs with no proxy and its own CA here, whatever the machine running the test has: an empty
+        // http.proxy is then what turns every proxy off.
+        let supervisor_ca = dir.join("supervisor-ca.pem");
+        std::fs::write(&supervisor_ca, "synthetic supervisor CA\n").unwrap();
+        let _supervisor = Supervisor::with(&[
+            ("SSL_CERT_FILE", supervisor_ca.to_str().unwrap()),
+            ("SSL_CERT_DIR", dir.to_str().unwrap()),
+        ]);
         let git = |env: &Env, args: &[&str]| {
             std::process::Command::new("git")
                 .arg("-C")
@@ -811,6 +905,8 @@ mod tests {
         assert!(std::process::Command::new("git")
             .args(["init", "-q"])
             .arg(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output()
             .unwrap()
             .status
@@ -818,6 +914,8 @@ mod tests {
         assert!(std::process::Command::new("git")
             .args(["init", "-q", "--bare"])
             .arg(&remote)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .output()
             .unwrap()
             .status

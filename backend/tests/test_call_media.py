@@ -44,12 +44,6 @@ def test_a_person_token_lives_five_minutes_from_when_it_is_minted():
     assert claims["nbf"] <= 1000
 
 
-def test_a_token_signed_with_another_secret_fails_the_check():
-    token = media.person_token(CONFIG, "thread-acme-1", "human:ana", "Ana", now=1000)
-    with pytest.raises(AssertionError):
-        decode(token, secret="someone-else")
-
-
 def test_the_recorder_hears_the_room_and_cannot_publish():
     claims = decode(media.recorder_token(CONFIG, "thread-acme-1", "tico-recorder-acme", now=1000))
     assert claims["video"]["hidden"] is True

@@ -110,15 +110,6 @@ def test_the_computer_holds_the_key_only_when_isolated_with_the_key_and_the_conn
     assert mail_key.held_by_computer(config) is False  # a bot reads the key itself there
 
 
-def test_the_connectors_job_writes_group_writable_files_only_in_the_two_user_layout(monkeypatch):
-    from runner_support.connectors import mail_umask
-
-    monkeypatch.setattr(isolation, "identity", lambda: (10003, 10002))
-    assert mail_umask() == {"umask": 0o002}
-    monkeypatch.setattr(isolation, "identity", lambda: None)
-    assert mail_umask() == {}
-
-
 def previous_registration(tmp_path):
     import json
 

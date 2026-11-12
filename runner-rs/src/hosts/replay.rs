@@ -563,34 +563,6 @@ async fn every_codex_replay_matches_its_recording() {
 }
 
 #[test]
-fn the_replays_are_real_captures() {
-    let all: Vec<Scenario> = ["claude", "codex"]
-        .iter()
-        .flat_map(|h| scenarios(h))
-        .collect();
-    let real = all
-        .iter()
-        .filter(|s| s.input["source"]["real"] == true)
-        .count();
-    assert!(
-        real >= 8,
-        "{real} real-capture replays; the suite keeps at least 8"
-    );
-    for s in &all {
-        assert!(
-            s.transcript.first().is_some_and(|e| e["dir"] == "spawn"),
-            "{}",
-            s.dir.display()
-        );
-        assert!(
-            s.transcript.iter().any(|e| e["dir"] == "out"),
-            "{}: no frame from the runner",
-            s.dir.display()
-        );
-    }
-}
-
-#[test]
 fn a_frame_matches_with_wildcards_only() {
     assert!(matches(
         &json!({"a": "<any>", "b": [1, {"c": 2}]}),

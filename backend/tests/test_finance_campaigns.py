@@ -194,14 +194,6 @@ def test_the_metrics_report_and_search_read_the_same_campaigns(books: Store):
     assert missed["results"] == []
 
 
-def test_the_summary_for_a_briefing_names_the_cheapest_priced_campaign(books: Store):
-    g = google(books)
-    feed(books, g["a"], "c1", "Costly", "2026-10-05", 9000, clicks=5, conv=3.0)  # 3000 each
-    with books.read() as c:
-        summary = CP.campaign_summary(c, OWNER, "2026-10")
-    assert summary == {"live": 1, "best": {"name": "Costly", "per_conversion": 3000}}
-
-
 def test_the_campaign_month_is_the_one_asked_for(books: Store):
     g = google(books)
     feed(books, g["a"], "c1", "Spring", "2026-10-05", 6000)

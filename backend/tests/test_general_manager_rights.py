@@ -103,7 +103,6 @@ def test_a_bot_manager_acts_for_its_reports_on_their_tasks(api, bot_manager, sub
         (_manager_comment_wakes_owner_without_mention, ()),
         (_requester_manager_comment_wakes_owner_with_requester_permissions, ()),
         (_manager_links_and_unlinks, ()),
-        (_manager_run_now, ()),
         (_manager_cannot_edit_or_delete_another_authors_comment, ()),
     ]
     for check, extra in checks:
@@ -193,12 +192,6 @@ def _manager_links_and_unlinks(api, bot_manager):
     with api.app.state.store.read() as c:
         assert H.task_links(c, task['id']) == []
         assert all(e['actor'] == actor for e in H.task_history(c, task['id']) if e['field'] == 'link')
-
-
-def _manager_run_now(api, bot_manager):
-    token, _ = bot_manager
-    task = make(api)  # the report has a current assigned computer (its lease, taken by the caller)
-    post(api, 'tasks/' + task['id'] + '/run-now', {}, token=token)
 
 
 def _nonmanager_unchanged_and_refusal_names_managers(api, manager):

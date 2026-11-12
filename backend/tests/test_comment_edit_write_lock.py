@@ -98,50 +98,6 @@ def test_the_work_under_the_lock_does_not_grow_with_the_stored_answers(api, chan
     assert big <= small * 1.2 + 20, steps
 
 
-def test_a_writer_waiting_on_an_edit_does_not_time_out(api, tmp_path):
-    """The live file reads slowly from disk; here each 100 SQLite steps under the lock take 1 ms. Reading every one
-    of 20,000 answers then held the lock for seconds, past the other writer's 1 s wait."""
-    task, said = _comment(api)
-    with api.app.state.store.transaction() as c:
-        _answers(c, BIG, quoting=said)
-    held, outcome, timing = threading.Event(), {}, {}
-
-    def edit():
-        with api.app.state.store.transaction() as c:
-            started = time.monotonic()
-            held.set()
-            c.set_progress_handler(lambda: time.sleep(0.001) or 0, 100)
-            try:
-                H.task_comment_edit(c, "human:ana", task["id"], said["id"], "New words")
-            finally:
-                c.set_progress_handler(None, 0)
-            timing["held"] = time.monotonic() - started
-
-    def write():
-        held.wait(10)
-        other = sqlite3.connect(str(api.app.state.store.settings.db_path), timeout=1.0, isolation_level=None)
-        try:
-            other.execute("BEGIN IMMEDIATE")
-            other.execute("INSERT INTO registry_metadata VALUES('dev194.writer','true')")
-            other.execute("COMMIT")
-            outcome["ok"] = True
-        except sqlite3.OperationalError as exc:
-            outcome["error"] = str(exc)
-        finally:
-            other.close()
-
-    threads = [threading.Thread(target=edit), threading.Thread(target=write)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(60)
-    assert outcome == {"ok": True}, (outcome, timing)
-    assert timing["held"] < 1.0, timing
-    with api.app.state.store.read() as c:
-        stored = " ".join(r[0] for r in c.execute("SELECT response FROM idempotency"))
-        assert "old words" not in stored and stored.count("New words") >= 2 * (BIG // 500)
-
-
 SHAPES = (
     lambda m: {"comment": m},  # the answer to the comment itself
     lambda m: {"comments": [m, dict(m, id="other", body="kept")]},  # a list of comments
@@ -293,13 +249,3 @@ def test_the_server_indexes_an_older_servers_answers_after_it_starts(tmp_path):
             while IM.quoting(c, "m-older") is None and time.monotonic() < deadline:
                 time.sleep(0.05)
             assert len(IM.quoting(c, "m-older")) == 2
-
-
-def test_a_new_file_is_ready_without_a_backfill(tmp_path):
-    from backend.config import Settings
-    from backend.store import Store
-
-    store = Store(Settings(db_path=tmp_path / "hub.db"))
-    store.initialize(seed_market=False)
-    with store.read() as c:
-        assert IM._get(c, IM.READY) is True

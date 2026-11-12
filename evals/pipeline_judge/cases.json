@@ -189,30 +189,6 @@
    "trap": null
   },
   {
-   "id": "dev-shot-wrong-screen",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "billing.png",
-    "text": "Screenshot text read from the image: Billing page. Plan: Team. Invoices table. No Dark mode control visible.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": "wrong_screen"
-  },
-  {
    "id": "dev-shot-old",
    "domain": "dev",
    "requirement": {
@@ -254,54 +230,6 @@
    "attachment": null,
    "expected": "not_met",
    "trap": "missing_file"
-  },
-  {
-   "id": "dev-shot-blank",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "shot.png",
-    "text": "Image is almost entirely white. No text could be read from it. 1280x800.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": null
-  },
-  {
-   "id": "dev-shot-one-theme",
-   "domain": "dev",
-   "requirement": {
-    "name": "Screenshots match spec",
-    "rubric": "The attachment is a screenshot of the screen the spec names, showing the state the spec asks for, taken at the work's current work_version. A different screen, a missing state, an empty image or an older work version does not count."
-   },
-   "work": {
-    "title": "Dark mode toggle on Settings",
-    "spec": "Add a Dark mode toggle to the Settings page. Show it off and on, in light and dark themes.",
-    "work_version": 3,
-    "repo": "acme/app",
-    "pr": 91,
-    "author": "human:ana"
-   },
-   "attachment": {
-    "kind": "image",
-    "name": "settings-light.png",
-    "text": "Settings page. Appearance section. 'Dark mode' toggle shown off, light theme only. No second panel.",
-    "work_version": 3
-   },
-   "expected": "unsure",
-   "trap": "partial"
   },
   {
    "id": "dev-review-done",

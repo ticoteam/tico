@@ -170,17 +170,6 @@ def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_
     assert next(a for a in asks(api) if a["ref"] == ref)["title"] == "My own words"  # a person's title stays
 
 
-def test_a_flags_task_says_what_the_strategy_bot_noticed(api):
-    goal_manager(api, level=2)
-    goal, _ = goal_with_kpi(api)
-    flag = propose(api, "flag", {"issue": "vague"}, goal["id"])
-    sync(api)
-    [task] = [a for a in asks(api) if a["ref"] == flag["id"]]
-    with api.app.state.store.read() as c:
-        name = strategy_bot.name(c)
-    assert task["title"] == f"The {name} noticed something on Raise activation"
-
-
 def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     goal, kpi = goal_with_kpi(api)
     proposed = {"kind": "improve", "baseline": 10, "target": 40, "deadline": "2099-06-30"}

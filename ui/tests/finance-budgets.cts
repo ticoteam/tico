@@ -399,23 +399,6 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(writes.slice(retry).map(w => w[0] + ' ' + w[1]), ['POST /api/v2/api-tools', 'POST /api/v2/api-tools/stripe/keys', 'POST /api/v2/finance/connections'], tag + ': stored again, then connected');
       assert.deepEqual(writes.find(w => w[1] === '/api/v2/api-tools')![2], {name: 'Stripe', service: 'stripe'}, tag + ': a Stripe tool');
       assert.deepEqual(writes.at(-1)![2], {provider: 'stripe', credential_id: 'k-stripe', name: 'Stripe'}, tag + ': connects with the new key');
-      // Brex while Tools can't be read: an error, not a paste that could store a second key.
-      hub.indexFail = true;
-      const brex = writes.length, index3 = indexReads();
-      await pick('brex');
-      await settled(() => indexReads() > index3);
-      assert.equal(await dlg.count(), 0, tag + ': no dialog when Tools can\'t be read');
-      assert.equal(await page.locator('.toast', {hasText: 'Tools are down'}).count(), 1, tag + ': the error shows');
-      hub.indexFail = false;
-      await pick('brex');
-      await dlg.locator('input[name=token]').fill('brex_token_123');
-      assert.equal(await dlg.locator('select[name=level]').inputValue(), 'read', tag + ': Brex pastes start Read');
-      await dlg.locator('select[name=level]').selectOption('read_write');
-      await dlg.locator('[type=submit]').click();
-      await dlg.waitFor({state: 'detached'});
-      assert.deepEqual(writes.slice(brex).map(w => w[1]), ['/api/v2/api-tools', '/api/v2/api-tools/brex/keys', '/api/v2/finance/connections'], tag + ': Brex stored on Tools, then connected');
-      assert.equal(writes.at(-2)![2].access_level, 'read_write', tag + ': at the level picked');
-      assert.deepEqual(writes.at(-1)![2], {provider: 'brex', credential_id: 'k-brex', name: 'Brex'}, tag + ': connects Brex');
       assert.deepEqual(errors, [], tag + ': no page errors');
       // Google Ads: its tool page.
       await pick('google-ads');

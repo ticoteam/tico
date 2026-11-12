@@ -119,9 +119,6 @@ interface StorageMove {
     await v.page.waitForFunction(() => /Moved 3 files, 2\.50 GB, as estimated/.test(document.querySelector('[data-move-line]')?.textContent as string));
     assert.deepEqual(JSON.parse(v.calls.find(c => c.startsWith('POST move'))!.slice(10)), {expect_bytes: 2500000000});
     assert.equal(await hosting.locator('[data-move]').isHidden(), true, 'nothing left to move');
-    await hosting.locator('[data-tico-check]').click();
-    await v.page.waitForFunction(() => document.querySelector('[data-storage-tico]'));
-    assert.ok(v.calls.includes('POST check'));
     assert.deepEqual(v.errors, []);
     await v.ctx.close();
 

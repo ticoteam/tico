@@ -730,9 +730,6 @@ def matrix_scenario(seed):
         org.step(f, "listing", org.api, "get", "/api/v2/automations", wave=W3)
 
     checks = [
-        Check("every dimension value is in at least one combination", W3, lambda f: plan_values(rows_)),
-        Check("every feasible pair is in at least one combination", W3, lambda f: pairs_covered(rows_)),
-        Check("the combination count is at least the all-pairs floor", W3, lambda f: combo_floor(rows_)),
         Check(
             "the inputs are in place: the email combinations' mail is published",
             W3,

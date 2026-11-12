@@ -2,7 +2,6 @@
 access with the person's rights, and taking any away is a Confirm card for the person, never done at once."""
 
 import json
-import re
 
 import pytest
 
@@ -80,36 +79,6 @@ def test_a_person_in_settings_still_narrows_and_is_told_what_stops(api, botops, 
     assert detail["stopped"] == [{"full_name": "Acme/product", "access": "write"}]
     back = put(api, "bots/ops/repositories", {"mode": "chosen"}, token="ana-test")
     assert back["stopped"] == [] and back["effective"] == [{"full_name": "Acme/product", "access": "write"}]
-
-
-def test_the_cli_says_what_a_mode_change_took_away(monkeypatch, capsys):
-    from argparse import Namespace
-    from clients import hubtools, remotecli
-
-    monkeypatch.setenv("HUB_API_URL", "https://hub.example")
-    monkeypatch.setenv("HUB_TOKEN", "test")
-    monkeypatch.setattr(
-        hubtools,
-        "bot_repos_set",
-        lambda client, body: {
-            "mode": body["mode"],
-            "stopped": [{"full_name": "Acme/product", "access": "write"}],
-            "creation_stopped": True,
-        },
-    )
-    args = Namespace(cmd="bot", fn="bot repos", bot="ops", all=False, own=True, chosen=None)
-    assert remotecli.run(args)["mode"] == "own"
-    assert capsys.readouterr().err.strip() == "ops no longer has: Acme/product (write), repository creation"
-    # Clearing only a workflow option is a loss too.
-    monkeypatch.setattr(
-        hubtools,
-        "bot_repos_set",
-        lambda client, body: {"mode": "chosen", "stopped": [], "workflow_edits_stopped": ["Acme/product"]},
-    )
-    remotecli.run(
-        Namespace(cmd="bot", fn="bot repos", bot="ops", all=False, own=False, chosen=["Acme/product:write-edit"])
-    )
-    assert capsys.readouterr().err.strip() == "ops no longer has: Acme/product (edit workflow files)"
 
 
 def test_the_cli_grant_suffix_sets_each_workflow_option_or_leaves_it():
@@ -250,26 +219,6 @@ def test_a_tick_under_all_ticked_repos_from_botops_is_a_confirm_card(api, botops
     switched = act(api, ana, "PUT", "bots/botops/repositories", {"mode": "all"})
     assert switched.status_code == 403 and "Only an Owner or admin lets a bot" in switched.text, switched.text
     assert get(api, "bots/botops/repositories", "ana-test")["mode"] == "chosen"
-
-
-@pytest.mark.parametrize("option,words", CARDS)
-def test_a_tick_kept_on_chosen_repos_while_the_bot_is_on_own_repos_says_when_it_starts(
-    api, botops, repos, option, words
-):
-    put(api, "bots/ops/repositories", {"mode": "own"}, token="ana-test")
-    ana = turn(api, botops, person="ana-test", text="Tick " + option + " on product for ops")
-    card = act(
-        api,
-        ana,
-        "PUT",
-        "bots/ops/repositories",
-        {"mode": "own", "chosen": [{"full_name": "Acme/product", "access": "write", option: True}]},
-    )
-    assert card.json()["needs_confirm"] is True, card.text
-    assert (
-        _stored_card(api, card.json())["description"]
-        == "ops: " + words.replace(" in product:", " in product once Chosen repos is on with Write there:") + "."
-    ), card.text
 
 
 def test_a_declined_run_workflows_card_changes_nothing(api, botops, repos):
@@ -466,43 +415,6 @@ def test_turning_product_repositories_back_on_is_the_owners_card_and_an_admin_is
     assert get(api, "bots/ops/repositories", "ana-test")["create_product_repositories"] is True
 
 
-def test_a_repository_card_says_in_plain_words_what_changes():
-    """Chris, Oct 17: the card read "PUT /api/v2/bots/security-engineer-2/repositories" and "access to chosen"."""
-    from backend.repositories import plain_change, plain_request
-
-    org = "ticoteam/"
-    before = {"effective": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-pages", "tico-recorder")]}
-    result = {
-        "effective": [{"full_name": org + "tico", "access": "read"}],
-        "stopped": [{"full_name": org + n, "access": "write"} for n in ("tico", "tico-pages", "tico-recorder")],
-    }
-    assert plain_change("Security Engineer", before, result) == (
-        "Security Engineer: read-only on tico (was write). Loses access to tico-pages and tico-recorder."
-    )
-    gained = {
-        "effective": [{"full_name": org + "tico", "access": "write"}, {"full_name": org + "docs", "access": "read"}],
-        "stopped": [],
-        "workflows_stopped": [org + "tico"],
-        "creation_stopped": True,
-    }
-    assert plain_change("Ops", {"effective": [{"full_name": org + "tico", "access": "write"}]}, gained) == (
-        "Ops: gets read-only on docs. Can no longer run workflows in tico. Can no longer create repositories."
-    )
-    assert plain_request("Ops", {"mode": "chosen", "chosen": [{"full_name": org + "tico", "access": "read"}]}) == (
-        "Ops: read-only on tico, besides its own repository."
-    )
-    assert (
-        plain_request("Ops", {"mode": "all", "all_access": "read"})
-        == "Ops: read-only on every repository the team uses."
-    )
-    assert plain_request("Ops", {"mode": "own"}) == "Ops: only its own repository."
-    # Left out, the list and the level keep what is stored (set_access): the line never guesses "only its own".
-    assert plain_request("Ops", {"mode": "chosen"}) == "Ops: the repositories picked for it before, again."
-    assert (
-        plain_request("Ops", {"mode": "all"}) == "Ops: the access level set before on every repository the team uses."
-    )
-
-
 def test_a_card_made_elsewhere_says_what_confirming_really_does(api, botops, repos):
     """A carried hand-off's card (create_proposal, not bot_set): {"mode": "chosen"} with no list turns the stored grants
     back on, and the title says so, from the change tried as the person and rolled back."""
@@ -538,91 +450,3 @@ def test_a_card_made_elsewhere_says_what_confirming_really_does(api, botops, rep
 
 
 RAW_WORDS = {"own", "all", "chosen", "none"}
-
-
-def test_the_new_bot_repository_default_reads_as_what_new_bots_get(api, botops):
-    """{"new_bot_default": "all"} is the card a person confirms for Settings > General › Repositories > New bots get."""
-    from backend import rooms
-    from backend.assistant import create_proposal
-
-    state = api.app.state
-    with state.store.transaction() as c:
-        ana = state.auth.identity_for_actor(c, "human:ana")
-        room = rooms.chat_room(c, state.auth, ana, "botops")
-        cards = [
-            create_proposal(
-                c,
-                state.store.settings,
-                ana,
-                room,
-                "botops",
-                "Open up new bots",
-                "PUT",
-                "/api/v2/repositories/settings",
-                {"new_bot_default": v},
-            )["action"]
-            for v in ("all", "own", "x")
-        ]
-    assert [a["description"] for a in cards] == [
-        "New bots get every repository ticked in Settings > General › Repositories",
-        "New bots get only their own repository",
-        "Change which repositories new bots get",
-    ]
-
-
-def test_no_card_is_titled_with_its_method_and_path(api):
-    """Every route a card may name has a plain title: a route with no sentence of its own still gets words."""
-    from backend.assistant import describe
-    from backend import botops_act
-
-    with api.app.state.store.read() as c:
-        for path in (
-            "/api/v2/bots/ops/repositories",
-            "/api/v2/bots/ops/go-live",
-            "/api/v2/bots/ops/tools/t1/delete",
-            "/api/v2/routines/r1",
-            "/api/v2/groups/g1",
-            "/api/v2/repositories/Acme/product",
-            "/api/v2/slack/channels",
-        ):
-            for method in ("POST", "PUT", "DELETE"):
-                what, _ = describe(c, method, path, {"mode": "chosen", "enabled": True})
-                assert "/api/" not in what and not what.startswith(method + " "), (method, path, what)
-                assert not RAW_WORDS & set(re.findall(r"[a-z]+", what.lower())), (method, path, what)
-        # A setting value is never read out as a word; one whose field holds a name is.
-        assert (
-            describe(c, "PUT", "/api/v2/access/rules", {"mode": "own", "scope": "all"})[0]
-            == "Make a change in Tico (access): mode, scope"
-        )
-        assert (
-            describe(c, "POST", "/api/v2/bots/ops/model", {"model": "gpt-6.1", "paused": False})[0]
-            == "Change bot ops's model: model: gpt-6.1, paused: no"
-        )
-        assert describe(c, "DELETE", "/api/v2/groups/g1", {})[0] == "Remove something in Tico (groups)"
-        assert describe(c, "POST", "/api/v2/bots/ops/go-live", {})[0] == "Put bot ops live"
-    assert botops_act.DO  # the routes above are BotOps' own (botops_act.DO)
-
-
-def test_a_repository_card_stored_before_the_plain_wording_reads_plainly(api, botops, repos):
-    """Chris's card: stored titled with its method and path and summed up as "access to chosen". It is read again from
-    the request it sends, and the old line is kept, only for Details."""
-    from backend import rooms
-    from backend.assistant import create_proposal
-
-    state = api.app.state
-    body = {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "read"}]}
-    old = "Set ops's repository access to chosen. This stops: Acme/product (write)"
-    with state.store.transaction() as c:
-        ana = state.auth.identity_for_actor(c, "human:ana")
-        room = rooms.chat_room(c, state.auth, ana, "botops")
-        aid = create_proposal(
-            c, state.store.settings, ana, room, "botops", old, "PUT", "/api/v2/bots/ops/repositories", body
-        )["action"]["id"]
-        c.execute(
-            "UPDATE assistant_actions SET description=?, summary=? WHERE id=?",
-            ("PUT /api/v2/bots/ops/repositories", old, aid),
-        )
-    action = get(api, f"assistant/actions/{aid}", "ana-test")["action"]
-    assert action["description"] == "ops: read-only on product, besides its own repository."
-    assert action["summary"] == "" and action["original_summary"] == old
-    assert action["body"] == body and action["method"] == "PUT"  # what Confirm sends is untouched

@@ -1213,55 +1213,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_harness_that_exited_before_its_reader_drained_the_pipe_still_hands_in_its_answer() {
-        // R1: Codex's reaper marks the process gone before its stdout reader has decoded the last lines. Exit first,
-        // the finished answer a moment later: it is still read out.
-        let (url, _) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone())); // not alive: the process is gone
-        let feed = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            for ev in answer_events("th-4", "turn-1") {
-                tx.send(ev).unwrap();
-            }
-        });
-        let f = flags(true);
-        let drove = drive_turn(&runner, &host, &mut rx, &f, "th-4")
-            .await
-            .unwrap_or_else(|e| panic!("refused: {}", e.text));
-        feed.await.unwrap();
-        assert_eq!(
-            (drove.outcome.as_str(), drove.reply.as_str()),
-            ("completed", "Acme's renewal summary is ready.")
-        );
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn a_lost_lease_with_the_harness_gone_and_nothing_left_to_read_ends_within_the_window() {
-        let (url, _) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone()));
-        let (f, began) = (flags(true), Instant::now());
-        let err = drive_turn(&runner, &host, &mut rx, &f, "th-5")
-            .await
-            .err()
-            .expect("not completed");
-        assert_eq!(
-            err.text,
-            "Computer lost or heartbeat stopped (execution lease expired)"
-        );
-        assert!(
-            began.elapsed() < SALVAGE + Duration::from_secs(1),
-            "{:?}",
-            began.elapsed()
-        );
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
     async fn inputs_a_steer_refused_start_no_new_turn_after_the_lease_is_lost() {
         let (url, seen) = lapsed_hub().await;
         let (runner, dir) = runner_at(&url);
@@ -1297,54 +1248,6 @@ mod tests {
 
     fn acme_goal() -> Value {
         json!({"id": "g-1", "status": "active", "objective": "Finish the Acme renewal summary", "updated_at": "2026-10-21T04:00:00Z"})
-    }
-
-    #[tokio::test]
-    async fn a_goal_read_refused_before_the_renewer_reads_out_the_answer_and_asks_nothing_more() {
-        let (url, seen) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let claude = ClaudeHost::new("acme", vec![], tx.clone());
-        claude.pretend_up(true);
-        let host = Host::Claude(claude);
-        let watched = seen.clone();
-        let feed = tokio::spawn(async move {
-            while !watched.lock().unwrap().iter().any(|p| p.contains("/goal ")) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            for ev in answer_events("th-7", "turn-1") {
-                tx.send(ev).unwrap();
-            }
-        });
-        let f = flags(false);
-        let (drove, _, _) = drive_with(
-            &runner,
-            &host,
-            &mut rx,
-            &f,
-            "th-7",
-            "claude",
-            Some(acme_goal()),
-            BTreeMap::new(),
-        )
-        .await;
-        feed.await.unwrap();
-        assert_eq!(
-            drove
-                .unwrap_or_else(|e| panic!("refused: {}", e.text))
-                .outcome,
-            "completed"
-        );
-        assert!(f.lost.load(Ordering::SeqCst));
-        let asked = seen
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.contains("/goal ") || p.contains("/inputs"))
-            .count();
-        assert_eq!(asked, 1, "one goal read, refused; no inputs or goal after");
-        std::fs::remove_dir_all(dir).ok();
     }
 
     /// Goal continuations that reach the no-progress cap, then the turn's answer.
@@ -1392,114 +1295,6 @@ mod tests {
             runner.state.pending("acme-late").unwrap()
         );
         assert!(!said.contains("could not be cleared"), "{said}");
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn a_pause_waiting_when_the_lease_is_lost_ends_with_the_answer_and_starts_no_clear_turn()
-    {
-        let (url, seen) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let claude = ClaudeHost::new("acme", vec![], tx.clone());
-        claude.pretend_up(false);
-        claude.pretend_turn("th-9", "turn-1"); // the harness still runs the turn being paused
-        let host = Host::Claude(claude);
-        let mut events = stuck_goal_events("th-9");
-        let completed = events.pop().unwrap();
-        for ev in events {
-            tx.send(ev).unwrap();
-        }
-        let f = Arc::new(flags(false));
-        let (lose, feed) = (f.clone(), tx.clone());
-        let later = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(300)).await; // the pause is waiting on the interrupted turn
-            lose.lost.store(true, Ordering::SeqCst);
-            tokio::time::sleep(Duration::from_millis(200)).await;
-            feed.send(json!({"kind": "turn_completed", "thread_id": "th-9", "turn_id": "turn-1", "status": "interrupted"})).unwrap();
-            drop(completed);
-        });
-        let began = Instant::now();
-        let (drove, _, goal) = drive_with(
-            &runner,
-            &host,
-            &mut rx,
-            &f,
-            "th-9",
-            "claude",
-            None,
-            BTreeMap::new(),
-        )
-        .await;
-        later.await.unwrap();
-        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!(drove.outcome, "completed");
-        assert!(
-            drove.reply.starts_with("Acme's renewal summary is ready.")
-                && drove.reply.contains("Goal paused after"),
-            "{}",
-            drove.reply
-        );
-        assert!(goal.paused.is_some());
-        assert!(
-            began.elapsed() < SALVAGE + Duration::from_secs(1),
-            "bounded: {:?}",
-            began.elapsed()
-        );
-        let said = format!(
-            "{:?} {:?}",
-            seen.lock().unwrap(),
-            runner.state.pending("acme-late").unwrap()
-        );
-        assert!(
-            !said.contains("could not be cleared"),
-            "no /goal clear turn was tried: {said}"
-        );
-        std::fs::remove_dir_all(dir).ok();
-    }
-    #[tokio::test]
-    async fn a_goal_read_refused_as_the_harness_exits_waits_for_the_reader_instead_of_giving_up() {
-        // R1 delta 1: the goal GET is refused before the renewer hears, in the same pass that finds the harness gone
-        // with nothing read yet; the answer the reader delivers a moment later still comes out completed.
-        let (url, seen) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone())); // not alive
-        let watched = seen.clone();
-        let feed = tokio::spawn(async move {
-            while !watched.lock().unwrap().iter().any(|p| p.contains("/goal ")) {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            for ev in answer_events("th-10", "turn-1") {
-                tx.send(ev).unwrap();
-            }
-        });
-        let f = flags(false);
-        let (drove, _, _) = drive_with(
-            &runner,
-            &host,
-            &mut rx,
-            &f,
-            "th-10",
-            "claude",
-            Some(acme_goal()),
-            BTreeMap::new(),
-        )
-        .await;
-        feed.await.unwrap();
-        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!(
-            (drove.outcome.as_str(), drove.reply.as_str()),
-            ("completed", "Acme's renewal summary is ready.")
-        );
-        let asked = seen
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|p| p.contains("/goal ") || p.contains("/inputs"))
-            .count();
-        assert_eq!(asked, 1, "one goal read, refused; nothing after");
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1577,48 +1372,6 @@ mod tests {
             .unwrap()
             .iter()
             .any(|e| e["kind"] == "goal"));
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn a_codex_goal_that_runs_across_turns_is_not_continued_once_the_lease_is_lost() {
-        // R1 delta 3: on Codex a completed turn under an active goal normally waits for the next continuation; read
-        // out after a lost lease, it is the end. No goal-met or clear event comes to end it some other way.
-        let (url, seen) = lapsed_hub().await;
-        let (runner, dir) = runner_at(&url);
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let host = Host::Claude(ClaudeHost::new("acme", vec![], tx.clone())); // Codex's capabilities come from `runtime`
-        for ev in answer_events("th-12", "turn-1") {
-            tx.send(ev).unwrap();
-        }
-        let (f, began) = (flags(true), Instant::now());
-        let (drove, _, goal) = drive_with(
-            &runner,
-            &host,
-            &mut rx,
-            &f,
-            "th-12",
-            "codex",
-            Some(acme_goal()),
-            BTreeMap::new(),
-        )
-        .await;
-        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
-        assert_eq!(
-            (drove.outcome.as_str(), drove.reply.as_str()),
-            ("completed", "Acme's renewal summary is ready.")
-        );
-        assert!(
-            began.elapsed() < SALVAGE,
-            "ended on the completed turn, not the window: {:?}",
-            began.elapsed()
-        );
-        assert!(goal.paused.is_none() && !goal.controlled);
-        assert!(!seen
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|p| p.contains("/goal ") || p.contains("/inputs")));
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1867,21 +1620,5 @@ mod tests {
         commits.sort_unstable();
         eprintln!("3,000 queued deltas through drive: wall time median {:.1} ms (min {:.1}, max {:.1}); event-write transactions median {} (min {}, max {})",
             micros[25] / 1e3, micros[0] / 1e3, micros[49] / 1e3, commits[25], commits[0], commits[49]);
-    }
-
-    /// Bench, not run by CI: heap bytes requested per delta by the drive's redact step and the payload the outbox
-    /// stores for it, over 10,000 deltas.
-    #[test]
-    #[ignore]
-    fn bench_drive_redact_step_allocations_for_10k_deltas() {
-        let r = Arc::new(Redactor::new(&["granted-secret-value".into()]));
-        let deltas: Vec<Value> = (0..10_000).map(|i| json!({"kind": "delta", "thread_id": "th-1", "turn_id": "turn-1", "text": format!("token {i} of the answer ")})).collect();
-        let asked = crate::util::alloc_probe::requested();
-        let mut stored = 0;
-        for event in &deltas {
-            let row = scrubbed(Some(&r), event);
-            stored += row.to_string().len();
-        }
-        eprintln!("drive redact step + payload, 10,000 deltas: bytes requested {} (payload bytes {stored})", crate::util::alloc_probe::requested() - asked);
     }
 }

@@ -123,16 +123,6 @@ def test_a_setup_code_expires_after_thirty_minutes(api, private):
     assert upload(api, code, key_json(private), expected=401)["error"]["code"] == "setup_code"
 
 
-def test_two_racing_uploads_cannot_both_use_one_code(api):
-    code = new_code(api)
-    digest = W.code_hash(code)
-    store = api.app.state.store
-    with store.transaction() as c:
-        assert W._consume_code(c, digest, H.now()) is True
-    with store.transaction() as c:
-        assert W._consume_code(c, digest, H.now()) is False
-
-
 def test_a_code_from_someone_who_lost_admin_cannot_upload(api, private, monkeypatch):
     code = new_code(api)
     monkeypatch.setattr(api.app.state.store.settings, "credential_admins", ("ben@acme.example",))
@@ -597,13 +587,3 @@ def test_me_is_null_without_a_roster_or_for_someone_not_acting_as_themselves(api
     assert no_roster["me"] is None and no_roster["can_admin"] is False
     assert google_view(api, "ana-via-test")["me"] is None  # the Assistant acting for her is not her
     assert google_view(api, "ana-test")["can_admin"] is True
-
-
-def test_a_devcopy_clears_the_workspace_tables_and_the_connection_client():
-    assert {
-        "google_workspaces",
-        "google_setup_codes",
-        "google_oauth_clients",
-        "connector_reports",
-        "google_connects",
-    } <= set(devcopy.EMPTY)

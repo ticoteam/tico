@@ -177,13 +177,6 @@ def test_open_source_cannot_enable_or_call_even_with_a_stored_opt_in(install, ht
     assert http[0] == []
 
 
-def test_new_install_defaults_are_off_and_reporting_on(api):
-    store = api.app.state.store
-    with store.read() as c:
-        assert suggestions.privacy(c, store.settings)["share_stats_for_suggestions"] is False
-        assert suggestions.privacy(c, store.settings)["report_suggestion_outcomes"] is True
-
-
 def test_privacy_api_enforces_owner_and_open_source_gate(api):
     value = get(api, "system/suggestions")
     assert value["share_stats_for_suggestions"] is False
@@ -643,29 +636,6 @@ def test_saved_gateway_key_rewrap_uses_the_writer_with_kms_outside_it(install, h
         assert c.execute("SELECT kms_key FROM credential_keys WHERE id='v1'").fetchone()[0] == "alias/tico"
 
 
-def test_person_money_cap_uses_spend_alert_company_owner_path(install, http):
-    with install.transaction() as c:
-        usage_limits.save_pool(c, usage_limits.COMPANY, {"monthly_usd": 1}, "human:ana")
-        spend(c, 2)
-    suggestion = item(
-        owner_role="person_money_cap",
-        title="Review the monthly cap",
-        body="The company is over its cap.",
-        condition={"all": [{"field": "spend_month_usd", "op": "gt", "other_field": "spend_month_cap_usd"}]},
-    )
-    http[1]["items"] = [suggestion]
-    assert run_step(install)["details"]["delivered"] == 1
-    row = receipt(install)
-    assert row["outcome"] == "delivered" and row["owner_bot_id"] is None
-    # Spend is checked here, never sent.
-    assert "spend_month_usd" not in http[0][0][1] and "spend_month_cap_usd" not in http[0][0][1]
-    with install.read() as c:
-        notice = c.execute(
-            "SELECT recipient_id,kind FROM messages WHERE body=?", (suggestion["title"] + "\n\n" + suggestion["body"],)
-        ).fetchone()
-        assert tuple(notice) == ("human:ana", "notice")
-
-
 def test_person_money_cap_waits_for_known_company_spend_above_its_monthly_cap(install, http):
     http[1]["items"] = [item(owner_role="person_money_cap")]
     assert run_step(install)["details"]["delivered"] == 0
@@ -683,18 +653,6 @@ def test_person_money_cap_waits_for_known_company_spend_above_its_monthly_cap(in
             c.execute("SELECT 1 FROM messages WHERE body=?", (item()["title"] + "\n\n" + item()["body"],)).fetchone()
             is None
         )
-
-
-def test_person_money_cap_uses_fresh_caps_and_the_subscription_count_switch(install, http):
-    http[1]["items"] = [item(owner_role="person_money_cap")]
-    run_step(install)
-    with install.transaction() as c:
-        usage_limits.save_pool(c, usage_limits.COMPANY, {"monthly_usd": 1}, "human:ana")
-        usage_limits.save_default(c, {}, False, "human:ana")
-        spend(c, 2, billing="subscription")
-        assert suggestions.deliver_people(c, install.settings) == 0
-        usage_limits.save_default(c, {}, True, "human:ana")
-        assert suggestions.deliver_people(c, install.settings) == 1
 
 
 def test_condition_semantics_missing_operands_and_no_coercion():

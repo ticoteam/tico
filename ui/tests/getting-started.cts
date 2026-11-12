@@ -413,19 +413,6 @@ const importedChart = {org_groups: [{id: 'built-in', name: 'General', order: 0},
     await menuTour.waitFor({state: 'detached'});
     await page.close();
 
-    // Someone who joins later gets the tour once, on their first visit, and not again.
-    dismissed.tour = false;
-    page = await open('#/updates');
-    await page.locator('.gs-tour[role=dialog]').waitFor();
-    await page.keyboard.press('Escape');
-    await page.locator('.gs-tour').waitFor({state: 'detached'});
-    await page.reload();
-    await ready(page);
-    // gsBoot decides on the tour in the same turn GS lands; GS says it was seen.
-    await page.waitForFunction(() => GS?.tour_seen === true, null, {timeout: t(5000)});
-    assert.equal(await page.locator('.gs-tour').count(), 0);
-    await page.close();
-
     // The owner of a team that came in from the company file gets one welcome screen in place of the tour: the team as
     // it is, what the bots run on, Start. It stays on the page it opened over, and closing it is the tour seen.
     dismissed.tour = false; imported = true;

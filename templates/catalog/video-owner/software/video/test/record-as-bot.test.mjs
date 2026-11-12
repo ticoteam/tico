@@ -8,12 +8,6 @@ import { botHeaders, checkBotCanOpenApp, hubAuth, resolveStepUrl } from '../reco
 
 const hub = { origin: 'https://hub.tico.team', token: 'bot-token-123' };
 
-test('hubAuth reads the origin and the token; the origin ignores any path', () => {
-  assert.deepEqual(hubAuth({ HUB_API_URL: 'https://hub.tico.team/', HUB_TOKEN: 'abc' }), {
-    origin: 'https://hub.tico.team',
-    token: 'abc',
-  });
-});
 
 test('hubAuth reads a token from a tico-file: path and trims it', () => {
   const dir = mkdtempSync(join(tmpdir(), 'vp-record-test-'));

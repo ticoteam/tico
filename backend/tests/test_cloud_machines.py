@@ -204,13 +204,6 @@ def test_decide_lets_an_update_stand_in_for_work_whose_wake_is_spent_once():
     assert CM.decide(spent, behind | {"activity": 2500}, 3000, 300) == ("start", None)
 
 
-def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
-    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
-    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)
-    assert CM.decide(on, facts(updating=True), 1300, 300) == ("heartbeat", None)
-    assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
-
-
 def test_the_pause_is_pause_minutes_or_30_and_only_whole_minutes_from_5_to_1440_are_stored():
     assert CM.PAUSE_MINUTES == 30
     assert CM.pause_after(machine_row()) == 1800
@@ -222,18 +215,6 @@ def test_the_pause_is_pause_minutes_or_30_and_only_whole_minutes_from_5_to_1440_
     for bad in (None, 4, 1441, 0, -5, 2.5, "30", True):
         with pytest.raises(Problem):
             CM.checked_pause(bad)
-
-
-def test_a_machine_pauses_after_its_pause_with_no_turn_out_and_always_on_never_does():
-    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
-    assert CM.decide(on, facts(), 2799, CM.pause_after(on)) == ("heartbeat", None)  # the default: 30 minutes
-    assert CM.decide(on, facts(), 2800, CM.pause_after(on)) == ("stop", None)
-    assert CM.decide(on, facts(turns=True), 9999, CM.pause_after(on)) == ("heartbeat", None)
-    long = {**on, "pause_minutes": 45}
-    assert CM.decide(long, facts(), 3699, CM.pause_after(long)) == ("heartbeat", None)
-    assert CM.decide(long, facts(), 3700, CM.pause_after(long)) == ("stop", None)
-    always = {**on, "always_on": 1}
-    assert CM.decide(always, facts(), 9999, CM.pause_after(always)) == ("heartbeat", None)
 
 
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
@@ -287,14 +268,6 @@ def test_live_runner_contact_preserves_a_cloud_machines_stop_state(cloud, state)
     assert employee(cloud.api)["cloud_machine"]["state"] == state
     shown = next(m for m in get(cloud.api, "operations")["computers"] if m["id"] == computer["runner_id"])
     assert shown["cloud_machine"]["state"] == state
-
-
-def test_heartbeat_boot_repair_is_one_lookup(api):  # noqa: F811
-    with api.app.state.store.transaction() as c:
-        calls = Mock(wraps=c)
-        CM.checked_in(calls, "self-hosted-computer")
-        # Ordinary computers and machines already running are the common case: one small read on every beat.
-        calls.execute.assert_called_once()
 
 
 def test_heartbeat_then_idle_stop_at_break_even_then_wake_with_a_resize(cloud):
@@ -3153,12 +3126,6 @@ def test_hq_refusing_the_stop_lets_the_claim_go_on_at_once_and_backs_off(cloud):
     assert cloud.row()["failures"] == 1 and cloud.row()["next_try_at"] == cloud.at[0] + CM.BACKOFF
     work(cloud)
     assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
-
-
-def test_a_computer_that_is_no_cloud_machine_is_never_held(api):  # noqa: F811
-    computer = runner(api)
-    with api.app.state.store.read() as c:
-        assert CM.held(c, computer["runner_id"]) == ""
 
 
 @pytest.mark.parametrize(

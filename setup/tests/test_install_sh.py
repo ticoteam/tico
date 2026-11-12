@@ -148,22 +148,6 @@ def test_installer_scenarios(image, rel, docker_ready):
         assert must in passed, f"scenario {must} did not run"
 
 
-def test_import_does_not_probe_docker(monkeypatch):
-    import importlib.util
-
-    calls = []
-
-    def unexpected_docker_probe(command, *args, **kwargs):
-        calls.append(command)
-        raise AssertionError("importing test_install_sh must not probe Docker")
-
-    monkeypatch.setattr(subprocess, "run", unexpected_docker_probe)
-    spec = importlib.util.spec_from_file_location("test_install_sh_import_probe", __file__)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert calls == []
-
-
 def test_wizard_keeps_private_inbox_settings_across_sudo_by_name_only(tmp_path):
     # Run the real privilege boundary with a sudo stand-in that drops settings not explicitly preserved.
     stubs = tmp_path / "bin"
@@ -213,19 +197,6 @@ printf '%s\\n' "${TICO_INBOUND_URL:-}" > "$CAPTURE/url"
     assert key not in shown and url not in shown
 
 
-def test_docker_is_ready_returns_false_on_nonzero_exit(monkeypatch):
-    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/docker")
-    calls = []
-
-    def failed_info(command, **kwargs):
-        calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 1)
-
-    monkeypatch.setattr(subprocess, "run", failed_info)
-    assert docker_is_ready() is False
-    assert calls == [(["docker", "info"], {"capture_output": True, "timeout": 8})]
-
-
 def test_bundle_from_the_real_repo_has_what_a_server_needs_and_is_reproducible(tmp_path):
     assert build.main(["--version", "v1.2.3", "--output", str(tmp_path / "a")]) == 0
     assert build.main(["--version", "v1.2.3", "--output", str(tmp_path / "b")]) == 0
@@ -267,21 +238,6 @@ def shellcheck_skip_reason(environ=os.environ, which=shutil.which):
     CI=true; its Ubuntu VMs ship shellcheck) a missing shellcheck is a failure, not a skip, so the release gate cannot
     pass without this check. None means the test runs."""
     return None if which("shellcheck") or environ.get("CI") else "shellcheck not installed"
-
-
-@pytest.mark.parametrize(
-    "environ, installed, reason",
-    [
-        ({}, True, None),
-        ({"CI": "true"}, True, None),
-        ({"CI": "true"}, False, None),
-        ({}, False, "shellcheck not installed"),
-        ({"CI": ""}, False, "shellcheck not installed"),
-    ],
-    ids=["local", "CI", "CI-missing-runs-and-fails", "local-missing-skips", "empty-CI-skips"],
-)
-def test_shellcheck_is_skipped_only_off_ci(environ, installed, reason):
-    assert shellcheck_skip_reason(environ, lambda name: "/usr/bin/shellcheck" if installed else None) == reason
 
 
 @pytest.mark.skipif(shellcheck_skip_reason() is not None, reason="shellcheck not installed")

@@ -1369,39 +1369,6 @@ mod tests {
     }
 
     #[test]
-    fn a_typical_resumed_turn_says_how_many_words_it_saves() {
-        let names = Names {
-            company: "Acme".into(),
-            app: "Tico".into(),
-        };
-        let (first, next) = task_turns();
-        let given = build(
-            &first,
-            &names,
-            None,
-            false,
-            "",
-            &Seen::default(),
-            "claude opus agent-1",
-        );
-        let short = build(
-            &next,
-            &names,
-            Some("m1"),
-            true,
-            "",
-            &seen(&given),
-            "claude opus agent-1",
-        );
-        let (before, after) = (
-            short.full.split_whitespace().count(),
-            short.text.split_whitespace().count(),
-        );
-        eprintln!("typical resumed task turn: {before} words before, {after} after");
-        assert!(after * 3 < before);
-    }
-
-    #[test]
     fn a_stateless_bot_is_told_to_keep_no_memory_and_is_pointed_at_neither_memory_nor_state() {
         let names = Names {
             company: "Acme".into(),

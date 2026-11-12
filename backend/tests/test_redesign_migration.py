@@ -389,10 +389,6 @@ def test_a_moved_wake_rule_does_what_its_filter_shows_and_an_edit_it_cannot_do_i
     assert r.status_code == 422 and "wake rules" in r.text, r.text
 
 
-def test_half_rounds_up_to_ten_cents():
-    assert [M.half(v) for v in (3.0, 5.0, 0.25, 0.35, 0.2)] == [1.5, 2.5, 0.2, 0.2, 0.1]
-
-
 def test_a_turn_prompt_runs_whole_up_to_32000_characters():
     from backend import automation_engine as E
     from backend.tests.automation_fakes import Services

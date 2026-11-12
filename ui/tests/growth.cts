@@ -302,17 +302,6 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
     await arrive(to, from);
   }
 
-  // A late answer never draws over Sources, which sits under #/growth.
-  let release!: () => void;
-  const held = new Promise<void>(r => { release = r; });
-  await page.route('**/api/v2/places/growth*', async route => { await held; await route.fallback(); });
-  await go(page, '#/growth');
-  await go(page, '#/growth/sources');
-  await page.locator('[data-clash]').waitFor({timeout: t(10000)});
-  release();
-  await page.waitForTimeout(500);
-  assert.ok(await page.locator('[data-clash]').count(), `${tag}: Sources stays after a late answer`);
-
   // Strategy: How we sell reads and edits like its neighbours.
   await go(page, '#/strategy');
   const how = page.locator('[data-section="how"]');

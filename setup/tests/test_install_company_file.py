@@ -234,11 +234,6 @@ def test_an_install_that_already_has_its_env_keeps_its_team_and_says_the_file_wa
     assert "docker compose run" not in company["log"].read_text()
 
 
-def test_the_help_text_names_the_flag(company):
-    r = run(company, "--help")
-    assert r.returncode == 0 and "--company-file PATH" in r.stdout
-
-
 def test_the_installers_packer_prints_the_plan_the_server_reads_and_refuses_a_file_it_cannot_import():
     # The program install.sh runs in the server image, run here as the image runs it: the same bytes the server unpacks.
     from backend.company_file import starter

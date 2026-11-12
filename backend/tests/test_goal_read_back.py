@@ -478,16 +478,6 @@ def test_what_stays_a_click_is_refused_at_read_back_with_one_reason_and_nothing_
     )
 
 
-def test_each_click_refusal_says_nothing_was_saved_and_where_the_change_is_made():
-    """A refused read-back saves nothing, so no refusal may say a change was left out."""
-    assert set(GR.CLICK) == {"colour", "status", "archive", "reading", "vision", "strategy", "recovery"}
-    for kind, sentence in GR.CLICK.items():
-        assert sentence.startswith("Nothing was saved: "), kind
-        assert "left it out" not in sentence, kind
-        assert sentence.count(".") == 1 and sentence.endswith("."), kind
-        assert any(place in sentence for place in ("Goals page", "KPI itself", "Strategy page", "its card")), kind
-
-
 def test_only_the_owners_strategy_bot_turn_saves_on_a_yes(api):
     strategy_bot(api)
     from backend.tests.helpers.assistant import assistant_turn

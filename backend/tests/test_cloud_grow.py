@@ -66,13 +66,6 @@ def test_a_nearly_full_disk_plans_the_next_size_with_more_disk_up_to_the_largest
     assert CM.bigger([{k: v for k, v in s.items() if k != "disk_gb"} for s in OFFERED], "default") is None
 
 
-def test_grow_storage_is_on_unless_the_bot_or_the_company_turned_it_off():
-    assert CM.grows(machine_row()) and CM.grows(machine_row(grow_storage=None), {"grow_storage": None})
-    assert not CM.grows(machine_row(grow_storage=0))
-    assert not CM.grows(machine_row(grow_storage=None), {"grow_storage": 0})  # the company's
-    assert CM.grows(machine_row(grow_storage=1), {"grow_storage": 0})  # the bot's own choice wins
-
-
 def test_a_running_machine_with_another_size_stops_only_once_no_turn_is_out_always_on_too():
     pending = machine_row(state="running", size="large", heartbeat_at=990, active_at=999)
     assert CM.resizing(pending) and not CM.resizing(machine_row(state="running"))

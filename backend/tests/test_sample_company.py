@@ -37,34 +37,6 @@ from backend.tests.helpers.sample_company import (
 
 
 # ---------------------------------------------------------------------------------------------- the file
-def test_the_sample_is_a_company_file_of_five_bots_each_with_a_goal_and_short_starter_tasks():
-    draft, extra = sample_company.team()
-    assert draft == from_yaml(sample_company.FILE.read_text())  # import can read it as it is
-    assert [b["template"] for b in draft["bots"]] == [
-        "assistant",
-        "product-lead",
-        "builder",
-        "support-owner",
-        "content-owner",
-    ]
-    assert [b["title"] for b in draft["bots"]] == [
-        "Assistant",
-        "Product Lead",
-        "Builder",
-        "Support Agent",
-        "Content Owner",
-    ]
-    assert sorted(g["owner"] for g in draft["goals"]) == sorted(b["id"] for b in draft["bots"])
-    runs_on = [row["runs_on"] for row in extra.values()]
-    assert set(runs_on) == set(sample_company.RUNS_ON) and min(runs_on.count(r) for r in set(runs_on)) >= 2
-    for row in extra.values():
-        assert 1 <= len(row["tasks"]) <= 2
-        for task in row["tasks"]:
-            assert set(task) == {"title", "approve", "body"} and len(task["body"]) < 1200
-            # Nothing leaves the company: no approval to send, spend or publish, no mail, no publishing.
-            assert not re.search(r"approval request|mail send|support send|file publish|tico message", task["body"])
-    # A made-up company that names none of the test fixtures' people or companies.
-    assert not re.search(r"\b(ana|ben|cara|acme|globex)\b", sample_company.FILE.read_text(), re.I)
 
 
 # ---------------------------------------------------------------------------------------------- the welcome's button

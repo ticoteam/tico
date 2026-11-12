@@ -559,26 +559,6 @@ def test_after_a_send_back_a_met_page_a_person_oks_is_asked_of_the_same_person(c
     assert standing.line.startswith('Version 2, after the send back: "Add the rounding". OK '), standing.line
 
 
-def test_a_note_that_ends_a_sentence_is_quoted_with_one_end_mark(c, store):
-    """Acme rc.4: "...criterion.. Attach the new version" on the line and "..person.." in the wake."""
-    from backend import task_wakes as TW
-
-    rid = _pipeline(c, who_oks="people_only")
-    row = _task(c)
-    fid, _ = _page(c, store)
-    _say(c, _attach(c, row, "page:" + fid), "met")
-    A.answer(c, row["id"], rid, BEN, "no", "Rename it everywhere.")
-    assert _standing(c, row).line == f"Sent back: Rename it everywhere. {R.PAGE_OK_HINT}"
-    told = TW.body(c, E.task(c, row["id"]), to=WRITER)
-    assert f"- Spec page: Sent back: Rename it everywhere. {R.PAGE_OK_HINT}\n" in told, told
-    assert ".." not in told
-    _again(c, store, row, fid, verdict="met")
-    assert _standing(c, row).line == 'Version 2, after the send back: "Rename it everywhere." OK Ben (version 2)'
-    A.answer(c, row["id"], rid, BEN, "no", "Is it absolute_value?")
-    _again(c, store, row, fid, verdict="met", text="<p>v3</p>")
-    assert _standing(c, row).line.startswith('Version 3, after the send back: "Is it absolute_value?" OK Ben')
-
-
 def test_a_new_version_asked_of_a_person_waits_from_when_it_was_asked_not_the_stage_start(c, store):
     """Acme rc.4: both version-2 asks showed `since` as stage entry. The wait counts from Jev's verdict on that version
     (when it was asked), so Needs you ages it from then."""

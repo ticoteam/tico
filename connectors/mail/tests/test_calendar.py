@@ -70,7 +70,10 @@ access:
         )
 
     def test_hold_may_invite_an_outside_guest_by_default(self):
-        rc, out, err = self.hold_with_outside_guest()
+        # The default is the policy left unset, whatever the shell that runs the suite has it set to.
+        with patch.dict("os.environ"):
+            os.environ.pop("TICO_BLOCK_EXTERNAL_INVITES", None)
+            rc, out, err = self.hold_with_outside_guest()
         self.assertEqual(rc, 0, err)
         self.assertEqual(len(self.calendar.created_events), 1)
 

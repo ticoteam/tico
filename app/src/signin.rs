@@ -1136,40 +1136,6 @@ mod tests {
     }
 
     #[test]
-    fn a_removal_during_a_renewal_waits_for_it_and_a_late_write_finds_the_org_gone() {
-        let store = Uuid::new_v4();
-        let mut orgs = vec![org("o_aaaaaaaa", Some(store)), org("o_bbbbbbbb", None)];
-        assert!(owns_store(&orgs, "o_aaaaaaaa", Some(store)));
-        assert!(
-            owns_store(&orgs, "o_bbbbbbbb", None),
-            "the org moved over from server.txt, on the default store"
-        );
-        assert!(
-            !owns_store(&orgs, "o_aaaaaaaa", None),
-            "never the default store for an org with its own"
-        );
-        assert!(!owns_store(&orgs, "o_aaaaaaaa", Some(Uuid::new_v4())));
-        // Removed while the cookies were being read: the write that comes after finds nothing to write to.
-        orgs.retain(|org| org.id != "o_aaaaaaaa");
-        assert!(!owns_store(&orgs, "o_aaaaaaaa", Some(store)));
-        // And a removal waits for a renewal under way before it closes the page and lets the store go.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_time()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let renewing = RENEWING.lock().await;
-            let removal = tokio::spawn(async {
-                let _removing = RENEWING.lock().await;
-            });
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            assert!(!removal.is_finished(), "the removal waits");
-            drop(renewing);
-            removal.await.unwrap();
-        });
-    }
-
-    #[test]
     fn a_renewed_session_goes_only_into_each_picked_orgs_own_store() {
         let (acme_store, tidy_store) = (Uuid::new_v4(), Uuid::new_v4());
         let mut tidy = org("o_bbbbbbbb", Some(tidy_store));

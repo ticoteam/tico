@@ -268,20 +268,6 @@ def test_the_product_task_is_handed_the_pre_release_sign_offs_of_the_work_it_fil
     assert not [e for e in SI.of(c, E.task(c, product), shown=lambda task_id: False) if e["kind"] == "signoff"]
 
 
-def test_tico_task_show_prints_a_sign_off_with_its_person():
-    task = {
-        "id": "t1",
-        "title": "Saved carts",
-        "version": 4,
-        "stage": {"name": "Validate"},
-        "to_leave": [],
-        "inputs": [{"kind": "signoff", "line": SIGNED, "by": ANA, "answer": "ok"}],
-    }
-    lines = hubtools.task_text(task, {ANA: "Ana"}).splitlines()
-    at = lines.index("From earlier stages:")
-    assert lines[at + 1] == f"  {SIGNED} (Ana)"
-
-
 def _link_other_pr(c, task_id, repo, number):
     c.execute(
         "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "

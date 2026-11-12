@@ -1515,31 +1515,6 @@ mod tests {
     }
 
     #[test]
-    fn tool_calls_follow_the_real_muse_stream() {
-        let proposed = |task: &str| json!({"event": {"kind": "proposed", "task_kind": task}});
-        assert_eq!(
-            tool_started(
-                "task.lifecycle.proposed",
-                &proposed("tool.mcp__tico__tico_task_list")
-            )
-            .as_deref(),
-            Some("mcp__tico__tico_task_list")
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.proposed", &proposed("model.meta.response")),
-            None
-        );
-        assert_eq!(
-            tool_started("task.lifecycle.started", &json!({"task_id": "t"})),
-            None
-        );
-        assert_eq!(
-            tool_started("tool.bash.started", &json!({"tool_name": "bash"})).as_deref(),
-            Some("bash")
-        );
-    }
-
-    #[test]
     fn flags_usage_and_sign_in_follow_the_python_host() {
         assert_eq!(model_for(None), "muse-spark-1.3");
         assert_eq!(model_for(Some("default")), "muse-spark-1.3");

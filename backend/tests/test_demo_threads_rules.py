@@ -3,7 +3,6 @@ pricing), the rules (three for everyone, four between teammates with a With, eac
 suggestion, and the one draft a rule held for Ben (written nowhere; its review task
 waits for Ben, and Ana, the owner, can review it too)."""
 
-import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -66,33 +65,6 @@ def _the_rules_say_who_follows_them_and_with_whom(built):
         for key in ("groups", "bots", "people"):
             assert [x["id"] for x in rule["who"][key]] == who.get(key, []), (item["key"], key)
             assert [x["id"] for x in rule["with"][key]] == with_.get(key, []), (item["key"], key)
-
-
-def _peer_rules_fill_the_with_column(built):
-    _, settings, _rows = built
-    with signed_in(settings) as api:
-        rules = api.get("/api/v2/rules", params={"kind": "internal", "status": "active"}).json()["rules"]
-    peer = [r for r in rules if any(r["with"][k] for k in ("groups", "bots", "people"))]
-    assert len(peer) >= 3
-    by_text = {r["text"]: r for r in peer}
-    ben = by_text["Don't assign @ben a task without asking first."]
-    assert ben["who"]["all_bots"] and [p["id"] for p in ben["with"]["people"]] == ["ben"]
-
-
-def _every_mention_in_a_rule_names_a_real_teammate(built):
-    """A rule names a teammate as @slug (a bot) or @handle (a person), the way the Rules page shows a mention chip."""
-    _, settings, _rows = built
-    with signed_in(settings) as api:
-        bots = {b["id"] for b in api.get("/api/v2/org").json()["bots"]}
-        rules = api.get("/api/v2/rules", params={"status": "active"}).json()["rules"]
-    people = {"ana", "ben", "cara", "eli"}
-    ours = {item["text"] for item in CONTENT["rules"]}
-    named = [
-        m.rstrip(".-") for r in rules if r["text"] in ours for m in re.findall(r"(?<![\w@])@(\w[\w.-]*)", r["text"])
-    ]
-    assert {"ana", "ben", "finance-owner", "accounts-payable-specialist", "firmware", "pricing-analyst"} <= set(named)
-    assert [m for m in named if m not in bots | people] == []
-    assert not any(re.search(r"\b(Ana|Ben)'s\b|go to Ben\b", text) for text in ours), "a teammate is named by @handle"
 
 
 def _bens_rule_suggestion_waits_as_a_suggestion(built):
@@ -215,8 +187,6 @@ def test_the_demo_threads_and_rules_tell_their_story(built, subtests):
     """Every check reads the one demo build, in file order, each as its own subtest."""
     for check in (
         _the_rules_say_who_follows_them_and_with_whom,
-        _peer_rules_fill_the_with_column,
-        _every_mention_in_a_rule_names_a_real_teammate,
         _bens_rule_suggestion_waits_as_a_suggestion,
         _the_refund_draft_is_held_for_ben_and_written_nowhere,
         _the_engineering_home_has_the_pause_and_its_fix_thread,

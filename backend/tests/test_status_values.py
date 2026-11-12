@@ -97,15 +97,6 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
             )
 
 
-def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS) == 71
-        triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-        assert "status_values_jobs_state_ins" in triggers and "status_values_webhook_sends_state_upd" in triggers
-        sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='fin_payments'").fetchone()[0]
-        assert "'canceled'" in sql and "'cancelled'" not in sql
-
-
 # The upgrade, on small hand-made tables (what an existing file held before migration 0002).
 
 

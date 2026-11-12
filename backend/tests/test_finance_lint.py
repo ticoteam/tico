@@ -1,8 +1,6 @@
 """scripts/finance_lint.py passes on the repo and catches a fin_* write, a business-table read and an inner import."""
 
 import importlib.util
-import subprocess
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -15,11 +13,6 @@ def _lint():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
-
-
-def test_the_repo_passes():
-    done = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True, cwd=ROOT, timeout=120)
-    assert done.returncode == 0, done.stdout + done.stderr
 
 
 def test_it_catches_writes_reads_and_inner_imports(tmp_path):

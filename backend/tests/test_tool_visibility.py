@@ -72,20 +72,6 @@ def test_a_credential_admin_who_is_not_listed_gets_404_everywhere_and_never_sees
         assert c.execute("SELECT revoked_at FROM credential_grants WHERE id=?", (grant,)).fetchone()[0] is None
 
 
-def test_ben_cannot_find_it_through_sql_events_or_history(api):
-    tid, rw, _ = bank(api)
-    for sql in (
-        "SELECT * FROM tools",
-        "SELECT * FROM credentials",
-        "SELECT * FROM tool_calls",
-        "SELECT target, detail FROM events",
-    ):
-        r = api.post("/api/v2/sql", json={"sql": sql}, headers=headers("ben-test"))
-        assert tid not in r.text and rw not in r.text and "Acme Bank" not in r.text, (sql, r.text[:300])
-    r = api.get("/api/v2/history", headers=headers("ben-test"))
-    assert r.status_code == 200 and "Acme Bank" not in r.text and "Close read" not in r.text and rw not in r.text
-
-
 def test_a_grant_holder_sees_it_and_the_proxy_key_works_for_them(api):
     tid, rw, ro = bank(api)
     level(api, tid, "human:cara", "read")

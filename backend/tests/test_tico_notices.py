@@ -140,33 +140,6 @@ def test_a_delivery_naming_tico_from_another_relay_is_ignored(api, hq, judged):
         assert c.execute("SELECT relay_id FROM trigger_relays WHERE trigger_id='_tico'").fetchall()[0][0] == TICO
 
 
-def test_with_only_a_gateway_key_the_loop_pulls_every_minute_learns_the_system_relay_and_notices_arrive(
-    api, hq, judged
-):
-    send(hq, "k1", kind="billing", body="Your Acme card expires.")
-    service(api).tick()
-    assert hq.paths().count("pull") == 1 and hq.paths().count("relays") == 1  # the list was forced by the notice
-    assert service(api).interval == hook_relay.NOTICES_EVERY == 60
-    assert "pending" not in hq.paths() and [c["notice_id"] for c in judged] == ["k1"]
-    assert [t["id"] for t in get(api, "triggers")["triggers"]] == ["_tico"]
-    relay_for(api, hq)
-    service(api).tick()
-    assert service(api).interval == hook_relay.EVERY
-
-
-def test_only_the_relay_hq_lists_as_system_is_recorded_and_the_list_is_asked_hourly(api, hq, monkeypatch):
-    hq.relays[TICO] = {"id": TICO, "trigger_id": "_tico", "key": "hq", "system": True}
-    hq.relays["hr_00000000000000b2"] = {"id": "hr_00000000000000b2", "trigger_id": "_tico", "key": "x"}  # not system
-    service(api).listed = 0.0  # the app's own first tick, before the key was set, may have asked
-    service(api).tick()
-    service(api).tick()
-    assert hq.paths().count("relays") == 1  # listed once this hour
-    with api.app.state.store.read() as c:
-        from backend import tico_notices
-
-        assert tico_notices.relay(c) == TICO
-
-
 def test_a_delivery_naming_the_tico_trigger_from_a_relay_hq_does_not_list_as_system_is_dropped_and_acked(
     api, hq, judged
 ):

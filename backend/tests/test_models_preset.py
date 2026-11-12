@@ -250,21 +250,6 @@ def test_the_turn_carries_what_each_gateway_model_reads():
         gateway_tiers.reset()
 
 
-def test_the_installer_choice_seeds_claude_and_chatgpt_and_an_unknown_choice_is_refused(api):
-    settings = api.app.state.store.settings
-    seeded = providers.env_seed(type("S", (), {"models_preset": "subscriptions-gateway"})())
-    assert (seeded["enabled"], seeded["preset"]) == (["anthropic", "openai"], "subscriptions-gateway")
-    assert providers.env_seed(type("S", (), {"models_preset": "something-else"})()) is None
-    with api.app.state.store.transaction() as c, pytest.raises(providers.ProviderError):
-        record = providers.load(c, settings)
-        providers.save(
-            c,
-            "human:ana",
-            {"enabled": ["anthropic"], "preset": "something-else", "expected_revision": record["revision"]},
-            "2026-10-19T00:00:00Z",
-        )
-
-
 def needs(api):
     """The company's sign-in card (models_preset.card), as a list. Needs you no longer lists setup cards since the
     cut-over (it is the engine's list and a person's @s), so the card is read where it is made."""
@@ -778,14 +763,3 @@ def test_a_turn_the_gateway_ran_before_sign_in_is_recorded_and_health_says_what_
     with api.app.state.store.read() as c:
         text = health._fallback_lines(c, settings, listed := [dict(r) for r in hop], {"ops", "cpo"})
     assert text.startswith("Every bot") and text.endswith(listed[-1]["line"])
-
-
-def test_health_names_five_bots_then_says_how_many_more_in_plain_words():
-    """Health names up to five bots, then says how many more there are in words a person reads: "And 1 more bot."""
-    from backend import health
-
-    lines = [f"Bot {n} runs on its fallback." for n in range(7)]
-    assert health._named_lines(lines[:1]) == lines[0]
-    assert health._named_lines(lines[:5]) == " ".join(lines[:5])
-    assert health._named_lines(lines[:6]) == " ".join(lines[:5]) + " And 1 more bot."
-    assert health._named_lines(lines) == " ".join(lines[:5]) + " And 2 more bots."

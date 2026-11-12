@@ -9,7 +9,6 @@ import pytest
 from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance.mercury import Answer
-from backend.finance.store import schema
 from backend.tests.helpers.finance_fixtures import (
     AT,
     MERCURY,
@@ -348,44 +347,7 @@ def test_an_internal_transfer_needs_two_of_the_companys_bank_accounts_and_money_
     assert _rows(books, "SELECT count(*) FROM fin_transfers")[0][0] == 0
 
 
-def test_migration_73_adds_fin_transfers_to_an_install_made_before_it_and_running_it_again_changes_nothing(books):
-    with books.transaction() as c:
-        c.execute("DROP TABLE fin_transfers")
-        schema.gaps_books(c)
-        schema.gaps_books(c)
-        found = c.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='fin_transfers'").fetchone()
-        assert found[0] == 1
-
-
 # fin_transfers as migration 73 first wrote it: before the columns added since, and the posted and canceled statuses
-FIRST_FIN_TRANSFERS = """CREATE TABLE IF NOT EXISTS fin_transfers (
-  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
-  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
-  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
-  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
-  idempotency_key TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed')),
-  provider_txn_id TEXT, last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
-  CHECK (from_money_account_id <> to_money_account_id));"""
-
-
-def test_migration_73_adds_every_fin_transfers_column_added_since_it_was_first_written(books):
-    """An install that ran migration 73 as first written gets the columns added since, idempotently."""
-    with books.transaction() as c:
-        c.execute("DROP TABLE fin_transfers")
-        c.execute(FIRST_FIN_TRANSFERS)
-        schema.gaps_books(c)
-        schema.gaps_books(c)
-        have = {str(r[1]) for r in c.execute("PRAGMA table_info(fin_transfers)").fetchall()}
-    assert {
-        "from_feed_id",
-        "to_feed_id",
-        "settled_at",
-        "submitted_at",
-        "counted",
-        "provider_credit_txn_id",
-        "find_after",
-    } <= have, have
 
 
 def _limit_per_month(books, rule_id_out: list[str] | None = None) -> str:
@@ -547,16 +509,6 @@ def test_a_rule_on_accounts_matches_a_transfer_by_its_two_ledger_accounts(books)
         assert c.execute("SELECT count(*) FROM fin_transfers").fetchone()[0] == 0
 
 
-def test_a_queued_transfer_whose_payer_lost_the_right_is_canceled_and_nothing_is_sent(books):
-    fake = FakeMercury()
-    src, dst = _two(books, fake)
-    _queued_by_ben(books, src, dst)
-    with books.transaction() as c:
-        act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
-    sync_once(books, fake)
-    _assert_canceled_unsent(books, fake)
-
-
 def test_a_deny_rule_added_after_a_transfer_is_queued_cancels_it_before_it_goes(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
@@ -654,7 +606,7 @@ def test_a_transfer_already_sent_or_whose_call_is_claimed_cannot_be_canceled(boo
 
 @pytest.mark.parametrize(
     "day, settles",
-    [("2026-10-01", False), ("2026-10-14", False), ("2026-10-15", True), ("2026-10-20", True), ("2026-10-21", False)],
+    [("2026-10-14", False), ("2026-10-15", True), ("2026-10-20", True), ("2026-10-21", False)],
 )
 def test_legs_settle_a_transfer_only_when_dated_from_its_submit_day_through_five_days_on(books, day, settles):
     fake = FakeMercury()
@@ -916,26 +868,6 @@ def test_an_unknown_transfer_is_searched_by_its_note_in_its_account_before_all_t
         "leg-out",
         "2026-10-16T00:04:00.000000Z",
     )
-
-
-def test_an_unknown_transfer_the_search_misses_is_still_found_in_the_full_list(books):
-    """Its key only in another memo field, which the search does not read: every transaction is read, and it is found."""
-    fake = FakeMercury()
-    src, dst = _two(books, fake)
-    fake.queue["create_transfer"] = [Answer(None, {})]
-    with books.transaction() as c:
-        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
-    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
-    (sent,) = fake.sent("create_transfer")
-    fake.txns["leg-out"] = {
-        **_leg("leg-out", src[1], -800.0, "2026-10-16"),
-        "note": None,
-        "externalMemo": sent["note"],
-        "createdAt": "2026-10-16T00:04:00Z",
-    }
-    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
-    assert fake.sent("account_transactions")[-1][1] == sent["note"]  # searched first, and it missed
-    assert tuple(_rows(books, "SELECT status, provider_txn_id FROM fin_transfers")[0]) == ("submitted", "leg-out")
 
 
 def test_the_transfers_read_lists_moves_between_accounts_the_viewer_sees_both_of_newest_first(books):

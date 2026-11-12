@@ -90,7 +90,24 @@ pub const SECRET_KEYS: &[&str] = &[
 pub fn process_environment() -> Env {
     std::env::vars()
         .filter(|(k, _)| SETTINGS.contains(&k.as_str()) || k.starts_with("LC_"))
+        .chain(test_home().map(|home| ("HOME".to_string(), home.display().to_string())))
         .collect()
+}
+
+/// The operator's own HOME: this process's.
+pub fn operator_home() -> PathBuf {
+    test_home().unwrap_or_else(|| PathBuf::from(std::env::var("HOME").unwrap_or_default()))
+}
+
+/// A test's private stand-in for this process's HOME (tests::OPERATOR_HOME).
+#[cfg(test)]
+fn test_home() -> Option<PathBuf> {
+    tests::OPERATOR_HOME.with(|h| h.borrow().clone())
+}
+
+#[cfg(not(test))]
+fn test_home() -> Option<PathBuf> {
+    None
 }
 
 /// Whether a granted credential's variable is one the turn sets itself or the computer runs on.
@@ -595,8 +612,14 @@ pub async fn environment_with(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    thread_local! {
+        /// This thread's stand-in for the operator's HOME (`operator_home`, and the HOME a turn inherits), so a test
+        /// never reads the developer's own login or config. Tokio tests run their turn on this one thread.
+        pub(crate) static OPERATOR_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+    }
 
     #[test]
     fn only_a_gateway_hop_can_receive_the_relay_and_it_needs_a_lease() {

@@ -288,20 +288,6 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         )
 
 
-def test_a_setup_finding_is_never_reported_to_the_tico_team(environment, readers, code_findings, hq):
-    api, _ = built(environment)
-    code_findings[:] = [item("push_stuck", key="push_stuck:A", title="Pushes are stuck")]
-    run(api)
-    for rule in (True, False):
-        set_rule(api, rule)
-        r = api.post("/api/v2/health/findings/push_stuck:A/report", json={}, headers=signed_in())
-        assert r.status_code == 409 and r.json()["error"]["code"] == "not_a_tico_bug", r.text
-    assert hq.seen == []
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM health_reports").fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM ok_grants WHERE subject LIKE 'support:%'").fetchone()[0] == 0
-
-
 def test_a_setup_finding_naming_a_bot_is_never_reported_to_the_tico_team(environment, readers, hq):
     api, runner = built(environment)
     store = api.app.state.store

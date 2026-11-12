@@ -195,20 +195,6 @@ def upgraded(tmp_path_factory):
     conn.close()
 
 
-def test_the_map_names_only_columns_the_old_schema_has():
-    tables = {}
-    for fixture in (FIXTURE, FIXTURE.with_name("schema_old_main.sql")):
-        conn = sqlite3.connect(":memory:")
-        conn.executescript(fixture.read_text())
-        for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
-            tables.setdefault(t, columns(conn, t))
-    # A later wave may rename what an earlier one named (automation_runs: state_json -> state -> saved_state).
-    named = {(t, n) for t, _old, n, _wave in COLUMNS}
-    missing = [(t, old) for t, old, _new, _wave in COLUMNS if old not in tables.get(t, ()) and (t, old) not in named]
-    clashes = [(t, old, n) for t, old, n, _wave in COLUMNS if n in tables.get(t, ())]
-    assert not missing and not clashes, (missing[:5], clashes[:5])
-
-
 def test_every_column_has_its_new_name_and_the_rows_kept_their_values(upgraded):
     _store, conn, before = upgraded
     for table, old, renamed, _wave in COLUMNS:

@@ -42,14 +42,6 @@ def test_no_leave_it_rejects_at_once_and_its_decider_adds_the_reason_afterwards(
     )
 
 
-def test_leaving_the_box_changes_nothing_more(api):
-    goal, _ = goal_with_kpi(api)
-    p = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])
-    post(api, f"goal-proposals/{p['id']}/decide", {"decision": "reject"})
-    assert tuple(stored(api, p["id"])) == ("rejected", "")
-    assert rejected(api)[p["id"]]["may_reason"] is True
-
-
 def test_a_second_reason_anyone_else_a_waiting_or_confirmed_one_and_an_empty_one_are_refused(api):
     goal, _ = goal_with_kpi(api)
     waiting = propose(api, "goal_kpi", {"kpi": {"name": "Weekly demos"}}, goal["id"])

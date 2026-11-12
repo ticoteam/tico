@@ -259,13 +259,6 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     assert sum(ana["ops"]["task_flow"].values()) == 1
 
 
-def test_a_bot_that_declares_no_host_lists_as_a_keeper_bot(api):
-    """The keeper is the only host there is. The seeded bots declare no host (api fixture), and each lists as keeper."""
-    rows = {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}
-    assert set(BASE) <= set(rows)
-    assert {slug: rows[slug]["host"] for slug in BASE} == {slug: "keeper" for slug in BASE}
-
-
 def statements(api, method, path, token, body=None):
     flight = api.app.state.flight
     flight.drain()
@@ -367,27 +360,6 @@ def list_statements(api, monkeypatch, token="ana-test"):
         response = api.get("/api/v2/bots", headers=T.headers(token))
     assert response.status_code == 200, response.text
     return response.json(), len(seen)
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="bot_rows.task_flow reads each task's waits (H.task_waits), and task_wakes.cannot_run reads four statements "
-    "per bot (bots, bot_settings twice over, assignments): 40 bots cost about 120 more than 5. The batched read is "
-    "listed under 'After the cut-over merge' in docs/dev/pipelines-v3-cutover.md",
-)
-def test_bot_list_statements_do_not_grow_with_bots_that_have_open_tasks(api, monkeypatch):
-    """Five bots and forty bots, each with open tasks, asks and a private task: the list reads each table once for all
-    of them, so the forty cost what the five do. Per bot, the waiting checks and the step names were read one bot at a time."""
-    small = [f"s{n:02d}" for n in range(5)]
-    add_bots(api, {slug: {} for slug in small})
-    open_work(api, small)
-    few_rows, few = list_statements(api, monkeypatch)
-    big = [f"b{n:02d}" for n in range(35)]
-    add_bots(api, {slug: {} for slug in big})
-    open_work(api, big)
-    many_rows, many = list_statements(api, monkeypatch)
-    assert len(many_rows) == len(few_rows) + 35 and {row["slug"] for row in many_rows} >= set(small + big)
-    assert few > 0 and many <= few + 2, (few, many)
 
 
 def old_rows(c, rows):

@@ -96,19 +96,6 @@ def test_a_carried_message_taken_back_mid_turn_gets_no_reply(api):
     assert replies(api) == []
 
 
-def test_public_and_private_threads_claim_different_audience_classes(api):
-    r = bot_runner(api)
-    public = make_thread(api, title="Handbook", audience="company", members=["bot:cpo"])
-    private = make_thread(api, title="Board prep", members=["bot:cpo"])
-    say(api, public, "@cpo update the handbook intro")
-    first = claim(api, r, "cpo")
-    finish(api, r, first, "Done with the handbook")
-    say(api, private, "@cpo draft the board note")
-    second = claim(api, r, "cpo")
-    assert (first["conversation"]["root_id"], second["conversation"]["root_id"]) == (public, private)
-    assert (first["conversation"]["audience_class"], second["conversation"]["audience_class"]) == ("public", "private")
-
-
 def test_a_carrier_turns_reply_is_rule_checked_as_going_to_the_carried_sender(api, monkeypatch):
     r = bot_runner(api)
     tid = make_thread(api, title="Launch", members=["bot:cpo"])

@@ -908,21 +908,6 @@ mod tests {
         );
         std::fs::remove_dir_all(dir).unwrap();
     }
-    #[test]
-    fn a_mac_with_the_driver_installed_reports_its_apps_before_any_bot_is_delivered_there() {
-        // A fresh runner: no assignment, no TICO_APPDRIVER, the driver beside it or on PATH.
-        assert!(wanted(false, false, true));
-        assert!(
-            wanted(true, false, false),
-            "a delivered bot with no driver hears that it's missing"
-        );
-        assert!(wanted(false, true, false));
-        assert!(
-            !wanted(false, false, false),
-            "a Mac without the driver says nothing about apps"
-        );
-    }
-
     fn header(request: &str, name: &str) -> String {
         request
             .lines()

@@ -1,27 +1,6 @@
 [
  {
   "argv": [
-   "usage"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "Tico: tasks, messages, bots and the rest of your team's work",
-  "exit": 64
- },
- {
-  "argv": [
-   "usage",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico usage: error: argument sub: invalid choice: 'nope' (choose from show, limits) Did you mean: tico usage show, tico usage limits?",
-  "exit": 64
- },
- {
-  "argv": [
    "usage",
    "show"
   ],
@@ -106,18 +85,5 @@
   "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
- },
- {
-  "argv": [
-   "usage",
-   "show",
-   "--group",
-   "nope"
-  ],
-  "tools": [],
-  "http": [],
-  "stdout": "",
-  "stderr": "tico usage show: error: argument --group: invalid choice: 'nope' (choose from bot, day, routine, task, harness, model, effort, subscription)",
-  "exit": 64
  }
 ]

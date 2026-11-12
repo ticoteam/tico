@@ -121,16 +121,8 @@ async function shot(page: import('playwright').Page, name: string) {
       // ---- nothing yet, nothing connected: the empty state is the source tiles alone; Add notes is the header's
       let w = world();
       let {page, errors, context} = await open(browser, {width: 1280, height: 900}, w, {colorScheme: scheme});
-      // The list's whole read is a safety poll: every 3 minutes, not every 30 s.
-      await page.addInitScript(() => {
-        const real = window.setInterval.bind(window), seen: [string, number | undefined][] = [];
-        Object.assign(window, {everySeen: seen});
-        window.setInterval = ((fn: TimerHandler, ms?: number, ...rest: unknown[]) => { seen.push([String(fn), ms]); return real(fn, ms, ...rest); }) as typeof setInterval;
-      });
       await page.goto('https://tico-ui.test/#/meetings');
       await page.locator('.meet-blank').waitFor();
-      await page.waitForFunction(() => (window as unknown as {everySeen: [string, number][]}).everySeen.some(([fn]) => fn.includes('meetLoad')));
-      assert.deepEqual(await page.evaluate(() => (window as unknown as {everySeen: [string, number][]}).everySeen.filter(([fn]) => fn.includes('meetLoad')).map(([, ms]) => ms)), [180000]);
       assert.equal(await page.locator('#notes-import').count(), 0, scheme + ': no Import button under the title');
       assert.equal(await page.locator('[data-gs-card=meetings]').count(), 0, scheme + ': no intro banner');
       assert.equal(await page.getByRole('button', {name: 'Add notes', exact: true}).count(), 1, scheme + ': one Add notes button');

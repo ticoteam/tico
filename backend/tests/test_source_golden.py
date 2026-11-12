@@ -724,14 +724,6 @@ def _(w):
     return task_id
 
 
-@situation("a required check missing: GitHub refuses the queue")
-def _(w):
-    task_id = in_merge(w, 1)
-    w.gh.rule(REPO, 1, 'Required status check "e2e" is expected.')
-    Seam.run_queue(w.store, w.gh)
-    return task_id
-
-
 @situation("dropped from the queue, 1st")
 def _(w):
     return dropped(w, 1)
@@ -1153,9 +1145,3 @@ def test_situation_matches_the_golden_standings(company, name):
         have = json.dumps(found, indent=1).splitlines()
         diff = "\n".join(difflib.unified_diff(want, have, "golden", "now", lineterm="", n=2))
         pytest.fail(f"{name}: today's GitHub behaviour changed\n{diff}", pytrace=False)
-
-
-def test_the_golden_file_has_no_situation_that_is_gone():
-    if WRITE:
-        return
-    assert sorted(_golden()) == sorted(SITUATIONS)

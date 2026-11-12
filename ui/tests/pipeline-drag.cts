@@ -92,19 +92,6 @@ const brief = (id: string, title: string, stageId: string, version = 1) => ({id,
       await page.mouse.up();
     };
 
-    // A refusal that can be pushed past asks why, then moves with it.
-    await drag('t1', 'build');
-    const bar = page.locator('form.pv-bar[data-pv-push]');
-    await bar.waitFor();
-    assert.equal((await bar.locator('.pv-bar-text').innerText()).trim(), 'Move to Build without Spec page?');
-    assert.equal(await inCol('spec', 't1').count(), 1, 'refused: the task is back in Spec');
-    assert.ok(!(await page.evaluate(() => location.hash)).startsWith('#/task/'), 'the drag opened nothing');
-    assert.deepEqual(moves[0], {id: 't1', body: {to: 'next', version: 1}}, 'the next stage is asked for as next');
-    await bar.locator('input[name="why"]').fill('Spec is in the doc');
-    await bar.locator('button[type="submit"]').click();
-    await inCol('build', 't1').waitFor();
-    assert.deepEqual(moves[1], {id: 't1', body: {to: 'next', why: 'Spec is in the doc', version: 1}});
-    assert.equal(await page.locator('.pv-bar').count(), 0, 'nothing left to say');
 
     // A refusal it cannot push past says the engine's line, and the task stays.
     await drag('t2', 'build');

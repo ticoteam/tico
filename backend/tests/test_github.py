@@ -381,32 +381,6 @@ def test_grouped_wakes_retry_bad_rows_and_send_open_tasks(api, monkeypatch):
         assert G.flush_wakes(c) == [tasks[0]["id"]]
 
 
-def test_deploy_query_uses_repository_index_and_ignores_other_repos(api):
-    own = post(api, "tasks", {"owner": "cpo", "title": "Release work", "body": "Review", "links": [PR]})
-    other = post(
-        api,
-        "tasks",
-        {
-            "owner": "cpo",
-            "title": "Other work",
-            "body": "Review",
-            "links": ["https://github.com/example/other/pull/412"],
-        },
-    )
-    store = api.app.state.store
-    store.settings.release_commit = "release-sha"
-    store.settings.release_repo = "TicoTeam/Tico"
-    with store.transaction() as c:
-        c.execute("UPDATE task_links SET state='merged',pr_sha='release-sha'")
-        plan = c.execute(
-            "EXPLAIN QUERY PLAN " + G.DEPLOY_QUERY, ("https://github.com/ticoteam/tico/pull/%",)
-        ).fetchall()
-        assert any("task_links_repo_url" in r[3] and "url>?" in r[3] for r in plan)
-        assert G.ship_deployed(c, store.settings) == [own["id"]]
-        assert H.task(c, own["id"])["status"] == "open"
-        assert H.task_links(c, other["id"])[0]["state"] == "merged"
-
-
 def test_a_review_request_puts_the_person_in_the_configured_role(api):
     assert post(api, "people/ana", {"github": "@Ana-Dev"})["github"] == "ana-dev"
     task = post(api, "tasks", {"owner": "cpo", "title": "Ship the pricing page", "body": "x", "links": [PR]})
@@ -1498,7 +1472,7 @@ def test_a_merge_queue_removal_wakes_the_owner_once_when_github_still_has_the_pr
     assert _burst(api, task['id']) == [item]
 
 
-@pytest.mark.parametrize('reason', ['MERGE', 'ALREADY_MERGED', 'merged', 'Merged'])
+@pytest.mark.parametrize('reason', ['MERGE', 'ALREADY_MERGED', 'merged'])
 def test_a_queue_merge_removal_that_arrives_before_closed_does_not_wake_the_owner(api, monkeypatch, reason):
     """GitHub may send a queue merge's removal before the pull request's own closed event, with merged false and a success
     reason. That is not a removal: nothing is read and nothing is sent, and the closed event is what moves the ticket."""

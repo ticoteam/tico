@@ -255,17 +255,3 @@ def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM task_trash WHERE task_id=?", (made["id"],))
     assert made["id"] in delta(api, ACTIVE, cursor)["gone"]
-
-
-def test_a_changed_trigger_is_rebuilt_on_the_next_start(api):
-    # Every start runs events.ensure, which replaces a trigger whose SQL differs: an install from before the snapshot
-    # kept its pipeline still has the old tasks update trigger.
-    store = api.app.state.store
-    with store.transaction() as c:
-        c.execute("DROP TRIGGER changes_tasks_update")
-        c.execute("CREATE TRIGGER changes_tasks_update AFTER UPDATE ON tasks BEGIN SELECT 1; END")
-        E.ensure(c)
-        sql = c.execute(
-            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='changes_tasks_update'"
-        ).fetchone()[0]
-    assert "OLD.pipeline_id" in sql

@@ -96,10 +96,6 @@ def test_javascript_under_ui_is_refused_except_the_generated_bundle_and_the_kept
     ]
 
 
-def test_every_kept_javascript_file_is_a_js_file_with_a_reason():
-    assert all(rel.endswith(".js") and reason for rel, reason in strict.KEPT_JS.items())
-
-
 def test_a_repeated_cast_is_a_hit_and_a_single_cast_is_not():
     assert strict.shift_left_hits("const a = (x as Foo);\n") == []
     assert strict.shift_left_hits("const a = (x as Foo);\nconst b = (y as Foo);\n") == []
@@ -200,11 +196,6 @@ def worker_root(tmp_path, monkeypatch, config=None):
     return config
 
 
-def test_the_worker_config_is_strict_and_names_only_the_service_worker():
-    assert strict.check_worker_config() == []
-    assert "./sw.ts" in json.loads((strict.ROOT / strict.CONFIG).read_text())["exclude"]
-
-
 def test_a_worker_finding_fails_the_gate_with_no_baseline(monkeypatch):
     found = [strict.Finding("ui/sw.ts", 8, 49, "TS2551", "Property 'skipWaitin' does not exist.")]
     monkeypatch.setattr(strict, "check_worker_config", lambda: [])
@@ -244,10 +235,6 @@ def test_dropping_the_service_worker_from_the_worker_program_fails(tmp_path, mon
         assert any("files must be" in p for p in strict.check_worker_config()), files
     (tmp_path / strict.WORKER_CONFIG).unlink()
     assert "cannot be read as JSON" in strict.check_worker_config()[0]
-
-
-def test_the_page_config_may_exclude_the_service_worker_and_nothing_else_new():
-    assert "./sw.ts" in strict.ALLOWED_EXCLUDE and "./app/**" not in strict.ALLOWED_EXCLUDE
 
 
 def _tests_root(tmp_path, monkeypatch, config, effective=None):

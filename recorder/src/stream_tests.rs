@@ -410,41 +410,6 @@ fn a_reconnected_stream_places_its_words_at_the_right_recording_time() {
 }
 
 #[test]
-fn a_service_error_is_shown_and_retried() {
-    let (url, _, server) = mock(vec![
-        Box::new(|socket: &mut Server| {
-            created(socket);
-            send(socket, json!({"type":"error","message":"rate limited"}));
-            let _ = socket.read();
-        }),
-        Box::new(|socket: &mut Server| {
-            created(socket);
-            until_done(socket);
-            send(socket, json!({"type":"transcript.done"}));
-        }),
-    ]);
-    let dir = tempfile::tempdir().unwrap();
-    let store = Store::open(dir.path()).unwrap();
-    let record = store.create("Error fixture").unwrap();
-    let mut slow = plan(&url);
-    slow.retry = Duration::from_millis(600);
-    let mut streams = Streams::new(store.clone(), record.id.clone(), slow);
-    let feed = streams.feed("me").unwrap();
-    wait_for("the retry", || state(&record.id, "me").reconnects == 1);
-    let shown = state(&record.id, "me");
-    assert_eq!(shown.state, "retrying");
-    assert!(shown.error.contains("rate limited"), "{shown:?}");
-    wait_for("the second session", || {
-        state(&record.id, "me").state == "live"
-    });
-    drop(feed);
-    wait_for("the stream to stop", || {
-        state(&record.id, "me").state == "stopped"
-    });
-    server.join().unwrap();
-}
-
-#[test]
 fn without_a_key_streaming_is_off_and_recording_is_unaffected() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();

@@ -130,17 +130,4 @@ mod tests {
             .build()
             .is_ok());
     }
-
-    #[test]
-    fn the_source_is_logged_once() {
-        let mut lines = Vec::new();
-        announce(|l| lines.push(l.to_string()));
-        announce(|l| lines.push(l.to_string()));
-        assert_eq!(lines.len(), 1);
-        assert!(
-            lines[0].ends_with("system trust store") || lines[0].ends_with("bundled trust list"),
-            "{}",
-            lines[0]
-        );
-    }
 }

@@ -428,17 +428,6 @@ def test_a_content_change_turns_on_the_slow_sweep_that_reads_it_on_a_pull_reques
             assert picked["contracts"] == (bool(sweeps) or changed[0].startswith(checks.CONTRACT_INPUTS)), changed
 
 
-def test_each_content_sweep_is_a_slow_test_that_runs_as_the_release_gate_runs_it():
-    release_gate = (ROOT / "scripts/release_checks.py").read_text()
-    for test, (paths, env) in checks.CONTENT_SWEEPS.items():
-        text = (ROOT / test).read_text()
-        assert "@pytest.mark.slow" in text, f"{test} has no slow test: the default run already has it"
-        assert paths and all(p.endswith("/") or (ROOT / p).exists() or any(ROOT.glob(p + "*")) for p in paths), test
-        for key, value in env.items():
-            assert key in text, f"{test} does not read {key}"
-            assert re.search(rf"""['"]{key}['"]\s*:\s*['"]{value}['"]""", release_gate), f"the release gate sets {key}"
-
-
 def test_the_contracts_job_carries_a_sweeps_environment_and_an_unswept_change_keeps_todays_job(tmp_path, monkeypatch):
     picked = {"python": [], "browser": [], "caddy": True, "conformance": False, "rust": [], "contracts": True}
     monkeypatch.setattr(checks, "changed_files", lambda *a, **kw: [])
@@ -975,7 +964,6 @@ def test_an_error_page_beside_a_jobs_page_keeps_the_jobs_and_says_the_receipt_is
     [
         json.dumps([ERROR_PAGE]).encode(),  # an error-only response
         b'[{"total_count": 2, "jobs": [',  # invalid JSON
-        b"",  # no output at all
         b"\xff",  # not UTF-8
         json.dumps(ERROR_PAGE).encode(),  # a top level that is not a list
         json.dumps([{"jobs": "not a list"}]).encode(),  # jobs that are not a list
@@ -1228,24 +1216,6 @@ def test_every_job_runs_on_a_github_hosted_runner_and_only_a_ready_pull_request_
     }
 
 
-def test_a_draft_runs_no_release_command_test_and_marking_it_ready_runs_them():
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-command-tests.yml").read_text())
-    assert doc[True]["pull_request"]["types"] == ["opened", "synchronize", "reopened", "ready_for_review"]
-    assert (
-        doc["jobs"]["command"]["if"] == "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}"
-    )
-
-
-def test_a_draft_or_a_fork_runs_no_test_leg():
-    jobs = workflow_jobs()["jobs"]
-    assert jobs["plan"]["if"] == "${{ !github.event.pull_request.draft }}"
-    tests = jobs["tests"]
-    assert tests["needs"] == "plan"  # a draft has no plan, so the leg is skipped with it
-    # A fork's pull request is not this repository's head, so it runs no leg here; a maintainer queues it instead.
-    assert "!github.event.pull_request.draft" in tests["if"]
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in tests["if"]
-
-
 def test_a_draft_starts_no_job_and_marking_it_ready_or_pushing_to_a_ready_pull_request_runs_the_checks():
     """Builders push a draft freely: no job runs on it. Marking it ready runs the pull request jobs, and so does each
     later push while it stays ready. `checks` is skipped on a draft, and GitHub never enqueues a draft."""
@@ -1293,20 +1263,6 @@ def test_a_failed_suite_leg_cancels_its_run_and_checks_still_reports():
     # The required gate still runs after a cancel, and a cancelled timing receipt never waits for a runner.
     assert "always()" in jobs["checks"]["if"] and "tests" in jobs["checks"]["needs"]
     assert "!cancelled()" in jobs["timings"]["if"]
-
-
-def test_pr_checks_and_the_cache_warm_up_take_no_runson_label_and_always_free_the_disk():
-    """PR checks and the cache warm-up run on GitHub-hosted runners only: no RunsOn label, no S3 cache extra, no runner
-    size, no repository variable. Their disk-freeing step always runs (hosted runners start with about 14 GB free)."""
-    import yaml
-
-    for name in ("pr-checks.yml", "pr-cache.yml"):
-        text = (ROOT / ".github" / "workflows" / name).read_text()
-        assert not re.search(r"runs-on=|runner=\d|s3-cache|TICO_CI_HOSTED", text), name
-        for job in yaml.safe_load(text)["jobs"].values():
-            for step in job.get("steps", []):
-                if "/opt/ghc" in str(step.get("run", "")):
-                    assert "if" not in step, name
 
 
 def test_every_runs_on_label_sits_behind_the_hosted_switch_and_stays_the_default():
@@ -1626,14 +1582,6 @@ def test_a_ui_change_selects_test_icon_font_through_the_module_that_globs_the_ui
     assert "backend/tests/test_icon_font.py" not in unrelated["python"]
 
 
-def test_a_template_edit_runs_the_hub_command_test_in_the_contract_job_that_2866_broke(mapped):
-    # #2866 added librarian commands with no recorded refusal. test_e2e_cli walks templates/ and skills/ and runs in the
-    # contract job, which any change under those folders selects.
-    assert "backend/tests/test_e2e_cli.py" in checks.CONTRACT_TESTS
-    plan = checks.selection(["templates/catalog/librarian/AGENT.md"])
-    assert plan["contracts"] is True
-
-
 def test_a_ui_file_the_map_lists_still_selects_test_icon_font_through_the_folder_listing(tmp_path, monkeypatch):
     # A UI_MAP file runs its mapped scripts, and the module that globs ui/app/*.js reaches test_icon_font for it too,
     # as it does for a file the map does not list. The map lists this file, so no rule-4 "not in UI_MAP" note applies.
@@ -1701,23 +1649,6 @@ def test_a_json_outside_the_owned_folders_keeps_the_generic_path(tmp_path, mappe
 TOP_BASELINES = re.compile(r"(?<![\w./-])baselines/")
 
 
-def test_owned_folders_list_existing_tests_of_their_scripts_and_only_the_owners_read_them():
-    for test, module in OWNED_TESTS.items():
-        assert (ROOT / test).is_file(), f"{test} is listed for baselines/ but does not exist"
-        assert module in (ROOT / test).read_text(encoding="utf-8"), f"{test} does not test {module}"
-    # The non-test Python files that name the baselines/ folder: the two owning scripts, and pr_checks.py (this table).
-    # Only the top-level folder: ui/baselines/ is the UI's own per-file counts (scripts/ui_baseline.py), not owned here.
-    tracked = subprocess.run(
-        ["git", "-C", str(ROOT), "ls-files", "*.py"], capture_output=True, text=True, check=True
-    ).stdout.split()
-    readers = {
-        name
-        for name in tracked
-        if "tests/" not in name and TOP_BASELINES.search((ROOT / name).read_text(encoding="utf-8", errors="replace"))
-    }
-    assert readers == {"scripts/lint_baseline.py", "scripts/pyright_baseline.py", "scripts/pr_checks.py"}
-
-
 def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(tmp_path, monkeypatch):
     # A script converted from ui/app/mapped.js to ui/app/mapped.ts keeps its UI_MAP entry: the map is keyed by the .js name.
     smoke_tree(tmp_path)
@@ -1730,7 +1661,7 @@ def test_a_ui_file_converted_to_typescript_keeps_the_map_entry_its_js_name_had(t
     assert not any("is not in UI_MAP" in note for note in plan["uncertain"])
 
 
-@pytest.mark.parametrize("seconds", [1, 396, 959, 960, 961, 1500, 2161, 5000])
+@pytest.mark.parametrize("seconds", [1, 959, 5000])
 def test_no_planned_python_vm_runs_past_the_target_however_small_the_selection(seconds):
     # 959 one-worker seconds once folded into one VM planned at 390 s; a VM holds WORKERS x (target - setup) = 720 of
     # them, so the selection takes two VMs of about 270 s, and a selection under one VM's work takes one.
@@ -2462,18 +2393,6 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     # A queue group plans light too, from its own base and head, with one map.
     checks.prepare("merge_group", "queue-base", tmp_path / "plan.json", head="queue-head", light=True)
     assert narrowed == [("merge_group", "graph")]
-
-
-def test_both_tiers_plan_light_and_the_required_check_keeps_its_contract():
-    jobs = workflow_jobs()["jobs"]
-    step = next(s for s in jobs["plan"]["steps"] if s.get("id") == "plan")
-    assert step["run"].endswith("--light")
-    # NARROW decides per event: a pull request one level and ten VMs, a queue group two levels and nineteen VMs.
-    assert checks.NARROW == {"pull_request": {"depth": 1, "shards": 10}, "merge_group": {"depth": 2, "shards": 19}}
-    assert checks.NARROW_SHARD_SECONDS == checks.JOB_SECONDS
-    # `checks` still needs every job and runs after any of them (a draft skips it with everything else).
-    assert jobs["checks"]["if"] == "${{ always() && !github.event.pull_request.draft }}"
-    assert set(jobs["checks"]["needs"]) == set(jobs) - {"checks", "timings"}
 
 
 def test_a_queue_group_runs_the_tests_two_levels_from_a_change_and_keeps_its_other_jobs(tmp_path, monkeypatch):

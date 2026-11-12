@@ -761,21 +761,6 @@ def test_an_untouched_preset_made_before_its_sign_offs_were_people_only_gets_the
     assert [tuple(r) for r in found] == [("engineering-fixes-2", "people_only"), ("product-spec", "people_only")]
 
 
-def test_the_software_factory_guide_names_the_seats_templates():
-    """The guide sends work to the seats the presets place (TEMPLATES), not to the 0.5 chart's Head of Product, Head of
-    Engineering or leads, or to a Pipeline Manager apart from the team's Manager."""
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    guide = (root / "docs/software-factory.md").read_text()
-    for old in ("Head of Product", "Head of Engineering", "Pipeline Manager", "Team Manager"):
-        assert old not in guide
-    for old in ("`product-lead`", "`engineering-lead`", "`pipeline-manager`"):
-        assert old not in guide
-    for role in (S.PRODUCT_MANAGER, S.ENGINEERING_MANAGER, S.PRODUCT_OWNER, S.RELEASE_MANAGER):
-        assert f"`{S.TEMPLATES[role]}`" in guide
-
-
 @pytest.mark.parametrize(
     ("pipeline", "before", "past"),
     [

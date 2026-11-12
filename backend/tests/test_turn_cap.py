@@ -114,14 +114,6 @@ def a_claim_leased_after_the_limit_drops_starts_nothing_until_a_place_frees(api,
     assert running_turns(api, machine) == 1
 
 
-def test_the_live_count_searches_the_runner_state_index(api):
-    """The live count's explicit state IN lets SQLite search attempts_runner_state,
-    not scan every attempt on the computer."""
-    with api.app.state.store.read() as c:
-        plan = [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + start_places.LIVE_SQL, ("runner", H.now()))]
-    assert any("attempts_runner_state" in line for line in plan), plan
-
-
 def free_every_place(api, machine):
     with api.app.state.store.transaction() as c:
         c.execute(

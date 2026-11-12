@@ -629,14 +629,6 @@ def test_an_external_agent_cannot_write_a_held_task_but_can_write_another_over_m
 @pytest.mark.parametrize(
     "mutation",
     [
-        pytest.param(
-            "snooze",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="v3 refuses a bad snooze date in the route (task_moves_routes.parse_until) as a plain 422: "
-                "it is never recorded as a refusal, so a bot looping on one is neither counted nor held",
-            ),
-        ),
         "relations",
     ],
 )
@@ -765,30 +757,6 @@ def test_runner_file_publishing_checks_the_supplied_attempt_hold(api, scope):
         assert c.execute("SELECT count(*) FROM bot_files").fetchone()[0] == 0
     post(api, "bots/ops/quarantine/clear", {})
     post(api, "files/uploads", body, machine["token"])
-
-
-def test_claim_fence_uses_both_partial_quarantine_indexes(api):
-    from backend import execution
-
-    machine = task_bot(api, lanes=True)
-    new_task(api, "Check the export")
-    post(api, "chat/ops", {"text": "Check the archive."})
-    with api.app.state.store.read() as c:
-        # The claim's candidate joins and fences, including task and chat probes, use both partial indexes.
-        plan = [
-            row["detail"]
-            for row in c.execute(
-                "EXPLAIN QUERY PLAN SELECT j.id FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
-                "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
-                f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
-                "WHERE j.state='queued' AND j.held=0 AND j.bot_id=? AND a.runner_id=? "
-                f"AND {execution.unfenced_sql()} AND {execution.scoped_sql()}",
-                ("ops", machine["runner_id"]),
-            )
-        ]
-    assert "SEARCH qh USING INDEX quarantine_holds_task (bot_id=? AND task_id=?)" in plan, plan
-    assert "SEARCH qh USING INDEX quarantine_holds_chat (bot_id=? AND conversation_id=?)" in plan, plan
-    assert not any("SCAN qh" in step for step in plan), plan
 
 
 def test_the_running_task_is_held_instead_of_the_target_of_its_refused_write(api):

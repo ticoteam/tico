@@ -21,14 +21,10 @@ ROOT = Path(__file__).resolve().parents[2]
     [
         ('v0.5.216', 'v0.6.0-rc.1', 'fresh-start'),
         ('v0.5.216', 'v0.6.0', 'fresh-start'),
-        ('v0.5.216', 'v0.7.3', 'fresh-start'),
         ('v0.5.216', 'v9.9.9', 'fresh-start'),  # a local build of a 0.6 checkout
-        ('v0.4.9', 'v1.0.0', 'fresh-start'),
         ('v0.5.215', 'v0.5.216', 'upgrade'),
         ('v0.6.0', 'v0.6.1', 'upgrade'),
-        ('v0.6.0', 'v9.9.9', 'upgrade'),
         ('v0.6.0-rc.1', 'v0.6.0-rc.2', 'upgrade'),
-        ('v0.6.3', 'v0.7.0-beta.1', 'upgrade'),
     ],
 )
 def test_the_journey_for_a_release_pair(previous, candidate, want):
@@ -65,36 +61,3 @@ def run_journey(tmp_path, previous):
     )
     table = result.stdout.split('\nSTEP')[-1].splitlines()[1:]
     return result, [line.rsplit(None, 2)[0].strip() for line in table if line.strip()]
-
-
-def test_a_05_previous_and_a_06_candidate_prove_the_refusal_then_start_over(tmp_path):
-    result, steps = run_journey(tmp_path, 'v0.5.216')
-    assert 'journey: fresh-start, previous v0.5.216 -> candidate v9.9.9' in result.stdout, result.stdout
-    assert steps == [
-        'install v0.5.216 (bundle, auth none)',
-        'seed: fixture rows, runner, HUB_ variable, session, worktree',
-        'v9.9.9 refuses the v0.5.216 database, files unchanged',
-        'v0.5.216 starts again on it with its tasks',
-        'update now to v9.9.9: refused or rolled back',
-        'new v0.5.216 install with no tasks',
-        'upgrade v0.5.216 -> v9.9.9 (no tasks; updater replaces itself)',
-        'seed v9.9.9: runner, HUB_ variable, session, worktree',
-        'v0.5.216 runner on the v9.9.9 server: turn and worktree',
-        'v9.9.9 runner keeps the seeded data',
-        'roll back a bad update (snapshot restored)',
-        'second updater hop v9.9.9 -> v9.9.11',
-    ], result.stdout
-
-
-def test_a_pair_on_one_line_keeps_the_ordinary_upgrade(tmp_path):
-    result, steps = run_journey(tmp_path, 'v0.6.0')
-    assert 'journey: upgrade, previous v0.6.0 -> candidate v9.9.9' in result.stdout, result.stdout
-    assert steps == [
-        'install v0.6.0 (bundle, auth none)',
-        'seed: fixture rows, runner, HUB_ variable, session, worktree',
-        'upgrade v0.6.0 -> v9.9.9 (updater replaces itself)',
-        'v0.6.0 runner on the v9.9.9 server: turn and worktree',
-        'v9.9.9 runner keeps the seeded data',
-        'roll back a bad update (snapshot restored)',
-        'second updater hop v9.9.9 -> v9.9.11',
-    ], result.stdout

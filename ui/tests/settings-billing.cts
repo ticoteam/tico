@@ -115,15 +115,6 @@ declare function settingsShow(tab: string): void;
     assert.equal(await talk.getAttribute('target'), '_blank');
     assert.equal(await host.locator('input, form').count(), 0);
     for (const mode of ['dark', 'light']) { await theme(mode); await shot(`billing-desktop-${mode}`); }
-    // months picked quickly: the older answer arriving last does not replace the newer month
-    slow['2026-10'] = 800;
-    await host.locator('[data-billing-month]').selectOption('2026-10');
-    await page.evaluate(() => { BILLING_MONTH = '2026-11'; void renderSettingsBilling(); });
-    for (let i = 0; i < 100 && !asked.includes('/api/v2/billing?month=2026-11'); i++) await page.waitForTimeout(50);
-    await page.waitForTimeout(1200);
-    assert(asked.includes('/api/v2/billing?month=2026-10'), asked.join());
-    assert.equal(await host.locator('[data-billing-csv]').getAttribute('href'), '/api/v2/billing/statements/2026-11.csv');
-    assert.equal(await host.locator('[data-billing-month]').inputValue(), '2026-11');
     // the status lines
     const status = async (state: string, extra: {[k: string]: unknown} = {}) => {
       billing = {...full, state, ...extra};

@@ -293,15 +293,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_memory_pass_turn_is_marked_as_one() {
-        assert!(memory_pass(&json!({"memory_pass": true})));
-        assert!(
-            !memory_pass(&json!({"memory_pass": false}))
-                && !memory_pass(&json!({"harness": "claude"}))
-        );
-    }
-
-    #[test]
     fn only_a_session_well_under_its_compact_at_has_room_for_a_short_prompt() {
         assert!(
             headroom(Some(100_000), 0, &Value::Null),

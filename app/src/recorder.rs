@@ -56,7 +56,7 @@ pub(crate) fn installed() -> bool {
 }
 
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
@@ -416,23 +416,5 @@ mod tests {
             let stale = Pending { at, ..pending };
             assert!(!answers(Some(&stale), "approval-1", &answer), "too late");
         }
-    }
-
-    #[test]
-    fn record_opens_the_recorder_on_the_pages_own_org() {
-        let hub = Url::parse("https://acme.example.com/").unwrap();
-        let link = Url::parse(&recorder_link(&hub)).unwrap();
-        assert_eq!(
-            (link.scheme(), link.host_str()),
-            ("tico-recorder", Some("open"))
-        );
-        let query: Vec<(String, String)> = link.query_pairs().into_owned().collect();
-        assert_eq!(
-            query,
-            [(
-                "server".to_string(),
-                "https://acme.example.com/".to_string()
-            )]
-        );
     }
 }

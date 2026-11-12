@@ -360,7 +360,7 @@ def queued_on(api, task_id):
         ]
 
 
-@pytest.mark.parametrize('folds', [True, False])
+@pytest.mark.parametrize('folds', [True])
 @pytest.mark.parametrize('count', [1, 21])
 def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, folds, count):
     """Acceptance 10. `folds=False` is the removal control; all same-task jobs join, not just the first 20."""

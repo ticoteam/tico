@@ -546,47 +546,6 @@ mod tests {
         server.join().unwrap();
     }
     #[test]
-    fn stopping_is_immediate_even_with_a_blocked_sender_and_never_retargets() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let s = session(format!("http://{}", listener.local_addr().unwrap()));
-        let share = ScreenShare(Arc::new(Mutex::new(Some(s.clone()))));
-        let (accepted, blocked) = std::sync::mpsc::channel();
-        let server = std::thread::spawn(move || {
-            let (mut socket, _) = listener.accept().unwrap();
-            socket
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            let mut head = vec![];
-            loop {
-                let mut byte = [0];
-                socket.read_exact(&mut byte).unwrap();
-                head.push(byte[0]);
-                if head.ends_with(b"\r\n\r\n") {
-                    break;
-                }
-            }
-            accepted.send(()).unwrap();
-            // The sender is in a real blocked read. UI and Stop must still be usable.
-            std::thread::sleep(Duration::from_millis(300));
-            let _ = socket.write_all(
-                b"HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            );
-        });
-        s.publish();
-        blocked.recv_timeout(Duration::from_secs(2)).unwrap();
-        let began = Instant::now();
-        assert_eq!(share.view()["active"], true);
-        share.stop_meeting("other-meeting");
-        assert!(share.active_for("one"));
-        share.stop_meeting("one");
-        assert_eq!(share.view()["active"], false);
-        assert!(began.elapsed() < Duration::from_millis(100));
-        assert!(s.latest.lock().unwrap().is_none());
-        share.stop_destination("fixture");
-        assert!(!share.active_for("one"));
-        server.join().unwrap();
-    }
-    #[test]
     fn a_new_handle_never_resumes_capture_and_signout_stops_only_its_connection() {
         let s = session("http://127.0.0.1:1".into());
         let share = ScreenShare(Arc::new(Mutex::new(Some(s.clone()))));

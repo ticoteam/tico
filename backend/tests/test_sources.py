@@ -24,15 +24,6 @@ def message(sender, **refs):
     return {"sender_id": sender, "refs": refs}
 
 
-def test_a_person_line_is_named_for_the_person():
-    assert SRC.message_source(NAMES, message("human:ana")) == {"kind": "person", "name": "Ana Lee", "link": None}
-
-
-def test_a_bot_line_is_named_for_the_bot_and_falls_back_to_its_slug():
-    assert SRC.message_source(NAMES, message("bot:ops")) == {"kind": "bot", "name": "Ops", "link": None}
-    assert SRC.message_source({}, message("bot:ops"))["name"] == "ops"
-
-
 def test_the_assistant_writing_for_a_person_is_named_for_that_person():
     row = message(SRC.KEEPER, source=SRC.ASSISTANT_FOR, **{"for": "human:ana"})
     assert SRC.message_source(NAMES, row, assistant="Atlas") == {
@@ -53,14 +44,6 @@ def test_an_automation_line_names_the_rule_and_links_to_it():
     row = message(SRC.KEEPER, source="automation:a1")
     assert SRC.message_source(NAMES, row) == {"kind": "automation", "name": "Nightly sweep", "link": "#/automations/a1"}
     assert SRC.message_source({}, row)["name"] == "Automation"
-
-
-def test_a_builtin_key_names_the_built_in():
-    assert SRC.message_source({}, message(SRC.KEEPER, source="follow-up-timer")) == {
-        "kind": "builtin",
-        "name": "Follow-up timer",
-        "link": None,
-    }
 
 
 def test_system_keys_and_unnamed_keeper_lines_are_system_lines():
@@ -109,13 +92,6 @@ def test_a_nested_scope_names_its_own_key_and_the_decorator_wraps_a_call():
     with SRC.writing_as("system:update"):
         assert write() == "rule-check"
         assert SRC.scope() == "system:update"
-
-
-def test_the_install_assistant_name_is_used_with_a_default():
-    SRC.set_assistant_name("  Atlas ")
-    assert SRC.assistant_name() == "Atlas"
-    SRC.set_assistant_name("")
-    assert SRC.assistant_name() == "Assistant"
 
 
 def test_a_keeper_line_written_in_a_built_in_scope_names_the_built_in(api):

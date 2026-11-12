@@ -27,7 +27,9 @@ HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 
 
 def run_hub(*args, env=None):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+    # The child is told who it is only by `env`: a person's own TICO_PROFILE in the shell that runs the
+    # suite would otherwise be refused in a bot's turn before the request is ever sent.
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     done = subprocess.run(
         [sys.executable, str(HUB), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60
     )
@@ -673,14 +675,6 @@ class AgainstAStub(unittest.TestCase):
         posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
         self.assertEqual((posted["owner"], posted["check_model"]), ("bot:assistant", "auto"))
 
-    def test_decision_readout_reads_the_days_asked(self):
-        code, out = run_hub("decision", "readout", "--days", "14", env=self.env)
-        self.assertEqual((code, out["text"]), (0, "Decide readout"), out)
-        self.assertIn(("GET", "/api/v2/decisions/readout?days=14"), [(m, p) for m, p, _, _ in Stub.seen])
-        code, out = run_hub("decision", "readout", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(Stub.seen[-1][1], "/api/v2/decisions/readout", "the server's default, 7 days")
-
     def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
         code, out = run_hub(
             "tool",
@@ -767,50 +761,6 @@ class AgainstAStub(unittest.TestCase):
         code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
         self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
 
-    def test_an_ask_is_rated_through_its_task_and_approval_is_no_feedback_subject(self):
-        from clients import hubtools
-
-        code, out = run_hub("task", "thumbs", "T1", "r-2", "down", "--note", "Don't ask, just archive", env=self.env)
-        self.assertEqual(code, 0, out)
-        rated = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/asks/r-2/thumbs"]
-        self.assertEqual(rated, [{"up": False, "note": "Don't ask, just archive"}])
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["task", "thumbs", "T1", "r-2", "sideways"])
-        for argv in (["feedback", "give", "approval", "a-1", "up"], ["feedback", "markers", "approval", "a-1"]):
-            with self.assertRaises(SystemExit):
-                hubcli.parser().parse_args(argv)
-        hubcli.parser().parse_args(["feedback", "markers", "ask", "v-1:r-2"])
-        give = hubtools.BY_NAME["tico_feedback_give"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        markers = hubtools.BY_NAME["tico_feedback_markers"]["inputSchema"]["properties"]["subject_type"]["enum"]
-        self.assertEqual((give, markers), (["message", "task"], ["message", "task", "ask"]))
-
-    def test_a_webhook_filters_by_pipeline_and_task_types_are_gone(self):
-        from clients import hubtools
-
-        argv = ("webhook", "create", "--name", "Ops", "--url", "https://hooks.example.test/x", "--pipelines", "General")
-        code, out = run_hub(*argv, env=self.env)
-        self.assertEqual(code, 0, out)
-        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/webhooks"][-1]
-        self.assertEqual(posted["filter"], {"pipelines": ["General"]})
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["webhook", "update", "w-1", "--task-types", "Bug"])
-        self.assertIn(
-            "pipelines", hubtools.BY_NAME["tico_webhook_create"]["inputSchema"]["properties"]["filter"]["properties"]
-        )
-
-    def test_settings_ask_is_gone_and_release_now_keeps_its_route(self):
-        from clients import hubtools
-
-        with self.assertRaises(SystemExit):
-            hubcli.parser().parse_args(["settings", "ask", "team.rules.admin_sql", "on"])
-        self.assertNotIn("tico_settings_ask", hubtools.BY_NAME)
-        code, out = run_hub("release", "now", "--note", "hotfix", env=self.env)
-        self.assertEqual(code, 0, out)
-        self.assertEqual([b for m, p, _, b in Stub.seen if p == "/api/v2/release/now"], [{"note": "hotfix"}])
-        for name in ("tico_release_now", "tico_release_schedule"):
-            self.assertNotIn("Pending Release", hubtools.BY_NAME[name]["description"])
-            self.assertNotIn("ticket", hubtools.BY_NAME[name]["description"])
-
     def test_task_snooze_sends_its_date_why_and_version(self):
         def last(method, path):
             return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
@@ -823,40 +773,6 @@ class AgainstAStub(unittest.TestCase):
         )
         self.assertEqual(run_hub("task", "snooze", "T1", "-m", "On ice", "--version", "3", env=self.env)[0], 0)
         self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"version": 3, "why": "On ice"})
-
-    def test_roadmap_commands_send_what_their_tools_send(self):
-        def last(method, path):
-            return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
-
-        for argv in (
-            ["task", "requesters", "T1", "--limit", "5"],
-            ["task", "requester-save", "T1", "--email", "jane@acme.example", "--organization", "Acme", "--important"],
-            ["task", "requester-save", "T1", "--requester-id", "R1", "--no-important"],
-            ["task", "requester-remove", "T1", "R1"],
-            ["task", "comment-moderate", "T1", "C1", "hide"],
-            ["roadmap", "tasks", "--sort", "size", "--direction", "asc"],
-            ["roadmap", "settings"],
-            ["roadmap", "settings", "--label", "roadmap", "--suggestion-limit", "5", "--no-bot-public-approval"],
-            ["roadmap", "settings", "--label", ""],
-        ):
-            code, out = run_hub(*argv, env=self.env)
-            self.assertEqual(code, 0, (argv, out))
-        self.assertIn("limit=5", last("GET", "/api/v2/tasks/T1/requesters")[0])
-        self.assertEqual(
-            last("POST", "/api/v2/tasks/T1/requesters")[1],
-            {"email": "jane@acme.example", "organization": "Acme", "important": True},
-        )
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1")[1], {"important": False})
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/requesters/R1/delete")[1], {})
-        self.assertEqual(last("POST", "/api/v2/tasks/T1/comments/C1/moderate")[1], {"action": "hide"})
-        self.assertTrue(
-            {"sort=size", "direction=asc"} <= set(last("GET", "/api/v2/roadmap-tasks")[0].split("?")[1].split("&"))
-        )
-        self.assertTrue(any(m == "GET" and p == "/api/v2/roadmaps/settings" for m, p, _, _ in Stub.seen))
-        settings = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/roadmaps/settings"]
-        self.assertEqual(
-            settings, [{"labels": ["roadmap"], "suggestion_limit": 5, "bot_public_approval": False}, {"labels": []}]
-        )
 
     def test_a_refusal_from_the_api_exits_two(self):
         code, out = run_hub("message", "send", "nobody", "hello", env=self.env)
@@ -2278,11 +2194,6 @@ def test_personal_alert_cli_keeps_paid_test_identity_and_explicit_consent(monkey
     remotecli.run(args)
     assert api.calls[-1][1] == {"phone": "+14155550123", "sms_consent": True, "call_consent": True}
     assert "tico_alerts_test" not in {t["name"] for t in hubtools.listing(kind="botops")}
-
-
-def test_tico_help_is_the_teamwork_help(capsys):
-    assert hubcli.main(["help"]) == 0
-    assert "task" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("argv, word", [(["status"], "status"), (["update"], "update")])

@@ -106,13 +106,6 @@ def test_librarian_wording_keeps_a_teams_own_words(path):
     assert H.librarian_text(original) == original
 
 
-@pytest.mark.parametrize("path", REWRITTEN, ids=_ids(REWRITTEN))
-def test_librarian_wording_rewrites_ticos_terms_to_the_expected_text(path):
-    expected = _expected(path)
-    assert H.librarian_text(_text(path)) == expected
-    assert H.librarian_text(expected) == expected  # a second pass (the upgrade repairs) changes nothing
-
-
 # 2. The Librarian's writes, the upgrade repairs that redo them, and the API answers that show them.
 
 

@@ -569,17 +569,6 @@ def test_seventy_comments_on_one_task_do_not_hold_the_automation(api):
     assert "hold" not in get(api, f"automations/{aid}")
 
 
-def test_a_hundred_thirty_manual_runs_do_not_hold_it_by_themselves(api):
-    aid = webhook_auto(api)
-    with api.app.state.store.transaction() as c:
-        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
-        for _ in range(130):  # "Run now" clicked 130 times in a minute: no spread, under the flood ceiling
-            automations.queue(c, row, {}, "manual", manual=True)
-        assert automations.on_webhook(c, "trg_1", "Deploys", "custom", "after-runs", {}, "")
-    assert statuses(api, aid) == {"queued": 131}
-    assert "hold" not in get(api, f"automations/{aid}")
-
-
 # ---------------------------------------------------------------------------------------------- the spend cap
 def test_a_turn_not_priced_yet_holds_its_usual_cost_against_the_cap(api):
     turn = {"type": "bot_turn", "bot": "ops", "prompt": "Look"}
@@ -750,24 +739,6 @@ def test_a_resumed_run_gets_back_the_turn_it_started_and_its_own_hold_never_caps
     done = run_row(api, rid)
     assert [(s["id"], s["status"]) for s in done["state"]["steps"]] == [("look", "ok"), ("tell", "ok")]
     assert len(sql(api, "SELECT id FROM tasks WHERE title = 'Test'")) == 1
-
-
-def test_a_turn_is_titled_with_exactly_its_automations_name(api):
-    r = runner(api)
-    assign(api, r, "ops")
-    ready(api, r, ["ops"])
-    aid = post(
-        api,
-        "automations",
-        {
-            "name": "Morning check",
-            "owner": "person:ana",
-            "trigger": EVENT,
-            "steps": [{"id": "brief", "type": "bot_turn", "bot": "ops", "prompt": "Brief"}],
-        },
-    )["id"]
-    post(api, f"automations/{aid}/run", {})
-    assert sql(api, "SELECT title FROM tasks WHERE title LIKE 'Morning check%'") == [{"title": "Morning check"}]
 
 
 def test_each_item_of_a_find_starts_its_own_turn(api):

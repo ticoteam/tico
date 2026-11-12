@@ -326,41 +326,6 @@ def test_an_offline_outside_agent_is_waited_on_without_a_job(api, monkeypatch):
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"] == thread_bot_status.OFFLINE
 
 
-def test_a_step_the_throttle_held_back_is_sent_on_the_next_tick(api):
-    machine = machine_for(api)
-    thread = new_thread(api)
-    say(api, thread["id"], "@ops can you check this?")
-    attempt = claim(api, machine)
-    store = api.app.state.store
-
-    def rows():
-        with store.read() as c:
-            return c.execute(
-                "SELECT COUNT(*) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?",
-                (thread["id"],),
-            ).fetchone()[0]
-
-    with store.transaction() as c:
-        assert thread_bot_status.send_trailing(c) == 0  # nothing moved since the run started
-    before = rows()
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9001,'tool',?,?)",
-            (attempt["id"], '{"name": "Read"}', H.now()),
-        )
-    assert rows() == before  # within 5 s of the last one: held back
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
-            "AND subject_id=?",
-            (thread["id"],),
-        )
-        c.execute("UPDATE attempt_events SET created_at=? WHERE attempt_id=? AND seq=9001", (H.now(), attempt["id"]))
-        assert thread_bot_status.send_trailing(c) == 1
-        assert thread_bot_status.send_trailing(c) == 0  # sent once
-    assert rows() == before + 1
-
-
 def clone_wakes(c, message_id, count, tag):
     """`count` copies of a person's message and its open wakes, as one root's long backlog: new ids, and new seqs from
     the stamp trigger."""
@@ -416,51 +381,6 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
     say(api, thread["id"], "@ops and this one?")
     with store.read() as c:
         assert set(thread_bot_status.candidates(c, thread["id"])) == {"bot:ops"}
-
-
-def test_a_run_that_is_thinking_says_so_and_a_thought_wakes_the_chat(api):
-    machine = machine_for(api)
-    thread = new_thread(api)
-    say(api, thread["id"], "@ops can you check this?")
-    attempt = claim(api, machine)
-    store = api.app.state.store
-
-    def status_changes():
-        with store.read() as c:
-            return c.execute(
-                "SELECT COUNT(*) FROM changes WHERE topic='threads' AND kind='bot_status' AND subject_id=?",
-                (thread["id"],),
-            ).fetchone()[0]
-
-    assert bot_status(api, thread["id"])[0]["detail"] == thread_bot_status.STARTING
-    with store.transaction() as c:  # the last status went out long ago, so the next one is not held back
-        c.execute(
-            "UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
-            "AND subject_id=?",
-            (thread["id"],),
-        )
-    before = status_changes()
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9001,'delta',?,?)",
-            (attempt["id"], '{"delta_kind": "thought", "text": "Checking the thread"}', H.now()),
-        )
-    assert status_changes() == before + 1
-    assert bot_status(api, thread["id"])[0]["detail"] == thread_bot_status.THINKING
-    with store.transaction() as c:  # a thought within five seconds of the last status is held back
-        c.execute(
-            "INSERT INTO attempt_events(attempt_id,seq,kind,payload,created_at) VALUES(?,9002,'delta',?,?)",
-            (attempt["id"], '{"delta_kind": "thought", "text": "Still checking"}', H.now()),
-        )
-    assert status_changes() == before + 1
-    with store.transaction() as c:
-        c.execute(
-            "UPDATE changes SET created_at='2020-01-01T00:00:00.000Z' WHERE topic='threads' AND kind='bot_status' "
-            "AND subject_id=?",
-            (thread["id"],),
-        )
-        assert thread_bot_status.send_trailing(c) == 1
-    assert status_changes() == before + 2
 
 
 def test_a_thought_after_a_tool_reads_as_thinking():

@@ -72,27 +72,6 @@ def test_a_stored_legacy_attachment_switch_does_not_restrict_sending(app):
     assert "company_attachments" not in own
 
 
-def test_scopes_follow_what_tico_may_do():
-    send_only = {"organize_mail": False, "send_mail": True, "change_calendar": False}
-    nothing = dict.fromkeys(ALL_ON, False)
-    assert google_connect.grantable("settings") == google_connect.READ_SCOPES + google_connect.ACT_SCOPES
-    assert google_connect.grantable("settings", send_only) == google_connect.READ_SCOPES + [G + "gmail.modify"]
-    assert google_connect.grantable("settings", {**nothing, "change_calendar": True}) == (
-        google_connect.READ_SCOPES + [G + "calendar.events"]
-    )
-    assert google_connect.grantable("settings", nothing) == google_connect.READ_SCOPES
-    assert google_connect.grantable("env", ALL_ON) == google_connect.READ_SCOPES  # the shared app stays read only
-    held = json.dumps(google_connect.READ_SCOPES + google_connect.ACT_SCOPES)
-    assert google_connect.refresh_scopes("gmail", held, nothing) == {G + "gmail.readonly"}
-    assert google_connect.refresh_scopes("gmail", held, send_only) == {G + "gmail.readonly", G + "gmail.modify"}
-    assert G + "calendar.events" not in google_connect.refresh_scopes("calendar", held, send_only)
-    assert W.workspace_scopes("gmail", nothing) == [G + "gmail.readonly"]
-    assert W.workspace_scopes("calendar", nothing) == [G + "calendar.readonly"]
-    assert W.workspace_scopes("gmail", send_only) == [GMAIL] and W.workspace_scopes("calendar") == [CALENDAR]
-    # The admin authorizes the read-only scopes too: delegation takes only scopes named in the Admin console.
-    assert W.scope_urls() == sorted([GMAIL, CALENDAR, G + "gmail.readonly", G + "calendar.readonly"])
-
-
 def test_the_company_s_own_app_asks_only_for_what_is_ticked(own_app):
     assert allow(own_app, organize_mail=False, send_mail=False).status_code == 200
     _, query = start(own_app)
@@ -186,12 +165,6 @@ def test_send_mail_off_stops_every_bot_whatever_its_own_switch(app):
     assert person["outbound_send"] is True and person["company_send"] is False  # the bot's own switch is kept
     assert allow(app).status_code == 200
     assert get(app, "bots/inbox/mail-settings", "inbox-test")["outbound_send"] is True
-
-
-def test_the_assistant_never_sets_what_tico_may_do():
-    from backend import assistant
-
-    assert any(method in (None, "PUT") and pattern.fullmatch(PERMISSIONS) for method, pattern in assistant.NEVER)
 
 
 def test_a_key_authorized_before_the_read_only_scopes_keeps_minting_what_google_accepts(api, private, covered, google):

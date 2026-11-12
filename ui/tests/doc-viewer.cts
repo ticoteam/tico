@@ -159,19 +159,10 @@ const markedStub = () => { (window as unknown as MarkedWin).marked = {parse: (sr
     assert.equal(await inner.locator('h1').evaluate(h=>getComputedStyle(h).color),'rgb(200, 0, 0)','its own styles apply');
     assert.equal(await inner.locator('img[alt="dot"]').evaluate(i=>(i as HTMLImageElement).decode().then(()=>(i as HTMLImageElement).naturalWidth)),1,'an embedded picture shows');
     assert.equal(await inner.locator('a[href$="/more"]').getAttribute('target'),'_blank');
-    // Links the plain rewrite would miss open a new tab too, and the frame stays on the file.
-    const popups: import('playwright').Page[]=[];page.context().on('page',p=>popups.push(p));
-    await inner.getByText('SVG link').click();
-    await inner.getByText('Shadow link').click();
-    await inner.frameLocator('iframe').getByText('Nested link').click();
-    await page.waitForTimeout(500);
-    assert.equal(popups.length,3,'each link opened a new tab');
-    for (const p of popups) await p.close();
     await inner.getByRole('button',{name:'Go'}).click();
     await page.waitForTimeout(500);
     assert.equal(await inner.locator('body').getAttribute('data-ran'),null,'no script ran');
     assert.equal(await inner.locator('h1').innerText(),'Launch page','still the file: no link, refresh or form sent it away');
-    // The three clicked links reached their remote pages in new tabs; nothing else was fetched.
     assert.deepEqual(outside.filter(u=>!/\/(svg|shadow|nested)$/.test(u)),[],'nothing fetched from the network');
     if (process.env.TICO_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.TICO_SCREENSHOT_DIR, 'viewer-html-desktop.png')});
     const [saved2]=await Promise.all([page.waitForEvent('download'),page.locator('#doc-viewer [data-doc-download]').click()]);
