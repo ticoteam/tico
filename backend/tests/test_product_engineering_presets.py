@@ -401,6 +401,16 @@ def test_the_builder_the_manager_picks_on_deck_owns_the_handoff_in_build(c):
     assert [bot for bot, _ in _queued_wakes(c, eng["id"])] == ["builder"]
 
 
+def test_a_handoff_into_a_pipeline_with_no_manager_keeps_the_filer_as_assignee(c):
+    """Nobody could pick an owner there: an assignee-owned first stage gets the filer, as before."""
+    row = _product_task(c)
+    c.execute("UPDATE stages SET owner='assignee' WHERE id='engineering-on-deck'")
+    c.execute("UPDATE pipelines SET manager_id=NULL WHERE id='engineering'")
+    E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    eng = E.task(c, _filed(c, row["id"])[0][0])
+    assert (eng["requester_id"], eng["assignee_id"], eng["owner_id"]) == ("bot:pm", "bot:pm", "bot:pm")
+
+
 def test_a_handoff_the_product_owner_cannot_file_is_filed_by_the_engine(c):
     row = _product_task(c)
     c.execute("UPDATE bots SET state='paused' WHERE id='pm'")
