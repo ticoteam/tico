@@ -10,7 +10,7 @@ the Gateway does not have the route yet: the worker tries again an hour later an
 nothing: what would be sent is recorded as withheld. Nothing runs without a Gateway connection.
 
 A self cap belongs to one key at one address: each result keeps the connection's target fingerprint (`for`: the saved
-revision, or a digest of the environment's key and URL), and a result for another target says nothing about the
+revision, or a digest of the environment's key and URL, with the address), and a result for another target says nothing about the
 current one. After a key or URL change, a rotation or a new environment key, the cap is unknown and is set again: a cut
 is made on the new key, and a clear is sent to it once Tico has cut any key here (an earlier key that comes back may
 still hold Tico's cut). A key that stops being current keeps its self cap: Tico no longer holds it to change it, and a

@@ -189,7 +189,7 @@ def test_an_old_claims_late_reply_does_not_overwrite_a_newer_claims_result(gw):
     gw.gateway.during = newer
     assert gw.cap(T1) != "pushed"
     state = _cap_state(gw)
-    assert state["pushed"] == "cut" and state["for"] == "settings:2"  # B's result, not A's
+    assert state["pushed"] == "cut" and state["for"] == "settings:2@" + _base()  # B's result, not A's
     before = len(gw.gateway.sent)
     assert gw.cap(T4) == "steady" and len(gw.gateway.sent) == before
 
@@ -230,3 +230,12 @@ def test_a_new_keys_first_failure_waits_the_first_retry_not_the_old_keys_count(g
     assert gw.cap("2026-10-15T13:09:00.000000Z") == "failed"
     state = _cap_state(gw)
     assert state["tries"] == 1 and state["next_try_at"] == "2026-10-15T13:10:00.000000Z"
+
+
+def test_a_new_environment_address_for_a_saved_key_is_capped_there(gw, monkeypatch):
+    gw.save(key=KEY_A)
+    gw.cutoff()
+    assert gw.cap(T1) == "pushed"
+    monkeypatch.setenv(GC.ENV_URL, "https://gateway-b.example.com")  # a restart with a new address, same saved key
+    assert gw.cap(T2) == "pushed"
+    assert gw.gateway.cap(KEY_A, "https://gateway-b.example.com") == 2

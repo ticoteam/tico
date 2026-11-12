@@ -493,15 +493,22 @@ def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tu
     from ... import gateway_connection
 
     secret, base, fingerprint = cast(tuple[str, str, object], cast(Any, gateway_connection).target(c, vault, settings))
-    return str(secret or ""), str(base or ""), str(fingerprint or "")
+    return str(secret or ""), str(base or ""), _bound(fingerprint, base)
 
 
 def gateway_fingerprint(c: sqlite3.Connection, settings: object) -> str:
-    """Which Gateway key and address a call would use now, without unsealing the key: the saved connection's revision
-    (every key or URL save, clear and rotation adds one), or a digest of the environment's key and URL."""
+    """Which Gateway key and address a call would use now, without unsealing the key: the connection's fingerprint (the
+    saved revision, which every key or URL save, clear and rotation adds one to, or a digest of the environment's key
+    and URL) with the address. A saved key's address can also come from the environment, which no revision follows."""
     from ... import gateway_connection
 
-    return str(cast(Any, gateway_connection).fingerprint(c, settings) or "")
+    GC = cast(Any, gateway_connection)
+    return _bound(GC.fingerprint(c, settings), GC.url(c, settings))
+
+
+def _bound(fingerprint: object, base: object) -> str:
+    """`fingerprint@address`, '' with no connection. The address holds no secret (`safe_base` refuses a password)."""
+    return f"{fingerprint}@{base}" if fingerprint else ""
 
 
 def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
