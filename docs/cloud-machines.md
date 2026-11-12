@@ -55,11 +55,16 @@ cloud machine" under Computer).
 - A bot's own machine pauses by the same rule, with its own Pause after (`pause_minutes` on `POST /api/v2/bots/{bot}/cloud-machine`).
 - A new cloud machine gets the company's plan when an admin moves a bot onto it. Before this, the bot waited on "login required" until someone
   signed in to the machine by hand. The machine takes a plan only when all of these hold: the machine is that bot's own cloud
-  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or sign-in of its own for
-  that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
+  machine; the admin's choice put the bot there, either by moving it or by the machine's first enrollment for a bot an admin placed; no other bot on that machine already runs the same tool; and the machine has no plan or working sign-in of its
+  own for that tool, with no run in progress. The machine skips plans that need reconnecting, plans at their limit, and API keys. It
   prefers the plan on the shared machine, then one on another cloud machine, then the plan with the lowest known usage.
   Nothing is stopped or reset. A member's moves, and any other assignment, never give a plan. When no plan fits, nothing
   changes and the bot keeps its current message and its Gateway path.
+- A plan added, connected or reconnected after the bots were placed goes on each cloud machine's computer that needs it
+  (the computer Connect signed it in on first, then the shared machine's, then the others), by the same rules: a computer
+  with a plan for that tool, a working sign-in of its own (one missing, failed or refused does not count), or a run in
+  progress keeps what it has. On a self-hosted company with one computer, that computer gets it; with several, the
+  person gives it under Settings > Computers (Connect's computer still gets it).
 - When a person picks a cloud machine for a bot and the move is refused, the change is not saved. The server answers 409 with
   `repository_unpublished`. That happens when the bot's history exists only on its current computer, GitHub does not have it,
   and the new machine has no copy. If no cloud machine exists yet, the refusal comes before one is made, so nothing is billed.

@@ -150,6 +150,41 @@ def test_a_turn_signs_in_with_its_computers_subscription_and_a_refused_one_is_pa
     assert listed(api)[0]["status"] == "working"
 
 
+def given_events(api):
+    with api.app.state.store.read() as c:
+        return [
+            (r["actor"], json.loads(r["detail"])["runner"])
+            for r in c.execute("SELECT actor,detail FROM events WHERE action='subscription.given' ORDER BY rowid")
+        ]
+
+
+def test_a_plan_added_on_a_company_with_one_computer_goes_on_it_unless_its_own_sign_in_works(api):
+    setup(api)
+    company(api)
+    m = machine(api)  # nothing signed in for Claude or Codex
+    sid = add(api)["id"]
+    assert effect(api, m) == sid and given_events(api) == [("human:ana", m["runner_id"])]
+    assert listed(api)[0]["computers"] == [m["runner_id"]]
+    add(api, secret=OTHER, name="Newer Max")
+    assert effect(api, m) == sid  # a plan it has is never replaced
+    give(api, m, "claude", None)
+    signed = machine(api, signed_in=True, bot="cpo", label="Signed Mac")  # its own Claude login works
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), m["runner_id"]))
+    add(api, secret="sk-ant-oat01-" + "c" * 24, name="Third Max")
+    assert effect(api, signed) is None and len(given_events(api)) == 1  # left as it is
+
+
+def test_a_plan_added_on_a_company_with_several_computers_waits_for_the_person_to_choose(api):
+    setup(api)
+    company(api)
+    m = machine(api)
+    machine(api, bot="cpo", label="Office Mac")
+    add(api)
+    assert effect(api, m) is None and given_events(api) == []
+    assert listed(api)[0]["computers"] == [] and listed(api)[0]["usage"]["reason"] == "Not on a computer yet"
+
+
 def test_an_older_computer_runs_on_its_own_login_as_before(api):
     setup(api)
     company(api)

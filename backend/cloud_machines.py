@@ -953,6 +953,19 @@ def check_host(c, bot, runner_id):
         )
 
 
+def lend_order(c):
+    """(the shared machine's computer id or None, the other cloud machines' computer ids by bot): the order a company
+    plan is lent to cloud machines' computers in (model_subscriptions.lend, .spread)."""
+    shared = (row(c, SHARED) or {}).get("runner_id")
+    others = [
+        r["runner_id"]
+        for r in c.execute(
+            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND bot<>? ORDER BY bot", (SHARED,)
+        )
+    ]
+    return shared, others
+
+
 def lend_plans(c, execution, bot, runner_id, chooser, new=False):
     """An admin's choice put `bot` on its cloud machine's computer: `chooser` is that admin, already checked. Called at
     only two moments, an admin's request (`change`) and a new computer's enrollment (`enrolled`), and never from a look,
@@ -965,13 +978,7 @@ def lend_plans(c, execution, bot, runner_id, chooser, new=False):
     if (home(c, bot) or {}).get("runner_id") != runner_id:
         return
     settings = execution.store.settings
-    shared = (row(c, SHARED) or {}).get("runner_id")
-    others = [
-        r["runner_id"]
-        for r in c.execute(
-            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND bot<>? ORDER BY bot", (SHARED,)
-        )
-    ]
+    shared, others = lend_order(c)
     fellows = (
         []
         if new
