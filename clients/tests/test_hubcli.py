@@ -2510,6 +2510,33 @@ def test_bots_and_the_assistant_may_book_and_every_caller_may_read_the_calendar(
         assert {"owner", "member", "bot", "assistant"} <= set(hubtools.offered_to(hubtools.BY_NAME[name])), name
 
 
+def test_bot_commands_with_their_own_tool_reach_it_not_bot_create(monkeypatch):
+    """`tico bot app-view|app-shot|turns-at-once|browser-exit` run their own tool through the CLI's routing; an unlisted
+    `tico bot` command fell to `bot create` and failed with "'Namespace' object has no attribute 'template'"."""
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+
+    ran = []
+
+    class Api:
+        def __init__(self, *args, **kw):
+            self.__dict__["_tico_is_botops"] = False
+
+    monkeypatch.setattr(remotecli, "Client", Api)
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example/api/v2")
+    argvs = {
+        "tico_bot_app_view": ["bot", "app-view", "cpo"],
+        "tico_bot_app_shot": ["bot", "app-shot", "/#/tasks", "--out", "x.png"],
+        "tico_bot_turns_at_once": ["bot", "turns-at-once", "cpo"],
+        "tico_bot_browser_exit": ["bot", "browser-exit", "cpo"],
+    }
+    for name in argvs:
+        monkeypatch.setitem(BY_NAME[name], "fn", lambda api, args, name=name: ran.append(name) or {"ok": True})
+    for argv in argvs.values():
+        assert remotecli.run(hubcli.parser().parse_args(argv)) == {"ok": True}
+    assert ran == list(argvs)
+
+
 def test_app_view_cli_sends_on_off_as_booleans_and_app_shot_keeps_the_token_off_the_command_line(monkeypatch, tmp_path):
     import subprocess
 

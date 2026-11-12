@@ -58,6 +58,11 @@ def _contacts_args(args):
     return args
 
 
+# `tico bot` commands that are one tool each, run through via_tool: anything else under `tico bot` falls to bots(),
+# whose last branch is `bot create` and reads args.template.
+BOT_TOOLS = ("bot turns-at-once", "bot browser-exit", "bot app-view", "bot app-shot")
+
+
 def unwrap(result):
     """A write's task as the CLI prints it: the task alone when the answer is only `{"task": ...}`."""
     return result["task"] if isinstance(result, dict) and set(result) == {"task"} else result
@@ -502,6 +507,8 @@ def run(args, who=None):
         return integrations(client, args)
     if fn in ("bot copy", "bot update-from-original", "bot suggest-to-original", "skill copy", "skill submit"):
         return via_tool(client, args)  # they work in this computer's workspace (clients/botcopy.py)
+    if fn in BOT_TOOLS:
+        return via_tool(client, args)
     if fn == "tool report":
         return via_tool(client, args, tools=json.loads(args.tools))
     if args.cmd == "template" or (args.cmd == "bot" and args.sub not in ("status", "recent", "repo-create")):
