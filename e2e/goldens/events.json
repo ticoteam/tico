@@ -719,7 +719,6 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<id12>",
         "seq": 53,
@@ -1300,7 +1299,6 @@
       "data": {
         "actor": "bot:ops",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<id16>",
         "seq": 105,
@@ -1516,7 +1514,6 @@
       "data": {
         "actor": "runner:<id27>",
         "at": "<time>",
-        "bots": [],
         "kind": "bot_status",
         "root_id": "<conversation>",
         "seq": 122,

@@ -2332,13 +2332,27 @@ def _messages(view, rows, shared=None):
     return out
 
 
-def _threads(view, rows):
+def _viewed_roots(c, threads_scope):
+    """The roots of the threads a stream follows (`thread=`): the ones whose bots' status rows it is on screen for."""
+    roots = set()
+    for part in H.chunks(sorted(set(threads_scope))):
+        roots.update(
+            root
+            for (root,) in c.execute(
+                "SELECT COALESCE(root_id,id) FROM conversations WHERE id IN (%s)" % ",".join("?" * len(part)), part
+            )
+        )
+    return roots
+
+
+def _threads(view, rows, threads_scope=()):
     """The `threads` topic (contract §9): one event per thread and kind, as it stands now. A `read` row goes only to
     the reader it names; a thread the viewer cannot read sends nothing, and an `activity` row only for a message the
-    viewer reads. A call's `call.*` rows go to the people who may read the call's thread."""
+    viewer reads. A call's `call.*` rows go to the people who may read the call's thread. A `bot_status` row carries
+    its root's `bots` only to a stream following a thread under that root: only the open thread shows them."""
     from . import calls, threads
 
-    out, last, activity = [], {}, {}
+    out, last, activity, viewed = [], {}, {}, None
     for row in rows:
         if str(row["kind"]).startswith("call."):
             # Tico Meet call changes (backend/calls.py): the call's thread decides who hears each one, and each is sent once.
@@ -2429,7 +2443,10 @@ def _threads(view, rows):
             if root is None or threads.legacy_reader_only(view.c, view.reader, root):
                 continue
             entry["thread_id"] = entry["root_id"]
-            entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
+            if viewed is None:
+                viewed = _viewed_roots(view.c, threads_scope) if threads_scope else set()
+            if entry["root_id"] in viewed:
+                entry["bots"] = thread_bot_status.status(view.c, view.reader, found)
         elif kind == "routed":
             message = H.message(view.c, ref) if ref else None
             if not message or not threads.message_readable(view.c, view.reader, message, thread_checked=True):
@@ -2676,11 +2693,8 @@ class _Snapshot:
             topic = row["topic"]
             if (
                 topic not in topics
-                or conversations
-                and topic == "runs"
-                and row["conversation_id"] not in conversations
                 or (conversations or threads_scope)
-                and topic == "messages"
+                and topic in ("messages", "runs")
                 and row["conversation_id"] not in conversations
                 and not self._in_scope(row["conversation_id"], threads_scope)
                 or bots
@@ -2709,10 +2723,7 @@ class _Snapshot:
         self, who, after, limit, topics, conversations, bots, tasks, parties, threads_scope, meetings=(), places=()
     ):
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
-        if conversations:
-            clauses.append("(topic<>'runs' OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
-            args += list(conversations)
-        followed = []  # the messages on screen: these conversations' and these threads' subtrees
+        followed = []  # the messages and runs on screen: these conversations' and these threads' subtrees
         if conversations:
             followed.append("conversation_id IN (%s)" % ",".join("?" * len(conversations)))
             args += list(conversations)
@@ -2726,7 +2737,7 @@ class _Snapshot:
             )
             args += list(threads_scope)
         if followed:
-            clauses.append("(topic<>'messages' OR %s)" % " OR ".join(followed))
+            clauses.append("(topic NOT IN ('messages','runs') OR %s)" % " OR ".join(followed))
         if bots:
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
@@ -2901,7 +2912,7 @@ def read_in(
     if by_topic.get("needs"):
         picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
     if by_topic.get("threads"):
-        picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
+        picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"], threads_scope)]
     if by_topic.get("letters"):
         from . import letters
 
