@@ -388,6 +388,11 @@ A wake that hands on a PR says to read its checks with `gh pr checks <its link>`
 filed link is in one repository, the bot's turn also has `GH_REPO` set to it, so a bare `gh pr checks 46` reads that
 repository even from a copy with no git remote (stage_inputs.repository, runner-rs/src/env.rs).
 
+A task in a pipeline whose stages read PRs (Engineering) is in the repositories In use from the moment it is filed,
+before any PR: its wake opens with `Repository: owner/name` and `tico task worktree add owner/name`, `tico task show`
+names it, and with one, `GH_REPO` is set to it. With several, the wake lists them and the bot works in the one the spec
+names (stage_inputs.repositories).
+
 A bot that lacks an input it needs does not say done. It moves the task back to the stage the input comes from, saying
 what is missing; its wake says so. A done said with nothing changed is not refused (a review with no findings needs no
 change), but the note is handed on, so the next stage and the person who OKs Fixes 2 read what was and was not done.
