@@ -135,12 +135,15 @@ function subsStatusHTML(sub: SubsRow) {
 function subsRowHTML(sub: SubsRow) {
   const count = (sub.computers || []).length;
   const names = (sub.computers || []).map(subsComputerLabel).join(', ');
+  const status = subsStatusHTML(sub);
+  const usage = subsUsageHTML(sub);
+  const offlineWithUsage = status?.includes('Computer offline:') && (typeof sub.usage?.used_pct === 'number' || typeof sub.usage?.cost_usd_month === 'number');
   return `<tr data-subs-row="${esc(sub.id)}">
     <td class="subs-name">${esc(sub.name)}</td>
     <td class="muted subs-kind">${esc(sub.label || subsKind(sub.kind).label)}</td>
     <td class="subs-owner">${esc(sub.owner_name || '')}</td>
     <td class="subs-count" title="${esc(names || 'No computers')}"><span class="nav-icon" aria-hidden="true">computer</span><span class="tnum">${count}</span><span class="sr-only"> ${count === 1 ? 'computer' : 'computers'}</span></td>
-    <td class="subs-use">${subsStatusHTML(sub) || subsUsageHTML(sub)}</td>
+    <td class="subs-use">${offlineWithUsage ? `${status} ${usage}` : status || usage}</td>
     <td class="subs-more-cell">${subsMayEdit() ? `<button type="button" class="ghost subs-more" data-subs-more="${esc(sub.id)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(sub.name)}">⋯</button>` : ''}</td></tr>`;
 }
 async function renderSettingsSubs() {
