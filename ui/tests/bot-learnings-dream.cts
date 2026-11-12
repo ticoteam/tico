@@ -42,6 +42,7 @@ declare const window: Window & typeof globalThis & {
   md: (text: string) => string;
   ago: () => string;
   toast: (message: string) => void;
+  errorMessage: (e: unknown) => string;
   newRequestId: () => string;
   BOT: {slug: string};
   state: DreamState;
@@ -72,6 +73,8 @@ const QUESTIONS = 'Two things only you can settle.\n1. Should weekly reports go 
       window.esc = value => String(value).replace(/[&<>"']/g, ch => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'} as Record<string, string>)[ch]!);
       window.md = text => `<p>${esc(text)}</p>`;
       window.ago = () => 'today';
+      // errors.ts's errorMessage, so a refused request reaches toast with the server's detail.
+      window.errorMessage = (e: unknown) => String((e as Error)?.message ?? e);
       window.toast = message => { state.toasts.push(message); throw new Error('toast: ' + message); };
       window.BOT = {slug: 'ops'};
       window.newRequestId = () => 'req-1';
