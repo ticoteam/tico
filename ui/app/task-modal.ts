@@ -946,7 +946,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const files = tfFiles(state.dialog);
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
-  const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}</p>`;
+  const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}${data.waiting_for.startsWith('Out of credit') ? ` <a class="link" href="${BOT_BILLING}">Add credit</a>` : ''}</p>`;
   // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
