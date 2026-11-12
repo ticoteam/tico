@@ -117,6 +117,27 @@ ctx.taskModalShow = (task: unknown) => { shown.push(task); return Promise.resolv
   await open('t1', dialog());
   assert.equal(toasts[0]!.opts?.host, undefined, 'a closed window is no host');
 
+  // ---- a read that fails after the person moved on (another page, another task) says nothing
+  {
+    const S = ctx.S as {route: string};
+    toasts.length = 0; shown.length = 0;
+    let fail: (e: unknown) => void = () => {};
+    answer = () => new Promise((_, reject) => { fail = reject; });
+    const late = open('t1');
+    S.route = '#/goals';
+    fail(failure(500, 'The hub had a problem'));
+    await late;
+    S.route = '#/tasks';
+    assert.equal(toasts.length, 0, 'a failure after a change of page says nothing');
+    const first = open('t1');
+    const failFirst = fail;
+    answer = () => Promise.resolve({task: TASK});
+    await open('t2');
+    failFirst(failure(500, 'The hub had a problem'));
+    await first;
+    assert.equal(toasts.length, 0, 'a failure after another task opened says nothing');
+  }
+
   // ---- a read that works opens the task and says nothing
   toasts.length = 0; shown.length = 0;
   answer = () => Promise.resolve({task: TASK});
