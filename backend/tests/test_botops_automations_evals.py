@@ -154,8 +154,9 @@ def _actions(node):
     if isinstance(node, dict):
         if "do" in node:
             yield node
-        for value in node.values():
-            yield from _actions(value)
+        for key, value in node.items():
+            if key != "trigger":  # a listening's rules have `do` too (keep, drop), and are not actions
+                yield from _actions(value)
     elif isinstance(node, list):
         for value in node:
             yield from _actions(value)

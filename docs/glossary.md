@@ -82,7 +82,9 @@ The words Tico uses, and what each replaces.
 
 ## Knowledge
 
-Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), Listening, Goals, KPIs, Check-ins, Usage.
+Docs (internal and linked), Files, Meetings, Strategy (with Market as its tab), Goals, KPIs, Check-ins, Usage.
+
+- **Listening**: an automation of one special kind, under Automations in the sidebar. Its sources say what to read, its rules keep and tag or drop, and its rate limits say how many items are sent as text to its steps ([Listening](listening.md)).
 
 ## Webhooks
 

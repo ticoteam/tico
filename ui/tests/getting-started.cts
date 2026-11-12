@@ -440,7 +440,8 @@ const importedChart = {org_groups: [{id: 'built-in', name: 'General', order: 0},
     assert.equal(await welcome.locator('.onb-team-roles .onb-team-open').textContent(), 'Support Writer');
     assert.equal(await welcome.locator('input, [data-onb-team]').count(), 0, 'nothing to switch: the team is set up');
     assert.equal(await welcome.locator('#onb-machine-status').getAttribute('data-onb-machine'), 'cloud');
-    assert.equal(await welcome.locator('#onb-subscription a').getAttribute('href'), '#/settings');
+    assert.equal(await welcome.locator('#onb-subscription a').count(), 0, 'the sign-in sheet opens here, not Settings');
+    assert.equal(await welcome.locator('#onb-subscription [data-onb-subscription]').isVisible(), true);
     const welcomeSaved = page.waitForResponse(r => r.url().endsWith('/api/v2/setup/getting-started/state')
       && r.request().method() === 'POST' && r.request().postDataJSON()?.tour === true);
     await welcome.locator('#onb-next').click();

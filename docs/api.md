@@ -93,7 +93,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Skills | The company's approved skills: proposals and approval, screening state, and installs for bots and people ([guide](skills.md)). |
 <!-- api-tags:end -->
 
-Internal developer tutorials: [Listening](listening.md#save-decide-and-resolve) and [Needs you batches](needs-you-batches.md).
+Internal developer tutorials: [Listening](listening.md#read-and-save) and [Needs you batches](needs-you-batches.md).
 
 `GET /api/v2/needs-you` is one list for the signed-in person, oldest first: every ask with their name, every task they
 own, every Paused cause they can fix, and every @ of them by a person until they reply. Each item has `kind` (`task`,

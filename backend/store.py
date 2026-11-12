@@ -671,7 +671,6 @@ EVENT_NOISE_ACTIONS = (
     "job.suppress",
     "bot.drain",
     "operator.deployment-undrain",
-    "listen.judgment",
     "bot.repository_read",
 )
 EVENT_NOISE_RETENTION_DAYS = 7
@@ -1191,6 +1190,10 @@ def _close_idle(conns):
             pass
 
 
+# Secrets an answer shows once: never kept with the idempotency record, so a replay answers without them.
+SHOWN_ONCE = ("requester_token", "push_addresses", "push_address")
+
+
 class Store:
     def __init__(self, settings, recorder=None):
         self.settings = settings
@@ -1422,10 +1425,6 @@ class Store:
             _updates.purge_rejected(c)
             # Which stored retry answers quote which message (backend/idempotency_messages.py).
             idempotency_messages.ensure(c)
-            # Destinations saved in Settings > Listening (backend/listening.py).
-            from . import listening as _listening
-
-            _listening.ensure(c)
             # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
             H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
@@ -2779,7 +2778,7 @@ class Store:
                 }
             if not is_poll(operation, result):
                 cached = (
-                    {k: v for k, v in result.items() if k != 'requester_token'} if isinstance(result, dict) else result
+                    {k: v for k, v in result.items() if k not in SHOWN_ONCE} if isinstance(result, dict) else result
                 )
                 c.execute(
                     "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",

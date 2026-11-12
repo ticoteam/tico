@@ -366,8 +366,8 @@ def test_graph_and_entity_pages_are_bounded_and_focus_works_beyond_the_first_pag
 
 
 def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
-    """No new insight and no Listening for the Librarian on a weekday: no task, the skip on record as
-    `automation.skipped`. An insight brings it back."""
+    """No new insight on a weekday: no task, the skip on record as `automation.skipped`. An insight brings it
+    back."""
     import backend.routines as routines
     from backend.scheduler import Scheduler
 
@@ -386,7 +386,7 @@ def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
             json.loads(r[0])
             for r in c.execute("SELECT detail FROM events WHERE action='automation.skipped' AND target=?", (aid,))
         ]
-    assert [("Listening" in d["reason"], d["at"]) for d in skipped] == [(True, "2026-10-12T00:00:00.000000Z")]
+    assert [(bool(d["reason"]), d["at"]) for d in skipped] == [(True, "2026-10-12T00:00:00.000000Z")]
     with store.transaction() as c:
         c.execute(
             "INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES('i1','bot:ops',?,'pricing')",

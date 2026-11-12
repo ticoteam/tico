@@ -631,87 +631,25 @@ def failed_repository_copies(c, online_ids):
     return out
 
 
-LISTENING_ACTIVE_DAYS = 14  # Listening still saving posts this recently is still in use
-
-
-def _listening_lost(c, settings):
-    """Listening once sent posts to inboxes and still saves them, but the registry no longer routes any: what a
-    server move that left `listening.yaml` behind looks like. A company that stopped listening is not flagged."""
-    from . import listening
-
-    routed = c.execute("SELECT count(*) n, max(created_at) last FROM intake_items").fetchone()
-    if not routed or not routed["n"]:
-        return None
-    last = routed["last"]
-    saved = c.execute("SELECT count(*) n FROM listen_items WHERE first_seen_at>?", (last,)).fetchone()["n"]
-    if not c.execute(
-        "SELECT 1 FROM listen_items WHERE first_seen_at>? LIMIT 1", (H.shift(H.now(), days=-LISTENING_ACTIVE_DAYS),)
-    ).fetchone():
-        return None
-    present = (settings.registry_dir / listening.LISTENING_FILE).is_file()
-    return _check(
-        "listening",
-        "Listening",
-        "warn" if present else "bad",
-        f"Listening routes nowhere: listening.yaml {'has no valid destinations' if present else 'is missing from the company registry'}. "
-        f"It last sent a post to an inbox on {last[:10]}; {_plural(saved, 'post')} saved since went to no inbox. "
-        "Restore listening.yaml and questions/listening-item.json from the registry's previous copy.",
-        [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-    )
-
-
-def _listening_questions_lost(c, settings, qset):
-    """The registry has no questions of its own, yet posts were scored lately with a later version of the set than
-    the shipped one now in use: the company's own questions were there and are gone."""
-    from . import listening
-
-    if (settings.registry_dir / "questions" / (listening.QUESTION_SET + ".json")).is_file():
-        return None
-    since = H.shift(H.now(), days=-30)
-    for row in c.execute(
-        "SELECT question_set, max(judged_at) last FROM listen_judgments WHERE judged_at>? GROUP BY question_set",
-        (since,),
-    ):
-        name, _, version = str(row["question_set"]).partition("@")
-        if name == qset["id"] and version.isdigit() and int(version) > int(qset["version"]):
-            return _check(
-                "listening",
-                "Listening",
-                "warn",
-                f"Listening scores posts with Tico's built-in questions ({qset['label']}), but until "
-                f"{row['last'][:10]} it used the company's own ({row['question_set']}). "
-                "Restore questions/listening-item.json in the company registry.",
-                [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-            )
-    return None
-
-
 def _listening(c, settings):
+    """A listening that is on with a source whose last read was blocked, limited or failed, or with posts waiting
+    unscored (decisions are off, or a spend cap is reached). Nothing listening, or all of it well: no check."""
     from . import listening
-    from clients.judge import JudgeError
 
-    dests = listening.destinations(settings, c, check_questions=False)
-    if not dests:
-        return _listening_lost(c, settings)
-    try:
-        qset = listening.question_set(settings)
-        problems = listening.category_problems(dests, qset)
-    except JudgeError:
-        problems = [
-            "The listening-item question set could not be loaded. Check registry/questions/listening-item.json."
-        ]
-    if not problems:
-        return _listening_questions_lost(c, settings, qset)
-    summary = "; ".join(problems[:5])
-    if len(problems) > 5:
-        summary += f"; and {len(problems) - 5} more"
-    return _check(
-        "listening",
-        "Listening",
-        "warn",
-        summary,
-        [_fix("Listening settings", "https://github.com/ticoteam/tico/blob/main/docs/listening.md")],
-    )
+    trouble, waiting = listening.trouble(c), listening.stalled(c)
+    if not trouble and not waiting:
+        return None
+    words = {"blocked": "was blocked", "rate_limited": "was rate limited", "error": "failed"}
+    lines = [
+        f"{row['name']}: {listening.site_label(row) or row['key']} {words[row['status']]}"
+        + (f" ({row['last_error']})" if row["last_error"] else "")
+        for row in trouble
+    ]
+    lines += [f"{name}: posts are waiting to be scored" for name in waiting]
+    summary = "; ".join(lines[:5])
+    if len(lines) > 5:
+        summary += f"; and {len(lines) - 5} more"
+    return _check("listening", "Listening", "warn", summary, [_fix("Listening", "#/listening")])
 
 
 def repository_fix(c, bot, label, github_owner=""):

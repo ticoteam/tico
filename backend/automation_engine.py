@@ -151,6 +151,8 @@ def advance(flow, state, services):
         else:
             n += 1
     state["status"] = _status(state)
+    if state["status"] == "failed" and _all_capped(state):
+        state.setdefault("error", CAPPED)
     return state
 
 
@@ -160,13 +162,26 @@ def _status(state):
         return "running"
     if WAITING in states:
         return "waiting"
-    if FAILED in states:
+    if FAILED in states or _all_capped(state):
         return "failed"
     if state["empty"] and not state["threads"]:
         return "empty"
     if state["steps"] and all(r["status"] == "skipped" for r in state["steps"]):
         return "skipped"
     return "ok"
+
+
+CAPPED = "every turn was stopped by the spend cap"
+
+
+def _all_capped(state):
+    """A listening's run whose every turn the spend cap stopped: what it sent reached nobody, so it did not go well."""
+    if "listening" not in state["payload"]:
+        return False
+    turns = [r for r in state["steps"] if r["type"] in ("llm", "bot_turn")]
+    return bool(turns) and all(
+        r["status"] == "spend_cap" or (r.get("outputs") or {}).get("skipped") == "spend_cap" for r in turns
+    )
 
 
 def _record(state, thread, step, status, outputs=None, cost=0.0):
@@ -337,7 +352,7 @@ def _turn_label(thread):
     if thread["item"] is None:
         return None
     value = thread["value"] if isinstance(thread["value"], dict) else {}
-    own = " ".join(str(value.get("title") or value.get("subject") or "").split())
+    own = " ".join(str(value.get("title") or value.get("subject") or value.get("tag") or "").split())
     return own or f"item {thread['item'] + 1}"
 
 
@@ -620,7 +635,27 @@ def _brief(item):
     return {k: (v[:ITEM_TEXT] if isinstance(v, str) else v) for k, v in item.items()}
 
 
+def _split(state, thread, step):
+    """A listening's paths `by` tag or item: the thread becomes one per group or per item of what was sent, each back
+    at this step to choose its own path, as `_find` makes one per found item. `split` tells them from a find's items,
+    which the automation's find watermark follows."""
+    sent = state["payload"].get("listening")
+    sent = sent if isinstance(sent, dict) else {}
+    entries = sent.get("groups" if step["by"] == "tag" else "items") or []
+    values = [dict(e) if step["by"] == "tag" else {**e, "count": 1} for e in entries if isinstance(e, dict)]
+    _record(state, thread, step, "ok", {"by": step["by"], "count": len(values)})
+    state["empty"] = not values
+    place = next(n for n, t in enumerate(state["threads"]) if t is thread)
+    state["threads"][place : place + 1] = [
+        {**_thread(n, value, thread["outputs"], thread["trail"], thread["next"] - 1, thread["batched"]), "split": True}
+        for n, value in enumerate(values)
+    ]
+
+
 def _paths(flow, state, thread, step, services):
+    if step.get("by") and thread["item"] is None:
+        _split(state, thread, step)
+        return
     values = values_of(state, thread)
     index = thread["next"] - 1
     for n, path in enumerate(step.get("paths") or []):

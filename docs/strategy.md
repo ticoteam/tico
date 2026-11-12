@@ -19,12 +19,12 @@ spend. Then five questions, each with a one-line answer the Librarian writes wit
 - **Who are we up against?** The players in the segments with what they sell, their revenue and share where known, and
   the briefing's last word on each. A row opens the player's note.
 - **How does it reach buyers?** The value chain, with spend or revenue on each node where known.
-- **What are buyers saying?** Listening's posts a day and the newest posts, for those who can read them. Owners and
-  admins see **Settings** for where posts go.
+- **What are buyers saying?** The items Listening sent: how many a day, and the newest. Sources, rules and rate
+  limits are set under [Listening](listening.md), not here.
 
 **Open map** opens the graph and its notes (`#/strategy/market/map`); a note link opens the map at that note. The old
 view addresses (`#/strategy/market/briefing`, `/spend`, `/buyers`, `/growth`, `/value-chain`, `/listening`) open the page
-at their question, and `/players` opens the map. How the market is defined, cut into segments and sized is in
+at their question (`/listening` opens Listening), and `/players` opens the map. How the market is defined, cut into segments and sized is in
 [Librarian](librarian.md#market-spend).
 
 Three activities make one loop:
@@ -85,7 +85,7 @@ removes a thing.
 - **Competitors.** Every company or product with a current `competes_with` edge to `company/self`, as chips that link
   to their sites. × ends those edges (the company stays in the graph); **Add a competitor or its site** finds the
   company the graph has by that name or domain, or makes it, and adds the edge.
-- **Related news.** What Listening found: the newest posts routed to a destination the reader reads, and the posts
+- **Related news.** What Listening found: the newest items it sent, and the posts
   setup filed as market insights (`about` "Listening: hot" and so on; the owner's only), hot first, then the newest,
   eight at most, each linking out.
 - **Seven sections**, markdown, in this order, in the owner's words:

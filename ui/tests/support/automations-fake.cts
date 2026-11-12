@@ -355,6 +355,35 @@ function inboxRuns(now = Date.now()): Run[] {
   });
 }
 
+// Listening (ui/app/listening.ts): each source's health as GET /api/v2/listening/sources lists it, by the source's id in
+// its listening's trigger: [status, minutes since the last read, the last error]. A source not named here was never read.
+const LISTEN_HEALTH: Record<string, [string, number, string?]> = {s_smb: ['ok', 120], s_agency: ['ok', 120], s_x: ['blocked', 180, 'Sign-in wall'],
+  s_nw: ['ok', 300], s_syften: ['ok', 12], s_acme: ['ok', 60]};
+// Listenings whose posts have waited unscored: the server gives them a hollow dot though every source read well.
+const LISTEN_STALLED = new Set(['au_pricing']);
+const LISTEN_TEXT = `Market listening · Tue Nov 10, 14:00 · 3 of 30
+
+1. competitor  Northwind Team plan is now $15 a seat
+   Page · northwind.com/pricing
+2. question    Which tracker works for a 6-person agency?
+   Reddit · 3 copies · reddit.com/r/agency/…
+3. buyer       We're 8 people and need to replace our spreadsheet this month
+   Reddit · reddit.com/r/smallbusiness/…`;
+// A listening's sends: one run an hour, each carrying what was sent and the counts since the send before.
+function listenRuns(now = Date.now()): Run[] {
+  return Array.from({length: 6}, (_, i) => {
+    const at = now - (i * 60 + 20) * 60000;
+    return {id: 'lrun_' + (60 - i), automation_id: 'au_market', version: 3, trigger_ref: 'listening:' + (60 - i),
+      started_at: new Date(at).toISOString(), finished_at: new Date(at + 21000).toISOString(), status: 'ok', cost: 0.06, summary: '3 sent',
+      listening: {name: 'Market listening', sent_at: new Date(at).toISOString(), count: 3, waiting: 27, text: LISTEN_TEXT,
+        counts: {read: 212, duplicates: 41, dropped: 136, kept: 33, sent: 3, waiting: 27, failed: 2}},
+      steps: [{id: 'lp1', type: 'paths', status: 'ok', outputs: {summary: 'competitor 1 · question 1 · Otherwise 1'}, cost: 0},
+        {id: 'lb1', type: 'bot_turn', status: 'ok', outputs: {}, cost: 0.06},
+        {id: 'lt1', type: 'action', status: 'ok', outputs: {result: '1 task'}, cost: 0},
+        {id: 'lu1', type: 'action', status: 'ok', outputs: {result: 'posted'}, cost: 0}]};
+  });
+}
+
 // One page on the fake hub. viewer: the person signed in (any but the fixture's owner sees nothing editable).
 // tweak(fx) changes the fixture copy before the page reads it. proposal: a bot's pending version on the inbox one.
 async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/automations', viewer = 'dana', tweak = null, draft = false,
@@ -371,7 +400,7 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
   const config = {};
   const db: AutomationsDb = {
     list: fx.automations.map(a => asAuto({...sortFlow(a), can_edit: owner && a.can_edit !== false, ...(a.can_pause != null ? {can_pause: owner && a.can_pause} : {})})),
-    versions: {}, runs: {au_inbox: inboxRuns(), ...(system ? {[String(SYSTEM.id)]: systemRuns()} : {})}, conv: null, messages: [],
+    versions: {}, runs: {au_inbox: inboxRuns(), au_market: listenRuns(), ...(system ? {[String(SYSTEM.id)]: systemRuns()} : {})}, conv: null, messages: [],
     held: {},   // id → {wait, fail}: an automation's GET or Maintenance's PATCH waits for release()
   };
   for (const a of db.list) {
@@ -417,12 +446,17 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
     }
     return out;
   });
-  const full = (a: Auto): Json => ({...clone(a), steps: withSets(a.steps)});
+  // A listening's summary as the server gives it: its one dot is filled when every source read well and nothing waits unscored.
+  const heard = (a: Auto): Json => {
+    const t = a.trigger as Json, sources = (t.sources || []) as Json[];
+    return t.type !== 'listening' ? {} : {listening: {dot: sources.length && !LISTEN_STALLED.has(a.id) && sources.every(s => LISTEN_HEALTH[String(s.id)]?.[0] === 'ok') ? 'filled' : 'hollow'}};
+  };
+  const full = (a: Auto): Json => ({...clone(a), steps: withSets(a.steps), ...heard(a)});
   // A list row carries how many versions wait for a person (the Pending pill)
   // and its newest run (the Last run column).
   const row = (a: Auto): Json => {
     const {steps, ...rest} = clone(a), last = db.runs[a.id]?.[0];
-    return {...rest, pending: db.versions[a.id]!.filter(v => v.status === 'pending').length,
+    return {...rest, ...heard(a), pending: db.versions[a.id]!.filter(v => v.status === 'pending').length,
       ...(last && !rest.last_run ? {last_run: {id: last.id, started_at: last.started_at, status: last.status}} : {})};
   };
   const nextN = (id: string) => Math.max(...db.versions[id]!.map(v => v.n)) + 1;
@@ -522,6 +556,16 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         return json({run: clone(mt.live), started: true});
       }
     }
+    // Listening: every listening's sources with how their last read went; a push source's new address.
+    if (p === '/api/v2/listening/sources' && method === 'GET') {
+      return json({sources: db.list.filter(a => (a.trigger as Json).type === 'listening').flatMap(a => (((a.trigger as Json).sources || []) as Json[]).map(s => {
+        const [status, mins, error] = LISTEN_HEALTH[String(s.id)] || ['never', 0], at = status === 'never' ? null : new Date(Date.now() - mins * 60000).toISOString();
+        return {id: 'ls_' + s.id, automation_id: a.id, key: s.id, kind: s.kind, site: s.site ?? null, target: s.target ?? null, status,
+          last_read_at: at, last_ok_at: status === 'ok' ? at : null, last_error: error || null};
+      }))});
+    }
+    const addrMatch = p.match(/^\/api\/v2\/listening\/sources\/([^/]+)\/address$/);
+    if (addrMatch && method === 'POST') return json({address: `https://tico.example/api/v2/listening/in/new_${decodeURIComponent(addrMatch[1] ?? '')}`});
     if (p === '/api/v2/automations/question-sets') return json({sets: fx.question_sets});
     // A template fill saves nothing; like the hub it refuses an owner the viewer may not make an automation for (another
     // person) and one that can't hear the inbox (a group on an email address).
@@ -612,10 +656,14 @@ async function openAutomations(browser: Browser, {viewport = PHONE, hash = '#/au
         if (b.steps || b.trigger || b.destinations) {
           const bad = b.steps ? flowProblem(b.steps) : '';
           if (bad) return refuse(422, 'invalid_flow', bad);
+          // A listening's new push source gets its address, sent with this answer only.
+          const had = new Set((((a.trigger as Json).sources || []) as Json[]).map(s => s.id));
+          const pushed = (((b.trigger as Json | undefined)?.sources || []) as Json[]).filter(s => s.kind === 'push' && !had.has(s.id));
           if (b.steps) a.steps = sortKeys(b.steps) as Step[];
           if (b.trigger) a.trigger = sortKeys(b.trigger) as Json;
           if (Array.isArray(b.destinations)) a.destinations = sortKeys(b.destinations) as Json[];
           newVersion(a);
+          if (pushed.length) return json({...full(a), push_addresses: Object.fromEntries(pushed.map(s => [s.id, `https://tico.example/api/v2/listening/in/tok_${s.id}`]))});
         }
         return json(full(a));
       }

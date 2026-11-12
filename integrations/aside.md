@@ -39,9 +39,8 @@ support-style bots); social sites and news (a listening bot, read); ad dashboard
 **The owner's social sessions are the listening bot's alone**. The Tool refuses
 any other bot that names a social site (X, Reddit, LinkedIn, Facebook, Instagram, TikTok,
 YouTube and the rest of `SOCIAL_HOSTS` in `connectors/browser.py`) in its `sites:` or its code;
-ad-account dashboards on those domains are not social reading. The listening bot saves what it reads in Tico (`tico listening save`), the decision model routes
-each post to the inboxes that want it (the team's `registry/listening.yaml`), and every other bot works its
-inbox (`tico listening item list`, `tico listening item resolve`) or asks the listening bot by task for a lookup.
+ad-account dashboards on those domains are not social reading. The listening bot saves what it reads in Tico (`tico listening save`); each listening's rules
+decide what is kept, and its automation sends that on. Every other bot asks the listening bot by task for a lookup.
 
 ## How a bot uses it
 

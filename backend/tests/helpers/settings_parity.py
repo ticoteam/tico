@@ -124,8 +124,6 @@ NOT_PROVEN = {
     "storage.s3.remove": "tap 409: no company storage is set",
     "people.person.delete": "tap 409: the fixture person can't be removed for good",
     "repos.product.create": "422: the body shape (and no GitHub App here)",
-    "listening.destination": "422: the body shape",
-    "listening.destination.remove": "tap 404: no synthetic listening destination",
     "roadmap.public": "tap 422: the route takes no empty settings",
     "inbound.inbox.release": "tap 404: no synthetic inbox",
     "inbound.phone_request": "tap 409: inbound is not configured",

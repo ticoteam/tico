@@ -57,12 +57,11 @@ does and what it returns. For any other command, run `tico <group> --help` first
 
 Market sizing (`tico market define|segment|size|figure|sources|spend`): the commands are in `playbooks/size-the-market.md`.
 
-## Listening: posts routed to you
+## Listening: items sent to you
 
-- `tico listening item list --destination market`: posts waiting for you, oldest first, with id, url and text.
-- `tico listening item resolve <id> --status <accepted|rejected|duplicate> [--ref <insight id>] [--reason "<one sentence>"]`:
-  accepted with the insight id it became, or rejected with a reason.
-- `tico listening show <id>`: one post, its run and its decisions.
+There is no command and nothing to fetch or close. The "Market listening" automation gives you its items as text in a
+turn: each with its tag, title, site and link. File what is worth keeping with `tico market report` (above), with the
+item's link as `--source` and the post's words as `--quote`.
 
 ## Meetings
 

@@ -4,7 +4,7 @@
 'use strict';
 
 const RD_GOALS = '#/strategy/goals', RD_ORG = '#/strategy/org', RD_BUDGET = '#/strategy/budget';
-const RD_LISTENING = '#/strategy/market/listening', RD_AUTOMATIONS = '#/automations';
+const RD_LISTENING = '#/listening', RD_AUTOMATIONS = '#/automations';
 const rdUnder = (r: string, base: string): boolean => r === base || r.startsWith(base + '/') || r.startsWith(base + '?');
 // Where Goals lives: a Strategy tab.
 const goalsBase = () => RD_GOALS;
@@ -153,6 +153,7 @@ function redesignNavCurrent(nav: string | undefined): boolean {
   if (!nav) return false;   // sidebar.ts passes a row's data-nav, which a row without one lacks (the old code threw here)
   const r = S.route || '';
   if (nav === 'automations') return rdUnder(r, RD_AUTOMATIONS);
+  if (nav === 'listening') return rdUnder(r, RD_LISTENING);
   if (nav === 'tools') return rdUnder(r, TOOLS_ROUTE);
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'skills') return rdUnder(r, SKILLS_ROUTE);
@@ -170,13 +171,14 @@ function redesignNavCurrent(nav: string | undefined): boolean {
 function redesignRoute(r: string): boolean {
   // Old addresses of what moved.
   if (rdUnder(r, GOALS)) { location.replace(RD_GOALS + r.slice(GOALS.length)); return true; }
-  if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
+  // Listening is its own page; its old places (a Settings tab, then a view of Market) lead to it.
+  if (r === '#/settings/listening' || r === '#/strategy/market/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
   if (rdUnder(r, GTM_OLD_ROUTE + '/sources')) { location.replace(GR_SOURCES); return true; }   // Sources is growth's now
   if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace('#/strategy'); return true; }
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0] ?? '')) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
-  if (rdUnder(r, RD_AUTOMATIONS)) {
+  if (rdUnder(r, RD_AUTOMATIONS) || rdUnder(r, RD_LISTENING)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
     if (typeof window.pageAutomations === 'function') window.pageAutomations();
     else $('#main').innerHTML = '<div id="automations-root" class="rd-automations"></div>';
@@ -198,7 +200,7 @@ function redesignRoute(r: string): boolean {
 }
 // After every route: leave Automations' and Tools' state when off their pages.
 function redesignAfterRoute() {
-  if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
+  if (!rdUnder(S.route || '', RD_AUTOMATIONS) && !rdUnder(S.route || '', RD_LISTENING)) window.automationsStop?.();
   if (!rdUnder(S.route || '', TOOLS_ROUTE)) toolsStop();
   if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');

@@ -9,6 +9,7 @@ import re
 import sys
 import time
 import uuid
+from urllib.parse import quote
 from pathlib import Path
 
 if __package__ in (None, ""):  # imported by a script run from anywhere
@@ -760,21 +761,14 @@ def run(args, who=None):
     if cmd == "listening":
         if fn == "listening save":
             text = sys.stdin.read() if args.file == "-" else Path(args.file).read_text()
-            return post("listening/runs", json.loads(text))
-        if fn == "listening decide":
-            return post("listening/decide", {"limit": args.limit, "item_ids": args.item_ids or []})
-        if fn == "listening show":
-            return client.get("listening/items/" + args.id)
-        if fn == "listening runs":
-            return client.get("listening/runs", since=args.since, source=args.source)
-        if fn == "listening item list":
-            return client.get("intake", destination=args.destination, status=args.status, limit=args.limit)
-        if fn == "listening item resolve":
-            return post(
-                f"intake/{args.id}/resolve",
-                {"status": args.status, "receiver_ref": args.receiver_ref or "", "reason": args.reason or ""},
-            )
-        return client.get("listening/stats", since=args.since)
+            try:
+                read = json.loads(text)
+            except ValueError as exc:
+                raise APIError("file", f"--file is not JSON ({exc})") from None
+            if not isinstance(read, dict):
+                raise APIError("file", "--file must hold a JSON object")
+            return post("listening/sources/" + quote(args.source, safe="") + "/items", read)
+        return client.get("listening/sources", due=1, automation=args.automation)
     if fn == "conversation show":
         page = client.get(f"conversations/{args.conversation}/messages", before=args.before, since=args.since)
         return {

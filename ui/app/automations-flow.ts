@@ -10,7 +10,7 @@ const AU_STEP_ICONS: Record<string, string> = {filter: 'filter_list', decide: 'a
 const AU_ACTIONS: Record<string, string> = {archive: 'Archive', leave_for_you: 'Leave for you', draft_reply: 'Draft reply', send_reply: 'Send reply',
   create_task: 'Create task', label: 'Label', forward: 'Forward', wake_bot: 'Wake a bot', note: 'Note', post_update: 'Post update',
   call_webhook: 'Call a webhook', assign: 'Assign', unsubscribe: 'Unsubscribe'};
-const AU_FIND: Record<string, string> = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', listening: 'Listening', docs: 'Docs'};
+const AU_FIND: Record<string, string> = {mail: 'Mail', tasks: 'Tasks', prs: 'Pull requests', docs: 'Docs'};
 const AU_OPS: Record<string, string> = {is: '=', is_not: '≠', '>=': '≥', '<=': '≤', contains: 'has', matches: 'matches'};
 const AU_MAX_PATHS = 10, AU_MAX_DEPTH = 3;
 // A Filter rule's action: the hub keeps {do, args} (CONTRACT §2 ACTIONS); older copies said just the name.
@@ -85,6 +85,7 @@ function auContainer(steps: AuStep[], key: string): {arr: AuStep[]; depth: numbe
 }
 
 function auTriggerCard(a: AuAutomation) {
+  if (a.trigger.type === 'listening') return lstBlockHTML(a);   // Sources, Rules and Rate limits (ui/app/listening.ts)
   const icons: Record<string, string> = AU_TRIGGER_ICONS, words: Record<string, string> = AU_TRIGGER_WORDS;
   const t = a.trigger, system = a.kind === 'system', src = system ? a.schedule || a.controls?.schedule || '' : auSource(t);
   return `<div class="au-card au-trig${auPage().ed?.kind === 'trigger' ? ' sel' : ''}" role="button" tabindex="0" data-open="trigger">
@@ -141,11 +142,11 @@ function auPathsHTML(s: AuStep): string {
   const cols: {p: AuPath; i: number | string; key: string; fb?: boolean}[] = [...(s.paths || []).map((p, i) => ({p, i, key: `${s.id}:${i}`})), {p: {name: 'Otherwise', steps: s.otherwise?.steps || []}, i: 'other', key: `${s.id}:other`, fb: true}];
   return `<div class="au-pb">
     <div class="au-card au-pcard${s.enabled === false ? ' off' : ''}${auPage().ed?.id === s.id ? ' sel' : ''}" role="button" tabindex="0" data-open="${esc(s.id)}">
-      <div class="au-cr">${auTag('paths')}<span class="au-ct muted">${(s.paths || []).length + 1} paths</span>${auStepSwitch(s)}</div></div>
+      <div class="au-cr">${auTag('paths')}<span class="au-ct muted">${lstIs() ? lstByWords(s.by) : (s.paths || []).length + 1 + ' paths'}</span>${auStepSwitch(s)}</div></div>
     <div class="au-paths" data-paths="${esc(s.id)}">${cols.map(({p, i, key, fb}) => `<div class="au-pth${fb ? ' fb' : ''}" data-col="${i}">
       <button class="au-pname" type="button" data-open="${esc(s.id)}" data-path="${i}">${esc(p.name || 'Path')}</button>
       <div class="au-chips">${fb ? '<span class="muted">Nothing else</span>' : (p.when || []).length
-        ? (p.when || []).map(c => `<span class="au-c1 au-cond">${esc(auCondText(c))}</span>`).join('') : '<span class="muted">No condition</span>'}</div>
+        ? (p.when || []).map(c => `<span class="au-c1 au-cond">${esc(lstIs() && lstTagOf(c) ? lstTagOf(c) : auCondText(c))}</span>`).join('') : '<span class="muted">No condition</span>'}</div>
       ${auStepsHTML(p.steps, key)}</div>`).join('')}</div>
     <div class="au-dots" role="tablist" aria-label="Paths">${cols.map(({p, i}, n) => `<button type="button" role="tab" data-dot="${i}" aria-label="${esc(p.name || 'Path')}" aria-selected="${n === 0}"></button>`).join('')}</div>
   </div>`;
@@ -206,7 +207,7 @@ function auNewStep(type: string) {
   if (type === 'llm') Object.assign(s, {as: 'assistant:' + (S.me?.id || ''), prompt: '', out: auNextOut('l')});
   if (type === 'find') Object.assign(s, {source: 'mail', query: '', since: 'last_run', limit: 20});
   if (type === 'bot_turn') Object.assign(s, {bot: (S.emps || []).find(e => e.id !== AU_BOT)?.id || '', prompt: ''});
-  if (type === 'paths') Object.assign(s, {paths: [{name: 'Path 1', when: [], steps: []}], otherwise: {steps: []}});
+  if (type === 'paths') Object.assign(s, lstIs() ? lstNewPaths() : {paths: [{name: 'Path 1', when: [], steps: []}], otherwise: {steps: []}});
   if (type === 'action') Object.assign(s, {do: 'archive', args: {}});
   return s;
 }

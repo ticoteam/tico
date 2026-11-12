@@ -57,7 +57,7 @@ from . import task_models
 from . import task_run_models
 from .migrations import renames
 from .models import Contract
-from . import audit_log, cloud_access
+from . import audit_log, cloud_access, listening
 from .store import H, Problem
 from . import sources as SRC
 
@@ -198,6 +198,9 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
             if not day
             else (day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
         )
+    if flow["trigger"]["type"] == "listening" and (heard := listening.summary(c, row, flow)) is not None:
+        out["listening"] = heard
+        out["next_run"] = heard["next_send_at"]
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute(
@@ -302,6 +305,8 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
     if flow["trigger"]["type"] == "due":
         due = _due_text(D.start(flow["trigger"], at))
+    if flow["trigger"]["type"] == "listening":
+        due = _iso(listening.next_send(flow["trigger"], at))  # its next send time, as a schedule's next run
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
         # schedule, or one turned back on, starts from the next time after now.
@@ -322,6 +327,7 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
             "created_at,created_by_id,found_since,next_due_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (*columns, aid, now, actor, "" if idle else now, due),
         )
+    listening.sync_sources(c, aid, flow, now)  # a listening's source rows follow its trigger
     if audit:
         audit_log.write(c, actor, "automation:" + aid, before, flow, via)
     if before and before.get("enabled") and not flow["enabled"]:
@@ -345,6 +351,7 @@ def remove(c, actor, row, via=None):
     aid = row["id"]
     _unhold(c, aid, actor, "drop", via)
     c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
+    listening.sync_sources(c, aid, None)  # a deleted listening reads nothing: what it had not sent expires
     for dropped in c.execute(
         "SELECT id FROM automation_runs WHERE automation_id=? AND status IN ('queued','waiting','running')", (aid,)
     ).fetchall():
@@ -883,23 +890,24 @@ def may_read_inbox(c, owner, inbox, *, sender=None, settings=None):
 # on, never by POST. Each is {key, name, owner, trigger, steps}. The first is `What wakes bots`, owned by the top of the
 # org: the wake rules rules.py keeps in code, shown read-only (`readonly`: the engine never runs it, and pausing it
 # leaves those rules working). The system jobs move here with their migration; until then the old jobs run as they do.
-# With a Librarian on the team, the market's two: `Market briefing` (daily at 07:00 team time: the Librarian's turn
-# writes it and `post_update` posts it to Market and Updates) and one `Market listening` per destination the Librarian
-# receives (each match is a Librarian turn, which changes the graph through the market routes). The top of the org
-# pauses them; nobody deletes them. Each stands down while the team's own Librarian automation does the same work
-# (`_stands_down`), and the briefing starts paused while a Librarian briefing routine still runs (the converter adopts
-# that routine into it).
+# With a Librarian on the team, `Market briefing` (daily at 07:00 team time: the Librarian's turn writes it and
+# `post_update` posts it to Market and Updates). The top of the org pauses it; nobody deletes it. It stands down while
+# the team's own Librarian automation does the same work (`_stands_down`), and starts paused while a Librarian
+# briefing routine still runs (the converter adopts that routine into it). `Market listening` is not a built-in: it
+# is made once (`ensure_listening`) and is its owner's to change or delete.
 BUILTINS = ()
 LIBRARIAN = "librarian"
-BRIEFING_KEY, LISTENING_KEY = "market_briefing", "market_listening_"
+BRIEFING_KEY = "market_briefing"
 BRIEFING_PROMPT = (
     "Write today's market briefing from the graph: what changed since yesterday, what listening heard and "
     "which bets it touches. Start with a one-line title; then one bullet per point."
 )
+LISTENING_NAME = "Market listening"
+LISTENING_MADE = "listening.ready_made"  # registry_metadata: the ready-made listening was made once; never again
 LISTENING_PROMPT = (
-    "A listening match for Market ({{listening.destination}}): {{listening.url}}\n\n{{listening.content}}"
-    "\n\nIf it changes what we know about the market, file it as evidence and change the graph through "
-    "the market routes, citing it. If it changes nothing, say so and stop."
+    "What listening kept for Market:\n\n{{listening.text}}"
+    "\n\nFor each item that changes what we know about the market, file it as evidence and change the graph "
+    "through the market routes, citing its address. If none changes anything, say so and stop."
 )
 
 
@@ -926,7 +934,7 @@ def is_briefing_routine(row):
 
 
 def _market_builtins(c, settings=None):
-    """The Librarian's built-ins; `settings` adds the destinations listening.yaml names to the ones saved here."""
+    """The Librarian's built-in."""
     found = H.bot(c, LIBRARIAN)
     if not found or found.get("state") == "archived":
         return []
@@ -936,21 +944,58 @@ def _market_builtins(c, settings=None):
             "SELECT bot, title, routine_key, event_name FROM schedules WHERE bot=? AND deleted_at IS NULL", (LIBRARIAN,)
         )
     )
-    out = [{**briefing_flow(), "key": BRIEFING_KEY, "enabled": not live}]
-    from . import listening
+    return [{**briefing_flow(), "key": BRIEFING_KEY, "enabled": not live}]
 
-    dests = listening.destinations(settings, c, check_questions=False) if settings is not None else listening.stored(c)
-    for key in sorted(k for k, cfg in dests.items() if cfg.get("receiver") == "bot:" + LIBRARIAN):
-        out.append(
-            {
-                "key": LISTENING_KEY + key,
-                "name": f"Market listening · {key}"[:120],
-                "owner": "bot:" + LIBRARIAN,
-                "trigger": {"type": "listening", "destination": key},
-                "steps": [{"id": "update", "type": "bot_turn", "bot": "bot:" + LIBRARIAN, "prompt": LISTENING_PROMPT}],
-            }
-        )
-    return out
+
+def listening_flow(owner, librarian):
+    """The ready-made `Market listening`: no sources yet, ten items a day, and one step: the Librarian's turn on what
+    was kept, or with no Librarian a post to Updates."""
+    step = (
+        {"id": "update", "type": "bot_turn", "bot": "bot:" + LIBRARIAN, "prompt": LISTENING_PROMPT}
+        if librarian
+        else {"id": "post", "type": "action", "do": "post_update", "args": {"text": "{{listening.text}}"}}
+    )
+    return {
+        "name": LISTENING_NAME,
+        "owner": owner,
+        "trigger": {
+            "type": "listening",
+            "sources": [],
+            "rules": [
+                {
+                    "do": "keep",
+                    "tag": "competitor",
+                    "text": "A competitor changed a price, a plan, a product or an offer",
+                },
+                {
+                    "do": "keep",
+                    "tag": "buyer",
+                    "text": "A buyer describing a problem, a need or what they pay, in their own words",
+                },
+                {"do": "drop", "text": "Vendors promoting themselves. Job posts."},
+            ],
+            "limits": [{"count": 10, "per": "day"}],
+        },
+        "steps": [step],
+    }
+
+
+def ensure_listening(c):
+    """Make the ready-made listening once per company: its owner the Librarian, else the top of the org. The marker
+    is written with it, so one its owner deleted is not made again. A company with neither yet waits for one."""
+    if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (LISTENING_MADE,)).fetchone():
+        return None
+    found = H.bot(c, LIBRARIAN)
+    librarian = bool(found) and found.get("state") != "archived"
+    top = "" if librarian else top_person(c) or ""
+    if not librarian and not top:
+        return None
+    aid = "auto_" + H.new_id()
+    _save(
+        c, H.KEEPER, aid, F.check(listening_flow("bot:" + LIBRARIAN if librarian else "person:" + top, librarian)), None
+    )
+    c.execute("INSERT INTO registry_metadata VALUES(?,?)", (LISTENING_MADE, json.dumps({"automation": aid})))
+    return aid
 
 
 def _posts_market(steps):
@@ -967,16 +1012,12 @@ def _posts_market(steps):
 
 
 def _stands_down(c, aid, trigger):
-    """A market built-in does not run while the team's own Librarian automation does its work: one on the same
-    listening destination, or (the briefing) one that posts to Market. One turn per match, one briefing a day."""
-    if aid == "auto_builtin_" + BRIEFING_KEY:
-        same = lambda flow: _posts_market(flow["steps"])
-    elif aid.startswith("auto_builtin_" + LISTENING_KEY):
-        same = lambda flow: flow["trigger"].get("destination") == trigger.get("destination")
-    else:
+    """The market briefing does not run while the team's own Librarian automation posts to Market: one briefing a
+    day."""
+    if aid != "auto_builtin_" + BRIEFING_KEY:
         return False
     return any(
-        same(flow_of(r))
+        _posts_market(flow_of(r)["steps"])
         for r in c.execute(
             "SELECT flow FROM automations WHERE builtin=0 AND enabled=1 AND deleted_at IS NULL AND owner_id=? "
             "AND trigger_type=?",
@@ -1017,6 +1058,8 @@ def ensure_builtins(c, catalog=None, settings=None):
             {**{k: v for k, v in spec.items() if k != "key"}, "builtin": True, "enabled": spec.get("enabled", True)}
         )
         _save(c, H.KEEPER, aid, flow, None)
+        made.append(aid)
+    if catalog is None and (aid := ensure_listening(c)):
         made.append(aid)
     return made
 
@@ -1458,13 +1501,13 @@ def _queue(c, row, payload, ref="", *, manual=False, chain=()):
         # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
     if (
-        stored.startswith(("slack:", "mail:"))
+        stored.startswith(("slack:", "mail:", "listening:"))
         and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1", (row["id"], stored)
         ).fetchone()
     ):
         # One Slack or mail message, one run: a message offered again (its mail row swept, or a label change exported
-        # it again) starts nothing new. The run stays after its message's row goes (automation_runs_trigger).
+        # it again) starts nothing new. A listening's send time likewise: a repeated pass cannot send twice. The run stays after its message's row goes (automation_runs_trigger).
         return None
     held = _hold_row(c, row["id"])
     if held and manual:
@@ -1544,8 +1587,7 @@ def for_attempt(c, attempt):
 
 def turn_source(c):
     """The automation run behind the bot turn this write comes from (`H.RUN`), as a market change names it:
-    {turn: {attempt, bot, task}, automation, run, match}; `match` is the listening post that started the run, when
-    one did. None for a write no automation's turn made."""
+    {turn: {attempt, bot, task}, automation, run}. None for a write no automation's turn made."""
     attempt = H.RUN.get()
     found = (
         c.execute(
@@ -1569,18 +1611,11 @@ def turn_source(c):
     )
     if not run:
         return None
-    out = {
+    return {
         "turn": {"attempt": attempt, "bot": found["bot_id"], "task": H._task_ref(refs.get("task"))},
         "automation": run["automation_id"],
         "run": refs["automation_run"],
     }
-    try:
-        heard = (json.loads(run["saved_state"] or "{}").get("payload") or {}).get("listening")
-    except (TypeError, ValueError, AttributeError):
-        heard = None
-    if isinstance(heard, dict):
-        out["match"] = {key: heard.get(key) for key in ("id", "destination", "url", "source")}
-    return out
 
 
 def fire(c, kind, payload, ref="", match=None, access=None, only=None):
@@ -1822,23 +1857,6 @@ def on_webhook(c, trigger_id, name, type_, delivery, payload, content):
     ]
 
 
-def on_listening(c, intake, post):
-    """A listening post routed to a destination (backend/listening.py `route`)."""
-    payload = {
-        "listening": {
-            "id": intake["id"],
-            "destination": intake["destination"],
-            "url": post.get("url"),
-            "author": post.get("author"),
-            "content": str(post.get("content") or "")[:8000],
-            "source": post.get("source"),
-        }
-    }
-    return fire(
-        c, "listening", payload, f"listening:{intake['id']}", lambda t: t["destination"] == intake["destination"]
-    )
-
-
 def _run_flow(c, run):
     """The flow a run works on, as `Hub.go` builds it: its version's steps, with the owner and the rest as they are now.
     None when the automation or its version is gone."""
@@ -2016,7 +2034,7 @@ def _found_done(c, aid, state, ended=False):
     found = c.execute("SELECT found_since FROM automations WHERE id=?", (aid,)).fetchone()
     mark = _mark(found[0] if found else "")
     finished = {p: True for p in mark["done"]}
-    for thread in (t for t in state.get("threads") or [] if t.get("item") is not None):
+    for thread in (t for t in state.get("threads") or [] if t.get("item") is not None and not t.get("split")):
         value = thread.get("value") if isinstance(thread.get("value"), dict) else {}
         place, ident = (str(value.get("at") or ""), str(value.get("id") or "")), str(value.get("id") or "")
         if thread["state"] == E.DONE:
@@ -2061,7 +2079,7 @@ def _held(c, aid, rid):
         (aid, rid),
     ):
         for thread in json.loads(row[0] or "{}").get("threads") or []:
-            if thread.get("item") is not None and isinstance(thread.get("value"), dict):
+            if thread.get("item") is not None and not thread.get("split") and isinstance(thread.get("value"), dict):
                 out.add(str(thread["value"].get("id")))
     return out
 
@@ -3051,6 +3069,12 @@ def tick(store, at=None):
         log.exception("redesign catch-up failed")
     at = at or datetime.now(timezone.utc)
     now = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    try:
+        # The listenings' pass, before and outside this tick's transaction: it asks the decision model and compares
+        # texts between short transactions of its own. What it sends is queued here and drained below.
+        listening.run_pass(store, at, getattr(getattr(getattr(hub, "app", None), "state", None), "judge", None))
+    except Exception:  # the automations go on without it
+        log.exception("listening pass failed")
     with store.transaction() as c:
         ensure_builtins(c, settings=getattr(store, "settings", None))
         try:
@@ -3406,6 +3430,7 @@ def prune(c, now):
     )
     c.execute("DELETE FROM automation_effects WHERE created_at<?", (old,))
     c.execute("DELETE FROM automation_turn_answers WHERE created_at<?", (old,))
+    listening.prune(c, now)  # a listening's items: sent ones keep 90 days, the rest 30
 
 
 # ---------------------------------------------------------------------------------------------------- routes
@@ -3493,6 +3518,10 @@ def run_view(run, detail=True):
     }
     if state:
         out["summary"] = _summary(state)
+        sent = (state.get("payload") or {}).get("listening")
+        if isinstance(sent, dict):
+            out["listening"] = {k: sent.get(k) for k in ("text", "count", "waiting", "sent_at", "counts")}
+            out["summary"] = out["summary"] or f"{sent.get('count') or 0} sent"
     if detail:
         out["steps"] = (state or {}).get("steps") if state else None  # None: pruned after KEEP_DAYS
         if state and state.get("error"):
@@ -3540,6 +3569,12 @@ def install(app, store, auth, mutate):
             await asyncio.to_thread(hub.drain)
         return response
 
+    def _push_addresses(c, aid):
+        """A listening's new push sources get their addresses here, in the answer to the save that made them and
+        nowhere after: only each token's hash is kept."""
+        made = listening.issue_addresses(c, store.settings, aid)
+        return {"push_addresses": {m["source"]: m["address"] for m in made}} if made else {}
+
     def found(c, who, aid, what="see this automation", rule=None):
         auth.domain(who)
         row = _row(c, aid)
@@ -3552,9 +3587,10 @@ def install(app, store, auth, mutate):
         return row
 
     @app.get("/api/v2/automations")
-    def automations_list(request: Request, owner: str = "", limit: int = 50, cursor: int = 0):
+    def automations_list(request: Request, owner: str = "", trigger: str = "", limit: int = 50, cursor: int = 0):
         """The automations the caller may change (the same rule decides what they see), newest first; up to 500 a page,
-        and `next` is the `cursor` for the page after."""
+        and `next` is the `cursor` for the page after. `trigger` keeps one trigger type (`listening`: the Listening
+        list)."""
         from . import automation_overview as AO
 
         who = request.state.identity
@@ -3563,8 +3599,9 @@ def install(app, store, auth, mutate):
             rows = c.execute(
                 "SELECT * FROM automations WHERE deleted_at IS NULL"
                 + (" AND owner_id=?" if owner else "")
+                + (" AND trigger_type=?" if trigger else "")
                 + " ORDER BY created_at DESC",
-                ((F.owner_ref(owner),) if owner else ()),
+                (*((F.owner_ref(owner),) if owner else ()), *((trigger,) if trigger else ())),
             ).fetchall()
             pending = {
                 r[0]: r[1]
@@ -3659,7 +3696,7 @@ def install(app, store, auth, mutate):
             _require(c, who, flow, "make an automation for " + flow["owner"])
             assistant_routines.check_confirmed(c, request, None, flow)
             row = _save(c, who.actor, "auto_" + H.new_id(), flow, None, via=_via(who))
-            result = view(c, row, who, detail=True)
+            result = {**view(c, row, who, detail=True), **_push_addresses(c, row["id"])}
             if chat_draft:
                 result.update(assistant_routines.propose_saved(c, store.settings, who, row, app.routes))
                 result["needs_confirm"] = True
@@ -3791,7 +3828,11 @@ def install(app, store, auth, mutate):
                 )
             if changes.get("enabled") is True and flow.get("wakes"):
                 _resume_task_triggers(c, aid, flow)
-            return {**view(c, row, who, detail=True), **({"warning": warning} if warning else {})}
+            return {
+                **view(c, row, who, detail=True),
+                **({"warning": warning} if warning else {}),
+                **_push_addresses(c, aid),
+            }
 
         return mutate(request, body, work)
 

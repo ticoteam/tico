@@ -1653,3 +1653,51 @@ class TaskMoveGuardRow(TypedDict):
     id: int
     open: int
     task_id: str | None
+
+
+class ListeningSourceRow(TypedDict):
+    """One source of a listening's trigger (backend/listening.py). `key` is its id in the flow."""
+
+    id: str
+    automation_id: str
+    key: str
+    kind: str
+    site: str
+    target: str
+    status: str
+    last_read_at: str | None
+    last_ok_at: str | None
+    last_error: str | None
+    token_hash: str | None
+    snapshot: str | None
+    deleted_at: str | None
+    created_at: str
+    updated_at: str
+
+
+class ListeningItemRow(TypedDict):
+    """One post a source saved, and what became of it (backend/listening.py)."""
+
+    id: str
+    automation_id: str
+    source_id: str
+    native_id: str
+    url: str
+    author: str
+    title: str
+    text: str
+    posted_at: str | None
+    text_key: str
+    status: str
+    tag: str
+    score: float | None
+    copies: int
+    duplicate_of_id: str | None
+    tries: int
+    claimed_at: str | None
+    scored_at: str | None
+    run_id: str | None
+    sent_at: str | None
+    cost: float
+    created_at: str
+    updated_at: str

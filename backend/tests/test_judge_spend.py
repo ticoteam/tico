@@ -186,8 +186,9 @@ class Paid:
 def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypatch):
     """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
     from backend import learnings as L
-    from backend.listening import judge_pending
-    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
+    from backend.listening import run_pass
+    from backend.tests.helpers.automation_runs import sql
+    from backend.tests.helpers.listening import FakeJudge as Listener, item, listening, save, source_id
 
     store = api.app.state.store
     store.settings.decisions_monthly_usd = 1.0
@@ -200,24 +201,14 @@ def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypat
         engine({"team": "Acme"}, QUESTIONS)
     assert refused.value.code == "spend_cap" and len(jev.calls) == 1, "no paid call starts over the cap"
 
-    # Listening: the first post is judged, the rest stay unjudged for after the cap.
-    _bots(api)
-    listening = _token(api, "social-media-manager")
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [_post(str(n), f"Creator post {n} [creator]") for n in range(3)],
-        },
-        token=listening,
-    )
-    api.app.state.judge = jev = Paid(0.6, Listener())
-    spend(api, -0.6)  # back to $0.50, so the batch starts
-    out = post(api, "listening/judge", {}, token=listening)
-    assert out["judged"] == 1 and [e["error"] for e in out["errors"]] == ["spend_cap"] and len(jev.calls) == 1
+    # Listening: the first post is scored, the rest stay new for after the cap.
+    made = listening(api, rules=[{"do": "keep", "tag": "leads", "text": "A lead"}])
+    save(api, source_id(api, made["id"]), [item(n, f"A post about standups, number {n} [r0]") for n in range(3)])
+    jev = Paid(0.6, Listener())
+    spend(api, -0.6)  # back to $0.50, so the pass starts
+    run_pass(store, None, jev)
+    rows = sql(api, "SELECT status, count(*) AS n FROM listening_items GROUP BY status")
+    assert {r["status"]: r["n"] for r in rows} == {"kept": 1, "new": 2} and len(jev.calls) == 1
     with store.read() as c:
         assert B.spent_this_month(c) == pytest.approx(1.1)
 
@@ -522,38 +513,27 @@ def test_the_nightly_learnings_ask_jev_once_and_briefly_and_tally_the_cost(api, 
         assert L.engine_for(store, c) is None
 
 
-def test_the_listening_judge_leaves_a_post_unjudged_when_jev_is_down_and_waits_at_the_cap(api):
-    from backend.tests.helpers.listening import _bots, _post, _token
+def test_listening_leaves_a_post_unscored_when_jev_is_down_and_waits_at_the_cap(api):
+    from backend.listening import run_pass
+    from backend.tests.helpers.automation_runs import sql
+    from backend.tests.helpers.listening import item, listening, save, source_id
 
-    _bots(api)
-    listening = _token(api, "social-media-manager")
+    store = api.app.state.store
     jev = FakeJudge()
     jev.fail = DOWN
-    api.app.state.judge = jev
-    post(
-        api,
-        "listening/runs",
-        {
-            "source": "x",
-            "query": "q",
-            "status": "ok",
-            "items": [_post("1", "Creator asks how teams handle standups [creator] [content]")],
-        },
-        token=listening,
-    )
-    out = post(api, "listening/judge", {}, token=listening)
-    assert out["judged"] == 0 and [e["error"] for e in out["errors"]] == ["unavailable"] and len(jev.calls) == 1
+    made = listening(api, rules=[{"do": "keep", "tag": "leads", "text": "A lead"}])
+    source = source_id(api, made["id"])
+    save(api, source, [item(1, "Someone asks how teams handle standups")])
+    run_pass(store, None, jev)
+    assert sql(api, "SELECT status, tries FROM listening_items") == [{"status": "new", "tries": 1}]
+    assert len(jev.calls) == 1
 
-    api.app.state.store.settings.decisions_monthly_usd = 1.0
+    store.settings.decisions_monthly_usd = 1.0
     spend(api, 1.0)
-    post(
-        api,
-        "listening/runs",
-        {"source": "x", "query": "q", "status": "ok", "items": [_post("2", "Another creator post [creator]")]},
-        token=listening,
-    )
-    result = api.post("/api/v2/listening/judge", json={}, headers=headers(listening))
-    assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap" and len(jev.calls) == 1
+    save(api, source, [item(2, "Another post about how teams handle standups")])
+    run_pass(store, None, jev)  # at the cap nothing is asked, and waiting is not a try
+    rows = sql(api, "SELECT status, tries FROM listening_items ORDER BY native_id")
+    assert rows == [{"status": "new", "tries": 1}, {"status": "new", "tries": 0}] and len(jev.calls) == 1
 
 
 def test_the_slack_gateway_routes_to_the_assistant_at_the_cap_and_audits_the_cost(gateway, hub):

@@ -88,7 +88,7 @@ const MARKET_MAP = MARKET_ROUTE + '/map';
 const isMarketRoute = (r: string) => r === MARKET_ROUTE || r.startsWith(MARKET_ROUTE + '?') || r.startsWith(MARKET_ROUTE + '/');
 // The tab's old views each land on the page at their question; Players opens the map. A note id always has a slash
 // in it, so a bare key is never a note.
-const MARKET_SECTIONS: Record<string, string> = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach', listening: 'saying'};
+const MARKET_SECTIONS: Record<string, string> = {briefing: 'changed', spend: 'money', buyers: 'money', growth: 'money', 'value-chain': 'reach'};
 let MARKET_PAGE = 0;
 
 // Where an address goes: {kind: 'page', section, dimension} or {kind: 'map', note}.

@@ -600,56 +600,9 @@ ALTER TABLE messages ADD COLUMN answered_by_id TEXT;
 CREATE INDEX IF NOT EXISTS messages_open_asks ON messages(recipient_id, sender_id, kind, answered_by_id);
 """
 
-# Listening's observation store and the shared intake (backend/listening.py). Four tables: what a
-# sweep covered, what it saw, what the decision model scored, and where each post was sent. A market insight
-# filed from an intake item names it in `source_ref`, once per reporter.
+# A market insight names what it was filed from in `source_ref`, once per reporter. (The listening tables this once
+# made are gone: backend/migrations/20261111190425_listening_feed.py.)
 LISTENING_SCHEMA = """
-CREATE TABLE IF NOT EXISTS listen_runs (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  query TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  status TEXT NOT NULL,
-  pages_read INTEGER DEFAULT 0,
-  items_seen INTEGER DEFAULT 0,
-  note TEXT);
-CREATE INDEX IF NOT EXISTS listen_runs_started ON listen_runs(started_at, source);
-
-CREATE TABLE IF NOT EXISTS listen_items (
-  id TEXT PRIMARY KEY,
-  source TEXT NOT NULL,
-  native_id TEXT NOT NULL,
-  url TEXT NOT NULL,
-  author TEXT,
-  author_url TEXT,
-  content TEXT NOT NULL,
-  content_hash TEXT NOT NULL,
-  published_at TEXT,
-  first_seen_at TEXT NOT NULL,
-  first_run_id TEXT REFERENCES listen_runs(id),
-  UNIQUE (source, native_id));
-
-CREATE TABLE IF NOT EXISTS listen_judgments (
-  id TEXT PRIMARY KEY,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  question_set TEXT NOT NULL,
-  scores TEXT NOT NULL,
-  judged_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS listen_judgments_item ON listen_judgments(item_id, judged_at);
-
-CREATE TABLE IF NOT EXISTS intake_items (
-  id TEXT PRIMARY KEY,
-  destination TEXT NOT NULL,
-  item_id TEXT NOT NULL REFERENCES listen_items(id),
-  judgment_id TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'new',
-  receiver_ref TEXT,
-  reason TEXT,
-  created_at TEXT NOT NULL,
-  decided_at TEXT,
-  UNIQUE (destination, item_id));
-CREATE INDEX IF NOT EXISTS intake_items_queue ON intake_items(destination, status, created_at);
-
 ALTER TABLE market_insights ADD COLUMN source_ref TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS market_insights_source_ref
   ON market_insights(reported_by, source_ref) WHERE source_ref IS NOT NULL;

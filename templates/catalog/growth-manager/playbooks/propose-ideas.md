@@ -14,8 +14,8 @@ a source. Nothing is started here; the weekly meeting starts an idea.
     tico growth numbers             the growth numbers, and which channels are behind them
     tico growth channel list        the channels, their stage and owner
 
-Then the market: `tico market show <competitor>` for each competitor, and `tico listening runs --since <30 days ago>` for the
-recent matches. Then look at what was dropped: the dated learnings in `memory/learnings.md` say which tests failed, which
+Then the market: `tico market show <competitor>` for each competitor, and `tico market delta` for
+what changed, which includes what Listening heard and the Librarian kept. Then look at what was dropped: the dated learnings in `memory/learnings.md` say which tests failed, which
 were inconclusive and which were stopped.
 
 ## 2. Look at what did not work first

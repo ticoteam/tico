@@ -685,8 +685,6 @@ _PROPOSABLE_BOTOPS = [
         ("POST", r"/api/v2/tasks/[^/]+/requesters/[^/]+/delete"),
         ("POST", r"/api/v2/tasks/[^/]+/links"),
         ("DELETE", r"/api/v2/tasks/[^/]+/links/[^/]+"),
-        ("PUT", r"/api/v2/listening/destinations/[^/]+"),
-        ("POST", r"/api/v2/listening/destinations/[^/]+/remove"),
         ("POST", r"/api/v2/roadmaps/settings"),
         ("POST", r"/api/v2/inbound/inboxes/[^/]+/release"),
         ("POST", r"/api/v2/inbound/phone-requests(/[^/]+/accept)?"),
@@ -1136,11 +1134,6 @@ def describe(c, method, path, body, viewer=None, admins=()):
             r"/api/v2/github/product-repos",
             lambda g: f"Create the private, empty GitHub repository {body.get('org', '')}/{body.get('name', '')}",
         ),
-        (
-            r"/api/v2/listening/destinations/([^/]+)",
-            lambda g: f"Change the listening destination “{g[0]}”: " + values(body),
-        ),
-        (r"/api/v2/listening/destinations/([^/]+)/remove", lambda g: f"Remove the listening destination “{g[0]}”"),
         (r"/api/v2/roadmaps/settings", lambda g: "Change the public roadmap: " + values(body)),
         (
             r"/api/v2/inbound/inboxes/([^/]+)/release",

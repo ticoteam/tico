@@ -3,74 +3,80 @@
 Schedule: `0 8 * * 1-5` in the team's timezone, routine `weekday-morning-sweep`. Take the run's
 label from the task title.
 
-Budget 20 minutes. The outcome is one digest saved in `reports/sweeps/` and attached to the task,
-plus a child task for anything that genuinely needs a human or another bot. Quiet is a normal
-result.
+Budget 20 minutes. The outcome is every due source read and saved with its status. You read and
+save; you do not sort. Listening's rules decide what is kept, and its steps decide who gets it.
+Quiet is a normal result.
 
 ---
 
-## 1. Read the watchlist first
+## 1. Ask what is due
 
     tico task show <id>
+    tico listening sources
 
-Then `knowledge/watchlist.md`, before the first query. It holds the names, the queries, the phrases
-that matter, and the sources this sweep reads. Anything not on it is not this sweep's work.
-`tico market show <id>` for each organization this brief will name. The graph is what is true about them;
-the watchlist is only what to search.
+`tico listening sources` (the `tico_listening_sources` tool) lists the search sources that are due
+for a read, overdue first, each with its id, its site and its target (a search or a community).
+Sources are the list. Anything not on it is not this sweep's work.
 
-## 2. Run the queries
+With nothing due, finish the task with that one line.
 
-Work through the sources the watchlist names, in the order it names them, over the window since the
-last sweep. Read search results only. Never click, type, submit, or sign in anywhere. A sign in wall
-or a challenge means that source is blocked for this run: record it and move on.
+## 2. Read each source
 
-Keep a note of every source as you go, in one of two states: returned, or blocked. You will need
-both lists in the digest and you will not remember them at the end. A query that keeps returning noise is fixed in the watchlist, as `skills/check-a-query-before-trusting-it/SKILL.md` sets out.
+Open each source's target on its site in your browser, in the order the list gives. Read the
+results only. Never click, type, submit, or sign in anywhere. Read newest first, back to the last
+sweep, at most 200 posts a source. `knowledge/sources.md` says how each site behaves.
 
-## 3. Sort what came back
+For each post, note:
 
-| Bucket | What it is |
+| Field | What it is |
 |---|---|
-| Worth a human's reply | A real customer or buyer asking the question {{company_name}} answers, in a live thread, where a plain honest reply would actually help |
-| Worth writing about | A question people keep asking in different words, or a claim worth answering in public |
-| A real move | Funding, an acquisition, layoffs, a price change, a launch, a new market, a shutdown, a lawsuit, or a notable public complaint thread about a watchlist name |
-| Noise | Everything else. Drop it. Do not list it. |
+| `native_id` | The site's own id for the post. When the site shows none, its permanent link |
+| `url` | The post's link |
+| `author` | The name shown on the post |
+| `title` | The post's own title, when it has one |
+| `text` | The post's words, as written |
+| `posted_at` | When it was posted |
 
-Skip anything cold, duplicated from an earlier sweep, from a vendor promoting itself, or from
-someone who is not the kind of person {{company_name}} sells to. A handful of good items is the
-cap, not the target.
+Take every post the target shows, not the ones you think matter. Redact personal details from
+`text` before you save (the list is in `AGENT.md`).
 
-## 4. Write the digest
+A read ends in one of four states:
 
-`reports/sweeps/YYYY-MM-DD.md`, in this order and nothing longer:
+| Status | When |
+|---|---|
+| `ok` | The site answered and you read it. No posts is still `ok` |
+| `blocked` | A sign in wall, a challenge, or a page that refuses the browser |
+| `rate_limited` | The site says to slow down or try later |
+| `error` | Anything else that stopped the read |
 
-1. **Coverage**: which sources returned and which were blocked, named individually.
-2. **Worth a reply**: the link, one line on who they are, one line on why it matters. No draft
-   reply unless the owner has said sending is allowed, and even then a human sends it. Before a thread goes to a person, check it with `skills/check-a-reply-before-a-human-posts/SKILL.md`.
-3. **Worth writing about**: the link, one line on why, and the angle.
-4. **Real moves**: what happened with the link, why it matters for {{company_name}}, and what could
-   be done about it. Three lines each. Confirm each move first with `skills/confirm-a-competitor-move/SKILL.md`.
+A source that fails is saved with its status and you move on to the next one.
 
-A section with nothing in it is absent, not empty with a note apologising for it.
+## 3. Save each source
 
-## 5. Hand over what needs someone
+    tico listening save --source <source id> --file <file.json>
 
-    tico task create --owner content-owner --parent <id>
-    tico task create --owner <person> --parent <id>
+One save per source (the `tico_listening_save` tool), as soon as it is read:
 
-One child task per real item, never one to show the sweep happened. Something worth writing about
-goes to the content bot with the link, the reason, and the angle; you never write the piece. A real
-move or a thread a human should see goes to that human, under 200 words.
+```json
+{"status": "ok",
+ "items": [{"native_id": "t3_1abc", "url": "https://forum.example/t/4412", "author": "studio_owner",
+            "title": "Booking software that texts cancellations?", "text": "We run two studios and ...",
+            "posted_at": "2026-09-28T16:20:00Z"}]}
+```
 
-## 6. Finish the task
+A `blocked`, `rate_limited` or `error` read is saved with no items. Saving a post that was saved
+before does nothing, so an overlap with the last sweep is safe. A save is refused while its
+listening is off: skip that source and say so on the task.
 
-Commit, then `tico task done <id> -m "..." --version N`. With findings: one line each and the path
-to the digest. Without findings: one line naming the sources that returned and how many results you
-reviewed. Always finish it. A scheduled task left open absorbs the next occurrence and quietly stops
-the sweep.
+## 4. Finish the task
+
+Commit, then `tico task done <id> -m "..." --version N`: how many sources were read, how many posts
+were saved, and each source that was not `ok`, by name, with what it refused with. Always finish
+it. A scheduled task left open absorbs the next occurrence and quietly stops the sweep.
 
 ## When a source fails
 
-It goes in the coverage line as blocked, with what it refused with. That means unknown coverage for
-that source, not a clean sweep, and never "nothing found". Two consecutive failures of the same
-source is one line on the owner's task, not a repeated complaint in every digest.
+It is saved as `blocked`, `rate_limited` or `error`, never as `ok` with no items. That means
+unknown coverage for that source, not a clean read. Listening shows it on the source's dot. Two
+failures in a row of the same source is one line on the task for the owner, not a repeated
+complaint every day. Add how the site failed to `knowledge/sources.md`.
