@@ -209,7 +209,7 @@ async function start(browser: import('playwright').Browser, hash: string, {width
       const crumb = page.locator('.tt-crumb a[href="#/tools"]');
       const rect = await crumb.boundingBox();
       assert.ok(rect, `${width}: Tools breadcrumb is visible`);
-      if (width <= 760) assert.ok(rect.height >= 40, `${width}: Tools breadcrumb needs a 40 px tap height, got ${rect.height}`);
+      if (width <= 760) assert.ok(rect.height >= 40 && rect.width >= 40, `${width}: Tools breadcrumb needs a 40 px tap area, got ${rect.width} × ${rect.height}`);
       else assert.ok(rect.height < 40, 'desktop: Tools breadcrumb keeps its compact height');
       assert.equal(await sideways(page), false, `${width}: GitHub has no sideways scroll`);
       await crumb.click({position: {x: rect.width / 2, y: 2}});
