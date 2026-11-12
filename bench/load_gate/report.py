@@ -10,7 +10,9 @@ import math
 
 LATENESS_P95_MS = 50.0  # the sender's p95 lateness above this makes a level not valid
 LATENESS_MAX_MS = 1000.0  # and any single send this late
-SENDER_CPU_SHARE = 0.9  # a sender process busier than this share of one CPU is the limit
+SENDER_CPU_SHARE = 0.9  # a sender process busier than this share of one CPU, in the steady window, is the limit
+LOOP_LAG_P95_MS = 50.0  # a sender loop whose 100 ms ticks oversleep more than this at p95 is behind, whatever it sent
+SERVER_SEEN_SHARE = 0.9  # the recorder holding fewer of the window's requests than this share says a minute is missing
 BUCKET = 0.25  # the flight recorder's histogram buckets are this far apart, so its p95 moves in 25% steps
 MIN_REQUESTS = 1000  # repeatability (Measure 3) compares routes with at least this many requests
 
@@ -64,7 +66,7 @@ def level_report(level, logs, flight, since, until, budget=None):
     seconds = max(1e-9, until - since)
     lag = [ms for log in logs for at, ms in log["lag"] if since <= at < until]
     deliveries = [ms for log in logs for at, ms in log["deliveries"] if since <= at < until]
-    cpu_shares = [log["cpu_s"] / max(1e-9, log["wall_s"]) for log in logs]
+    cpu_shares = [cpu_share(log, since, until) for log in logs]
     process = (flight or {}).get("process") or {}
     sender = {
         "processes": len(logs),
@@ -87,6 +89,10 @@ def level_report(level, logs, flight, since, until, budget=None):
         why.append(f"sender p95 lateness {sender['lateness_p95_ms']} ms over {LATENESS_P95_MS} ms")
     if sender["lateness_max_ms"] is not None and sender["lateness_max_ms"] > LATENESS_MAX_MS:
         why.append(f"a send {sender['lateness_max_ms']} ms late, over {LATENESS_MAX_MS} ms")
+    # A turn's step that follows a slow answer is planned "now" and shows no lateness, and at high levels those steps are
+    # most requests: the loop's own oversleep tells a sender that is behind whatever the route mix.
+    if sender["loop_lag_p95_ms"] is not None and sender["loop_lag_p95_ms"] > LOOP_LAG_P95_MS:
+        why.append(f"sender loop lag p95 {sender['loop_lag_p95_ms']} ms over {LOOP_LAG_P95_MS} ms")
     if sender["cpu_share_max"] is not None and sender["cpu_share_max"] > SENDER_CPU_SHARE:
         why.append(f"a sender process used {sender['cpu_share_max']:.0%} of a CPU")
     if flight is None:
@@ -120,8 +126,24 @@ def level_report(level, logs, flight, since, until, budget=None):
         },
         "sender": sender,
     }
+    # Not a verdict on the sender, but a sign the recorder's numbers miss part of the window (a minute held back).
+    seen = out["server"]["requests"]
+    out["server"]["seen_share"] = round(seen / out["requests"], 3) if seen is not None and out["requests"] else None
+    out["warnings"] = (
+        [f"the server recorded {seen:,} of the sender's {out['requests']:,} requests: a recorder minute may be missing"]
+        if out["server"]["seen_share"] is not None and out["server"]["seen_share"] < SERVER_SEEN_SHARE
+        else []
+    )
     out["budget"] = check_budget(out, budget) if budget else []
     return out
+
+
+def cpu_share(log, since, until):
+    """A sender process's CPU share inside the window, from the loop's samples; over its whole life without them."""
+    inside = [(at, cpu) for at, cpu in log.get("cpu", []) if since <= at < until]
+    if len(inside) >= 2 and inside[-1][0] > inside[0][0]:
+        return (inside[-1][1] - inside[0][1]) / (inside[-1][0] - inside[0][0])
+    return log["cpu_s"] / max(1e-9, log["wall_s"])
 
 
 def metric(level, line):
@@ -217,7 +239,7 @@ def markdown(report):
             f"{lv['requests']:,} requests in {lv['window']['seconds']:.0f} s steady ({lv['requests_per_second']}/s), "
             f"{s['turns_running_mean']} turns running on average. "
             f"Sender lateness p95 {s['lateness_p95_ms']} ms, max {s['lateness_max_ms']} ms; sender CPU max "
-            f"{s['cpu_share_max']}. Server CPU avg {srv['cpu_avg']}, max {srv['cpu_max']}; RSS {srv['rss']}. "
+            f"{s['cpu_share_max']}; loop lag p95 {s['loop_lag_p95_ms']} ms. Server CPU avg {srv['cpu_avg']}, max {srv['cpu_max']}; RSS {srv['rss']}. "
             f"Write lock wait max {srv['lock_wait_max_ms']} ms, hold max {srv['lock_hold_max_ms']} ms, hold p95 "
             f"{srv['lock_hold_p95_ms']} ms. Live delivery p95 {d['p95_ms']} ms over {d['deliveries']} deliveries.",
             "",
@@ -229,6 +251,8 @@ def markdown(report):
                 f"| {route} | {r['requests']:,} | {r['errors']} | {r['rejected_4xx']} | {r['sender_p50']} | "
                 f"{r['sender_p95']} | {r['sender_p99']} | {r['server_p50']} | {r['server_p95']} |"
             )
+        if lv.get("warnings"):
+            lines += ["", *(f"Warning: {w}." for w in lv["warnings"])]
         if lv["budget"]:
             lines += ["", "| Budget line | Value | Max | Result |", "|---|---:|---:|---|"]
             lines += [f"| {b['line']} | {b['value']} | {b['max']} | {b['result']} |" for b in lv["budget"]]

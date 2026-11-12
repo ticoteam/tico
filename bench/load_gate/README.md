@@ -14,6 +14,8 @@ One command, from a checkout of the commit to measure (the sender's checkout nam
 python -m bench.load_gate run --seed 7 --server-ssh gate-server --remote-dir /srv/tico --listen 0.0.0.0:8800 \
     --out reports/gate-$(git rev-parse --short HEAD)
 
+# The gate host's port must be open to the sender host only: the server answers to the fixture's fixed tokens.
+
 # One machine (the fallback when no second host is available; the report says so): pin server and sender apart.
 python -m bench.load_gate run --seed 7 --server-cpus 0-3 --sender-cpus 4-7 --out reports/gate-local
 ```
@@ -30,7 +32,8 @@ small company the test suite runs (`backend/tests/test_load_gate.py`, a few seco
 server).
 
 Compare two reports per route (repeatability, Measure 3: two runs of one commit within 15% for routes with at least
-1,000 requests; a deliberate change, Measure 4: the slowed route named):
+1,000 requests, judged on the sender's p95, with the server's p95 allowed one recorder bucket; a deliberate change,
+Measure 4: the slowed route named):
 
 ```sh
 python -m bench.load_gate compare reports/a/report.json reports/b/report.json
@@ -56,14 +59,20 @@ Each turn slot claims a run, takes its place, starts, posts events every 2 secon
 characters), polls inputs every second, renews every 20 seconds and completes after 20 to 120 seconds; no model is
 called. Routines the server fires are claimed the same way. Not sent yet: approvals (the company has no asks).
 
-The load is open-loop: every request has a planned time and goes out then, whether or not earlier ones have
-answered, so a slow server shows as slow answers and not as less load. The sender runs in several processes
+People's actions and heartbeats are open-loop: every one has a planned time and goes out then, whether or not
+earlier ones have answered, so a slow server shows as slow answers and not as less load. A turn's steps are chained,
+as a runner's are: each goes out at its slot or after the previous step's answer, whichever is later. So the sender's
+p95 on runner routes leaves out time spent queued behind a slow step; the server's own p95 does not depend on it.
+People sign in with fixed test tokens, not the session sign-in browsers use; runners use their real enrollment tokens.
+The report's `plan` says both. The sender runs in several processes
 (`--workers`); each request records how late it went out against its plan.
 
 ## Read the report
 
 Per level, the run is **valid** only when the sender kept its schedule: p95 lateness at most 50 ms, no send more
-than a second late, and no sender process above 90% of a CPU. A level marked **not valid** measured the sender, not
+than a second late, the sender loop's own oversleep (sampled every 100 ms) at most 50 ms at p95, and no sender process
+above 90% of a CPU in the steady window. The loop's oversleep matters at high levels, where most requests are chained
+turn steps that show no lateness of their own. A level marked **not valid** measured the sender, not
 the server: do not use its numbers; add sender processes or a second sender host, never less load.
 
 Per route: requests, 5xx errors, 4xx refusals, the sender's p50, p95 and p99, and the server's own p50 and p95 from
@@ -72,7 +81,10 @@ server's own time is what a change to the server moves. Per level: the server's 
 longest wait, longest hold and p95 hold (the flight recorder's per-minute rows), and live delivery delay: the time
 from a person's write (its marker carries the send time) to the event reaching any person's live stream.
 
-The head names the commit the sender ran, the commit the server reported at its start, and whether they match with
+A warning under a level says the server's flight recorder holds under 90% of the requests the sender counted: a
+recorder minute is probably missing, so read its server numbers with care.
+
+The head names the commit that built the cached company, the commit the sender ran, the commit the server reported at its start, and whether they match with
 no local changes (`pinned`); the host sizes, data sizes, seed and plan.
 
 ## Budget

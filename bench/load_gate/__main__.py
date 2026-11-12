@@ -112,6 +112,9 @@ def cmd_send(args):
 
 def cmd_run(args):
     """Start the server (here as a child process, or on another host over ssh), send, report, stop the server."""
+    if not args.listen:
+        # A server on another host must listen where the sender can reach it; keep that port open to the sender only.
+        args.listen = "0.0.0.0:8800" if args.server_ssh else "127.0.0.1:0"
     serve = [
         "-m",
         "bench.load_gate",
@@ -229,7 +232,7 @@ def main(argv=None):
     q = sub.add_parser("run", help="the one command: serve, send, report")
     common(q)
     sending(q)
-    q.add_argument("--listen", default="127.0.0.1:0")
+    q.add_argument("--listen", help="the server's address: 127.0.0.1:0 locally, 0.0.0.0:8800 with --server-ssh")
     q.add_argument("--server-ssh", help="run the server on this host over ssh (its checkout at --remote-dir)")
     q.add_argument("--remote-dir", default="tico")
     q.add_argument("--server-cpus", help="local run: CPUs for the server, e.g. 0-3")

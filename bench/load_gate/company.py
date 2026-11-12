@@ -397,6 +397,8 @@ def cached(cache_dir, seed, sizes, release_commit=""):
     app = create_app(settings(cache, scheduler=False, release_commit=release_commit))
     with TestClient(app) as client:
         manifest = build(client, seed, sizes)
+    # Reused at later commits for before-and-after runs; the report names the commit that built it.
+    manifest["built_at_commit"] = release_commit or None
     app.state.store.close() if hasattr(app.state.store, "close") else None
     manifest_path.write_text(json.dumps(manifest, indent=1))
     return db, manifest

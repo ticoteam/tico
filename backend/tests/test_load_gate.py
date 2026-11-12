@@ -115,3 +115,31 @@ def test_compare_names_the_routes_whose_p95_moved():
     apart["levels"][0]["routes"]["GET /api/v2/tasks"]["server_p95"] = 25.85
     assert all(r["within"] for r in R.compare(report(16.54), adjacent))
     assert [r["route"] for r in R.compare(report(16.54), apart) if not r["within"]] == ["GET /api/v2/tasks"]
+
+
+def test_a_lagging_sender_is_not_valid_even_when_its_chained_steps_show_no_lateness():
+    """At high levels most requests are a turn's chained steps, planned "now", with no lateness: the loop's own
+    oversleep still marks the level not valid. The CPU share counts only the steady window."""
+
+    def log(lag_ms, cpu_per_s):
+        at = [100 + i * 0.1 for i in range(600)]
+        return {
+            "requests": [(t, "POST /api/v2/attempts/{aid}/inputs", 5.0, 200, 10, 0.5) for t in at],
+            "deliveries": [],
+            "lag": [(t, lag_ms) for t in at],
+            # Busy for the whole life (ramp and grace included), nearly idle inside the window.
+            "cpu": [(t, (t - 100) * cpu_per_s) for t in at],
+            "cpu_s": 1000.0,
+            "wall_s": 10.0,
+            "turns": 1,
+            "spans": [],
+            "claims_empty": 0,
+        }
+
+    flight = {"requests": {"n": 600, "routes": []}, "process": {}}
+    calm = R.level_report(300, [log(2.0, 0.1)], flight, 100, 160)
+    assert calm["valid"] is True, calm["not_valid_because"]
+    assert calm["sender"]["lateness_p95_ms"] <= R.LATENESS_P95_MS and calm["sender"]["cpu_share_max"] == 0.1
+    behind = R.level_report(300, [log(400.0, 0.1)], flight, 100, 160)
+    assert behind["valid"] is False and behind["sender"]["lateness_p95_ms"] <= R.LATENESS_P95_MS
+    assert any("loop lag" in why for why in behind["not_valid_because"]), behind["not_valid_because"]

@@ -1431,6 +1431,8 @@ def view(c, minutes=60, sections=SECTIONS, now=None, since=None, until=None, rou
     load run reads exactly its steady window this way. Requests and process minutes keep to the window; slow requests,
     SQL hours and events start at `since`."""
     now = int(now or time.time())
+    if since is not None:  # the window's own length, in whole minutes
+        minutes = max(0, -(-(int(until if until is not None else now) - int(since)) // 60))
     since = int(since) if since is not None else now - minutes * 60
     out = {"since": since, "now": now, "minutes": minutes}
     if until is not None:

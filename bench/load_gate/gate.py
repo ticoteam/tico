@@ -129,12 +129,14 @@ def assemble(runs, read, manifest, meta, budget=None):
         "sizes": manifest["sizes"],
         "rows": manifest.get("rows", {}),
         "build_seconds": manifest.get("build_seconds"),
+        "company_built_at_commit": manifest.get("built_at_commit"),
         "server_commit": server_commit or meta.get("server_commit"),
         "plan": S.plan_json(manifest),
         "limits": {
             "lateness_p95_ms": R.LATENESS_P95_MS,
             "lateness_max_ms": R.LATENESS_MAX_MS,
             "sender_cpu_share": R.SENDER_CPU_SHARE,
+            "loop_lag_p95_ms": R.LOOP_LAG_P95_MS,
         },
     }
     head["pinned"] = bool(head["commit"]) and not head.get("dirty") and head["commit"] == head["server_commit"]

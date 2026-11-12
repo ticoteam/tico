@@ -2,9 +2,11 @@
 
 Open-loop: every request has a planned time, drawn from the seed before the level starts, and goes out at that time
 whether or not earlier ones have answered, so a slow server shows as slow answers, not as less load. A call that must
-follow another (the steps of one turn) is planned at the later of its timetable slot and the previous step's answer.
-Each request records how late it went out against its plan (the sender's lateness): when the sender is the limit, that
-number grows and the run is not valid (report.py).
+follow another (the steps of one turn) is planned at the later of its timetable slot and the previous step's answer, as a
+runner does: those steps' sender times leave out any queueing behind a slow earlier step. Each request records how late
+it went out against its plan (the sender's lateness), and the loop records its own oversleep every 100 ms; when the
+sender is the limit, either grows and the run is not valid (report.py). The loop's oversleep is what catches a lagging
+sender at high levels, where a chained step planned "now" has no lateness to show.
 
 People: each holds the live stream (GET /api/v2/events) open and, at Poisson times, opens a page (Home, Needs you, task
 lists, search, a task, a thread, a run view) or writes (a comment, a thread message, a move, a chat to a bot). Writes
@@ -66,6 +68,7 @@ class Log:
         self.requests = []  # (planned epoch s, route template, ms, status, bytes, lateness ms)
         self.deliveries = []  # (epoch s, delay ms)
         self.lag = []  # (epoch s, ms) the loop's own oversleep, every 100 ms
+        self.cpu = []  # (epoch s, process CPU s), every 100 ms, for the CPU share inside the steady window
         self.turns = 0
         self.spans = []  # (start, end) of each fake turn, for the turns actually running at once
         self.claims_empty = 0
@@ -134,17 +137,24 @@ class Worker:
             at += rnd.expovariate(PERSON_RATE)
             if at >= self.stop_at:
                 break
-            pending.append(asyncio.ensure_future(self.action(client, who, rnd.choice(kinds), rnd, at)))
+            # Every choice is drawn here, in plan order, so a seed sends the same requests whatever the timing.
+            pick = {
+                "kind": rnd.choice(kinds),
+                "task": rnd.choice(plan["tasks"]) if plan["tasks"] else None,
+                "thread": rnd.choice(plan["threads"]) if plan["threads"] else None,
+                "q": rnd.choice(("Acme", "Topic", "kickoff", "routine", "history")),
+                "bot": rnd.choice(plan["all_bots"]),
+            }
+            pending.append(asyncio.ensure_future(self.action(client, who, pick, at)))
             # Plan one action ahead: sleep until shortly before it is due, so no backlog of waiting plans builds up.
             ahead = at - time.time() - 0.05
             if ahead > 0:
                 await asyncio.sleep(ahead)
         await asyncio.gather(*pending, return_exceptions=True)
 
-    async def action(self, client, who, kind, rnd, at):
+    async def action(self, client, who, pick, at):
         tok = who["token"]
-        task = rnd.choice(self.plan["tasks"]) if self.plan["tasks"] else None
-        thread = rnd.choice(self.plan["threads"]) if self.plan["threads"] else None
+        kind, task, thread = pick["kind"], pick["task"], pick["thread"]
         mark = lambda: f"gate-mark-{int(time.time() * 1000):013d}"
         if kind == "home":
             await self.call(client, "GET", "GET /api/v2/places/{place}", "places/person:me", tok, planned=at)
@@ -155,7 +165,7 @@ class Worker:
         elif kind == "task_list":
             await self.call(client, "GET", "GET /api/v2/tasks", "tasks?limit=50", tok, planned=at)
         elif kind == "search":
-            q = rnd.choice(("Acme", "Topic", "kickoff", "routine", "history"))
+            q = pick["q"]
             await self.call(client, "GET", "GET /api/v2/threads/search", f"threads/search?q={q}", tok, planned=at)
         elif kind == "task" and task:
             await self.call(client, "GET", "GET /api/v2/tasks/{tid}", f"tasks/{task}", tok, planned=at)
@@ -189,7 +199,7 @@ class Worker:
             self.moves[task] = to if to == "done" else "open"
             await self.call(client, "POST", "POST /api/v2/tasks/{tid}/move", f"tasks/{task}/move", tok, {"to": to}, at)
         elif kind == "chat":
-            bot = rnd.choice(self.plan["all_bots"])
+            bot = pick["bot"]
             await self.call(
                 client, "POST", "POST /api/v2/chat/{bot}", f"chat/{bot}", tok, {"text": "Acme question"}, at
             )
@@ -302,7 +312,9 @@ class Worker:
         while time.time() < self.stop_at:
             before = time.monotonic()
             await asyncio.sleep(0.1)
-            self.log.lag.append((time.time(), (time.monotonic() - before - 0.1) * 1000))
+            now = time.time()
+            self.log.lag.append((now, (time.monotonic() - before - 0.1) * 1000))
+            self.log.cpu.append((now, time.process_time()))
             if self.starve_ms:
                 time.sleep(self.starve_ms / 1000)  # noqa: ASYNC251  blocking on purpose: the loop falls behind
 
@@ -343,6 +355,7 @@ def work(target, plan, out_path, starve_ms=0):
         "requests": log.requests,
         "deliveries": log.deliveries,
         "lag": log.lag,
+        "cpu": log.cpu,
         "turns": log.turns,
         "spans": log.spans,
         "claims_empty": log.claims_empty,
@@ -418,4 +431,9 @@ def plan_json(manifest):
         "computers": len(manifest["computers"]),
         "streams": len(manifest["people"]),
         "approvals": "not sent: the synthetic company has no asks to answer yet",
+        # What differs from a plain open-loop reading, so nobody reads the runner routes' sender p95 as one.
+        "turn_steps": "chained: a turn's step goes out at its slot or after the previous step's answer, whichever is "
+        "later, as a runner does; people's actions and heartbeats are open-loop",
+        "people_auth": "fixed test tokens (a dictionary lookup), not the session sign-in browsers use; runners use "
+        "their real enrollment tokens",
     }
