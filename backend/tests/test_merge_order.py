@@ -18,7 +18,18 @@ from backend.migrations import renames as _renames  # noqa: F401 - the migration
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.fake_github import FakeGitHub
-from backend.tests.helpers.github_facts_merge_queue import EM, REPO, RM, B, effects, engineering, later, new, seen, stage
+from backend.tests.helpers.github_facts_merge_queue import (
+    EM,
+    REPO,
+    RM,
+    B,
+    effects,
+    engineering,
+    later,
+    new,
+    seen,
+    stage,
+)
 
 
 @pytest.fixture
@@ -133,7 +144,9 @@ def test_an_earlier_task_closed_without_merging_ends_the_order_and_it_is_the_own
     said = f"{b6_ref} closed without merging. Queue it, or send it back."
     assert merged_line(c, b7) == (R.NOT_MET, RM, said)
     assert effects(c, b7) == []  # Tico does not queue it by itself
-    assert [k for k, _ in X.wakes(c, b7, RM) if ":after_closed:" in k] == [f"{b7}:{E.task(c, b7)['visit']['id']}:after_closed:{b6}"]
+    assert [k for k, _ in X.wakes(c, b7, RM) if ":after_closed:" in k] == [
+        f"{b7}:{E.task(c, b7)['visit']['id']}:after_closed:{b6}"
+    ]
     MO.release(c, b6, E.SYSTEM)  # read again: told once
     assert len([k for k, _ in X.wakes(c, b7, RM) if ":after_closed:" in k]) == 1
     # The Release Owner queues it.

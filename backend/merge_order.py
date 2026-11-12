@@ -226,8 +226,9 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
     """Refuse an order that cannot hold: on a task that has ended, after one that has ended, or a loop (#40 already goes
     after #42, however far round). The writer's right to change the later task and read the earlier one is checked by
     the caller (task_relations.relate)."""
-    from . import hubdb as H
+    from . import hubdb
 
+    H: Any = hubdb
     for row, what in ((later, "it"), (earlier, ref(earlier))):
         if row["status"] != "open":
             who = "The task" if what == "it" else what

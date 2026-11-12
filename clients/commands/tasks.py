@@ -301,7 +301,9 @@ def order_lines(task):
         word = "After" if entry.get("direction") == "out" else "Before"
         where = entry.get("stage") if entry.get("status") == "open" else entry.get("status")
         ref = f"#{entry['number']}" if entry.get("number") else str(entry.get("id") or "")[:8]
-        out.append(f"{word} {ref} {entry.get('title') or ''}" + (f" · {where}" if where else "") + f" ({entry.get('id')})")
+        out.append(
+            f"{word} {ref} {entry.get('title') or ''}" + (f" · {where}" if where else "") + f" ({entry.get('id')})"
+        )
     return out
 
 
