@@ -278,7 +278,7 @@ class SoftRig(Rig):
             str(r[0])
             for r in self.w.read(
                 lambda c: c.execute(
-                    "SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' AND recipient_id=? ORDER BY rowid",
+                    "SELECT wake_key FROM messages WHERE wake_key LIKE '%:room:%' AND recipient_id=? ORDER BY rowid",
                     (bot,),
                 ).fetchall()
             )

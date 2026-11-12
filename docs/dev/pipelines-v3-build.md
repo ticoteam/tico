@@ -230,7 +230,9 @@ Ideas): then a person's request on its first visit (`task_engine.not_held_by_han
 next stage has room, oldest first, before C10's room wake (`never_stuck._requests`). C10 wakes nobody for a by-hand
 stage owned by each task's assignee when `requests_move_on` is off (Growth's Ideas, Watching): every task there rests.
 With it on (Product's Ideas pointed at the assignee, one Product Owner per area), C10 wakes the owner of the task that
-has waited longest there.
+has waited longest there. C10's key is `<task>:<visit>:room:<next stage>:<epoch>` (`never_stuck.room_key`): one wake per
+waiting visit while the next stage has room, and another only after that stage was full and a slot opened
+(`never_stuck.room_epoch` counts those in `registry_metadata`).
 
 The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
 `late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
@@ -333,8 +335,9 @@ person, or a bot named to approve. Without it the wait is the task's own work. T
 def key(task_id, visit_id, level="owner", try_n=0) -> str        # <task id>:<visit id>:<level>:<try>
 def body(conn, task, lead="") -> str                             # the stage, what is missing, the five endings
 def add(conn, task, target, visit, text, *, level="owner", try_n=0, wake_key=None, quiet=False) -> str | None
-    # None when the key exists or there is nobody to tell. A wake still queued for that bot and task is folded in:
-    # its words first, then these, and it is canceled, so one run starts. A quiet note folds nothing.
+    # None when the key exists or there is nobody to tell, or the key does not start with `<task id>:` (refused and
+    # logged: the run a wake starts is the task its key starts with). A wake still queued for that bot and task is
+    # folded in: its words first, then these, and it is canceled, so one run starts. A quiet note folds nothing.
 def cannot_run(conn, actor, seen=None) -> str | None   # why this bot cannot run now; None when it can
 def cause_line(conn, actor, cause) -> str       # the cause as a sentence: "Builder has no computer"
 def queued(conn, task_id, actor) -> bool        # a wake for this task is waiting for this bot, held ones included

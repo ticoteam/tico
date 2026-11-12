@@ -1296,3 +1296,56 @@ def test_a_private_task_that_waits_on_someone_who_cannot_read_it_is_stuck_at_onc
     assert NS.rules_hold(c) == []
     H.set_task_readers(c, ANA, shared, add=[ben])  # Ana shares it again: Ben's OK is his
     assert any(n.get("task_id") == shared and n["kind"] == "ask" for n in W.needs(c, ben))
+
+
+# ----------------------------------------------------------------------------- C10: the next stage has room
+@pytest.fixture
+def ideas(c):
+    """Ideas, left by hand and owned by the reviewer bot, then Spec with room for two."""
+    for slug in ("builder", "reviewer", "manager"):
+        X.bot(c, slug)
+    stages = [
+        {"name": "Ideas", "by_hand": True, "owner": REVIEWER},
+        {"name": "Spec", "owner": BUILDER, "task_limit": 2, "requirements": [{"kind": "owner_done"}]},
+    ]
+    return X.pipeline(c, "product", "Product", stages=stages, manager=MANAGER)
+
+
+def _room_wakes(c):
+    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE '%:room:%' ORDER BY rowid")
+    return [tuple(row) for row in rows]
+
+
+def _in_spec(c, title):
+    row = X.new_task(c, BUILDER, title, "product")
+    return E.move(c, row["id"], "product-spec", ANA)
+
+
+def test_room_is_told_once_per_waiting_task_and_again_only_after_the_next_stage_was_full(c, ideas, later):
+    """The "Spec has room" wake names the waiting task and its visit, so its run is that task's. Spec under its limit
+    while the task in it goes back and forth between a person and its bot tells nobody again; Spec full, then a slot
+    freeing, tells the waiting task once more."""
+    working = _in_spec(c, "Importer spec")
+    idea = X.new_task(c, BUILDER, "Exporter", "product")
+    later(seconds=10)
+    told = NS.room_key(idea["id"], idea["visit"]["id"], "product-spec", 0)
+    assert _room_wakes(c) == [(told, REVIEWER)]
+    message = c.execute("SELECT id FROM messages WHERE wake_key=?", (told,)).fetchone()[0]
+    assert task_wakes.message_task(c, message) == idea["id"]
+    assert task_wakes.may_start(c, message)  # the by-hand stage's owner has no turn, and the wake still runs
+    for n in range(3):  # the Spec task's turn goes to a person and back: Spec had room all along
+        row = E.task(c, working["id"])
+        asked = E.add_requirement(c, row["id"], BUILDER, "answer", ANA, f"Question {n}?", seen_version=row["version"])
+        later(minutes=5)
+        assert [held for held, _ in W.slots(c, "product-spec").on_person] == [row["id"]]
+        A.answer(c, row["id"], asked["requirement_id"], ANA, "Yes")
+        later(minutes=5)
+    assert _room_wakes(c) == [(told, REVIEWER)]
+    full = _in_spec(c, "Report spec")
+    later(seconds=10)  # Spec is full: nobody is told
+    assert _room_wakes(c) == [(told, REVIEWER)]
+    E.move(c, full["id"], E.CLOSED, ANA, "Not needed")
+    later(seconds=10)
+    later(minutes=10)
+    again = NS.room_key(idea["id"], idea["visit"]["id"], "product-spec", 1)
+    assert _room_wakes(c) == [(told, REVIEWER), (again, REVIEWER)]

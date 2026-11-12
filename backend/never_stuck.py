@@ -26,6 +26,7 @@ harmless: every wake has a key made from the task's visit, the level, the try an
 Names and signatures are in docs/dev/pipelines-v3-build.md.
 """
 
+import json
 from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
@@ -216,9 +217,6 @@ _FIRST_WAITING = (
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     "ORDER BY v.entered_at, v.id LIMIT 1"
 )
-_FREED = (
-    "SELECT id, left_at FROM visits WHERE stage_id=? AND left_at IS NOT NULL ORDER BY left_at DESC, id DESC LIMIT 1"
-)
 
 
 # A person's request still on its first visit to a by-hand stage that moves requests on (task_engine.not_held_by_hand),
@@ -298,36 +296,47 @@ def _handoffs(conn: "sqlite3.Connection", at: str, done: dict[str, int], seen: d
             done["woken"] += 1
 
 
-def room_key(stage_id: str, freed_by: str | None) -> str:
-    """C10's wake key: one wake per slot freed in the stage (`freed_by`, the visit whose leaving freed it, or the task
-    whose turn became a person's and when: `freed`), and one for the room a stage has before any task ever left it."""
-    return f"room:{stage_id}:{freed_by or 'start'}"
+def room_key(task_id: str, visit_id: str, stage_id: str, epoch: int) -> str:
+    """C10's wake key. It starts with the task and its visit, as every wake key does (`task_wakes.add`), so the run it
+    starts is the task's. One wake per waiting visit each time the next stage has room (`epoch`, `room_epoch`)."""
+    return f"{task_id}:{visit_id}:{task_wakes.ROOM}:{stage_id}:{epoch}"
 
 
-def freed(conn: "sqlite3.Connection", stage_id: str) -> str | None:
-    """What freed the stage's newest slot: the visit that left it last, or a task in it whose turn became a person's
-    since (`waiting_on.slots`), as "<task id>@<when>". None before any slot was ever freed."""
-    left = conn.execute(_FREED, (stage_id,)).fetchone()
-    newest: tuple[str, str] | None = (str(left[1]), str(left[0])) if left else None
-    for task_id, since in W.slots(conn, stage_id).on_person:
-        if newest is None or since > newest[0]:
-            newest = (since, f"{task_id}@{since}")
-    return newest[1] if newest else None
+# Per limited stage after a by-hand stage: whether it was last seen full, and how many times it had room again since.
+ROOM_STATE = "never_stuck.room:"
+
+
+def room_epoch(conn: "sqlite3.Connection", stage_id: str, room: bool) -> int | None:
+    """How many times the stage had room again after it was full, or None while it is full. Written only when it turns
+    full or gets room again, so a waiting task is told once while room stays open, and again only once the stage was
+    full and a slot opened: never because a task in it changed hands while the stage stayed under its limit."""
+    key = ROOM_STATE + stage_id
+    found = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    state: Row = cast(Row, _h()._json(found[0], {}) or {}) if found else {}
+    full, epoch = bool(state.get("full")), int(state.get("epoch") or 0)
+    if room != full:
+        return epoch if room else None  # as it was: room still open, or still full
+    epoch += 1 if room else 0
+    conn.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps({"full": not room, "epoch": epoch})),
+    )
+    return epoch if room else None
 
 
 def _room(conn: "sqlite3.Connection") -> int:
     """C10: when the stage after a by-hand stage (Product's Ideas, then Spec) has room, the by-hand stage's owner bot
     (else that task's owner, when it is a bot) gets one wake, about the task that has waited longest there. Once per
-    freed slot (`room_key`); never chased: the by-hand stage has no ladder. A stage owned by "the task's assignee" wakes
-    that task's owner only when it moves a person's request on (Product's Ideas with one Product Owner per area); with
+    waiting visit while the stage has room, again after it was full (`room_epoch`); never chased: the by-hand stage has
+    no ladder. A stage owned by "the task's assignee" wakes that task's owner only when it moves a person's request on (Product's Ideas with one Product Owner per area); with
     the switch off (Growth's and Success's Ideas, Watching) its tasks rest and nobody is told. Returns how many wakes
     were written."""
     woken = 0
     for by_hand, after, stage_owner, requests_move_on in conn.execute(_ROOM).fetchall():
         nxt = E.stage(conn, str(after))
-        if not nxt or not E.has_room(conn, nxt):
+        epoch = room_epoch(conn, str(after), E.has_room(conn, nxt)) if nxt else None
+        if not nxt or epoch is None:
             continue
-        wake_key = room_key(str(after), freed(conn, str(after)))
         first = conn.execute(_FIRST_WAITING, (by_hand,)).fetchone()
         row = E.task(conn, str(first[0])) if first else None
         if not row or not row.get("visit"):
@@ -339,6 +348,7 @@ def _room(conn: "sqlite3.Connection") -> int:
         if not is_bot(owner) or not _reads(conn, owner, row):
             continue
         text = f"{nxt['name']} has room."
+        wake_key = room_key(row["id"], row["visit"]["id"], str(after), epoch)
         if task_wakes.add(conn, row, owner, row["visit"], text, wake_key=wake_key):
             woken += 1
     return woken

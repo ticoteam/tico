@@ -9,6 +9,8 @@ was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes o
 """
 
 import json
+import logging
+import re
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, cast
 
@@ -41,6 +43,11 @@ def _h() -> Any:
 
 def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> str:
     return f"{task_id}:{visit_id}:{level}:{try_n}"
+
+
+def _kind(wake_key: str) -> str:
+    """What sort of wake a key is (its first plain word: room, late, ask), for a log line: never ids or words."""
+    return next((part for part in wake_key.split(":") if re.fullmatch(r"[a-z_]{1,24}", part)), "unknown")
 
 
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
@@ -191,6 +198,13 @@ def add(
     if not target:
         return None
     wake_key = wake_key or key(task["id"], visit["id"], level, try_n)
+    if not wake_key.startswith(f"{task['id']}:"):
+        # The run a wake starts is the task its key starts with (`message_task`), and wakes fold and count by that
+        # prefix: a key naming no task would start a run on a task that does not exist, refused at every claim.
+        logging.getLogger(__name__).warning(
+            "wake refused: its key does not start with its task's id (%s)", _kind(wake_key)
+        )
+        return None
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (wake_key,)).fetchone():
         return None
     if not H._actor_exists(conn, target):
@@ -757,7 +771,8 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     Every automatic start tied to a task on the engine is held: the engine's wakes, and any other message a person did
     not write (a scheduled occurrence's notice, a CI nudge, a task's news), retries included. Such a run may start only
     while the task is open, not snoozed and not at level person, while its bot has a turn on it (`waiting_on.turns`;
-    Late's one look for the manager bot and the owner's wake that what it filed ended, `FILED`, need none), and while the visit has started fewer than 7 runs since it last
+    Late's one look for the manager bot, the owner's wake that what it filed ended, `FILED`, and a by-hand stage's
+    owner told the next stage has room, `ROOM`, need none), and while the visit has started fewer than 7 runs since it last
     changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
     run is held its queued job is canceled, here. True for a person's own message (their words always get an answer)
     and anything about no task on the engine. A message in a person's name they did not type themselves (the
@@ -846,7 +861,10 @@ def _may_start(
     pipe: Row = task.get("pipeline") or {}
     late = kind == "late" and bot == pipe.get("manager_id")
     filed = kind == FILED and bot == task.get("owner_id")
-    if not (late or filed) and bot not in W.turns(conn, task):
+    # "The next stage has room" (never_stuck._room) goes to a by-hand stage's owner, where nobody has a turn.
+    stage: Row = task.get("stage") or {}
+    room = kind == ROOM and bot in (task.get("owner_id"), stage.get("owner"))
+    if not (late or filed or room) and bot not in W.turns(conn, task):
         return False
     return runs_since(conn, task, starting=True, besides=attempt) < RUNS
 
@@ -854,6 +872,8 @@ def _may_start(
 # The wake key's kind for "what this task filed has ended" (task_engine._ended): its owner bot's run may start though
 # it has no turn, since the task waits on a person's OK that the filed review was about.
 FILED = "filed"
+# The wake key's kind for "the next stage has room" (never_stuck.room_key).
+ROOM = "room"
 # A job in one of these states may still start its run: its wake is not lost.
 LIVE_JOBS = ("queued", "leased", "running", "input", "stalled")
 

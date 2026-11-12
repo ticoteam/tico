@@ -86,6 +86,8 @@ HELD_UNREVIEWED = 2 * 3600
 SILENT_KINDS = {"error", "diagnostic", "status"}
 NO_EFFECT_TRIES = 3
 PRE_START_TRIES = 10  # lapsed leases before start: a broken computer must not retry forever
+# Why a run that names a task gone or unreadable to its bot failed (Execution.fail_unreadable): no task's title.
+UNREADABLE_RUN = "Not started: its task is gone or this bot can't read it"
 # Count missed starts across hub restarts without making old computer trouble exhaust today's retries.
 PRE_START_WINDOW_HOURS = 24
 # A run that found the Tico AI Gateway unavailable goes back in the queue (at most NO_EFFECT_TRIES - 1 times), and the
@@ -4398,6 +4400,19 @@ class Execution:
         H.event(c, H.KEEPER, event, row["id"], {"bot": row["bot_id"], "job_id": row["job_id"], "job_state": state})
         return state
 
+    def fail_unreadable(self, c, aid, job):
+        """A claimed run its bot may never start: a task it names does not exist, or the bot may not read it
+        (`privacy.attempt_readable`, the check `attempt` makes on every start and renewal). No wait changes that, so
+        the job fails at once and is never leased again. The reason, in the bot's run history, names no task."""
+        now = H.now()
+        c.execute(
+            "UPDATE attempts SET state='failed',finished_at=?,lease_until=?,final_text=? WHERE id=?",
+            (now, now, UNREADABLE_RUN, aid),
+        )
+        c.execute("UPDATE jobs SET state='failed',attempt_id=? WHERE id=?", (aid, job["id"]))
+        H.turn_finish(c, H.KEEPER, aid, exit_code="failed", summary=UNREADABLE_RUN, usage_reason="no_result")
+        H.event(c, H.KEEPER, "job.suppress", job["id"], {"reason": "unreadable_run", "attempt_id": aid})
+
     def hand_back(self, c, row, body):
         """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
         stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 BotOps's runner lost
@@ -5118,6 +5133,11 @@ class Execution:
             },
         )
         aid = turn["id"]
+        if not privacy.attempt_readable(c, privacy.make_page_actor(c, "bot:" + row["bot_id"], msg), aid):
+            # The run names a task that is gone or the bot may not read: the start (`attempt`) would refuse it on every
+            # try, for good. It fails once, here, and the claim hands out the bot's next job.
+            self.fail_unreadable(c, aid, row)
+            return {"attempt": None, "dropped": True}
         if body.start_places:
             # Decided now, under this write lock: granted a place while the computer holds fewer than its turn limit. A turn
             # past the limit is leased (it counts toward live_limit) and holds no place until one frees.

@@ -611,31 +611,25 @@ def test_the_product_manager_is_woken_once_when_spec_has_room(c):
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
+    c.execute("UPDATE stages SET task_limit=2 WHERE id='product-spec'")  # a Spec two tasks fill
     ideas = [X.new_task(c, "bot:pm", f"Idea {n}", "product") for n in range(4)]  # its own briefs: held by hand
     X.settled(c)
     N.check(c)
-    first = N.room_key("product-spec", None)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
+    first = N.room_key(ideas[0]["id"], E.task(c, ideas[0]["id"])["visit"]["id"], "product-spec", 0)
+    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE '%:room:%'").fetchall()
     assert [tuple(r) for r in rows] == [(first, "bot:pm")]
     N.check(c)
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE '%:room:%'").fetchone()[0] == 1
     for idea in ideas[:2]:
         E.move(c, idea["id"], "product-spec", ANA)
     N.check(c)  # Spec is full: nothing
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 1
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE '%:room:%'").fetchone()[0] == 1
     E.move(c, ideas[0]["id"], "product-ideas", ANA, "Not ready")
-    left = c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (ideas[0]["id"],)).fetchone()[
-        0
-    ]
+    N.check(c)  # a slot opened after Spec was full: the idea that has waited longest now is told
     N.check(c)
-    N.check(c)
-    keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")]
-    assert keys == [first, N.room_key("product-spec", left)]
+    keys = [r[0] for r in c.execute("SELECT wake_key FROM messages WHERE wake_key LIKE '%:room:%' ORDER BY rowid")]
+    assert keys == [first, N.room_key(ideas[2]["id"], ideas[2]["visit"]["id"], "product-spec", 1)]
     assert N.rules_hold(c) == []
-
-
-def _left_spec(c, task_id):
-    return c.execute("SELECT id FROM visits WHERE task_id=? AND stage_id='product-spec'", (task_id,)).fetchone()[0]
 
 
 def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_freed_slot(c):
@@ -653,15 +647,15 @@ def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_free
     N.check(c)  # a person's request: it moves on into Spec by itself
     assert E.task(c, bug["id"])["stage_id"] == "product-spec"
     E.move(c, bug["id"], "product-ideas", ANA, "Route it to its area's owner first")
-    first = N.room_key("product-spec", _left_spec(c, bug["id"]))
     row = E.task(c, bug["id"])
+    first = N.room_key(bug["id"], row["visit"]["id"], "product-spec", 0)
     assert (row["stage_id"], row["owner_id"], row["visit"]["entered_how"]) == ("product-ideas", area, "back")
     (held,) = W.of(c, row)
     assert held.state == W.BY_HAND
     X.settled(c)
     N.check(c)
     N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id, body FROM messages WHERE wake_key LIKE 'room:%'").fetchall()
+    rows = c.execute("SELECT wake_key, recipient_id, body FROM messages WHERE wake_key LIKE '%:room:%'").fetchall()
     assert [(r[0], r[1]) for r in rows] == [(first, area)]
     assert rows[0][2].startswith("Spec has room.")
     assert E.task(c, bug["id"])["stage_id"] == "product-ideas"  # still held: the wake only tells
@@ -673,8 +667,9 @@ def test_an_assignee_owned_ideas_wakes_the_oldest_held_tasks_owner_once_per_free
     E.move(c, other["id"], E.CLOSED, ANA, "Done elsewhere")
     N.check(c)
     N.check(c)
-    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:%' ORDER BY rowid")
-    assert [tuple(r) for r in rows] == [(first, area), (N.room_key("product-spec", _left_spec(c, other["id"])), area)]
+    rows = c.execute("SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE '%:room:%' ORDER BY rowid")
+    again = N.room_key(bug["id"], row["visit"]["id"], "product-spec", 1)  # Spec was full, then had room again
+    assert [tuple(r) for r in rows] == [(first, area), (again, area)]
     assert N.rules_hold(c) == []
 
 
@@ -707,7 +702,7 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
     assert (wait.state, wait.line) == (W.ROOM, "No room in Spec")
     (held,) = W.of(c, E.task(c, brief["id"]))
     assert held.state == W.BY_HAND
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE '%:room:%'").fetchone()[0] == 0
     moved = E.task(c, asked[0]["id"])
     assert moved["owner_id"] == "bot:pm" and X.wakes(c, moved["id"], "bot:pm")  # its owner is told at once
     E.move(c, asked[0]["id"], "product-ideas", ANA, "Not this month")
@@ -718,7 +713,7 @@ def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_wait
         "Request 2": "product-spec",  # the slot went to the waiting request, not to a room wake
         "Brief": "product-ideas",
     }
-    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0] == 0
+    assert c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE '%:room:%'").fetchone()[0] == 0
     assert N.rules_hold(c) == []
 
 

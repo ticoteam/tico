@@ -13,6 +13,7 @@ import pytest
 from backend import never_stuck as N
 from backend import pipeline_settings as PS
 from backend import task_engine as E
+from backend import task_wakes
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -38,9 +39,13 @@ def product(c, time_machine):
 
 
 def _owner_wakes(c, row):
-    """The owner's wakes about the task's open visit."""
+    """The owner's wakes about the task's open visit, beside C10's "Spec has room" (never_stuck._room)."""
     visit = E.task(c, row["id"])["visit"]["id"]
-    return [key for key, who in X.wakes(c, row["id"], row["owner_id"]) if key.split(":")[1] == visit]
+    return [
+        key
+        for key, who in X.wakes(c, row["id"], row["owner_id"])
+        if key.split(":")[1] == visit and key.split(":")[2] != task_wakes.ROOM
+    ]
 
 
 def _manager_late_wakes(c, row):
@@ -130,7 +135,7 @@ def test_a_product_owners_own_brief_still_rests_with_no_turn_and_no_wake(c, prod
     assert (held.state, held.line) == (W.BY_HAND, "Leaves Ideas by hand")
     time_machine.shift(timedelta(hours=25))
     assert N.check(c)["late"] == 0
-    assert X.wakes(c, brief["id"]) == [] or all(key.startswith("room:") for key, _ in X.wakes(c, brief["id"]))
+    assert X.wakes(c, brief["id"]) == [] or all(":room:" in key for key, _ in X.wakes(c, brief["id"]))
     assert not E.task(c, brief["id"])["visit"]["late_told_at"]
 
 

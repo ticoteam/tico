@@ -56,6 +56,20 @@ def test_a_callers_refs_never_set_what_is_the_engines(c, general):
     assert _queued(c, row["id"]) == [BUILDER]  # folded into one, and the run still starts
 
 
+def test_a_wake_whose_key_does_not_start_with_its_task_is_never_written(c, general, caplog):
+    """The run a wake starts is the task its key starts with (`message_task`): a key that starts with anything else
+    (C10's old `room:<stage>:...`, another task's id) would start runs on a task that is not this one, refused at every
+    start. Such a wake is refused and logged by its kind alone."""
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    other = X.new_task(c, ANA, "Plan the week", assignee=BUILDER)
+    visit = row["visit"]["id"]
+    for bad in ("room:general-todo:start", f"{other['id']}:{visit}:room:general-todo:0", f"{row['id']}0:{visit}:x"):
+        assert task_wakes.add(c, row, BUILDER, row["visit"], "Words.", wake_key=bad) is None, bad
+        assert not c.execute("SELECT 1 FROM messages WHERE wake_key=?", (bad,)).fetchone(), bad
+    assert "(room)" in caplog.text and row["id"] not in caplog.text and "Words" not in caplog.text
+    assert task_wakes.add(c, row, BUILDER, row["visit"], "Words.", wake_key=f"{row['id']}:{visit}:room:general-todo:0")
+
+
 def test_a_fold_never_leaves_a_bot_that_runs_jobs_without_a_queued_run(c, general, monkeypatch):
     from backend import enqueue
 
@@ -642,3 +656,29 @@ def test_a_run_count_reads_the_runs_since_the_change_and_looks_up_each_ones_star
     ], plan
     assert not [s for s in plan if "run_starts" in s and "(attempt_id=?)" not in s], plan
     assert any("run_starts" in step and "(attempt_id=?)" in step for step in plan), plan
+
+
+def test_the_cleanup_ends_every_run_still_waiting_on_an_old_room_wake(c, general):
+    """Migration 20261112200917: a wake keyed `room:...` (before its key named its task) started runs no start would
+    take. Each such job still queued or leased is canceled, its lease ended; every other wake is left as it was."""
+    import importlib
+
+    cleanup = importlib.import_module("backend.migrations.20261112200917_end_room_wakes")
+    row = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)
+    other = X.new_task(c, ANA, "Plan the week", assignee=REVIEWER)
+    old = [
+        task_wakes.add(c, row, BUILDER, row["visit"], "Spec has room.", wake_key=f"{row['id']}:old"),
+        task_wakes.add(c, other, REVIEWER, other["visit"], "Spec has room.", wake_key=f"{other['id']}:old"),
+    ]
+    for n, message in enumerate(old):
+        c.execute("UPDATE messages SET wake_key=? WHERE id=?", (f"room:general-todo:{n}", message))
+    c.execute("UPDATE jobs SET state='leased' WHERE id=?", (old[1],))
+    third = X.new_task(c, ANA, "Fix the footer", assignee=BUILDER)
+    kept = c.execute(
+        "SELECT j.id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' AND m.wake_key LIKE ?",
+        (third["id"] + ":%",),
+    ).fetchone()[0]
+    for _ in range(2):  # a second run finds nothing left to end
+        cleanup.up(c)
+        assert [_state(c, message) for message in old] == ["canceled", "canceled"]
+        assert _state(c, kept) == "queued"

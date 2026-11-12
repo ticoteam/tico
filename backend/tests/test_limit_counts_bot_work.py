@@ -174,7 +174,7 @@ def _room_wakes(c):
     return [
         tuple(found)
         for found in c.execute(
-            "SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE 'room:product-spec:%' ORDER BY rowid"
+            "SELECT wake_key, recipient_id FROM messages WHERE wake_key LIKE '%:room:product-spec:%' ORDER BY rowid"
         )
     ]
 
@@ -183,13 +183,12 @@ def test_with_no_request_waiting_the_ideas_owner_gets_one_spec_has_room_wake(c, 
     """Given Spec is full of bot work and Ideas holds only an idea a bot filed, when a Spec task's turn becomes a
     person's, the Ideas owner gets one "Spec has room" wake, and no second one on the next pass."""
     first, _second = _in_spec(c, "Importer spec"), _in_spec(c, "Exporter spec")
-    _idea(c, "Bug Triage handoffs")
+    idea = _idea(c, "Bug Triage handoffs")
     _pass(c)
     assert _room_wakes(c) == []  # full of bot work: nobody is told
     _to_person(c, store, first)
     _pass(c)
-    since = W.slots(c, "product-spec").on_person[0][1]
-    assert _room_wakes(c) == [(f"room:product-spec:{first['id']}@{since}", WRITER)]
+    assert _room_wakes(c) == [(NS.room_key(idea["id"], idea["visit"]["id"], "product-spec", 1), WRITER)]
     _pass(c)
     assert len(_room_wakes(c)) == 1
 

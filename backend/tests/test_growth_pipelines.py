@@ -77,7 +77,7 @@ def _move(c, task_id, to, by, why=None):
 
 
 def _room_wakes(c):
-    return c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE 'room:%'").fetchone()[0]
+    return c.execute("SELECT COUNT(*) FROM messages WHERE wake_key LIKE '%:room:%'").fetchone()[0]
 
 
 def _go_live(c, row):

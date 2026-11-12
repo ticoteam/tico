@@ -808,3 +808,40 @@ def test_health_lists_waiting_bots_while_a_claim_check_raises(api, monkeypatch, 
         online = {r["id"] for r in health._online_runners(c)}
         waiting, slow, stuck = health._waiting(c, online, store.settings)
     assert "ops" not in {r["bot"] for r in stuck}
+
+
+@pytest.mark.parametrize("names", ["no task", "a task it cannot read"])
+def test_a_run_that_names_a_task_its_bot_may_never_read_fails_once_and_the_next_job_runs(api, names):
+    """A run's task is the one its wake key starts with (task_wakes.message_task). When that task does not exist, or
+    the bot may not read it, every start of the run is refused (`attempt`'s privacy check), so the claim fails the job
+    at once with a reason its owner sees in the run history, naming no task, and hands out the bot's next job. The job
+    is never leased again."""
+    machine = runner(api, "ana")
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    jammed = post(api, "chat/ops", {"text": "Please look at this."})
+    post(api, "chat/ops", {"text": "Please summarize the current work."})
+    with api.app.state.store.transaction() as c:
+        if names == "no task":
+            task_id = "room"  # what C10's old `room:<stage>:...` keys named
+        else:
+            task_id = H.task_create(c, "human:ben", "Ben's check", "Private.", "human:ben", private=True, lint=False)[
+                "id"
+            ]
+        c.execute("UPDATE messages SET wake_key=? WHERE id=?", (f"{task_id}:v1:x", jammed["id"]))
+    attempt = claim(api, machine)
+    assert attempt and attempt["job_id"] != jammed["id"]  # the next job is handed out in the same claim
+    with api.app.state.store.read() as c:
+        job = c.execute("SELECT state, attempt_id FROM jobs WHERE message_id=?", (jammed["id"],)).fetchone()
+        run = c.execute("SELECT state, final_text, summary FROM attempts WHERE id=?", (job["attempt_id"],)).fetchone()
+        assert job["state"] == "failed"
+        assert (run["state"], run["final_text"], run["summary"]) == (
+            "failed",
+            execution.UNREADABLE_RUN,
+            execution.UNREADABLE_RUN,
+        )
+        tries = c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (jammed["id"],)).fetchone()[0]
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, machine["token"])
+    assert claim(api, machine) is None  # nothing left: the failed job is not leased again
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM attempts WHERE job_id=?", (jammed["id"],)).fetchone()[0] == tries == 1

@@ -106,8 +106,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   Close. Bots can close tasks that bots asked for.
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
-- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room. It is not chased after that. A request a
-  person filed that still waits in Ideas takes the room first, by itself.
+- **C10.** Ideas: the Product Owner bot gets one wake when Spec has room, and another only after Spec was full and a
+  slot opened. It is not chased after that. A request a person filed that still waits in Ideas takes the room first, by
+  itself.
 - **C11.** Held actions (send this email, spend, publish) become an Approve ask on the task the bot is working on. If
   there is no task, Tico files one for you in General.
 - **C12.** Stale checks are dropped. *Today a model flags tasks that look forgotten and lists them for you.* Bot tasks
