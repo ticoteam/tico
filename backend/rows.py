@@ -1605,6 +1605,15 @@ class GithubReleaseCommitRow(TypedDict):
     checked_at: str
 
 
+class GithubPrDiffRow(TypedDict):
+    """What a PR commit changes, as one id (item_sources.github.diff_id); None when GitHub could not give it all."""
+
+    repo: str
+    sha: str
+    diff_id: str | None
+    read_at: str
+
+
 class GithubDeliveryRow(TypedDict):
     """A webhook delivery already taken: a repeat of it is dropped."""
 

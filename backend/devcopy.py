@@ -560,6 +560,7 @@ KEEP = (
             "github_releases",
             "github_release_reads",
             "github_release_commits",
+            "github_pr_diffs",
             "requirement_pages",
             "page_verdicts",
             # The order runs started in (backend/task_wakes.py): kept with the runs it orders.

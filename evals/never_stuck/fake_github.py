@@ -118,6 +118,10 @@ class RigGitHub:
         self._up("contains")
         return self.gh.contains(repo, release_sha, commit_sha)
 
+    def pr_diff(self, repo: str, number: int, sha: str) -> str | None:
+        self._up("pr_diff")
+        return self.gh.pr_diff(repo, number, sha)
+
     def ready(self, repo: str, number: int) -> None:
         self._up("ready")
         self.gh.ready(repo, number)

@@ -740,8 +740,9 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
         F.save_pr(c, REPO, 1, {"checks": [{"name": "unit", "state": "success"}]}, F.version_now())
         refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
-        # The new commit came after the person's OK: the Release Owner sends the task back to Fixes 2 to have it
-        # reviewed and OK'd; it may not queue it as it is (an OK on an old commit never merges a new one).
+        # The new commit changes other lines than the one the person OK'd: the Release Owner sends the task back to
+        # Fixes 2, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
+        # new one).
         assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
         assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
         owed = go()  # a person queues it as it is now: that is their OK of the new commit
@@ -753,6 +754,30 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
     with company.transaction() as c:
         assert F.pr(c, REPO, 1)["queue_state"] == "queued"
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
+
+
+def test_a_rebase_after_the_ok_is_queued_again_by_the_release_owner(company):
+    """C22, velocity: a rebase onto a newer main (or a conflict fixed without changing the PR's own lines) changes the
+    same lines as the commit the person OK'd. The Release Owner queues it again; until Tico has read what the new commit
+    changes, it is asked to try again."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    head = gh.rebase(REPO, 1)
+    gh.set_checks(REPO, head, "success")
+    with company.transaction() as c:
+        seen(c, gh, 1)
+        version = E.task(c, task_id)["version"]
+        go = lambda: MQ.requeue(c, task_id, RM, seen_version=version)  # noqa: E731
+        assert refused(go, "task_requirement") == MQ.COMPARING.format(ref=REF)
+    F.refresh(company, gh, later())
+    assert [call[0] for call in gh.calls].count("pr_diff") == 2, "the queued commit and the new one, once each"
+    with company.transaction() as c:
+        owed = MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"])
+        assert [(e["state"], e["pinned"]) for e in owed] == [("owed", head)]
+    F.refresh(company, gh, later(20))
+    assert [call[0] for call in gh.calls].count("pr_diff") == 2, "each commit is read once"
 
 
 def test_queue_again_only_on_a_stage_that_queues_and_an_open_task(c):

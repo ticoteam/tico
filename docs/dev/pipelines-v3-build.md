@@ -609,9 +609,17 @@ the answer keeps the commits it was given at (`answers.heads`). Its OK makes tho
 ask then starts "<bot> reviewed the commits since the reviews: <notes>." Its no is `not_met` on the owner: "<bot>
 sent back the new commits: <notes>". A round is one set of commits it answered at; after `DELTA_ROUNDS` (2) rounds in
 a visit, or with no such bot, the person is asked with "New commits since the reviews (now at <sha>): not reviewed by
-a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits, and counts only while they
-are still the newest: after a new commit it is gone, the ask starts "New commits since <name>'s OK.", and the new
-commits go through the same review. Answers from before `heads` was kept stand. The Builder's wake says "not
+a bot." (Tico keeps no commit count). A person's OK on that page also keeps its commits (`task_requirements._after_ok`,
+C22). After a new commit, `item_sources.github.same_changes` compares what each moved PR changes (`github_pr_diffs`,
+read once per commit by the re-read's `_refresh_diffs` through `GitHub.pr_diff`: GitHub's compare `<base>...<sha>`,
+hashed by `diff_id` from the added and removed lines of each file); until both are read the page waits on GitHub
+("Reading what the commits since <name>'s OK change"). The same lines: met, "OK'd by <name>; the commits since change
+the same lines". Other lines: the delta review above, its rounds counted from the OK; the reviewer's OK at the newest
+commits is met ("OK'd by <name>; <bot> read the commits since"). After its no, with no such bot, or with the rounds
+spent, the OK is gone: the ask starts "New commits since <name>'s OK." and goes to that person. Back from Merge with no
+page attached on the visit (`page_for`), the OK and page of the Fixes 2 visit before Merge count; when that OK is gone,
+the Builder is asked to attach the page again. In Merge a bot's `requeue` of a moved head needs the same lines
+(`COMPARING` while unread, else `SENT_BACK_FOR_NEW`). Answers from before `heads` was kept stand. The Builder's wake says "not
 reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
 asked (its attach, or Jev's verdict when later), not when the stage began. The manager bot asked to decide answers with
 `tico task answer <id> <requirement> ok|no -m "<why>"`; its forward move with a reason is kept as that OK, not a push

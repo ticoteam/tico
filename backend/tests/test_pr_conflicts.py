@@ -200,7 +200,8 @@ def _checks_pass(c, head):
 def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_goes_to_the_builder_once(c):
     """Acme rc.5 (Nov 11): PR #41 waited a day on its pre-release OK and the Builder rebased it after every merge to
     main, each push unreviewed. While Fixes 2 waits on the person, the conflict is held: not met, nobody's turn, and
-    the person's ask says so. Their OK hands it to the Builder once; the rebase is a new commit, so they OK it again."""
+    the person's ask says so. Their OK hands it to the Builder once; the rebase changes the same lines, so their OK
+    stands and nobody is asked again (C22, Nov 12)."""
     _product, eng = T._filed_engineering(c)
     T._move(c, eng, "engineering-build")
     T._link_pr(c, eng, 12, "aaa")
@@ -247,20 +248,16 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     _github(c, "bbb", False, action="refresh")  # the hourly read again: no second wake
     assert len(_conflict_wakes(c, eng)) == 1
 
-    # The Builder pushes the rebase: Ana's OK was for bbb, so it no longer counts (an OK on an old commit never merges
-    # a new one). No other bot reviewed the work, so Ana is asked again, told why, and the task goes on to Merge only
-    # on her OK of the new commit.
+    # The Builder pushes the rebase: it changes the same lines as bbb, so Ana's OK stands, nobody is asked again, and
+    # the task goes on to Merge once the checks pass at the new commit.
     T._push(c, 12, "ccc")
+    _same_changes(c, "bbb", "ccc")
     _github(c, "ccc", None)
     row = E.task(c, eng)
     assert PC.standing(c, row) is None and row["stage"]["name"] == "Fixes 2"
-    [again] = [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
-    assert again["line"].startswith(
-        "New commits since Ana's OK. New commits since the reviews (now at ccc): not reviewed by a bot."
-    ), again["line"]
+    assert not [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
     _checks_pass(c, "ccc")
-    assert not E.advance(c, eng)
-    A.answer(c, eng, rid, X.ANA, "ok")
+    E.advance(c, eng)
     assert E.task(c, eng)["stage"]["name"] == "Merge"
 
 
@@ -279,16 +276,22 @@ def _waiting_on_the_pre_release_ok(c):
     return eng, rid
 
 
+def _same_changes(c, before, after):
+    """What GitHub says the two commits change: the same lines (a rebase), as the re-read keeps it."""
+    for sha in (before, after):
+        F.save_diff(c, T.REPO, sha, "same-lines")
+
+
 def _ana_ask(c, eng):
     return [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
 
 
-def test_run_g_order_the_ask_does_not_change_under_the_person_and_the_rebase_is_asked_again(c):
+def test_run_g_order_the_ask_does_not_change_under_the_person_and_the_rebase_is_not_asked_again(c):
     """Acme rc.5 run G (Nov 11, 13:28-13:36): the ask for the pre-release OK was open when another PR merged and this
     one conflicted. Tico woke the Builder at once; while it rebased, the ask stayed in Needs you and changed under the
     person (an unreviewed-commit line, then a new page). Now, in this order: ask open, base moves, conflict, the ask
-    keeps pointing at the same page and commit with one added line, the person OKs, the Builder rebases once. Since
-    Nov 12 an OK counts only at the commit it was given at: the person OKs the rebased commit before Merge takes it."""
+    keeps pointing at the same page and commit with one added line, the person OKs, the Builder rebases once, Merge
+    takes the new commit, and the person is not asked again: the rebase changes the same lines (C22, Nov 12)."""
     eng, rid = _waiting_on_the_pre_release_ok(c)
     visit = E.task(c, eng)["visit"]["id"]
     [before] = _ana_ask(c, eng)
@@ -309,22 +312,21 @@ def test_run_g_order_the_ask_does_not_change_under_the_person_and_the_rebase_is_
     assert _conflict_wakes(c, eng) == [(f"{eng}:{visit}:conflict:{PR}@aaa", "bot:builder")]
     assert not _ana_ask(c, eng)
 
-    # The Builder rebases (a new commit, no new page): Ana's OK was for aaa, so it no longer counts. She is asked
-    # again, once, for the same page at the new commit, and the task goes to Merge at that commit on her OK.
+    # The Builder rebases (a new commit, no new page): it changes the same lines as aaa, so Ana's OK stands, the task
+    # goes to Merge at the new commit, and Ana is never asked again.
     T._push(c, 12, "ccc")
+    _same_changes(c, "aaa", "ccc")
     _github(c, "ccc", True)
-    [again] = _ana_ask(c, eng)
-    assert again["requirement_id"] == rid and again["line"].startswith("New commits since Ana's OK.")
+    assert not _ana_ask(c, eng)
     _checks_pass(c, "ccc")
-    assert not E.advance(c, eng)
-    A.answer(c, eng, rid, X.ANA, "ok")
+    E.advance(c, eng)
     row = E.task(c, eng)
     assert row["stage"]["name"] == "Merge" and F.heads(c, eng) == {PR: "ccc"}
     assert not _ana_ask(c, eng) and len(_conflict_wakes(c, eng)) == 1
     kept = c.execute(
         "SELECT heads FROM answers WHERE requirement_id=? AND by_id=? AND answer='ok' ORDER BY created_at", (rid, X.ANA)
     ).fetchall()
-    assert [json.loads(h) for (h,) in kept] == [{PR: "aaa"}, {PR: "ccc"}]  # each OK names the commit it was for
+    assert [json.loads(h) for (h,) in kept] == [{PR: "aaa"}]  # one OK from Ana, for the whole run, at aaa
 
 
 def test_a_send_back_while_the_conflict_is_held_goes_to_the_builder_with_the_conflict(c):
