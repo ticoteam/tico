@@ -236,6 +236,9 @@ def test_a_new_environment_address_for_a_saved_key_is_capped_there(gw, monkeypat
     gw.save(key=KEY_A)
     gw.cutoff()
     assert gw.cap(T1) == "pushed"
-    monkeypatch.setenv(GC.ENV_URL, "https://gateway-b.example.com")  # a restart with a new address, same saved key
+    # A restart with a new address, same saved key. The trailing slash pins that the claim's target and the steady
+    # read build the address alike: if they differed, every pass would send the cap again.
+    monkeypatch.setenv(GC.ENV_URL, "https://gateway-b.example.com/")
     assert gw.cap(T2) == "pushed"
     assert gw.gateway.cap(KEY_A, "https://gateway-b.example.com") == 2
+    assert gw.cap(T3) == "steady"
