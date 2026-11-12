@@ -3205,6 +3205,10 @@ SCHEMAS = {
         {
             "tasks": items(ref("Task")),
             "next_offset": {"type": ["integer", "null"]},
+            "next_after": {
+                "type": ["string", "null"],
+                "description": "Opaque: pass as after for the next keyset page (search and filters kept); null at the end",
+            },
             "cursor": {
                 "type": "string",
                 "description": "Opaque: pass as changed_after to read only what changed since",

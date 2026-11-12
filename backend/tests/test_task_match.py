@@ -236,3 +236,16 @@ def test_a_catch_up_takes_the_same_search_and_filters(api):
 )
 def test_a_bad_page_start_or_filter_is_refused(api, bad):
     get(api, "tasks?" + bad, expected=422)
+
+
+def test_a_task_with_no_created_date_is_still_reached_page_by_page(api):
+    product(api)
+    made = [
+        post(api, "tasks", {"title": f"Report {i}", "body": "x", "owner": "ben", "pipeline": "product"})
+        for i in range(4)
+    ]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET created_at=NULL, rank=NULL WHERE id IN (?, ?)", (made[1]["id"], made[2]["id"]))
+    whole = read(api, VIEW + "&search=report&limit=500")["tasks"]
+    got, pages = every_page(api, VIEW + "&search=report", limit=1)
+    assert [t["id"] for t in got] == [t["id"] for t in whole] and len(got) == 4 and pages == [1, 1, 1, 1]

@@ -5,7 +5,8 @@ A search or a filter on a pipeline or the archive used to read every page of the
 there (ui/app/task-row.ts `taskFilterMatch`). `GET /api/v2/tasks` now takes the same search and filters with the same
 meaning, and answers one bounded keyset page of matches (`after`, hubdb.KEYSET_SQL):
 
-- `search`: every word (a leading # dropped) in the title, the task number or a label, case-insensitively. Text is
+- `search`: every word (a leading # dropped) in the title, the task number or a label, case-insensitively; the first
+  50 words, a bound the page's search box never reaches in practice. Text is
   lowered in Python, as the browser lowers it (SQLite's lower() knows only ASCII), over the view's narrow columns.
 - `owners`, `stages`, `requesters`, `labels`: one or several values each, comma-separated; any of them.
 - `turn`: one or several people or bots whose turn it is, the list row's headline wait (`turn.who`), as Waiting on
@@ -47,6 +48,7 @@ def words(search: str | None) -> list[str]:
 
 def text_hit(found: Sequence[str], title: str | None, number: int | None, labels: Sequence[str]) -> bool:
     """Whether every word is in the title, the number or a label (task-row.ts `taskFilterMatch`)."""
+    # Two spaces: the page's haystack is `${title} ${body} ${number}`, and list rows carry no body.
     hay = f"{title or ''}  {'' if number is None else number} {' '.join(labels)}".lower()
     return all(w in hay for w in found)
 

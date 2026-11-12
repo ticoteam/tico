@@ -7775,18 +7775,20 @@ def labels_in_use(conn, visible="1"):
 
 
 # A keyset page starts after the last row's sort key: queue order (rank-less last, rank, created, id) or finished order
-# (most recently finished first, id). Row values compare left to right as the ORDER BY sorts.
+# (most recently finished first, id). Row values compare left to right as the ORDER BY sorts. created_at is a nullable
+# column: a missing date is '' here, which sorts where NULL does (before every date ascending, after every date
+# descending), so a row with none is still reached and its key still round-trips as a string.
 KEYSET_SQL = {
-    "queue": "((rank IS NULL), COALESCE(rank, 0), created_at, id) > (?, ?, ?, ?)",
-    "finished": "(COALESCE(done_at,closed_at,updated_at,created_at), id) < (?, ?)",
+    "queue": "((rank IS NULL), COALESCE(rank, 0), COALESCE(created_at, ''), id) > (?, ?, ?, ?)",
+    "finished": "(COALESCE(done_at,closed_at,updated_at,created_at,''), id) < (?, ?)",
 }
 
 
 def task_sort_key(row, order="queue"):
     """The sort key `tasks(after=...)` takes, of one raw task row, as a list that survives JSON."""
     if order == "queue":
-        return [int(row.get("rank") is None), row.get("rank") or 0, row.get("created_at"), row["id"]]
-    when = next((row[k] for k in ("done_at", "closed_at", "updated_at", "created_at") if row.get(k) is not None), None)
+        return [int(row.get("rank") is None), row.get("rank") or 0, row.get("created_at") or "", row["id"]]
+    when = next((row[k] for k in ("done_at", "closed_at", "updated_at", "created_at") if row.get(k) is not None), "")
     return [when, row["id"]]
 
 

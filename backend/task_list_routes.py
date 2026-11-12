@@ -1,5 +1,10 @@
 """Task list routes: task filters, notes, labels."""
 
+import base64
+import json
+import re
+from typing import Any
+
 from .store import H
 from . import models as M
 from .store import Problem
@@ -9,10 +14,6 @@ from . import delivery
 from . import lifecycle
 from . import org_rule_check
 from . import task_privacy as privacy
-import base64
-from typing import Any
-import json
-import re
 from . import reach
 from . import views
 
