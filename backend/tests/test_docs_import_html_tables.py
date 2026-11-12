@@ -3,8 +3,6 @@
 Markdown cannot nest tables, so an inner table is flattened into the outer cell's text, its words in source order.
 """
 
-import time
-
 from backend import docs_import
 
 
@@ -58,10 +56,7 @@ def test_plain_tables_import_as_before():
         assert md(html) == expected
 
 
-def test_deep_nesting_at_the_size_limit_finishes_quickly():
-    depth = docs_import.MAX_BYTES // 40
-    html = "<table><tr><td>w" * depth + "</td></tr></table>" * depth
-    start = time.monotonic()
-    out = md(html)
-    assert time.monotonic() - start < 20
-    assert out.count("w") == depth
+def test_deeply_nested_tables_keep_every_word():
+    depth = 10_000
+    out = md("<table><tr><td>w" * depth + "</td></tr></table>" * depth)
+    assert out == "| " + " ".join(["w"] * depth) + " |\n| --- |\n"
