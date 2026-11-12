@@ -143,7 +143,14 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await page.locator('#dash-grid .dash-none').count(), CARDS.length, `${tag}: each says it has nothing yet`);
   assert.equal(await page.locator('.dash-head [data-gr-ns]').isVisible(), false, `${tag}: no North Star line`);
   assert.equal(await page.locator('.dash-head .grh-month').isVisible(), false, `${tag}: no month picker`);
-  assert.equal(await page.locator('.dash-head [data-gr-board]').getAttribute('href'), '#/tasks?pipeline=general&who=all', `${tag}: the Growth board link`);
+  // The Growth board opens the Growth Experiments pipeline the growth packs file into, never General; none, no link.
+  const gx = (await ok<{pipelines: {id: string; preset: string | null; retired_at: string | null}[]}>(page, 'GET', 'pipelines')).pipelines
+    .find(p => p.preset === 'growth-experiments' && !p.retired_at);
+  const board = page.locator('.dash-head [data-gr-board]');
+  if (gx) await page.waitForFunction((h: string) => document.querySelector('.dash-head [data-gr-board]')?.getAttribute('href') === h, `#/tasks?pipeline=${gx.id}&who=all`, {timeout: t(5000)})
+    .catch(async () => assert.fail(`${tag}: the Growth board link (${await board.getAttribute('href')})`));
+  else await page.waitForFunction(() => (document.querySelector('.dash-head [data-gr-board]') as HTMLElement | null)?.hidden, null, {timeout: t(5000)})
+    .catch(async () => assert.fail(`${tag}: no Growth board link without a Growth pipeline (${await board.getAttribute('href')})`));
   assert.equal(await page.locator('.dash-actions').isVisible(), true, `${tag}: the owner arranges`);
   await flat(page, `${tag}: empty`);
   await themed(page, `growth-${width}-empty`);

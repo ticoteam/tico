@@ -12,8 +12,34 @@
 const GR_ROUTE = '#/growth', GR_SOURCES = GR_ROUTE + '/sources', BRAND_ROUTE = '#/strategy/brand', GR_GOALS = '#/strategy/goals';
 // Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them on.
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
-// Growth ideas are General tasks with labels (backend/marketing_tasks.py); one channel's are those with `channel:<slug>`.
-const grBoardHref = (slug = '') => `${TASKS}?pipeline=general&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}`;
+// The Growth board is Tasks on the pipeline the growth packs file ideas into, Growth Experiments (backend/
+// pipeline_presets_more.py); with several, the first live one; one channel's ideas are those tagged `channel:<slug>`.
+// Unknown (undefined) until the pipelines are read, null with none: then no board link shows (grBoardLinks).
+let GR_BOARD_PIPE: string | null | undefined;
+const GR_BOARD_PRESET = 'growth-experiments';
+const grBoardHref = (slug = '') => GR_BOARD_PIPE ? `${TASKS}?pipeline=${encodeURIComponent(GR_BOARD_PIPE)}&who=all${slug ? '&tag=' + encodeURIComponent('channel:' + slug) : ''}` : '';
+// A board link, hidden until the board is known; grBoardLinks points or hides it.
+const grBoardLink = (cls: string, text: string, slug = '', attrs = '') => {
+  const href = grBoardHref(slug);
+  return `<a class="${cls}" data-gr-board-link="${esc(slug)}"${attrs}${href ? ` href="${href}"` : ' hidden'}>${esc(text)}</a>`;
+};
+function grBoardLinks(root: ParentNode) {
+  root.querySelectorAll<HTMLAnchorElement>('a[data-gr-board-link]').forEach(a => {
+    const href = grBoardHref(a.dataset.grBoardLink || '');
+    a.hidden = !href;
+    if (href) a.setAttribute('href', href); else a.removeAttribute('href');
+  });
+}
+// The board's pipeline among those read: undefined while none were read yet, null when none is Growth Experiments.
+const grBoardOf = (pipes: PipelineRec[] | null): string | null | undefined => pipes ? pipes.find(p => p.preset === GR_BOARD_PRESET)?.id ?? null : undefined;
+// Reads the pipelines once per Growth page (the list already read draws the links meanwhile); a failed read shows no board link rather than a wrong one.
+async function grBoardRead(load: number) {
+  let pipe: string | null = null;
+  try { pipe = grBoardOf(await tasksPipelinesRead()) ?? null; } catch { /* no link */ }
+  if (load !== GR_LOAD) return;   // G: another page opened meanwhile
+  GR_BOARD_PIPE = pipe;
+  if (DASH?.place === 'growth' && DASH.root) grBoardLinks(DASH.root);
+}
 // The Sources list as the server answers it (GET /api/v2/growth/sources): one row per source of a truth.
 interface GrSource { id: string; truth_for: string; system: string; reach_kind: string; reach_ref?: string | null; may: string; owner_ref: string | null; retired_at?: string | null }
 interface GrSourcesData { src: GrSource[]; conflicts: string[]; may: boolean }
@@ -168,7 +194,7 @@ function pageGrowth() {
   document.querySelectorAll<HTMLDialogElement>('dialog.gr-dlg').forEach(d => d.close());
   const load = ++GR_LOAD, m = new URLSearchParams(query || '').get('m') || '';
   GR = {load, sub, month: GR_MONTH_RE.test(m) ? m : '', data: null};
-  if (sub !== 'sources') { void pageDashboard('growth', {month: GR.month}); return; }
+  if (sub !== 'sources') { GR_BOARD_PIPE = grBoardOf(TASK_PIPELINES); void grBoardRead(load); void pageDashboard('growth', {month: GR.month}); return; }
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
   main.innerHTML = `<div class="strat-head rd-strat-head gr-head"><a class="gr-back" href="${GR_ROUTE}" data-gr-back>Growth</a><span class="muted" aria-hidden="true">/</span><h1>Sources</h1><span class="spacer"></span>
@@ -190,7 +216,7 @@ DASH_PLACES.growth = {
   pages: () => S.me?.role !== 'bot',
   head: () => `<h1>Growth</h1><a class="grh-ns" data-gr-ns hidden></a><span class="spacer"></span>
     <label class="grh-month" hidden><span class="sr-only">Month</span><select data-gr-month></select></label>
-    <a class="gr-btn grh-btn" href="${grBoardHref()}" data-gr-board>Growth board</a>
+    ${grBoardLink('gr-btn grh-btn', 'Growth board', '', ' data-gr-board')}
     ${grAdmin() ? '<button type="button" class="ghost grh-btn" data-gr-settings>Settings</button>' : `<a class="gr-btn grh-btn" href="${GR_SOURCES}" data-gr-sources>Sources</a>`}`,
   wire(state) {
     const root = state.root;
@@ -213,6 +239,7 @@ DASH_PLACES.growth = {
   drawn(state) {
     const v = state.view, root = state.root;
     if (!v || !root) return;   // G: drawn only once the place has its view and its grid
+    grBoardLinks(root);
     // The month picker: the months with numbers, newest first, and the one the cards read.
     const months = [...new Set([...(v.months || []), ...(v.month ? [v.month] : [])])].sort().reverse();
     const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
@@ -287,7 +314,7 @@ function grChannelsCard(d: GrChannelsData) {
   const num = (k: string, v: number | null | undefined, fmt: (v: number) => string, from: string | null | undefined = '') => `<td class="grc-n${v == null ? ' muted' : from ? ' grc-old' : ''}" data-k="${k}"${from ? ` title="${esc(grMonth(from))}"` : ''}>${v == null ? '—' : esc(fmt(v))}</td>`;
   const row = (r: GrChannelRow) => `<tr data-channel="${esc(r.slug)}"><th scope="row">${esc(r.name)}</th>${num('New', r.new_customers, v => grX(v, 0))}${num('CAC', r.cac, grUsd)}${num('LTV:CAC', r.ltv_cac, grRatio, r.ltv_from)}
     <td class="grc-sp">${grSpark(r.series || [], -1, {w: 72, h: 20})}</td>
-    <td class="grc-tasks">${(r.tasks || []).map(chip).join('')}${r.more ? `<a class="grc-more" href="${grBoardHref(r.slug)}">+${esc(r.more)} more</a>` : ''}</td></tr>`;
+    <td class="grc-tasks">${(r.tasks || []).map(chip).join('')}${r.more ? grBoardLink('grc-more', `+${r.more} more`, r.slug) : ''}</td></tr>`;
   return `<div class="grc-ch"><table class="grc-table"><thead><tr><th scope="col">Channel</th><th scope="col" class="grc-n">New</th><th scope="col" class="grc-n">CAC</th>
     <th scope="col" class="grc-n">LTV:CAC</th><th scope="col" class="grc-sp">6 mo</th><th scope="col" class="grc-tasks">Working on</th></tr></thead>
     <tbody>${d.rows.map(row).join('')}</tbody></table></div>`;
@@ -305,7 +332,7 @@ function grBoardCard(d: GrBoardData) {
   const lanes = d.lanes.filter(l => l.count);
   return `<div class="grc-board">${lanes.map(l => `<section class="grc-lane" data-lane="${esc(l.stage)}"><h3 class="grc-lane-h"><i class="grc-sq" data-stage="${esc(l.stage)}" aria-hidden="true"></i>${esc(l.label)} <span class="muted">${esc(l.count)}</span></h3>
     <ul class="grc-cards">${l.cards.map(c => `<li><a class="grc-card" href="${grTaskHref(c.id)}"><span class="grc-card-t">${esc(c.title || 'Untitled')}</span>${c.channel ? `<span class="grc-card-c">${esc(c.channel)}</span>` : ''}${face(c.owner_id)}</a></li>`).join('')}</ul>
-    ${l.count > l.cards.length ? `<a class="grc-more" href="${grBoardHref()}">+${esc(l.count - l.cards.length)} more</a>` : ''}</section>`).join('')}</div>`;
+    ${l.count > l.cards.length ? grBoardLink('grc-more', `+${l.count - l.cards.length} more`) : ''}</section>`).join('')}</div>`;
 }
 Object.assign(DASH_BODY, {growth_number: grNumberCard, growth_funnel: grFunnelCard, growth_channels: grChannelsCard,
   growth_retention: grRetentionCard, growth_board: grBoardCard});
