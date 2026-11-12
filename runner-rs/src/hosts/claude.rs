@@ -441,6 +441,8 @@ struct Usage {
     input: i64,
     output: i64,
     cached: i64,
+    /// Prompt tokens written to the cache (`cache_creation_input_tokens`), a part of `input`.
+    cache_write: i64,
     cost: Option<f64>,
     texts: Vec<String>,
     /// Each model request this turn, the bot's and its subagents', in the order Claude made them; true for the bot's own.
@@ -1416,6 +1418,7 @@ impl ClaudeHost {
         u.input += inp;
         u.output += out;
         u.cached += count(&result["usage"], "cache_read_input_tokens");
+        u.cache_write += count(&result["usage"], "cache_creation_input_tokens");
         if let Some(c) = cost {
             u.cost = Some(u.cost.unwrap_or(0.0) + (c - pipe_cost).max(0.0));
             pipe_cost = c;
@@ -1843,7 +1846,7 @@ impl ClaudeHost {
                 Some(tid),
                 Some(turn),
                 json!({"input": u.input, "output": u.output, "total": u.input + u.output, "cost_usd": u.cost,
-                       "usage": {"input": u.input, "cached": u.cached, "output": u.output,
+                       "usage": {"input": u.input, "cached": u.cached, "cache_write": u.cache_write, "output": u.output,
                                  // The fourth count marks the bot's own requests (1) from its subagents' (0): the
                                  // newest of the bot's own is the session's context size (backend/topic_change.py).
                                  "requests": u.requests.iter().map(|(_, r, main)| json!([r[0], r[1], r[2], i64::from(*main)]))
@@ -3216,6 +3219,8 @@ mod tests {
             ),
             (&json!(123902), &json!(120000), &json!(83))
         );
+        // Cache writes are counted apart (they cost more than input): the input above includes them.
+        assert_eq!(tokens["usage"]["cache_write"], json!(3000), "{got:?}");
     }
 
     #[tokio::test]

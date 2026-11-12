@@ -488,14 +488,15 @@ pub fn usage_tokens(usage: &Value) -> (i64, i64, i64) {
     (inp, out, if total != 0 { total } else { inp + out })
 }
 
-/// {input, cached, output} for one assistant message: Pi keeps cache reads and writes apart from `input`; the
-/// meter counts them all as input, the reads also as cached.
+/// {input, cached, cache_write, output} for one assistant message: Pi keeps cache reads and writes apart from
+/// `input`; the meter counts them all as input, the reads also as cached and the writes also as cache writes.
 pub fn usage_increment(usage: &Value) -> Value {
     let read = first(usage, &["cacheRead", "cache_read", "cachedTokens"]);
-    let inp = first(usage, INPUT) + read + first(usage, &["cacheWrite", "cache_write"]);
+    let write = first(usage, &["cacheWrite", "cache_write"]);
+    let inp = first(usage, INPUT) + read + write;
     let out = first(usage, OUTPUT);
     // One assistant message is one model request, so the server prices a long prompt on its own (Tico Low).
-    json!({"input": inp, "cached": read, "output": out, "requests": [[inp - read, read, out]]})
+    json!({"input": inp, "cached": read, "cache_write": write, "output": out, "requests": [[inp - read, read, out]]})
 }
 
 /// The run's granted key; outside a turn (no bot environment) also the machine's, as local diagnostics read it.
@@ -2642,7 +2643,7 @@ mod tests {
                 "{events:?}"
             );
             // Usage is still priced per message, and the newest request is the session's size.
-            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
+            assert!(events.contains(&json!({"kind": "tokens", "input": 120, "output": 9, "total": 129, "usage": {"input": 160, "cached": 40, "cache_write": 0, "output": 9, "requests": [[120, 40, 9]]}})), "{events:?}");
             assert_eq!(host.context_tokens(&thread), Some(169));
         }
         assert_eq!(logged(&dir, "starts.log").len(), 1);
@@ -2812,7 +2813,7 @@ mod tests {
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.compact(&thread, None).await.unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
+        assert!(events.contains(&json!({"kind": "tokens", "input": 9000, "output": 700, "total": 9700, "usage": {"input": 9000, "cached": 0, "cache_write": 0, "output": 700, "requests": [[9000, 0, 700]]}})), "{events:?}");
         assert_eq!(
             kinds(&events).iter().rev().nth(1).unwrap(),
             "turn_completed"
@@ -3083,7 +3084,7 @@ mod tests {
         );
         assert_eq!(
             usage_increment(&json!({"input": 5, "cacheRead": 4, "cacheWrite": 1, "output": 2})),
-            json!({"input": 10, "cached": 4, "output": 2, "requests": [[6, 4, 2]]})
+            json!({"input": 10, "cached": 4, "cache_write": 1, "output": 2, "requests": [[6, 4, 2]]})
         );
         let mut env = Env::new();
         assert_eq!(openrouter_key(&env, false), "");

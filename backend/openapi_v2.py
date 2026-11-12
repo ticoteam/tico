@@ -4572,8 +4572,17 @@ SCHEMAS = {
     "UsageFigures": obj(
         {
             "runs": "i",
-            "input_tokens": {"type": "integer", "description": "Uncached input tokens"},
+            "input_tokens": {
+                "type": "integer",
+                "description": "Uncached input tokens, without cache writes (a run whose runner did not count cache "
+                "writes apart includes them)",
+            },
             "cached_tokens": {"type": "integer", "description": "Input tokens read from the provider's cache"},
+            "cache_write_tokens": {
+                "type": "integer",
+                "description": "Input tokens written to the provider's prompt cache (Claude, Cursor, pi); 0 for runtimes "
+                "that report none (Codex, Gemini, Antigravity, Muse Code) and for runs from before they were counted apart",
+            },
             "output_tokens": "i",
             "est_cost_usd": {
                 "type": ["number", "null"],

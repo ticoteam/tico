@@ -125,6 +125,8 @@ def test_warm_needs_a_turn_under_five_minutes_old_that_read_the_cache():
     assert T.warmth({**no_usage, "cached_tokens": 0}, now)[0] is False
     assert T.warmth({**recent, "input_tokens": None}, now)[0] is False, "cached but no fresh count: unknown share, cold"
     assert T.warmth({**recent, "prompt_tokens": None}, now) == (True, None), "no request counts: size unknown"
+    rewrote = {**recent, "input_tokens": 500, "cache_write_tokens": 20_000}
+    assert T.warmth(rewrote, now)[0] is False, "a cache write is not a cache hit: mostly rewritten is cold"
     assert T.warmth(None, now) == (False, None), "no turn on the session yet: cold"
 
 

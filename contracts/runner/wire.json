@@ -34,6 +34,8 @@
     "heartbeat.request.readiness.disk_cleanup": "runner-rs/src/readiness_extra.rs OPTIONAL: an older server's 422 drops this field for ten minutes; it reports only what the computer already cleaned",
     "heartbeat.request.readiness.runtimes.*.weekly": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
     "heartbeat.request.readiness.runtimes.*.five_hour": "runner-rs/src/profiles.rs for_server: a window's origin and subscription_id are sent only once the heartbeat answer says subscription_usage_sources (runner.rs)",
+    "complete.request.usage.cache_write_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes; otherwise counted in input_tokens",
+    "complete.request.usage.segments[].cache_write_tokens": "runner-rs/src/execute.rs served: sent only when the server's features say usage_cache_writes; otherwise counted in input_tokens",
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },
   "$defs": {

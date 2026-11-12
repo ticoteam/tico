@@ -125,6 +125,9 @@ impl From<String> for Fail {
 pub(crate) struct Meter {
     input: i64,
     cached: i64,
+    /// The part of `input` written to the prompt cache (Claude, Cursor and pi report it); 0 from a host that reports
+    /// none (Codex, Gemini, Antigravity, Muse Code).
+    cache_write: i64,
     output: i64,
     model: String,
     requests: Option<Vec<Value>>,
@@ -151,6 +154,7 @@ impl Meter {
             }
             self.input += count(&u["input"]);
             self.cached += count(&u["cached"]);
+            self.cache_write += count(&u["cache_write"]);
             self.output += count(&u["output"]);
             if let Some(more) = u["requests"].as_array() {
                 let requests = self.requests.get_or_insert_with(Vec::new);
@@ -184,6 +188,7 @@ impl Meter {
         billing: &str,
     ) -> Option<Map<String, Value>> {
         let cached = self.cached.min(self.input);
+        let cache_write = self.cache_write.min(self.input - cached);
         if !self.used() {
             return None;
         }
@@ -194,8 +199,12 @@ impl Meter {
                 model
             };
         let mut m = Map::new();
-        m.insert("input_tokens".into(), json!(self.input - cached));
+        m.insert(
+            "input_tokens".into(),
+            json!(self.input - cached - cache_write),
+        );
         m.insert("cached_tokens".into(), json!(cached));
+        m.insert("cache_write_tokens".into(), json!(cache_write));
         m.insert("output_tokens".into(), json!(self.output));
         m.insert(
             "model".into(),
@@ -214,8 +223,8 @@ impl Meter {
 }
 
 /// A segment's usage as this server takes it (`feature`: what the server said it takes, follow::feature): without
-/// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count (an older server
-/// refuses either).
+/// `usage_requests` no per-request list, without `usage_request_main` no request's fourth count, without
+/// `usage_cache_writes` no `cache_write_tokens`, counted in `input_tokens` as before (an older server refuses each).
 fn served(
     meter: &Meter,
     model: &str,
@@ -224,6 +233,14 @@ fn served(
     feature: impl Fn(&str) -> bool,
 ) -> Option<Map<String, Value>> {
     let mut part = meter.report(model, runtime, billing)?;
+    if !feature("usage_cache_writes") {
+        let writes = part
+            .remove("cache_write_tokens")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+        let input = part["input_tokens"].as_i64().unwrap_or(0);
+        part.insert("input_tokens".into(), json!(input + writes));
+    }
     if !feature("usage_requests") {
         part.remove("requests");
     } else if !feature("usage_request_main") {
@@ -7452,7 +7469,42 @@ for line in sys.stdin:
             ),
             (Some(0), Some(15), Some(5))
         );
+        assert_eq!(
+            r["cache_write_tokens"],
+            json!(0),
+            "a host with no cache writes reports 0"
+        );
         assert!(r.get("requests").is_none());
+    }
+
+    #[test]
+    fn meter_reports_cache_writes_apart_from_input() {
+        let mut m = Meter::default();
+        m.add(&json!({"usage": {"input": 3010, "cached": 4, "cache_write": 3000, "output": 3}}));
+        m.add(&json!({"usage": {"input": 100, "cached": 20, "cache_write": "50", "output": 2}}));
+        let r = m.report("m", "claude", "api").unwrap();
+        assert_eq!(
+            (
+                r["input_tokens"].as_i64(),
+                r["cached_tokens"].as_i64(),
+                r["cache_write_tokens"].as_i64(),
+                r["output_tokens"].as_i64()
+            ),
+            (Some(36), Some(24), Some(3050), Some(5))
+        );
+        let server = |takes: &'static [&'static str]| move |name: &str| takes.contains(&name);
+        let current = served(&m, "m", "claude", "api", server(&["usage_cache_writes"])).unwrap();
+        assert_eq!(
+            (&current["input_tokens"], &current["cache_write_tokens"]),
+            (&json!(36), &json!(3050))
+        );
+        let older = served(&m, "m", "claude", "api", server(&[])).unwrap();
+        assert_eq!(
+            older["input_tokens"],
+            json!(3086),
+            "an older server counts them as input"
+        );
+        assert!(older.get("cache_write_tokens").is_none(), "{older:?}");
     }
 
     #[test]

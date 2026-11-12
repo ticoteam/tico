@@ -1580,7 +1580,8 @@ _TOKEN_CACHE = {}  # (database, threshold) -> (monotonic time, answer)
 
 def _token_heavy(c, threshold):
     """(bot, tokens) for bots whose uncached input tokens passed `threshold` in the last day. A run records
-    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count.
+    `input_tokens` without its cache reads (runner-rs/src/execute.rs), so cache reads, which are cheap, do not count;
+    cache writes (`cache_write_tokens`, apart from input since they were counted apart) do.
     It reads the measured segments (usage_facts, indexed on `started_at`); the sum still visits every segment of the day,
     so one answer serves every tab's Health poll for five minutes."""
     if not threshold or threshold <= 0:
@@ -1595,8 +1596,8 @@ def _token_heavy(c, threshold):
     answer = [
         (r["bot"], r["n"])
         for r in c.execute(
-            "SELECT bot_id AS bot, sum(input_tokens) AS n FROM usage_facts WHERE source='estimate' AND started_at>=? "
-            "GROUP BY bot_id HAVING sum(input_tokens)>? ORDER BY sum(input_tokens) DESC",
+            "SELECT bot_id AS bot, sum(input_tokens + coalesce(cache_write_tokens, 0)) AS n FROM usage_facts "
+            "WHERE source='estimate' AND started_at>=? GROUP BY bot_id HAVING n>? ORDER BY n DESC",
             (since, threshold),
         )
     ]

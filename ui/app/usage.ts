@@ -7,6 +7,7 @@ interface UseFigures {
   runs: number;
   input_tokens: number;
   cached_tokens: number;
+  cache_write_tokens: number;
   output_tokens: number;
   est_cost_usd: number | null;
   subscription_equiv_usd: number;
@@ -119,7 +120,9 @@ function useCount(n: number | null | undefined): string {
   const v = n / size;
   return v.toFixed(v < 10 ? 2 : 1).replace(/\.?0+$/, '') + unit;
 }
-const useTokens = (r: UseFigures): number => (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.output_tokens || 0);
+// Cache writes are input too: input_tokens leaves them out since runners count them apart.
+const useTokens = (r: UseFigures): number =>
+  (r.input_tokens || 0) + (r.cached_tokens || 0) + (r.cache_write_tokens || 0) + (r.output_tokens || 0);
 const useSpend = (r: UseFigures): number => (r.est_cost_usd || 0) + (r.subscription_equiv_usd || 0);
 const useRuns = (n: number | null | undefined): string => `${(n || 0).toLocaleString()} run${n === 1 ? '' : 's'}`;
 // Runs on a model whose long prompts cost more, without each request's tokens, were priced at the lower rate.
@@ -321,7 +324,7 @@ async function useDetail(slug: string): Promise<void> {
 // The open bot's days as a CSV, in the units the API returns.
 function useCsv(): void {
   const data = USE?.detail; if (!data) return;
-  const head: (keyof UseDay)[] = ['day', 'runs', 'input_tokens', 'cached_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'];
+  const head: (keyof UseDay)[] = ['day', 'runs', 'input_tokens', 'cached_tokens', 'cache_write_tokens', 'output_tokens', 'est_cost_usd', 'subscription_equiv_usd'];
   const cell = (v: unknown): string => v == null ? '' : String(v);
   const text = [head.join(','), ...(data.daily || []).map(d => head.map(k => cell(d[k])).join(','))].join('\n') + '\n';
   const link = document.createElement('a');

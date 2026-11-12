@@ -60,12 +60,14 @@ LOW = (
 SUMS = f"""count(DISTINCT t.id) AS runs,
   sum(coalesce(t.input_tokens, 0)) AS input_tokens,
   sum(coalesce(t.cached_tokens, 0)) AS cached_tokens,
+  sum(coalesce(t.cache_write_tokens, 0)) AS cache_write_tokens,
   sum(coalesce(t.output_tokens, 0)) AS output_tokens,
   sum(CASE WHEN t.billing = 'subscription' OR t.usage_reason IS NOT NULL THEN 0 ELSE coalesce(t.est_cost_usd, 0) END) AS api_usd,
   sum(CASE WHEN t.billing = 'subscription' AND t.usage_reason IS NULL THEN coalesce(t.est_cost_usd, 0) ELSE 0 END) AS subscription_usd,
   count(DISTINCT CASE WHEN coalesce(t.billing, 'api') != 'subscription' AND t.est_cost_usd IS NOT NULL AND t.usage_reason IS NULL THEN t.id END) AS api_priced,
   count(DISTINCT CASE WHEN coalesce(t.billing, 'api') != 'subscription' AND (t.usage_reason IS NOT NULL OR (t.est_cost_usd IS NULL
-            AND coalesce(t.input_tokens, 0) + coalesce(t.cached_tokens, 0) + coalesce(t.output_tokens, 0) > 0))
+            AND coalesce(t.input_tokens, 0) + coalesce(t.cached_tokens, 0) + coalesce(t.cache_write_tokens, 0)
+              + coalesce(t.output_tokens, 0) > 0))
        THEN t.id END) AS api_unpriced,
   count(DISTINCT CASE WHEN t.est_cost_usd IS NOT NULL AND t.usage_reason IS NULL AND {LOW} THEN t.id END) AS low_priced"""
 ROUTINE_JOIN = "LEFT JOIN schedule_occurrences o ON o.task_id = t.task_id LEFT JOIN schedules s ON s.id = o.schedule_id"
@@ -73,6 +75,7 @@ EMPTY_DAY = {
     "runs": 0,
     "input_tokens": 0,
     "cached_tokens": 0,
+    "cache_write_tokens": 0,
     "output_tokens": 0,
     "est_cost_usd": 0.0,
     "subscription_equiv_usd": 0.0,
@@ -93,6 +96,7 @@ def figures(row):
         "runs": row["runs"],
         "input_tokens": row["input_tokens"],
         "cached_tokens": row["cached_tokens"],
+        "cache_write_tokens": row["cache_write_tokens"],
         "output_tokens": row["output_tokens"],
         "est_cost_usd": None if not row["api_priced"] and row["api_unpriced"] else money(row["api_usd"]),
         "subscription_equiv_usd": money(row["subscription_usd"]),
@@ -274,6 +278,7 @@ def install(app, store, auth, mutate, settings):
             "runs",
             "input_tokens",
             "cached_tokens",
+            "cache_write_tokens",
             "output_tokens",
             "api_usd",
             "subscription_usd",
@@ -549,7 +554,7 @@ def install(app, store, auth, mutate, settings):
                 rows.sort(
                     key=lambda r: (
                         -spend(r),
-                        -(r["input_tokens"] + r["cached_tokens"] + r["output_tokens"]),
+                        -(r["input_tokens"] + r["cached_tokens"] + r["cache_write_tokens"] + r["output_tokens"]),
                         -r["runs"],
                     )
                 )

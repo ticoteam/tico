@@ -36,6 +36,7 @@
         "usage": {
           "input": 16440,
           "cached": 10584,
+          "cache_write": 5854,
           "output": 7,
           "requests": [[5856, 10584, 7, 1]]
         },

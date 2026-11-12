@@ -12,13 +12,13 @@ const {unrouted} = require('./support/routes.cts');
 
 declare function useLimits(): void;
 const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString().slice(0, 10);
-const figures = (runs: number, i: number, c: number, o: number, est: number | null, sub = 0) => ({runs, input_tokens: i, cached_tokens: c, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
+const figures = (runs: number, i: number, c: number, o: number, est: number | null, sub = 0, w = 0) => ({runs, input_tokens: i, cached_tokens: c, cache_write_tokens: w, output_tokens: o, est_cost_usd: est, subscription_equiv_usd: sub, unpriced_runs: 0});
 const limit = (daily: number | null, monthly: number | null, percent = 0, blocked: string | null = null) => ({daily_usd: daily, monthly_usd: monthly, own_daily_usd: daily, own_monthly_usd: monthly, percent, blocked, may_edit: true, source: {}});
 // Arriving in the wrong order on purpose.
 const ROWS = [
   {bot: 'sales', name: 'Sales', department: 'Revenue', ...figures(3, 1000, 2000, 500, 0.4), low_estimate_runs: 2, share: 0.05, limit: limit(null, null)},
   {bot: 'support', name: 'Support', department: 'Revenue', ...figures(12, 900000, 2100000, 60000, 6.1, 1.5), share: 0.8, limit: limit(5, 50, 122, 'daily')},
-  {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null), share: 0, limit: limit(null, 20, 85)},
+  {bot: 'inbox', name: 'Inbox', department: null, ...figures(5, 400, 0, 50, null, 0, 100), share: 0, limit: limit(null, 20, 85)},
   {bot: 'assistant', name: 'COO', department: 'Ops', ...figures(4, 5000, 5000, 900, 0, 2.2), share: 0.15, limit: limit(null, null)},
 ];
 // The team's limits: a default, a team cap with the old hour window, a capped group, one bot with limits of its own.
@@ -27,9 +27,9 @@ const LIMITS = {default: {daily_usd: 20, monthly_usd: null, count_subscription: 
          inbox: limit(null, null), coo: limit(null, null)},
   pools: {company: {hourly_usd: 10, per_30m_usd: 4, spent: {hour: 4, '30m': 3.5}, percent: 87},
           groups: {ops: {name: 'Ops', parent: null, daily_usd: 30, spent: {day: 3}}, revenue: {name: 'Revenue', parent: null}}}};
-const total = (rows: {runs: number; est_cost_usd: number | null; subscription_equiv_usd: number; low_estimate_runs?: number}[]) => rows.reduce<{runs: number; est_cost_usd: number; subscription_equiv_usd: number; input_tokens: number; cached_tokens: number; output_tokens: number; unpriced_runs: number; low_estimate_runs: number}>((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
-                                              input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
-                                     {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
+const total = (rows: {runs: number; est_cost_usd: number | null; subscription_equiv_usd: number; low_estimate_runs?: number}[]) => rows.reduce<{runs: number; est_cost_usd: number; subscription_equiv_usd: number; input_tokens: number; cached_tokens: number; cache_write_tokens: number; output_tokens: number; unpriced_runs: number; low_estimate_runs: number}>((t, r) => ({runs: t.runs + r.runs, est_cost_usd: t.est_cost_usd + (r.est_cost_usd || 0), subscription_equiv_usd: t.subscription_equiv_usd + r.subscription_equiv_usd,
+                                              input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: t.low_estimate_runs + (r.low_estimate_runs || 0)}),
+                                     {runs: 0, est_cost_usd: 0, subscription_equiv_usd: 0, input_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, output_tokens: 0, unpriced_runs: 0, low_estimate_runs: 0});
 
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined} as import('playwright').LaunchOptions);
@@ -65,7 +65,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
         if (q.bot) {
           const days = [], from = new Date(q.from + 'T00:00:00Z'), to = new Date(q.to + 'T00:00:00Z');
           for (let d = from, n = 0; d <= to; d = new Date(+d + 864e5), n++)
-            days.push({day: d.toISOString().slice(0, 10), ...figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0)});
+            days.push({day: d.toISOString().slice(0, 10), ...figures(n % 2 ? 2 : 0, 100, 0, 10, n % 3 ? 1 + n : 0, n % 2 ? 0.5 : 0, 5)});
           return json({from: q.from, to: q.to, prices_as_of: '2026-09-29', bot: q.bot, name: 'Support', department: 'Revenue', totals: figures(12, 0, 0, 0, 6.1, 1.5), daily: days,
                        routines: [{routine: 's1', title: 'Morning triage', ...figures(7, 0, 0, 0, 4.2)}, {routine: null, title: 'Other runs', ...figures(5, 0, 0, 0, 1.9, 1.5)}]});
         }
@@ -151,7 +151,7 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     assert.match(await page.locator('.use-row[data-bot=sales] .use-cost').innerText(), /\$0\.40\s*estimate, may be low/);
     assert.match(await page.locator('.use-total').innerText(), /Estimate, may be low: 2 runs on a model that charges more for long prompts/);
     assert.equal((await page.locator('.use-row[data-bot=inbox] .use-cost').innerText()).trim(), '—', 'a model with no price has no cost');
-    assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /450 tokens/);
+    assert.match(await page.locator('.use-row[data-bot=inbox] .use-tok').innerText(), /550 tokens/, 'cache writes count as tokens');
     assert.equal(await page.locator('.use-row[data-bot=support] .use-share i').evaluate(e => e.style.width), '100%');
 
     // The limit cell: the caps, a warning chip near one and a Paused chip at one; a click opens it in Limits.
@@ -238,7 +238,8 @@ const total = (rows: {runs: number; est_cost_usd: number | null; subscription_eq
     const [download] = await Promise.all([page.waitForEvent('download'), support.locator('[data-use-csv]').click()]);
     assert.match(download.suggestedFilename(), /^usage-support-\d{4}-\d\d-\d\d-\d{4}-\d\d-\d\d\.csv$/);
     const csv = fs.readFileSync(await download.path(), 'utf8').trim().split('\n');
-    assert.equal(csv[0], 'day,runs,input_tokens,cached_tokens,output_tokens,est_cost_usd,subscription_equiv_usd');
+    assert.equal(csv[0], 'day,runs,input_tokens,cached_tokens,cache_write_tokens,output_tokens,est_cost_usd,subscription_equiv_usd');
+    assert.match(csv[1]!, /^\d{4}-\d\d-\d\d,\d+,100,0,5,10,/, 'each day carries its cache writes');
     assert.equal(csv.length, 8);
     await support.locator('.use-line').click();
     assert.equal(await support.locator('.use-detail').isHidden(), true);

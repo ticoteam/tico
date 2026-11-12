@@ -333,6 +333,7 @@ class AttemptRow(TypedDict):
     session_why: str | None
     input_tokens: int | None
     cached_tokens: int | None
+    cache_write_tokens: int | None
     output_tokens: int | None
     prompt_tokens: int | None
     usage_model: str | None
@@ -525,6 +526,7 @@ class UsageFactRow(TypedDict):
     billing: str | None
     input_tokens: int
     cached_tokens: int
+    cache_write_tokens: int | None
     output_tokens: int
     cost_nano: int | None
     low_estimate: int | None

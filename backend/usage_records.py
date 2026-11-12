@@ -6,10 +6,11 @@ import json
 # carries 0 tokens and why (usage_reason) or, from before usage was measured, nothing. Costs read back as USD.
 # A run is its attempts row when it has a run record (job_id NULL, or a trigger); the first branch names its columns for callers.
 RUNS = """(SELECT f.run_id AS id,f.bot_id AS bot,f.started_at,f.metered_at AS finished_at,f.task_id,f.input_tokens,
- f.cached_tokens,f.output_tokens,f.model,f.provider,f.cost_nano/1e9 AS est_cost_usd,f.billing,f.runtime,f.harness,f.effort,
+ f.cached_tokens,f.cache_write_tokens,f.output_tokens,f.model,f.provider,f.cost_nano/1e9 AS est_cost_usd,f.billing,f.runtime,f.harness,f.effort,
  f.profile,f.low_estimate AS est_cost_low,NULL AS usage_reason
  FROM usage_facts f WHERE f.source='estimate'
- UNION ALL SELECT t.id,t.bot_id,t.created_at,t.settled_at,t.task_id,t.input_tokens,t.cached_tokens,t.output_tokens,
+ UNION ALL SELECT t.id,t.bot_id,t.created_at,t.settled_at,t.task_id,t.input_tokens,t.cached_tokens,t.cache_write_tokens,
+ t.output_tokens,
  t.usage_model,t.provider,t.est_cost_usd,t.billing,NULL,NULL,NULL,NULL,NULL,t.usage_reason FROM attempts t
  WHERE (t.job_id IS NULL OR t.trigger IS NOT NULL)
  AND NOT EXISTS (SELECT 1 FROM usage_facts f WHERE f.run_id=t.id AND f.source='estimate'))"""
