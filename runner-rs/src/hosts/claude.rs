@@ -662,11 +662,6 @@ impl ClaudeHost {
             .map(|(_, u)| u)
     }
 
-    #[cfg(test)]
-    pub(crate) fn pretend_turn(&self, thread: &str, turn: &str) {
-        self.inner().turn = Some((thread.into(), turn.into()));
-    }
-
     pub fn start_thread(&self, settings: &Settings) -> String {
         let id = uuid::Uuid::new_v4().to_string();
         self.inner().threads.insert(

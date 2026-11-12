@@ -330,7 +330,7 @@ fn neutralize_repositories(
     ca: Option<String>,
 ) -> std::io::Result<()> {
     use crate::gitcred::push_config;
-    let runner = |name: &str| std::env::var(name).ok().filter(|v| !v.is_empty());
+    let runner = supervisor_var;
     // An empty http.proxy turns every proxy off, the turn environment's included.
     let proxy = proxy
         .or_else(|| runner("HTTPS_PROXY"))
@@ -460,6 +460,15 @@ fn neutralize_repositories(
         push_config(env, "protocol.file.allow", "never");
     }
     Ok(())
+}
+
+/// One of the supervisor's own proxy or CA variables, when set (a test sets its own, tests::SUPERVISOR_ENV).
+fn supervisor_var(name: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(env) = tests::SUPERVISOR_ENV.with(|e| e.borrow().clone()) {
+        return env.get(name).filter(|v| !v.is_empty()).cloned();
+    }
+    std::env::var(name).ok().filter(|v| !v.is_empty())
 }
 
 /// Whether a `url.<base>.insteadOf` prefix would match a URL on the GitHub host (TICO_GITHUB_HOST), in any form.
@@ -640,6 +649,32 @@ mod tests {
     use super::*;
     use std::io::Write;
 
+    thread_local! {
+        /// The supervisor's proxy and CA variables as this test sets them (`supervisor_var`), in place of the
+        /// process environment the test happens to run in. Each #[test] runs on a thread of its own.
+        pub(super) static SUPERVISOR_ENV: std::cell::RefCell<Option<Env>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// Runs the supervisor's side of a test with exactly `vars` as its proxy and CA settings; cleared when dropped.
+    struct Supervisor;
+
+    impl Supervisor {
+        fn with(vars: &[(&str, &str)]) -> Self {
+            let env: Env = vars
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            SUPERVISOR_ENV.with(|e| *e.borrow_mut() = Some(env));
+            Supervisor
+        }
+    }
+
+    impl Drop for Supervisor {
+        fn drop(&mut self) {
+            SUPERVISOR_ENV.with(|e| e.borrow_mut().take());
+        }
+    }
+
     #[test]
     fn a_turn_users_git_runs_no_repository_program_and_reads_no_wider_trust() {
         let dir =
@@ -721,6 +756,341 @@ mod tests {
             "the turn's overrides break plain git diff"
         );
         assert!(!mark.exists(), "the repository's hook ran");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_sibling_writable_gitconfig_gives_the_turn_user_no_proxy_or_ca() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("tico-turn-proxy-{}", uuid::Uuid::new_v4().simple()));
+        let home = dir.join("home");
+        std::fs::create_dir_all(home.join(".config/git")).unwrap();
+        // Any bot can write the shared HOME (1770), so these are a sibling's: a proxy it runs and a CA bundle it made.
+        let hostile = "[http]\n\tproxy = http://127.0.0.1:9\n\tsslCAInfo = /home/runner/sibling-ca.pem\n[http \"https://github.com/\"]\n\tproxy = http://127.0.0.1:9\n[user]\n\tname = Sibling\n";
+        let system = dir.join("gitconfig");
+        for file in [
+            home.join(".gitconfig"),
+            home.join(".config/git/config"),
+            system.clone(),
+        ] {
+            std::fs::write(&file, hostile).unwrap();
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o664)).unwrap();
+        }
+        let mut env = Env::new();
+        env.insert("HOME".into(), home.display().to_string());
+        env.insert(
+            "XDG_CONFIG_HOME".into(),
+            home.join(".config").display().to_string(),
+        );
+        env.insert("GIT_CONFIG_SYSTEM".into(), system.display().to_string()); // not root's, so not trusted either
+        env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        env.insert("GIT_AUTHOR_NAME".into(), "Ops Bot".into());
+        env.insert("GIT_AUTHOR_EMAIL".into(), "ops@bots.invalid".into());
+        // The supervisor's own settings are the test's, not whatever proxy or CA the machine running it has.
+        let supervisor_ca = dir.join("supervisor-ca.pem");
+        std::fs::write(&supervisor_ca, "synthetic supervisor CA\n").unwrap();
+        let supervisor_certs = dir.join("supervisor-certs");
+        std::fs::create_dir_all(&supervisor_certs).unwrap();
+        let (ca, certs) = (
+            supervisor_ca.display().to_string(),
+            supervisor_certs.display().to_string(),
+        );
+        let supervisor = Supervisor::with(&[("SSL_CERT_FILE", &ca), ("SSL_CERT_DIR", &certs)]);
+        let before = env.clone();
+        let global = dir.join("turn.gitconfig");
+        for_turn_user(&mut env, &[dir.join("repo")], &global, None).unwrap();
+        let written = std::fs::read_to_string(&global).unwrap();
+        assert!(
+            !written.to_lowercase().contains("proxy")
+                && !written.to_lowercase().contains("sslcainfo")
+                && !written.contains("Sibling"),
+            "{written}"
+        );
+        assert!(
+            written.contains("Ops Bot") && written.contains("ops@bots.invalid"),
+            "{written}"
+        );
+        let listed = std::process::Command::new("git")
+            .args(["config", "--get-regexp", "^http\\."])
+            .current_dir(&dir)
+            .env_clear()
+            .envs(&env)
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&listed.stdout);
+        assert!(
+            !listed.contains("127.0.0.1") && !listed.contains("sibling-ca"),
+            "the turn user's git sees a sibling's http settings: {listed}"
+        );
+        assert_eq!(
+            (
+                env["GIT_SSL_CAINFO"].as_str(),
+                env["GIT_SSL_CAPATH"].as_str()
+            ),
+            (ca.as_str(), certs.as_str())
+        );
+        // A proxy the supervisor itself runs with is the one the turn's git routes through, never the sibling's.
+        drop(supervisor);
+        let trusted = "http://proxy.supervisor.invalid:3128";
+        let _supervisor = Supervisor::with(&[
+            ("HTTPS_PROXY", trusted),
+            ("SSL_CERT_FILE", &ca),
+            ("SSL_CERT_DIR", &certs),
+        ]);
+        let mut routed = before;
+        for_turn_user(
+            &mut routed,
+            &[dir.join("repo")],
+            &dir.join("routed.gitconfig"),
+            None,
+        )
+        .unwrap();
+        for url in [
+            "https://github.com/o/r.git/info/refs",
+            "https://example.invalid/x",
+        ] {
+            let proxy = std::process::Command::new("git")
+                .args(["config", "--get-urlmatch", "http.proxy", url])
+                .current_dir(&dir)
+                .env_clear()
+                .envs(&routed)
+                .output()
+                .unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&proxy.stdout).trim(),
+                trusted,
+                "{url}"
+            );
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_siblings_repository_config_runs_nothing_and_routes_nothing_for_the_turn_user() {
+        let dir = std::env::temp_dir().join(format!(
+            "tico-turn-repo-config-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let (repo, remote) = (dir.join("repo"), dir.join("remote.git"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut env = Env::new();
+        env.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        env.insert("HOME".into(), dir.display().to_string());
+        // The supervisor runs with no proxy and its own CA here, whatever the machine running the test has: an empty
+        // http.proxy is then what turns every proxy off.
+        let supervisor_ca = dir.join("supervisor-ca.pem");
+        std::fs::write(&supervisor_ca, "synthetic supervisor CA\n").unwrap();
+        let _supervisor = Supervisor::with(&[
+            ("SSL_CERT_FILE", supervisor_ca.to_str().unwrap()),
+            ("SSL_CERT_DIR", dir.to_str().unwrap()),
+        ]);
+        let git = |env: &Env, args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .env_clear()
+                .envs(env)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        };
+        let plain = |args: &[&str]| {
+            let mut e = env.clone();
+            e.insert("GIT_CONFIG_NOSYSTEM".into(), "1".into());
+            e.insert("GIT_CONFIG_GLOBAL".into(), "/dev/null".into());
+            git(&e, args)
+        };
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q"])
+            .arg(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        assert!(std::process::Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(&remote)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap()
+            .status
+            .success());
+        std::fs::write(repo.join("f.txt"), "one\n").unwrap();
+        std::fs::write(repo.join(".gitattributes"), "* filter=evil diff=evil\n").unwrap();
+        assert!(
+            plain(&["-c", "user.name=t", "-c", "user.email=t@t", "add", "."])
+                .status
+                .success()
+        );
+        assert!(plain(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "one"
+        ])
+        .status
+        .success());
+        // What a sibling bot, which runs as the checkout's owner, plants in the checkout's own config before the turn.
+        let mark = |what: &str| dir.join(format!("ran-{what}"));
+        let touch = |what: &str| format!("touch '{}'", mark(what).display());
+        let planted = format!(
+            "[filter \"evil\"]\n\tclean = {}\n\tsmudge = {}\n\trequired = true\n[diff \"evil\"]\n\ttextconv = {}\n\tcommand = {}\n\
+             [commit]\n\tgpgSign = true\n[gpg]\n\tprogram = {}\n[credential \"https://github.com\"]\n\thelper = !{}\n\
+             [http]\n\tproxy = http://127.0.0.1:9\n\tsslVerify = false\n[http \"https://github.com/\"]\n\tproxy = http://127.0.0.1:9\n\tsslVerify = false\n\
+             [remote \"origin\"]\n\turl = {}\n\tproxy = http://127.0.0.1:9\n[alias]\n\tst = !{}\n",
+            touch("clean"), touch("smudge"), touch("textconv"), touch("diff"), touch("gpg"), touch("credential"), remote.display(), touch("alias"));
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(repo.join(".git/config"))
+            .unwrap()
+            .write_all(planted.as_bytes())
+            .unwrap();
+        let global = dir.join("turn.gitconfig");
+        let mut turn = env.clone();
+        for_turn_user(&mut turn, &[repo.clone()], &global, None).unwrap();
+        // ... and changes during the turn: a key with a fixed name stays overridden.
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(repo.join(".git/config"))
+            .unwrap()
+            .write_all(
+                format!(
+                    "[core]\n\tsshCommand = {}\n\tpager = {}\n",
+                    touch("ssh"),
+                    touch("pager")
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        std::fs::write(repo.join("f.txt"), "two\n").unwrap();
+        for args in [
+            &["add", "f.txt"][..],
+            &["diff", "HEAD"],
+            &["log", "-p", "-1"],
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "commit",
+                "-qm",
+                "two",
+            ],
+            &["ls-remote", "ssh://example.invalid/x"],
+            &["st"],
+            &["push", "-q", "origin", "HEAD:refs/heads/main"],
+        ] {
+            let _ = git(&turn, args);
+        }
+        let _ = std::fs::remove_file(repo.join("f.txt"));
+        let _ = git(&turn, &["checkout-index", "-f", "f.txt"]);
+        let filled = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["credential", "fill"])
+            .env_clear()
+            .envs(&turn)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        {
+            let mut filled = filled;
+            filled
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(b"protocol=https\nhost=github.com\npath=o/r.git\n\n")
+                .unwrap();
+            let _ = filled.wait();
+        }
+        for what in [
+            "clean",
+            "smudge",
+            "textconv",
+            "diff",
+            "gpg",
+            "credential",
+            "ssh",
+            "pager",
+            "alias",
+        ] {
+            assert!(
+                !mark(what).exists(),
+                "the checkout's config ran its {what} program as the turn user"
+            );
+        }
+        let get = |args: &[&str]| {
+            String::from_utf8_lossy(&git(&turn, args).stdout)
+                .trim()
+                .to_string()
+        };
+        for url in [
+            "https://github.com/o/r.git/info/refs",
+            "https://example.invalid/x",
+        ] {
+            assert_eq!(
+                get(&["config", "--get-urlmatch", "http.proxy", url]),
+                "",
+                "{url}"
+            );
+            assert_eq!(
+                get(&[
+                    "config",
+                    "--type=bool",
+                    "--get-urlmatch",
+                    "http.sslverify",
+                    url
+                ]),
+                "true",
+                "{url}"
+            );
+        }
+        assert_eq!(get(&["config", "--get", "remote.origin.proxy"]), "");
+        assert_eq!(
+            get(&["config", "--get", "core.sshcommand"]),
+            "ssh -F /dev/null"
+        );
+        // Neither an include nor a remote's own upload-pack can be overridden afterwards.
+        let mut uploads = env.clone();
+        plain(&["config", "remote.origin.uploadpack", &touch("upload")]);
+        for_turn_user(
+            &mut uploads,
+            &[repo.clone()],
+            &dir.join("uploads.gitconfig"),
+            None,
+        )
+        .unwrap();
+        let _ = git(&uploads, &["fetch", "-q", "origin"]);
+        assert!(
+            !mark("upload").exists(),
+            "a remote's upload-pack ran as the turn user"
+        );
+        plain(&[
+            "config",
+            "include.path",
+            &dir.join("sibling.gitconfig").display().to_string(),
+        ]);
+        let refused = for_turn_user(
+            &mut env.clone(),
+            &[repo.clone()],
+            &dir.join("included.gitconfig"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("includes other config"),
+            "{refused}"
+        );
         std::fs::remove_dir_all(dir).unwrap();
     }
 

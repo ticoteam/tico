@@ -94,6 +94,19 @@ def test_me_follows_is_whether_a_message_naming_nobody_reaches_you(api):
     assert delivery(api, say(api, thread["id"], "Budget is out")["id"], "human:ben")["reason"] == "follower"
 
 
+def test_a_further_delivery_over_the_cap_is_not_delivered_and_its_author_is_told(
+    api, monkeypatch, inside_one_half_hour
+):
+    monkeypatch.setattr(H, "UNSOLICITED_PER_DAY", 1)
+    thread = new_thread(api, audience="company")
+    first = bot_post(api, "bot:ops", thread["id"], "One for @ben")
+    assert delivery(api, first["id"], "human:ben")["unsolicited"] == 1
+    second = bot_post(api, "bot:ops", thread["id"], "Two for @ben")
+    assert delivery(api, second["id"], "human:ben") is None
+    assert {"rule": "unsolicited_cap", "actor": "human:ben"} in second["warnings"]
+    assert second["body"] == "Two for @ben"  # the message itself stays in the thread
+
+
 # ----------------------------------------------------------------------------- the unsolicited cap (19)
 
 

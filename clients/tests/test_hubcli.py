@@ -27,7 +27,9 @@ HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
 
 
 def run_hub(*args, env=None):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("HUB_")}
+    # The child is told who it is only by `env`: a person's own TICO_PROFILE in the shell that runs the
+    # suite would otherwise be refused in a bot's turn before the request is ever sent.
+    base = {k: v for k, v in os.environ.items() if not k.startswith(("HUB_", "TICO_"))}
     done = subprocess.run(
         [sys.executable, str(HUB), *args], env={**base, **(env or {})}, capture_output=True, text=True, timeout=60
     )
@@ -593,6 +595,190 @@ class AgainstAStub(unittest.TestCase):
 
     def setUp(self):
         Stub.seen.clear()
+
+    def test_whoami_is_the_api_identity_under_the_turn_token(self):
+        code, out = run_hub("whoami", env=self.env)
+        self.assertEqual(code, 0)
+        self.assertEqual(out["actor"], "bot:assistant")
+        self.assertEqual(Stub.seen[0][2], "Bearer turn-token")
+
+    def test_task_update_sends_the_version_it_was_given_and_never_reads_one(self):
+        code, out = run_hub(
+            "task", "update", "T1", "--title", "Ship it", "-m", "renamed", "--version", "2", env=self.env
+        )
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out["title"], "Ship it")
+        self.assertNotIn(("GET", "/api/v2/tasks/T1"), [(m, p) for m, p, _, _ in Stub.seen])
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST")
+        self.assertEqual(posted, {"version": 2, "title": "Ship it", "note": "renamed"})
+
+    def test_a_change_without_a_version_says_to_add_the_version_and_sends_nothing(self):
+        from clients.hubtools import version_needed
+
+        for argv in (["task", "update", "T1", "--title", "x"], ["task", "done", "T1", "-m", "x"]):
+            Stub.seen.clear()
+            code, out = run_hub(*argv, env=self.env)
+            self.assertEqual(code, 64, out)  # usage (docs/cli.md)
+            self.assertEqual((out["error"], out["detail"]), ("usage", version_needed("T1")))
+            self.assertIn("--version N", out["detail"])
+            self.assertFalse([s for s in Stub.seen if s[0] == "POST"])
+
+    def test_a_refusal_prints_what_is_missing_and_the_commands_allowed_next(self):
+        code, out = run_hub("task", "move", "T1", "next", "--version", "3", env=self.env)
+        self.assertEqual(code, 2, out)
+        self.assertEqual(
+            out["_stdout"].strip().splitlines(),
+            [
+                "Not moved. Not met: Owner says done.",
+                "Missing:",
+                "  Owner says done",
+                "You can:",
+                '  tico task move T1 next -m "why" --version 3',
+                '  tico task close T1 -m "why" --version 3',
+            ],
+        )
+
+    def test_task_list_still_filters_closed_tasks(self):
+        code, out = run_hub("task", "list", "--status", "closed", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out, [{"id": "T1", "status": "closed"}])
+        self.assertEqual(
+            [(m, p) for m, p, _, _ in Stub.seen], [("GET", "/api/v2/me"), ("GET", "/api/v2/tasks?status=closed")]
+        )
+
+    def test_task_child_on_a_check_model_is_the_bots_own_subtask(self):
+        code, out = run_hub(
+            "task",
+            "child",
+            "T1",
+            "--check-model",
+            "grok",
+            "--role",
+            "review",
+            "--title",
+            "Review PR 700",
+            "--body",
+            "https://github.com/ticoteam/tico/pull/700",
+            env=self.env,
+        )
+        self.assertEqual(code, 0, out)
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks")
+        self.assertEqual(
+            (posted["owner"], posted["check_model"], posted["check_role"], posted["parent"]),
+            ("bot:assistant", "grok", "review", "T1"),
+        )
+        # With no value, the server picks the company's check model.
+        code, out = run_hub(
+            "task", "child", "T1", "--check-model", "--role", "review", "--title", "Review PR 701", env=self.env
+        )
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks"][-1]
+        self.assertEqual((posted["owner"], posted["check_model"]), ("bot:assistant", "auto"))
+
+    def test_tool_add_dry_run_is_checked_by_the_server_not_the_task_dry_run(self):
+        code, out = run_hub(
+            "tool",
+            "add",
+            "writer",
+            "notion",
+            "--can",
+            "read",
+            "--mcp-url",
+            "https://mcp.notion.example/mcp",
+            "--dry-run",
+            env=self.env,
+        )
+        self.assertEqual(code, 0, out)
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/bots/writer/tools")
+        self.assertTrue(posted["dry_run"])
+        self.assertEqual(posted["mcp"]["url"], "https://mcp.notion.example/mcp")
+
+    def test_support_report_asks_an_ok_on_the_exact_message_and_send_names_it(self):
+        import hashlib
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp) / "report.md"
+            report.write_bytes(b"tico task update fails.\r\nError: refused (version)\r\n\r\n")
+            argv = ("support", "report", "--file", str(report), "--no-ids", "--task", "T9")
+            code, out = run_hub(*argv, env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual((out["ok"], out["task_id"]), ("r-1", "T9"))
+        self.assertIn("tico support send --ok r-1", out["next"])
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/reports")
+        message = "tico task update fails.\nError: refused (version)"
+        self.assertEqual(
+            posted,
+            {
+                "task_id": "T9",
+                "payload": {
+                    "message": message,
+                    "content_sha256": hashlib.sha256(message.encode()).hexdigest(),
+                    "include_ids": False,
+                },
+            },
+        )
+        code, out = run_hub("support", "send", "--ok", "r-1", env=self.env)
+        self.assertEqual((code, out["ticket"]["id"]), (0, "sup_1"))
+        posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
+        self.assertEqual(posted, {"approval": "r-1"})
+
+    def test_a_public_reply_names_the_ok_a_person_gave_and_the_old_approval_flag_is_gone(self):
+        def last(path):
+            return [b for m, p, _, b in Stub.seen if m == "POST" and p == path][-1]
+
+        code, out = run_hub("task", "comment", "T1", "Fixed in 1.2", "--public", "--ok", "r-7", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments")["approval_id"], "r-7")
+        code, out = run_hub("task", "comment-edit", "T1", "m-1", "Fixed in 1.2.1", "--ok", "r-8", env=self.env)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(last("/api/v2/tasks/T1/comments/m-1"), {"text": "Fixed in 1.2.1", "approval_id": "r-8"})
+        for argv in (["comment", "T1", "x"], ["comment-edit", "T1", "m-1", "x"]):
+            with self.assertRaises(SystemExit):
+                hubcli.parser().parse_args(["task", *argv, "--approval-id", "a-1"])
+
+    def test_an_ok_bound_to_a_subject_is_asked_on_the_task_and_used_once_by_its_id(self):
+        content = '{"project":"launch","usd":"10.00"}'
+        argv = ("task", "ask", "T1", "Raise it?", "--to", "human:ana", "--for", "budget_raise:launch")
+        code, out = run_hub(*argv, "--content", content, "--version", "3", env=self.env)
+        self.assertEqual(code, 0, out)
+        posted = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/tasks/T1/oks"]
+        self.assertEqual(
+            posted,
+            [
+                {
+                    "to": "human:ana",
+                    "line": "Raise it?",
+                    "version": 3,
+                    "subject": "budget_raise:launch",
+                    "content": {"project": "launch", "usd": "10.00"},
+                }
+            ],
+        )
+        code, out = run_hub("ok", "use", "r-1", "--for", "budget_raise:launch", "--content", content, env=self.env)
+        self.assertEqual(code, 0, out)
+        used = [b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/oks/r-1/use"]
+        self.assertEqual(used, [{"subject": "budget_raise:launch", "content": {"project": "launch", "usd": "10.00"}}])
+        code, _ = run_hub(*argv, "--choices", "a,b", "--content", content, "--version", "3", env=self.env)
+        self.assertNotEqual(code, 0)  # a bound OK is never a question with choices
+
+    def test_task_snooze_sends_its_date_why_and_version(self):
+        def last(method, path):
+            return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+
+        argv = ("task", "snooze", "T1", "--until", "2026-11-14", "-m", "Vendor replies by Nov 14", "--version", "3")
+        self.assertEqual(run_hub(*argv, env=self.env)[0], 0)
+        self.assertEqual(
+            last("POST", "/api/v2/tasks/T1/snooze"),
+            {"version": 3, "until": "2026-11-14", "why": "Vendor replies by Nov 14"},
+        )
+        self.assertEqual(run_hub("task", "snooze", "T1", "-m", "On ice", "--version", "3", env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"version": 3, "why": "On ice"})
+
+    def test_a_refusal_from_the_api_exits_two(self):
+        code, out = run_hub("message", "send", "nobody", "hello", env=self.env)
+        self.assertEqual(code, 2)
+        self.assertEqual(out["error"], "refused")
+        self.assertIn("roster", out["detail"])
 
 
 CARD = """template: specialist

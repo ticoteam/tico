@@ -16,6 +16,8 @@ from backend.tests.helpers.slack_gateway import gateway, hub  # noqa: F401
 from clients import judge as J
 from backend.tests.helpers.judge_spend import DOWN, spend
 
+pytestmark = pytest.mark.usefixtures("inside_one_half_hour")
+
 
 def priced(settings, rate_in=0.5, rate_out=2.0):
     settings.decisions_jev_usd_per_mtok_input, settings.decisions_jev_usd_per_mtok_output = rate_in, rate_out
@@ -110,6 +112,48 @@ def test_the_audit_keeps_model_tokens_latency_and_cost_and_says_when_jev_failed(
     assert detail["error"] == "unavailable" and "answers" not in detail and "fallback" not in detail
 
 
+def test_at_the_monthly_cap_a_call_is_refused_before_any_model_is_asked(api, monkeypatch):
+    engine = fake(api)
+    priced(api.app.state.store.settings, 0, 0)  # Jev unpriced: each call holds the dearest list price
+    api.app.state.store.settings.decisions_monthly_usd = 50.0
+    spend(api, 60.0, ts="2000-01-15T00:00:00Z")  # an older month never counts
+    spend(api, 30.0)
+    spend(api, 19.7, actor="human:ben")  # every actor's calls count: the cap is the team's
+    post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})  # its most (~$0.21) fits
+    assert len(engine.calls) == 1
+    shown = get(api, "judge")
+    assert shown["monthly_usd"] == 50.0 and shown["spent_this_month_usd"] == pytest.approx(49.7, abs=0.001)
+
+    spend(api, 0.2)  # under the cap, but a call's most no longer fits
+    result = api.post("/api/v2/decisions", json={"state": {"team": "Acme"}, "questions": QUESTIONS}, headers=headers())
+    assert result.status_code == 429 and result.json()["error"]["code"] == "spend_cap"
+    assert len(engine.calls) == 1, "Jev is not asked at the cap"
+
+    # The callers that ask through the hub (mail triage, "already covered?") carry on as if Decide were off.
+    from connectors.mail import judge as MJ
+
+    from clients.tico import APIError
+
+    class Client:
+        def post(self, path, body):
+            response = api.post("/api/v2/" + path, json=body, headers=headers())
+            if response.status_code != 200:
+                error = response.json()["error"]
+                raise APIError(error["code"], error.get("detail") or error.get("message") or "", response.status_code)
+            return response.json()
+
+    chosen = J.load_set("mail-triage")
+    judged = MJ.judge_message(
+        {"id": "m1", "subject": "Invoice", "from": "a@b.example"}, chosen, J.through_hub(Client())
+    )
+    assert judged["error"] == "spend_cap"
+
+    # A cap of 0 is no cap.
+    api.app.state.store.settings.decisions_monthly_usd = 0
+    post(api, "decisions", {"state": {"team": "Acme"}, "questions": QUESTIONS})
+    assert len(engine.calls) == 2
+
+
 # ----------------------------------------------------------------------------- the monthly cap
 def test_from_env_reads_the_monthly_cap_and_jevs_price(monkeypatch, tmp_path):
     monkeypatch.setenv("TICO_DB", str(tmp_path / "hub.db"))
@@ -139,6 +183,205 @@ class Paid:
     def __call__(self, state, questions, label=None):
         self.calls.append(questions)
         return {**self.inner(state, questions, label), "usage": {"input_tokens": 10, "cost": self.usd}}
+
+
+def test_a_batch_stops_calling_once_its_own_answers_reach_the_cap(api, monkeypatch):
+    """One engine serves a whole batch, so the cap is counted call by call, not only when the engine is made."""
+    from backend import learnings as L
+    from backend.listening import judge_pending
+    from backend.tests.helpers.listening import FakeJudge as Listener, _bots, _post, _token
+
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    spend(api, 0.5)
+    jev = Paid(0.6)  # the first answer takes the month past $1
+    with store.read() as c:
+        engine = B.server_engine(store, c, jev)
+    engine({"team": "Acme"}, QUESTIONS)
+    with pytest.raises(J.JudgeError) as refused:
+        engine({"team": "Acme"}, QUESTIONS)
+    assert refused.value.code == "spend_cap" and len(jev.calls) == 1, "no paid call starts over the cap"
+
+    # Listening: the first post is judged, the rest stay unjudged for after the cap.
+    _bots(api)
+    listening = _token(api, "social-media-manager")
+    post(
+        api,
+        "listening/runs",
+        {
+            "source": "x",
+            "query": "q",
+            "status": "ok",
+            "items": [_post(str(n), f"Creator post {n} [creator]") for n in range(3)],
+        },
+        token=listening,
+    )
+    api.app.state.judge = jev = Paid(0.6, Listener())
+    spend(api, -0.6)  # back to $0.50, so the batch starts
+    out = post(api, "listening/judge", {}, token=listening)
+    assert out["judged"] == 1 and [e["error"] for e in out["errors"]] == ["spend_cap"] and len(jev.calls) == 1
+    with store.read() as c:
+        assert B.spent_this_month(c) == pytest.approx(1.1)
+
+    # Learnings: a night that reaches the cap sends nothing and keeps its cursors, so nothing read is lost.
+    items = [
+        {
+            "key": f"chat:{n}",
+            "source": "chat",
+            "created_at": H.now(),
+            "audience": None,
+            "label": "Chat",
+            "text": f"Invoices go out on Friday {n}.",
+            "author": "human:ana",
+            "ref": {},
+        }
+        for n in range(3)
+    ]
+    team = {"ops": {"profile": "Ops runs invoicing."}}
+    spend(api, -0.6)  # back to $0.50, so the night starts
+    night = Paid(
+        0.6,
+        lambda state, questions, label=None: {
+            "model": "judge-1.13.0",
+            "ms": 5,
+            "answers": {qid: {"type": "noul", "noul": 0.9} for qid in questions},
+        },
+    )
+    monkeypatch.setattr(L, "primary_engine", lambda *args, **kwargs: night)
+    monkeypatch.setattr(L, "WORKERS", 1)
+    monkeypatch.setattr(L, "roster", lambda *args, **kwargs: team)
+    monkeypatch.setattr(L, "collect", lambda *args, **kwargs: (items, 0))
+    with store.transaction() as c:
+        run_id = L.claim(c, "2026-10-12")
+    L.run(store, run_id)
+    with store.read() as c:
+        row = c.execute("SELECT status,detail FROM learning_runs WHERE id=?", (run_id,)).fetchone()
+        assert row["status"] == "capped" and json.loads(row["detail"])["failed"] == {"spend_cap": 2}
+        assert c.execute("SELECT count(*) FROM learning_deliveries").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM learning_cursors").fetchone()[0] == 0, "the cursors did not move"
+        audit = json.loads(
+            c.execute(
+                "SELECT detail FROM events WHERE target=? ORDER BY rowid DESC LIMIT 1", (f"{L.QUESTION_SET}@run",)
+            ).fetchone()[0]
+        )
+        assert audit["calls"] == 1 and audit["cost_usd"] == 0.6, "the call it did make is counted"
+        assert audit["answers"] == [
+            {
+                "learnable": {"type": "noul", "value": 0.9, "confidence": 0.8},
+                "rel_ops": {"type": "noul", "value": 0.9, "confidence": 0.8},
+            }
+        ], "and what it answered"
+    assert len(night.calls) == 1
+    with store.transaction() as c:  # a capped night may be run again
+        c.execute("UPDATE learning_runs SET night=? WHERE id=?", (L.night_of(L.datetime.now(L.timezone.utc)), run_id))
+    assert api.post("/api/v2/learnings/run", json={}, headers=headers()).status_code == 200
+
+
+def test_a_call_in_flight_holds_its_most_against_the_cap_for_every_other_request(api, monkeypatch):
+    """Two requests at once: the second sees what the first may cost while it is still out, not only what is written."""
+    import threading
+
+    store = api.app.state.store
+    store.settings.decisions_monthly_usd = 1.0
+    priced(store.settings, 0, 0)  # Jev unpriced, so a call in flight holds a lot
+    spend(api, 0.6)
+    entered, release = threading.Event(), threading.Event()
+
+    class Slow(Paid):
+        def __call__(self, state, questions, label=None):
+            entered.set()
+            release.wait(5)
+            return super().__call__(state, questions, label)
+
+    slow = Slow(0.05)
+    with store.read() as c:
+        first, second = B.server_engine(store, c, slow), B.server_engine(store, c, Paid(0.05))
+    held = B.reservation(store.settings, [J.MODEL], {"team": "Acme"}, QUESTIONS)
+    assert 0.2 < held < 0.4, "unpriced: held high, but one call still fits under the cap"
+    out = {}
+    thread = threading.Thread(target=lambda: out.update(first({"team": "Acme"}, QUESTIONS, "unpriced")))
+    thread.start()
+    assert entered.wait(5)
+    slow.inner = lambda state, questions, label=None: {"model": "an-unpriced-model", "ms": 1, "answers": {}}
+    with pytest.raises(J.JudgeError) as refused:  # $0.60 written + the first call's most in flight + its own
+        second({"team": "Acme"}, QUESTIONS)
+    assert refused.value.code == "spend_cap"
+    release.set()
+    thread.join(5)
+    assert out["cost_usd"] == 0.05 and B._RESERVED[0] == 0
+    second({"team": "Acme"}, QUESTIONS)  # $0.65 written, nothing in flight: it fits
+    with store.read() as c:
+        assert B.spent_this_month(c) == pytest.approx(0.7)
+        rows = [
+            json.loads(r[0])
+            for r in c.execute("SELECT detail FROM events WHERE action='judge.spend' AND target='unpriced'")
+        ]
+    assert rows == [{"label": "unpriced", "model": "an-unpriced-model", "cost_usd": 0.05}], (
+        "the provider's own cost wins; an unpriced model without one is counted at the ceiling"
+    )
+
+
+@pytest.mark.parametrize("written", [0.009999, 0.0099])
+def test_two_processes_admitted_at_once_pass_the_cap_by_at_most_the_larger_reservation(
+    gateway, hub, monkeypatch, written
+):
+    """QA's repro on the v0.3.58 candidate: cap $0.01 and $0.009999 written; a server_engine call and a Slack
+    Gateway.ask in the gateway's own process (its own meter) both checked before either answer is written; each
+    answers 1000 tokens in, 0 out, on Jev. Each admits a call only if it fits with its own most, so the month ends
+    at most the larger reservation over the cap. Before the fix both were let in at $0.009999: $0.010083 written."""
+    from backend.tests.helpers import slack_gateway as S
+
+    hub.settings.decisions_monthly_usd = 0.01
+    with hub.transaction() as c:
+        H.event(c, "bot:ops", "judge.spend", "mail-triage@1", {"cost_usd": written})
+    jev_usage = {"input_tokens": 1000, "output_tokens": 0}
+    state, held, slack_answered = {"team": "Acme"}, [], []
+    reserve = B.reservation
+    monkeypatch.setattr(B, "reservation", lambda *args: held.append(reserve(*args)) or held[-1])
+
+    class SlackJev(S.CappedJudge):
+        def __call__(self, state, questions, label=None):
+            slack_answered.append(questions)
+            return {**super().__call__(state, questions, label), "model": J.MODEL, "usage": jev_usage}
+
+    gateway._judge = SlackJev({"asks": 0.9, "bot:legal": 0.9})
+
+    def slack_process():
+        """The gateway's container: the same audit, its own in-flight reservations."""
+        real = B._RESERVED
+        monkeypatch.setattr(B, "_RESERVED", [0.0])
+        try:
+            return S.send(gateway, "please review the vendor terms", channel=S.DM, kind="message", user="U2")
+        finally:
+            monkeypatch.setattr(B, "_RESERVED", real)
+
+    def server_jev(state, questions, label=None):
+        out["slack"] = slack_process()  # the Slack call is checked while this one is out
+        return {
+            "model": J.MODEL,
+            "answers": FakeJudge()(state, questions, label)["answers"],
+            "usage": jev_usage,
+            "ms": 1,
+        }
+
+    out = {}
+    with hub.read() as c:
+        engine = B.server_engine(hub, c, server_jev)
+    try:
+        engine(state, QUESTIONS, "server")
+    except J.JudgeError as exc:
+        assert exc.code == "spend_cap"
+        out["slack"] = slack_process()  # the server call never went out; Slack is checked alone
+    with hub.read() as c:
+        spent = B.spent_this_month(c)
+    assert len(held) == 2 and max(held) < 0.0001  # Jev at $0.042 per 1M in: a few hundredths of a cent each
+    assert spent <= 0.01 + max(held), f"${spent} written against a $0.01 cap"
+    if written == 0.009999:  # neither fits with its own most: nothing more is spent
+        assert spent == pytest.approx(written) and slack_answered == []
+        assert out["slack"]["decision"]["routed_by"] == "spend_cap"
+    else:  # both fit: both answer, and the month stays under the cap
+        assert len(slack_answered) == 1 and spent == pytest.approx(written + 2 * 0.000042) and spent <= 0.01
+    assert B._RESERVED[0] == 0
 
 
 class WholeAllowance:
@@ -211,6 +454,30 @@ def test_every_transport_caps_a_metered_drafts_answer_at_what_the_cap_reserves(p
     )
     if provider == "openai":
         assert "max_tokens" not in body, "OpenAI's reasoning models refuse max_tokens"
+
+
+def test_the_server_engine_asks_jev_alone_and_is_off_at_the_cap(api, monkeypatch):
+    store = api.app.state.store
+    jev = FakeJudge()
+    with store.read() as c:
+        engine = B.server_engine(store, c, jev)
+    assert engine.model == J.MODEL
+    assert "cost_usd" in engine({"team": "Acme"}, QUESTIONS) and len(jev.calls) == 1
+    # Jev down or refusing: the caller gets the error, and no other model is asked.
+    for failure in (DOWN, J.JudgeError("invalid", "TypeSafe refused the request", 422)):
+        jev.fail = failure
+        with pytest.raises(J.JudgeError) as failed:
+            engine({"team": "Acme"}, QUESTIONS)
+        assert failed.value.code == failure.code
+    assert len(jev.calls) == 3
+    # No Jev: off, even with a company model's key on the server.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic")
+    with store.read() as c:
+        assert B.server_engine(store, c, None) is None
+    store.settings.decisions_monthly_usd = 1.0
+    spend(api, 1.0)
+    with store.read() as c:
+        assert B.server_engine(store, c, jev) is None
 
 
 # ----------------------------------------------------------------------------- one engine for every caller

@@ -2,6 +2,7 @@
 has spent so far in each window whether capped or not, so the page adds spend up the org chart; a person who leads a group
 lists that group's bots, may edit them, and gets `leads`; and the read stays a handful of statements a bot at 200 bots."""
 
+import pytest
 import contextlib
 import json
 
@@ -11,6 +12,24 @@ from backend.tests.helpers.groups import send
 from backend.tests.helpers.usage_limits import finish, fleet, groups, put, start
 from backend import usage_limits
 from backend import bot_settings as BS
+
+pytestmark = pytest.mark.usefixtures("inside_one_half_hour")
+
+
+def test_every_bot_and_pool_row_says_what_it_spent_in_each_window_capped_or_not(api):
+    r = fleet(api)
+    groups(api, "product")  # ops in Product, under Engineering
+    finish(api, r, start(api, r), 500_000)  # $5, and no limit anywhere
+    put(api, "usage/pools/groups/eng", {"daily_usd": 50})
+    limits = get(api, "usage/limits")
+    ops = limits["bots"]["ops"]
+    assert ops["spent"] == {"30m": 5, "hour": 5, "day": 5, "week": 5, "month": 5}
+    assert ops["day_spent"] is None  # the capped-window fields stay as they were
+    eng, product = limits["pools"]["groups"]["eng"], limits["pools"]["groups"]["product"]
+    assert eng["spent"]["day"] == 5 and eng["day_spent"] == 5 and eng["daily_usd"] == 50
+    assert product["spent"]["month"] == 5 and product["daily_usd"] is None  # a group with no pool still adds up
+    assert limits["pools"]["company"]["spent"]["week"] == 5
+    assert limits["leads"] == []
 
 
 def test_a_person_who_leads_lists_and_may_edit_the_bots_of_what_it_leads(api):

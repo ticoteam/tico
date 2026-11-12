@@ -565,6 +565,39 @@ def test_release_of_an_open_task_never_moves_unsaved_or_unpushed_work(trees):
     assert not path.exists()
 
 
+@pytest.fixture
+def names_that_are_not_utf8(tmp_path):
+    """Skips where the disk refuses such a name (macOS does): the test could not get as far as the code it checks.
+    Linux, where runners and the suite's own checks run, takes them."""
+    try:
+        (tmp_path / os.fsdecode(b'probe-\xff')).write_bytes(b'')
+    except OSError:
+        pytest.skip('this filesystem refuses file names that are not UTF-8')
+
+
+@pytest.mark.slow
+def test_removal_keeps_a_changed_name_that_is_not_utf8_and_saves_nothing(trees, names_that_are_not_utf8):
+    workspace, base, remote, row, client = trees
+    client.get.return_value['repositories'][0]['setup_command'] = None
+    path = Path(W.command(client, 'add', 'org/product')['workspace_path'])
+    odd = path / os.fsdecode(b'notes-\xff.txt')
+    odd.write_text('ghp_abcdefghijklmnopqrstuvwxyz0123\n')
+    (path / 'draft.txt').write_text('half done')
+    head = git(path, 'rev-parse', 'HEAD')
+    branch = git(path, 'symbolic-ref', '--short', 'HEAD')
+    index = git(path, 'write-tree')
+    with pytest.raises(UnicodeDecodeError):
+        W.act(workspace, row, 'remove', os.environ.copy())
+    assert odd.exists() and (path / 'draft.txt').read_text() == 'half done'
+    assert git(path, 'rev-parse', 'HEAD') == head
+    assert git(path, 'symbolic-ref', '--short', 'HEAD') == branch, 'the removal must not switch branches'
+    assert git(path, 'write-tree') == index, 'the removal must not add to the index'
+    assert (
+        'refs/heads/' + W.wip_branch(row)
+        not in git(remote, 'for-each-ref', '--format=%(refname)', 'refs/heads').split()
+    )
+
+
 @pytest.mark.parametrize('name', ['.env.local'])
 def test_cleanup_keeps_unsafe_large_and_ignored_files(trees, name):
     workspace, base, remote, row, client = trees
@@ -1665,4 +1698,12 @@ def test_invalid_stage_bytes_edited_to_replacement_characters_are_kept(trees, tm
     with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
         W.act(workspace, row, 'remove', os.environ.copy())
     assert (path / 'file').read_bytes() == edited
+    git(path, 'rev-parse', '--verify', 'MERGE_HEAD')
+
+
+def test_a_merged_path_name_that_is_not_utf8_is_kept(trees, tmp_path, names_that_are_not_utf8):
+    workspace, base, remote, row, client = trees
+    path = _merge_in_progress(trees, tmp_path, adds=('caf\udce9.txt',))
+    with pytest.raises(ValueError, match='kept: merge in progress with resolved or unrecognised conflicts'):
+        W.act(workspace, row, 'remove', os.environ.copy())
     git(path, 'rev-parse', '--verify', 'MERGE_HEAD')

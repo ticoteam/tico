@@ -832,6 +832,61 @@ def server_wait(monkeypatch, tmp_path, rows, answers):
     return updater, inspected, asked
 
 
+def wait_clock(monkeypatch, updater):
+    """The updater's clock, turned by its own sleeps and by nothing else: how long a health wait lasted is then how
+    long it chose to wait, whatever else the computer was doing."""
+    import time
+    from types import SimpleNamespace
+
+    clock = SimpleNamespace(now=1_000_000.0)
+
+    class Time:
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+        def time(self):
+            return clock.now
+
+        def sleep(self, seconds):
+            clock.now += seconds
+
+    monkeypatch.setattr(updater, "time", Time())
+    return clock
+
+
+def test_a_server_container_that_exited_during_start_ends_the_health_wait_early(monkeypatch, tmp_path):
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["exited|0|False"], ["down"])
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
+    assert updater.healthy(60) is False
+    assert clock.now - started < 5  # the window is 60 s; the wait ends at the first poll
+    assert inspected.n == 1 and asked.n == 1
+    assert "the server container exited during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_server_container_restarting_in_a_loop_ends_the_health_wait_early(monkeypatch, tmp_path):
+    # The restart count is read when the wait begins (5); two restarts since then is a crash loop, not a slow start.
+    updater, inspected, asked = server_wait(
+        monkeypatch, tmp_path, ["running|5|False", "running|6|False", "restarting|7|False"], ["down"]
+    )
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
+    assert updater.healthy(60) is False
+    assert clock.now - started < 5
+    assert inspected.n == 3
+    assert "restarted 2 times during start" in updater.HEALTH_GAVE_UP
+
+
+def test_a_running_server_with_no_restarts_waits_the_whole_window(monkeypatch, tmp_path):
+    updater, inspected, asked = server_wait(monkeypatch, tmp_path, ["running|0|False"], ["down"])
+    clock = wait_clock(monkeypatch, updater)
+    started = clock.now
+    assert updater.healthy(0.3) is False
+    assert clock.now - started >= 0.3  # it kept polling until the deadline
+    assert inspected.n > 1 and asked.n > 1
+    assert updater.HEALTH_GAVE_UP == ""
+
+
 def test_a_failed_container_inspect_keeps_polling_and_does_not_give_up(monkeypatch, tmp_path):
     updater, inspected, asked = server_wait(
         monkeypatch, tmp_path, [OSError("docker is busy"), "running|0|False"], ["down", "down", "up"]

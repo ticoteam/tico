@@ -3982,6 +3982,38 @@ mod tests {
         }
     }
 
+    /// A private operator HOME for this test's turns (crate::env::tests::OPERATOR_HOME), holding a Claude login that
+    /// is warm until 2100 or already expired, so whether a turn takes the cold sign-in path (profiles::claude_token_cold)
+    /// is the test's choice, never the developer's own login. Restores the real HOME and removes the folder when dropped.
+    struct PrivateHome(PathBuf);
+
+    impl PrivateHome {
+        fn claude(warm: bool) -> Self {
+            let home = std::env::temp_dir().join(format!(
+                "tico-private-home-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(home.join(".claude")).unwrap();
+            let expires_ms: u64 = if warm { 4_102_444_800_000 } else { 1_000 };
+            std::fs::write(
+                home.join(".claude/.credentials.json"),
+                json!({"claudeAiOauth": {"accessToken": "synthetic", "expiresAt": expires_ms}})
+                    .to_string(),
+            )
+            .unwrap();
+            crate::env::tests::OPERATOR_HOME.with(|h| *h.borrow_mut() = Some(home.clone()));
+            assert_eq!(crate::profiles::claude_token_cold(None), !warm);
+            PrivateHome(home)
+        }
+    }
+
+    impl Drop for PrivateHome {
+        fn drop(&mut self) {
+            crate::env::tests::OPERATOR_HOME.with(|h| h.borrow_mut().take());
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
     #[test]
     fn make_page_uses_its_own_provider_session() {
         let mut turn = json!({"id": "a1", "bot": "assistant", "config": {"session": "bot"},
@@ -5368,6 +5400,7 @@ mod tests {
     }
 
     async fn execute_after_harness_memory_rises(fallback: bool) {
+        let _home = PrivateHome::claude(true);
         let _controls = RunControls;
         hosts::TEST_STARTS.with(|starts| starts.set(0));
         MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.set(true));
@@ -5451,6 +5484,7 @@ mod tests {
 
     #[tokio::test]
     async fn lazy_claude_spawn_failure_after_start_acknowledgement_runs_the_fallback() {
+        let _home = PrivateHome::claude(true);
         let _controls = RunControls;
         hosts::TEST_STARTS.with(|starts| starts.set(0));
         let window = Arc::new(Mutex::new(StartWindow {
@@ -6171,6 +6205,602 @@ for line in sys.stdin:
                 && back.contains("[m2]: Here's the draft"),
             "{back}"
         );
+    }
+
+    /// Turns through a fake Claude process that answers every prompt, one per entry of `turns` (each is the config
+    /// merged over a Claude bot whose host is the fake): (the session id of each process's command line, the
+    /// prompt each process read, the result Tico got for each turn).
+    async fn claude_turns(turns: &[Value]) -> (Vec<String>, Vec<String>, Vec<Value>) {
+        claude_turns_compacting(turns, &[]).await
+    }
+
+    /// `claude_turns`, with Claude compacting its session on its own (a `compact_boundary`) in each process of
+    /// `compacting` (counted from 0, a /compact first being a process of its own).
+    async fn claude_turns_compacting(
+        turns: &[Value],
+        compacting: &[usize],
+    ) -> (Vec<String>, Vec<String>, Vec<Value>) {
+        let (threads, prompts, completions, _) =
+            claude_rig(turns, compacting, &[], &[], json!({}), |_| ()).await;
+        (threads, prompts, completions)
+    }
+
+    /// `claude_turns_compacting`, with the saved session missing in each process of `missing` (Claude answers only
+    /// "No conversation found"), each process of `failing` ending in an error after any compaction, `extra` merged
+    /// over each attempt, and `ready` called with the projects folder first. Also returns what each process was
+    /// written after its prompt, while it ran (empty when nothing).
+    async fn claude_rig(
+        turns: &[Value],
+        compacting: &[usize],
+        missing: &[usize],
+        failing: &[usize],
+        extra: Value,
+        ready: impl Fn(&Path),
+    ) -> (Vec<String>, Vec<String>, Vec<Value>, Vec<String>) {
+        let (threads, prompts, completions, injected, _, dir) =
+            claude_rig_kept(turns, compacting, missing, failing, extra, ready).await;
+        std::fs::remove_dir_all(&dir).ok();
+        (threads, prompts, completions, injected)
+    }
+
+    /// `claude_rig`, keeping its folder for the caller to inspect (remove it when done), and returning every request the
+    /// recording server saw, in order.
+    async fn claude_rig_kept(
+        turns: &[Value],
+        compacting: &[usize],
+        missing: &[usize],
+        failing: &[usize],
+        extra: Value,
+        ready: impl Fn(&Path),
+    ) -> (
+        Vec<String>,
+        Vec<String>,
+        Vec<Value>,
+        Vec<String>,
+        Vec<(String, String, Value)>,
+        PathBuf,
+    ) {
+        claude_rig_each_turn(turns, compacting, missing, failing, extra, ready, |_, _| ()).await
+    }
+
+    /// `claude_rig_kept`, with checkout changes applied before each turn's prompt is built.
+    async fn claude_rig_each_turn(
+        turns: &[Value],
+        compacting: &[usize],
+        missing: &[usize],
+        failing: &[usize],
+        extra: Value,
+        ready: impl Fn(&Path),
+        before_turn: impl Fn(usize, &Path),
+    ) -> (
+        Vec<String>,
+        Vec<String>,
+        Vec<Value>,
+        Vec<String>,
+        Vec<(String, String, Value)>,
+        PathBuf,
+    ) {
+        let _controls = RunControls;
+        let _home = PrivateHome::claude(true);
+        RUN_SESSION.with(|on| on.set(Some(true)));
+        let dir = std::env::temp_dir().join(format!(
+            "tico-claude-session-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
+        for n in compacting {
+            // A process listed twice compacts twice.
+            let mut marks =
+                std::fs::read_to_string(dir.join(format!("compacts-{n}"))).unwrap_or_default();
+            marks.push_str("x ");
+            std::fs::write(dir.join(format!("compacts-{n}")), marks).unwrap();
+        }
+        for n in missing {
+            std::fs::write(dir.join(format!("missing-{n}")), "").unwrap();
+        }
+        for n in failing {
+            std::fs::write(dir.join(format!("fails-{n}")), "").unwrap();
+        }
+        ready(&dir.join("projects"));
+        let script = format!(
+            "case \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\n\
+             n=$(ls '{d}' | grep -c '^prompt-'); echo \"$@\" >> '{d}/args.log'\n\
+             IFS= read -r line; echo \"$line\" > '{d}/prompt-'$n\n\
+             id=$(echo \"$@\" | tr ' ' '\\n' | grep -A1 -e '^--session-id$' -e '^--resume$' | tail -1)\n\
+             if [ -e '{d}/missing-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 0, \"errors\": [\"No conversation found with session ID: '$id'\"], \"usage\": {{\"input_tokens\": 0, \"output_tokens\": 0}}}}'; exit 1; fi\n\
+             echo '{{\"type\": \"system\", \"subtype\": \"init\", \"session_id\": \"'$id'\"}}'\n\
+             for c in $(cat '{d}/compacts-'$n 2>/dev/null); do echo '{{\"type\": \"system\", \"subtype\": \"compact_boundary\", \"compact_metadata\": {{\"trigger\": \"auto\"}}}}'; done\n\
+             if [ -e '{d}/edits-'$n ]; then mkdir -p memory && echo 'rewritten' > memory/learnings.md && echo 'stray' > stray.txt && git add -A && git -c user.name=Fixture -c user.email=fixture@example.invalid commit -qm 'a pass commit' && echo 'more' >> memory/learnings.md; fi\n\
+             if [ -e '{d}/fails-'$n ]; then echo '{{\"type\": \"result\", \"subtype\": \"error_during_execution\", \"is_error\": true, \"num_turns\": 1, \"errors\": [\"Synthetic failure\"], \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'; exit 1; fi\n\
+             echo '{{\"type\": \"assistant\", \"message\": {{\"id\": \"m1\", \"content\": [{{\"type\": \"text\", \"text\": \"Done.\"}}]}}}}'\n\
+             echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
+             while IFS= read -r more; do printf '%s\\n' \"$more\" >> '{d}/injected-'$n\n\
+               mid=$(printf '%s' \"$more\" | sed 's/.*\"uuid\": \"\\([^\"]*\\)\".*/\\1/')\n\
+               echo '{{\"type\": \"user\", \"isReplay\": true, \"uuid\": \"'$mid'\", \"message\": {{\"role\": \"user\", \"content\": \"again\"}}}}'\n\
+               echo '{{\"type\": \"result\", \"subtype\": \"success\", \"is_error\": false, \"result\": \"Done again.\", \"usage\": {{\"input_tokens\": 348, \"output_tokens\": 2}}}}'\n\
+             done\n", d = dir.display());
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec!["/bin/sh".into(), "-c".into(), script, "fake".into()])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        let (url, seen, server) = recording_server().await;
+        let path = dir.join("runner.json");
+        std::fs::write(&path, json!({"url": url, "token": "synthetic", "runner_id": "r1", "projects_dir": dir.join("projects")}).to_string()).unwrap();
+        let config = crate::config::Config::load(&path).unwrap();
+        let client = crate::client::Client::new(&config.url(), &config.token(), 5, 0).unwrap();
+        let runner = Arc::new(Runner::new(
+            config,
+            client,
+            crate::state::State::open(&dir.join("state")).unwrap(),
+        ));
+        for (n, turn) in turns.iter().enumerate() {
+            before_turn(n, &dir.join("projects"));
+            let mut config = json!({"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot"});
+            config.as_object_mut().unwrap().extend(
+                turn.as_object()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|(k, _)| k != "attempt"),
+            );
+            let mut attempt = json!({"id": format!("a-claude-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
+                                 "conversation": {"id": "c1", "kind": "chat"},
+                                 "message": {"id": format!("m{n}"), "from_actor": "human:ana@acme.example", "body": format!("Question {n}"), "refs": {}},
+                                 "history": [], "config": config});
+            attempt
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().cloned().unwrap_or_default());
+            // A turn's own `attempt` fields go over the attempt itself (a command's message).
+            attempt
+                .as_object_mut()
+                .unwrap()
+                .extend(turn["attempt"].as_object().cloned().unwrap_or_default());
+            tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt))
+                .await
+                .expect("the turn did not end")
+                .unwrap();
+        }
+        server.abort();
+        let threads = std::fs::read_to_string(dir.join("args.log"))
+            .unwrap()
+            .lines()
+            .map(|l| {
+                l.split_whitespace()
+                    .skip_while(|a| *a != "--session-id" && *a != "--resume")
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect();
+        let prompts: Vec<String> = (0..)
+            .map(|n| dir.join(format!("prompt-{n}")))
+            .take_while(|p| p.exists())
+            .map(|p| std::fs::read_to_string(p).unwrap())
+            .collect();
+        let injected = (0..prompts.len())
+            .map(|n| std::fs::read_to_string(dir.join(format!("injected-{n}"))).unwrap_or_default())
+            .collect();
+        let seen = seen.lock().unwrap().clone();
+        let completions = (0..turns.len())
+            .map(|n| {
+                let found: Vec<&Value> = seen
+                    .iter()
+                    .filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-claude-{n}/complete")))
+                    .map(|(_, _, b)| b)
+                    .collect();
+                found.first().map_or(Value::Null, |b| (*b).clone())
+            })
+            .collect();
+        (threads, prompts, completions, injected, seen, dir)
+    }
+
+    #[tokio::test]
+    async fn a_fallback_hop_leaves_the_primarys_saved_session_for_its_next_turn() {
+        // Turn 2's own login is held, so its fallback harness runs it in a session of its own; turn 3 is back on the
+        // primary's.
+        let pi = json!({"runtime": "pi", "harness": "pi"});
+        let hop = json!({"runtime": "pi", "harness": "pi", "fallback": {"harness": "claude", "model": "synthetic-fallback"}, "primary_held": "2099-01-01T00:00:00Z"});
+        let (threads, prompts, completions) = claude_turns(&[pi.clone(), hop, pi]).await;
+        assert_eq!(threads.len(), 3, "{threads:?}");
+        assert!(
+            threads[1] != threads[0],
+            "the fallback shared the primary's session: {threads:?}"
+        );
+        assert_eq!(
+            threads[2], threads[0],
+            "the next normal turn did not resume the primary session: {threads:?}"
+        );
+        assert_eq!(
+            session_of(&completions[1]),
+            ("new".to_string(), json!("fallback_side"), Value::Null)
+        );
+        assert_eq!(completions[1]["fallback"], "claude");
+        assert_eq!(
+            session_of(&completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        assert!(
+            prompts[2].contains(crate::continuity::AFTER_SIDE),
+            "{}",
+            prompts[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn compact_first_compacts_the_resumed_session_and_then_runs_the_turn() {
+        let (threads, prompts, completions) =
+            claude_turns(&[json!({}), json!({"compact_first": true}), json!({})]).await;
+        // Turn 2 is two processes on the first session: /compact, then the turn itself.
+        assert_eq!(threads.len(), 4, "{threads:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        assert!(
+            prompts[1].contains("/compact") && !prompts[1].contains("Question 1"),
+            "{}",
+            prompts[1]
+        );
+        assert!(
+            prompts[2].contains("Question 1") && !prompts[2].contains("/compact"),
+            "{}",
+            prompts[2]
+        );
+        assert_eq!(
+            session_of(&completions[1]),
+            ("resumed".to_string(), json!("compacted"), Value::Null)
+        );
+        // One-shot: the next claim does not carry the flag.
+        assert_eq!(
+            session_of(&completions[2]),
+            ("resumed".to_string(), Value::Null, Value::Null)
+        );
+        assert!(!prompts[3].contains("/compact"));
+    }
+
+    #[tokio::test]
+    async fn symlinked_agent_rules_get_full_standing_prompts_after_target_changes() {
+        let (threads, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &[json!({}), json!({}), json!({})],
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |projects| {
+                let checkout = projects.join("bot-ops");
+                std::fs::remove_file(checkout.join("AGENT.md")).unwrap();
+                std::fs::write(checkout.join("rules.md"), "Original rules\n").unwrap();
+                std::os::unix::fs::symlink("rules.md", checkout.join("AGENT.md")).unwrap();
+            },
+            |n, projects| {
+                if n == 2 {
+                    std::fs::write(projects.join("bot-ops/rules.md"), "Updated rules\n").unwrap();
+                }
+            },
+        )
+        .await;
+        assert_eq!(prompts.len(), 3);
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        for (n, prompt) in prompts.iter().enumerate() {
+            assert!(
+                !prompt.contains(crate::prompt::STANDING_SEEN)
+                    && prompt.contains("Read AGENT.md and state.md"),
+                "turn {n}: {prompt}"
+            );
+            assert_eq!(completions[n]["outcome"], "completed");
+            if n > 0 {
+                assert_eq!(session_of(&completions[n]).0, "resumed");
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join("projects/bot-ops/AGENT.md")).unwrap(),
+            "Updated rules\n"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_agent_hashes_disable_shortening_until_rules_are_readable_again() {
+        let turns = vec![json!({}); 6];
+        let (_, prompts, completions, _, _, dir) = claude_rig_each_turn(
+            &turns,
+            &[],
+            &[],
+            &[],
+            json!({}),
+            |_| (),
+            |n, projects| {
+                let agent = projects.join("bot-ops/AGENT.md");
+                if n == 2 {
+                    std::fs::remove_file(&agent).unwrap();
+                }
+                if n == 4 {
+                    std::fs::write(&agent, "# Ops\n").unwrap();
+                }
+            },
+        )
+        .await;
+        assert_eq!(prompts.len(), turns.len());
+        for (n, prompt) in prompts.iter().enumerate() {
+            assert_eq!(
+                prompt.contains(crate::prompt::STANDING_SEEN),
+                n == 1 || n == 5,
+                "turn {n}: {prompt}"
+            );
+            assert_eq!(completions[n]["outcome"], "completed");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_resumed_claude_turn_is_given_its_standing_lines_again_only_after_they_may_be_gone() {
+        let held =
+            |p: &str| p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the tico CLI");
+        let full = |p: &str| {
+            !p.contains(crate::prompt::STANDING_SEEN)
+                && p.contains("Use the tico CLI")
+                && p.contains("Read AGENT.md and state.md")
+        };
+        // 0 new, 1 resumed and unchanged, 2 resumed but Claude compacts during it, 3 after that compaction, 4 unchanged,
+        // 5 compact_first (a /compact process, then the turn), 6 unchanged again.
+        let turns = [
+            json!({}),
+            json!({}),
+            json!({}),
+            json!({}),
+            json!({}),
+            json!({"compact_first": true}),
+            json!({}),
+        ];
+        let (threads, prompts, _, injected) =
+            claude_rig(&turns, &[2], &[], &[], json!({}), |_| ()).await;
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        assert_eq!(prompts.len(), 8, "{prompts:?}");
+        // Turn 2's short prompt is followed, as soon as Claude compacts, by the standing lines it left out.
+        assert!(
+            injected[2].contains(crate::prompt::RESTORED)
+                && injected[2].contains("Use the tico CLI")
+                && injected[2].contains("Read AGENT.md and state.md"),
+            "{}",
+            injected[2]
+        );
+        assert!(
+            injected
+                .iter()
+                .enumerate()
+                .all(|(n, i)| n == 2 || i.is_empty()),
+            "{injected:?}"
+        );
+        assert!(full(&prompts[0]), "a new session: {}", prompts[0]);
+        for n in [1, 2, 4, 7] {
+            assert!(held(&prompts[n]), "turn {n}: {}", prompts[n]);
+            assert!(
+                prompts[n].contains(&format!(
+                    "Tico-Run: a-claude-{}",
+                    if n == 7 { 6 } else { n }
+                )),
+                "{}",
+                prompts[n]
+            );
+        }
+        for n in [3, 6] {
+            assert!(full(&prompts[n]), "after a compaction: {}", prompts[n]);
+        }
+        assert!(prompts[5].contains("/compact"), "{}", prompts[5]);
+        for (n, p) in prompts.iter().enumerate().filter(|(n, _)| *n != 5) {
+            let q = if n > 5 { n - 1 } else { n };
+            assert!(
+                p.contains(&format!("Question {q}")),
+                "turn {n} lost its message: {p}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_near_its_compact_at_or_of_unknown_size_gets_the_whole_prompt() {
+        // Each fake turn uses 350 tokens. With the whole prompt (well over 3,400 characters, 850 tokens) that is under
+        // 60% of a 100,000-token Compact at, but over 60% of 2,000, though 350 alone is not; a first turn's size is unknown.
+        let (_, prompts, _) = claude_turns(&[
+            json!({"compact_at": 100_000}),
+            json!({"compact_at": 100_000}),
+        ])
+        .await;
+        assert!(
+            prompts[0].len() > 3_400 && !prompts[0].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[0]
+        );
+        assert!(
+            prompts[1].contains(crate::prompt::STANDING_SEEN),
+            "{}",
+            prompts[1]
+        );
+        let (_, prompts, _) = claude_turns(&[
+            json!({"compact_at": 2_000}),
+            json!({"compact_at": 2_000}),
+            json!({"compact_at": 2_000}),
+        ])
+        .await;
+        for p in &prompts {
+            assert!(
+                !p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the tico CLI"),
+                "{p}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_resumed_session_found_missing_restarts_with_a_new_sessions_whole_prompt() {
+        // Turn 1 resumes a session Claude no longer has: Claude starts a new one under its id, given what a session
+        // that replaces a missing one is given, the repo rules (unchanged since turn 0) included.
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(
+                projects.join("acme-app/AGENTS.md"),
+                "Run make check before every push.",
+            )
+            .unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let (threads, prompts, completions, _) = claude_rig(
+            &[json!({}), json!({}), json!({}), json!({})],
+            &[],
+            &[1],
+            &[],
+            extra,
+            rules,
+        )
+        .await;
+        assert_eq!(prompts.len(), 5, "{prompts:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        let rule = "Repo rules for acme/app";
+        assert!(
+            prompts[0].contains(rule) && prompts[0].contains("Use the tico CLI"),
+            "{}",
+            prompts[0]
+        );
+        // The missing session's process read the resumed prompt, which leaves the unchanged rules out.
+        assert!(!prompts[1].contains(rule), "{}", prompts[1]);
+        let restored = &prompts[2];
+        assert!(
+            restored.contains(rule)
+                && restored.contains("Use the tico CLI")
+                && restored.contains("Question 1"),
+            "{restored}"
+        );
+        assert!(
+            restored.contains("New session: your previous session here was not on this computer"),
+            "{restored}"
+        );
+        assert_eq!(session_of(&completions[1]).1, json!("not_found"));
+        // The restored session is given everything once more, rules included; then it is a resumed one again.
+        assert!(
+            prompts[3].contains(rule)
+                && !prompts[3].contains(crate::prompt::STANDING_SEEN)
+                && prompts[3].contains("Question 2"),
+            "{}",
+            prompts[3]
+        );
+        assert!(
+            prompts[4].contains(crate::prompt::STANDING_SEEN) && !prompts[4].contains(rule),
+            "{}",
+            prompts[4]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_does_not_complete_leaves_its_repo_rules_to_be_given_again() {
+        // Turn 1 compacts and then fails, turn 4 just fails: neither counts as having given the session its rules.
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(
+                projects.join("acme-app/AGENTS.md"),
+                "Run make check before every push.",
+            )
+            .unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let turns: Vec<Value> = (0..6).map(|_| json!({})).collect();
+        let (threads, prompts, _, _) = claude_rig(&turns, &[1], &[], &[1, 4], extra, rules).await;
+        assert_eq!(prompts.len(), 6, "{prompts:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        let rule = "Repo rules for acme/app";
+        for (n, given) in [
+            (0, true),
+            (1, false),
+            (2, true),
+            (3, false),
+            (4, false),
+            (5, true),
+        ] {
+            assert_eq!(prompts[n].contains(rule), given, "turn {n}: {}", prompts[n]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_compaction_during_a_turn_gives_back_the_repo_rules_it_left_out_after_each_boundary()
+    {
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(
+                projects.join("acme-app/AGENTS.md"),
+                "Run make check before every push.",
+            )
+            .unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let rule = "Repo rules for acme/app";
+        // Turn 1 is shortened and compacts twice: each boundary gives back the standing lines and the unchanged rules.
+        let (_, prompts, _, injected) = claude_rig(
+            &[json!({}), json!({})],
+            &[1, 1],
+            &[],
+            &[],
+            extra.clone(),
+            rules,
+        )
+        .await;
+        assert!(
+            prompts[1].contains(crate::prompt::STANDING_SEEN) && !prompts[1].contains(rule),
+            "{}",
+            prompts[1]
+        );
+        assert_eq!(
+            injected[1].matches(crate::prompt::RESTORED).count(),
+            2,
+            "{}",
+            injected[1]
+        );
+        assert_eq!(injected[1].matches(rule).count(), 2, "{}", injected[1]);
+        assert!(injected[1].contains("Use the tico CLI"), "{}", injected[1]);
+        // With no room the prompt is whole but for the unchanged rules: a compaction gives back those alone.
+        let tight = json!({"compact_at": 2_000});
+        let (_, prompts, _, injected) =
+            claude_rig(&[tight.clone(), tight], &[1], &[], &[], extra, rules).await;
+        assert!(
+            prompts[1].contains("Use the tico CLI") && !prompts[1].contains(rule),
+            "{}",
+            prompts[1]
+        );
+        assert!(
+            injected[1].contains(crate::prompt::RESTORED)
+                && injected[1].contains(rule)
+                && !injected[1].contains("Use the tico CLI"),
+            "{}",
+            injected[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_command_turn_does_not_count_as_giving_the_session_its_repo_rules() {
+        // Turn 1 fails, so the rules go again; turn 2 is a command, whose prompt is only its text; turn 3 gets them.
+        let rules = |projects: &Path| {
+            std::fs::create_dir_all(projects.join("acme-app")).unwrap();
+            std::fs::write(
+                projects.join("acme-app/AGENTS.md"),
+                "Run make check before every push.",
+            )
+            .unwrap();
+        };
+        let extra = json!({"worktrees": [{"repo": "acme/app", "path": "acme-app"}]});
+        let command = json!({"attempt": {"message": {"id": "m2", "from_actor": "human:ana@acme.example", "body": "/context", "refs": {"command": "context"}}}});
+        let (threads, prompts, _, _) = claude_rig(
+            &[json!({}), json!({}), command, json!({})],
+            &[],
+            &[],
+            &[1],
+            extra,
+            rules,
+        )
+        .await;
+        assert_eq!(prompts.len(), 4, "{prompts:?}");
+        assert!(threads.iter().all(|t| *t == threads[0]), "{threads:?}");
+        let rule = "Repo rules for acme/app";
+        assert!(
+            prompts[2].contains("/context") && !prompts[2].contains(rule),
+            "{}",
+            prompts[2]
+        );
+        assert!(prompts[3].contains(rule), "{}", prompts[3]);
     }
 
     #[test]
@@ -7392,6 +8022,105 @@ for line in sys.stdin:
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
+    #[tokio::test]
+    async fn a_memory_pass_that_edits_commits_and_fails_is_discarded_before_its_turn_settles() {
+        let base = Arc::new(Mutex::new(String::new()));
+        let remote_path = Arc::new(Mutex::new(PathBuf::new()));
+        let (base_out, remote_out) = (base.clone(), remote_path.clone());
+        let (_threads, _prompts, completions, _injected, seen, dir) = claude_rig_kept(
+            &[json!({"memory_pass": true})],
+            &[],
+            &[],
+            &[0],
+            json!({"lane": "task:t-pass", "task": {"id": "t-pass"}}),
+            move |projects: &Path| {
+                // A real checkout of the bot's repository, with a remote to compare main against.
+                let root = projects.parent().unwrap().to_path_buf();
+                let checkout = projects.join("bot-ops");
+                std::fs::remove_dir_all(&checkout).ok();
+                let remote = root.join("remote.git");
+                repo_git(
+                    &root,
+                    &[
+                        "init",
+                        "--bare",
+                        "-q",
+                        "-b",
+                        "main",
+                        remote.to_str().unwrap(),
+                    ],
+                );
+                let seed = root.join("seed");
+                repo_git(
+                    &root,
+                    &[
+                        "clone",
+                        "-q",
+                        remote.to_str().unwrap(),
+                        seed.to_str().unwrap(),
+                    ],
+                );
+                std::fs::write(seed.join("AGENT.md"), "# Ops\n").unwrap();
+                repo_git(&seed, &["add", "-A"]);
+                repo_git(&seed, &["commit", "-qm", "start"]);
+                repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+                repo_git(
+                    &root,
+                    &[
+                        "clone",
+                        "-q",
+                        remote.to_str().unwrap(),
+                        checkout.to_str().unwrap(),
+                    ],
+                );
+                *base_out.lock().unwrap() = repo_git(&checkout, &["rev-parse", "HEAD"]);
+                *remote_out.lock().unwrap() = remote;
+                // Process 0 of the fake Claude edits memory, commits, leaves more uncommitted, then fails.
+                std::fs::write(root.join("edits-0"), "").unwrap();
+            },
+        )
+        .await;
+        let base = base.lock().unwrap().clone();
+        let remote = remote_path.lock().unwrap().clone();
+        assert_eq!(completions[0]["outcome"], "failed", "{:?}", completions[0]);
+        let session = crate::sessions::path_for(&dir.join("projects"), "ops", "t-pass");
+        assert_eq!(
+            repo_git(&session, &["status", "--porcelain"]),
+            "",
+            "the pass left nothing uncommitted"
+        );
+        assert_eq!(
+            repo_git(&session, &["rev-parse", "HEAD"]),
+            base,
+            "the pass's own commit was dropped"
+        );
+        assert!(
+            !session.join("stray.txt").exists() && !session.join("memory").exists(),
+            "the pass's files were removed"
+        );
+        assert_eq!(
+            repo_git(&remote, &["rev-parse", "main"]),
+            base,
+            "main did not move"
+        );
+        let discarded = seen
+            .iter()
+            .position(|(_, _, body)| {
+                body.to_string()
+                    .contains("Nightly memory tidy: this pass changed")
+            })
+            .expect("the discard was not recorded on the run");
+        let settled = seen
+            .iter()
+            .position(|(_, path, _)| path.ends_with("/attempts/a-claude-0/complete"))
+            .expect("the turn settled");
+        assert!(
+            discarded < settled,
+            "the discard is recorded before the turn settles"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     async fn placement_wait_survives_start_window(kind: &str) {
         let _controls = RunControls;
         RENEW_EVERY.with(|v| *v.borrow_mut() = Some(Duration::from_millis(20)));
@@ -7646,6 +8375,155 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[tokio::test]
+    async fn a_completed_turn_is_not_replayed_on_fallback_when_local_session_state_cannot_be_saved()
+    {
+        let _controls = RunControls;
+        let _home = PrivateHome::claude(true);
+        for (failure, trigger) in [
+            ("session", "CREATE TRIGGER fail_completed BEFORE INSERT ON sessions WHEN NEW.thread = 'canonical-acme-session' BEGIN SELECT RAISE(FAIL, 'synthetic completed session save failure'); END;"),
+        ] {
+            let (url, seen, server) = recording_server().await;
+            let (runner, dir) = drain_runner_on(&url, 300).await;
+            std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+            let db = rusqlite::Connection::open(runner.state.directory.join("runner.sqlite")).unwrap();
+            db.execute_batch(trigger).unwrap();
+            let script = dir.join("completed_claude.py");
+            std::fs::write(&script, r#"import json, pathlib, signal, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+signal.alarm(10)
+sys.stdin.readline()
+with (root / 'turns').open('a') as f:
+    f.write('started\n')
+print(json.dumps({'type':'system','subtype':'init','session_id':'canonical-acme-session'}), flush=True)
+print(json.dumps({'type':'result','subtype':'success','result':'Acme completed once.'}), flush=True)
+"#).unwrap();
+            HOST_COMMAND.with(|command| *command.borrow_mut() = Some(vec![crate::env::python().display().to_string(), script.display().to_string()]));
+            let attempt = json!({"id": "a-completed", "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+                                 "conversation": {"id": "c1"}, "message": {"refs": {}},
+                                 "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary", "session": "bot",
+                                            "fallback": {"harness": "claude", "model": "synthetic-fallback"}}});
+            tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(attempt)).await.expect("completed turn did not settle").unwrap();
+            assert_eq!(std::fs::read_to_string(dir.join("turns")).unwrap().lines().count(), 1, "{failure} failure replayed completed work on fallback");
+            let seen = seen.lock().unwrap().clone();
+            let completions: Vec<_> = seen.iter().filter(|(_, p, _)| p.ends_with("/attempts/a-completed/complete")).map(|(_, _, b)| b).collect();
+            assert_eq!(completions.len(), 1, "{seen:?}");
+            assert_eq!(completions[0]["outcome"], "completed");
+            assert_eq!(completions[0]["text"], "Acme completed once.");
+            assert!(completions[0].get("fallback").is_none(), "{completions:?}");
+            let events: Vec<_> = seen.iter().filter(|(_, p, _)| p.ends_with("/attempts/a-completed/events"))
+                .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default()).collect();
+            assert!(events.iter().any(|e| e["kind"] == "diagnostic" && text_of(&e["payload"]["text"]).contains("Completed turn kept")), "missing save diagnostic: {events:?}");
+            server.abort();
+            drop(db);
+            std::fs::remove_dir_all(dir).ok();
+        }
+    }
+
+    #[tokio::test]
+    async fn drain_cap_holds_a_fallback_turn_for_review_since_its_side_session_is_never_kept() {
+        // Both harnesses resume after an interrupt; only the fallback's side session makes it unresumable.
+        let _controls = RunControls;
+        let _home = PrivateHome::claude(true);
+        RENEW_EVERY.with(|v| *v.borrow_mut() = Some(Duration::from_millis(20)));
+        let held_inputs = Arc::new(Notify::new());
+        let (url, seen, server) = recording_server_holding_inputs(Some(held_inputs.clone())).await;
+        let (runner, dir) = drain_runner_on(&url, 1).await;
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let script = dir.join("synthetic_claude.py");
+        std::fs::write(&script, r#"import json, os, pathlib, signal, sys
+root = pathlib.Path(__file__).parent
+if '--version' in sys.argv:
+    print('2.1.999'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+signal.alarm(20)  # A failed guard cannot leave this synthetic process behind.
+with (root / 'argv.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+(root / 'pid').write_text(str(os.getpid()))
+sys.stdin.readline()
+print(json.dumps({'type':'system','subtype':'init','session_id':'canonical-acme-session'}), flush=True)
+if '--resume' in sys.argv:
+    print(json.dumps({'type':'result','subtype':'success','result':'Continued safely.'}), flush=True)
+else:
+    pathlib.Path('kept-work.txt').write_text('work saved before the drain')
+    print(json.dumps({'type':'assistant','message':{'content':[{'type':'text','text':'unfinished Acme summary'}]}}), flush=True)
+    for line in sys.stdin:
+        pass
+"#).unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        HOST_CLAUDE.with(|on| on.set(true));
+        let mut attempt = json!({"id": "a-active", "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+                                 "conversation": {"id": "c1"}, "message": {"refs": {}},
+                                 "config": {"runtime": "pi", "harness": "pi", "model": "synthetic", "session": "bot"}});
+        // The primary's held login sends the turn to its fallback, which acknowledges it and runs.
+        attempt["config"]["fallback"] = json!({"harness": "claude", "model": "synthetic-fallback"});
+        attempt["config"]["primary_held"] = json!("2099-01-01T00:00:00Z");
+        let work = runner.clone().execute(attempt);
+        let drain = async {
+            // The second inputs call is held by the fake server after drive consumed the init and partial output.
+            // Only the outer guard can cap this await; drive's own loop cannot run its deadline check.
+            while posted(&seen, "/attempts/a-active/inputs") < 2 {
+                tokio::task::yield_now().await;
+            }
+            runner.shut_down();
+        };
+        let result = tokio::time::timeout(Duration::from_secs(12), async {
+            let (result, ()) = tokio::join!(work, drain);
+            result
+        })
+        .await;
+        held_inputs.notify_waiters();
+        assert!(
+            result.is_ok(),
+            "active host outlived the outer drain cap: {:?}",
+            seen.lock().unwrap()
+        );
+        result.unwrap().unwrap();
+        // A side session is not kept, so a continuation would start a fresh thread after the turn acted.
+        let completions: Vec<Value> = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("/attempts/a-active/complete"))
+            .map(|(_, _, b)| b.clone())
+            .collect();
+        assert_eq!(completions.len(), 1, "{completions:?}");
+        assert_eq!(completions[0]["outcome"], "interrupted");
+        assert_ne!(
+            completions[0]["yielded"], true,
+            "a turn that cannot resume was queued to continue: {completions:?}"
+        );
+        let events = seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("/attempts/a-active/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
+            .collect::<Vec<_>>();
+        assert!(
+            events
+                .iter()
+                .any(|e| e["payload"]["text"] == crate::drain::HELD),
+            "{events:?}"
+        );
+        assert!(
+            events.iter().any(|e| e["payload"]["fallback"] == "claude"),
+            "{events:?}"
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     /// A synthetic Claude process: its first turn says something (it acted) and then the model is at capacity; a turn
     /// that resumes its thread finishes. Every prompt it reads is kept in prompts.jsonl.
     fn capacity_host(dir: &Path) {
@@ -7830,6 +8708,265 @@ else:
         server.abort();
         std::fs::remove_dir_all(dir).ok();
     }
+    #[tokio::test]
+    async fn quota_capacity_or_computer_stopped_fallback_survives_a_runner_restart_in_its_own_session(
+    ) {
+        for mode in ["quota", "capacity", "computer"] {
+            for (worktree, named) in [(false, false), (true, false), (false, true), (true, true)] {
+                let quota = mode == "quota";
+                let _controls = RunControls;
+                let _home = PrivateHome::claude(true);
+                SOURCE_CONTINUE.with(|on| on.set(Some(true)));
+                THREAD_UPDATES.with(|on| on.set(Some(true)));
+                CAPACITY_CONTINUE.with(|on| on.set(Some(true)));
+                let (url, seen, server) = recording_server().await;
+                let (runner, dir) = runner_at(&url, "fallback-quota");
+                std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+                let runner = if named {
+                    let mut config = runner.config.clone();
+                    let login_dir = dir.join("lab-login");
+                    std::fs::create_dir_all(&login_dir).unwrap();
+                    config.data.insert(
+                        "profiles".into(),
+                        json!({"lab": {"dir": login_dir, "share_operator": true}}),
+                    );
+                    config.data.insert("default_profile".into(), json!("lab"));
+                    config.save().unwrap();
+                    Arc::new(Runner::new(
+                        config,
+                        runner.client.clone(),
+                        runner.state.clone(),
+                    ))
+                } else {
+                    runner
+                };
+                if worktree {
+                    // A real isolated checkout exercises place_turn's worktree suffix, not a fabricated session key.
+                    let main = dir.join("projects/bot-ops");
+                    let remote = dir.join("synthetic-origin.git");
+                    for args in [
+                        vec![
+                            "init".into(),
+                            "--bare".into(),
+                            "--initial-branch=main".into(),
+                            remote.display().to_string(),
+                        ],
+                        vec![
+                            "init".into(),
+                            "--initial-branch=main".into(),
+                            main.display().to_string(),
+                        ],
+                        vec![
+                            "-C".into(),
+                            main.display().to_string(),
+                            "-c".into(),
+                            "user.name=Acme".into(),
+                            "-c".into(),
+                            "user.email=bot@acme.example".into(),
+                            "commit".into(),
+                            "--allow-empty".into(),
+                            "-m".into(),
+                            "Synthetic fixture".into(),
+                        ],
+                        vec![
+                            "-C".into(),
+                            main.display().to_string(),
+                            "remote".into(),
+                            "add".into(),
+                            "origin".into(),
+                            remote.display().to_string(),
+                        ],
+                        vec![
+                            "-C".into(),
+                            main.display().to_string(),
+                            "push".into(),
+                            "-u".into(),
+                            "origin".into(),
+                            "main".into(),
+                        ],
+                    ] {
+                        let out = std::process::Command::new("git")
+                            .args(args)
+                            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                            .output()
+                            .unwrap();
+                        assert!(
+                            out.status.success(),
+                            "{}",
+                            String::from_utf8_lossy(&out.stderr)
+                        );
+                    }
+                }
+                capacity_host(&dir);
+                let script = dir.join("synthetic_claude.py");
+                let code = std::fs::read_to_string(&script).unwrap().replace(
+                    "Selected model is at capacity. Please try a different model.",
+                    "Usage limit reached; resets at 2099-01-01T07:00:00Z",
+                );
+                if quota {
+                    std::fs::write(&script, code).unwrap();
+                }
+                if mode == "computer" {
+                    let code = std::fs::read_to_string(&script).unwrap().replace(
+                    "    print(json.dumps({'type':'result','subtype':'error_during_execution'",
+                    "    import time; time.sleep(5)\n    print(json.dumps({'type':'result','subtype':'error_during_execution'");
+                    std::fs::write(&script, code).unwrap();
+                }
+                let mut first = capacity_attempt("a-side", None);
+                if worktree {
+                    first["task"] = json!({"id": "fallback-task", "status": "doing"});
+                    // Placement follows the claimed lane, not the task object on a main-chat turn.
+                    first["lane"] = json!("task:fallback-task");
+                }
+                let profile = runner.turn_profile(&first).unwrap();
+                assert_eq!(
+                    profile.as_ref().map(|p| p.name.as_str()),
+                    named.then_some("lab")
+                );
+                let profile_suffix = profile.as_ref().map_or(String::new(), |p| {
+                    format!(":profile:{}:{}", p.name, p.binding())
+                });
+                let primary_scope = format!(
+                    "bot{profile_suffix}{}",
+                    if worktree { ":worktree" } else { "" }
+                );
+                // The primary's qualified identity belongs to this epoch and must remain separate from the fallback.
+                runner
+                    .state
+                    .epoch_moved("ops", "", &primary_scope, 3)
+                    .unwrap();
+                runner
+                    .state
+                    .save_session("ops", &primary_scope, "codex", "primary-untouched")
+                    .unwrap();
+                first["job_id"] = json!("job-side");
+                first["bot_session_epoch"] = json!(3);
+                first["config"]["primary_held"] = json!("2099-01-01T07:00:00Z");
+                let observe = async {
+                    if mode != "computer" {
+                        return;
+                    }
+                    tokio::time::timeout(Duration::from_secs(20), async {
+                        loop {
+                            let handed = seen.lock().unwrap().iter().any(|(_, path, body)| {
+                                path.ends_with("/attempts/a-side/thread")
+                                    && body["source_continuation"].is_object()
+                            });
+                            if handed {
+                                break;
+                            }
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                    })
+                    .await
+                    .expect("the live side session is handed off before its result");
+                    assert_eq!(posted(&seen, "/attempts/a-side/complete"), 0);
+                    runner.shut_down();
+                    runner.shut_down();
+                };
+                let run = runner.clone();
+                let (ran, _) = tokio::join!(
+                    tokio::time::timeout(Duration::from_secs(30), run.execute(first.clone())),
+                    observe
+                );
+                ran.unwrap().unwrap();
+                let done = completion(&seen, "a-side");
+                if quota {
+                    assert_eq!(done["limited"], true, "{done}");
+                } else if mode == "capacity" {
+                    assert_eq!(done["continues"], true, "{done}");
+                } else {
+                    assert_eq!(done["outcome"], "interrupted", "{done}");
+                }
+                let saved = seen
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find_map(|(_, path, body)| {
+                        (path.ends_with("/attempts/a-side/thread")
+                            && body["source_continuation"].is_object())
+                        .then(|| body["source_continuation"].clone())
+                    })
+                    .expect("confirmed source persisted while live");
+                assert_eq!(saved["thread_id"], "capacity-session", "{done}");
+                assert_eq!(saved["runtime"], "claude", "{done}");
+                let expected_scope = format!(
+                    "source:job-side{profile_suffix}{}",
+                    if worktree { ":worktree" } else { "" }
+                );
+                assert_eq!(
+                    runner
+                        .state
+                        .session("ops", &expected_scope, "claude")
+                        .unwrap()
+                        .as_deref(),
+                    Some("capacity-session"),
+                    "{mode}: worktree={worktree}, named={named}"
+                );
+                if worktree {
+                    let path = crate::sessions::path_for(
+                        &runner.config.projects_dir(),
+                        "ops",
+                        "fallback-task",
+                    );
+                    assert!(
+                        path.join(".git").is_file(),
+                        "the task used its real worktree"
+                    );
+                }
+                assert_eq!(
+                    runner
+                        .state
+                        .session("ops", &primary_scope, "codex")
+                        .unwrap()
+                        .as_deref(),
+                    Some("primary-untouched")
+                );
+                let next = Arc::new(Runner::new(
+                    runner.config.clone(),
+                    runner.client.clone(),
+                    runner.state.clone(),
+                ));
+                first["id"] = json!("a-side-again");
+                first["source_continuation"] = saved;
+                first["continue_thread"] = json!("capacity-session");
+                tokio::time::timeout(Duration::from_secs(30), next.execute(first))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(completion(&seen, "a-side-again")["outcome"], "completed");
+                let args: Vec<Value> = std::fs::read_to_string(dir.join("argv.jsonl"))
+                    .unwrap()
+                    .lines()
+                    .map(|l| serde_json::from_str(l).unwrap())
+                    .collect();
+                assert_eq!(args.len(), 2, "no primary or fresh replay: {args:?}");
+                let resumed: Vec<_> = args[1]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect();
+                assert!(
+                    resumed
+                        .windows(2)
+                        .any(|p| p == ["--resume", "capacity-session"]),
+                    "{args:?}"
+                );
+                assert_eq!(
+                    runner
+                        .state
+                        .session("ops", &primary_scope, "codex")
+                        .unwrap()
+                        .as_deref(),
+                    Some("primary-untouched")
+                );
+                server.abort();
+                std::fs::remove_dir_all(dir).ok();
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_fallback_continuation_with_a_changed_login_or_epoch_never_starts_fresh() {
         for changed_profile in [false, true] {
