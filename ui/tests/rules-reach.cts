@@ -101,7 +101,8 @@ async function openReach(browser: import('playwright').Browser, {viewport = DESK
       Object.assign(l, {sender: body.sender, receiver: body.receiver, per_day: body.per_day, rule: body.rule ? {id: l.rule?.id || 'r-l' + next++, text: body.rule} : null});
       return json(l);
     }
-    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m![1]!); return route.fulfill({status: 204, body: ''}); }
+    // The real route answers JSON (backend/reach.py remove_line()), never an empty 204.
+    if (m && method === 'DELETE') { reach.lines = reach.lines.filter(x => x.id !== m![1]!); return json({id: m![1]!, removed: true}); }
     return json(unrouted(p));
   });
   await page.goto(ORIGIN + '/' + hash);
