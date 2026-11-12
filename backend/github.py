@@ -1642,6 +1642,20 @@ def _remote_work(service, repo, branch, base, auth):
     return int(response.json().get("ahead_by") or 0)
 
 
+def _covered(service, repo, branch, prs, auth):
+    """The open pull request of the same task that already holds all of this branch's work, by number, or None. A bot
+    that rebases a task's pull request from its own worktree pushes the pull request's branch, and its worktree's
+    branch can be pushed too, at the same commit: that is no new work, and a draft for it would be the task's second
+    pull request. A pull request whose head is not known yet is read."""
+    for number, head in sorted(prs.items()):
+        if not head:
+            response = service._call("GET", f"/repos/{quote(repo, safe='/')}/pulls/{number}", headers=auth)
+            head = (response.json().get("head") or {}).get("sha") if response.status_code == 200 else None
+        if head and _remote_work(service, repo, branch, head, auth) == 0:
+            return number
+    return None
+
+
 def reconcile_worktree_prs(service):
     """The background repair for the pull request links a worktree's release reads. Unfinished links on any task that
     holds a worktree (closed, declined and never-read tasks too) are read again, and a worktree branch with no link is
@@ -1682,7 +1696,10 @@ def reconcile_worktree_prs(service):
             for w in H._rows(
                 c.execute(
                     "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
-                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
+                    "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base,"
+                    "(SELECT json_group_array(json_array(p.number,json_extract(p.detail,'$.head_sha'))) FROM task_links p "
+                    "WHERE p.task_id=w.task_id AND p.kind='pr' AND lower(p.repo)=lower(w.repo) AND p.number IS NOT NULL "
+                    "AND coalesce(p.state,'open') IN ('open','draft')) AS prs "
                     "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                     "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND "
                     + held.format("w")
@@ -1691,8 +1708,9 @@ def reconcile_worktree_prs(service):
                     (org,),
                 )
             ):
-                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
+                b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set(), "prs": {}})
                 b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
+                b["prs"].update((n, sha) for n, sha in H._json(w["prs"], []) or [])
                 b["heads"].update(H.worktree_heads(H._json(w["detail"], {}) or {}))
             branches = list(branches.values())
 
@@ -1759,7 +1777,12 @@ def reconcile_worktree_prs(service):
                                     remote={"ahead": ahead or 0, "absent": ahead is None, "heads": known, "at": H.now()}
                                 ),
                             )
-                            if ahead:
+                            covered = ahead and _covered(service, repo, key, link["prs"], auth)
+                            if covered:
+                                logging.getLogger("tico.github").info(
+                                    "No draft for %s %s: its work is already in #%s", repo, key, covered
+                                )
+                            elif ahead:
                                 found = _open_draft(service, repo, key, link)
                                 retry = 180 if found else 900
                     registering = kind == "branch" and found
