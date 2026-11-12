@@ -580,7 +580,7 @@ async function renderSettingsPageOwners() {
     const options = ['<option value="">No owner</option>', ...bots.map(e => `<option value="${esc(e.id)}"${e.id === now ? ' selected' : ''}>${esc(e.display_name || e.slug || e.id)}</option>`)];
     return `<label class="people-line"><span>${esc(row.name || page)}</span><select data-page-owner="${esc(page)}" aria-label="${esc((row.name || page) + ' owner')}">${options.join('')}</select></label>`;
   }).join('') + '<p class="settings-cell-note">The bot you chat with from the page. No owner, no Chat.</p>';
-  for (const select of host.querySelectorAll<HTMLSelectElement>('[data-page-owner]')) {
+  for (const select of Array.from(host.querySelectorAll('[data-page-owner]') as NodeListOf<HTMLSelectElement>)) {
     select.onchange = async () => {
       const page = select.dataset.pageOwner || '';
       try { await put('/v2/page-owners/' + encodeURIComponent(page), {bot: select.value || null}); toast('Saved'); }

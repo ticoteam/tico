@@ -270,7 +270,11 @@ function auShell() {
   auEdWire(root.querySelector('.au-ed'));
   // Listening's owner's chat (page-chat.ts); a listening's editor takes its place while open (listening.css).
   if (lst) void pageChatMount({page: 'listening', label: 'Listening', root, button: root.querySelector('.au-chat'), panel: root.querySelector('.au-pgc'),
-    item: () => { const a = AU; return a?.root === root && a.lst && a.cur && a.id ? {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'} : null; }});
+    item: () => {
+      const a = AU;
+      if (!a || a.root !== root || !a.lst || !a.cur || !a.id) return null;
+      return {kind: 'automation', id: a.id, name: String(a.cur.name || '').trim() || 'Untitled'};
+    }});
 }
 
 // + New's menu: New inbox (automations-new.js), or which trigger a blank one starts with.
