@@ -376,7 +376,7 @@ function learnOpen(slug: string, data: LearnPage, dream: BotDream | null = null)
       t.disabled = true;
       try {
         const task = (await get(`/v2/tasks/${encodeURIComponent(shown.task)}`, {fresh: true})).task;
-        await post(`/v2/tasks/${encodeURIComponent(shown.task)}`, {version: task.version, close: true});
+        await taskMove(shown.task, 'closed', task.version);     // the edit route takes no close (task-api.ts)
         await dreamRefresh();
       } catch (e) { t.disabled = false; toast(errorMessage(e, '')); }
     } else if (t.matches('[data-dream-wake]')) {
