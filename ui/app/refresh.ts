@@ -6,7 +6,13 @@
 // Recruiting seats change only by a recruit flow here (each refreshes with force) or another person's: a poll reads
 // them every 5th time, or when the last answer is 10 minutes old.
 let SEATS_POLLS = 0, SEATS_AT = 0;
+// Newest wins, per value: each refresh is numbered as it starts, and publishes status, the roster or seats only when no
+// refresh that started later has already published that value. An older poll answering last cannot put back the roster
+// from before a change, and a newer poll that did not read seats does not discard an older forced refresh's seats.
+let REFRESH_STARTED = 0;
+const REFRESH_SHOWN = {status: 0, roster: 0, seats: 0};
 async function refresh(force = false): Promise<void> {
+  const mine = ++REFRESH_STARTED;
   // Every read at once: hub.db status and needs-you (docs/history/hub-v2.md) and the campus's computers (only while it
   // is open) do not wait for the roster.
   const v2 = v2Refresh(), computers = overviewLoadComputers();
@@ -18,15 +24,23 @@ async function refresh(force = false): Promise<void> {
     const options = {fresh: !!force};
     const [st, emps, people, seats] = await Promise.allSettled([get('/status', options), get('/employees', options), get('/humans', options),
       seatsDue ? get('/v2/seats', options) : null]);
-    S.status = st.status === 'fulfilled' ? st.value : null;
-    S.statusPending = false;
-    cloudAccessFromStatus();
-    if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
-      S.emps = namedRoster(emps.value);
-      setPeople(people.value);
-      S.overviewRosterFresh = true;
-    } else S.overviewRosterFresh = false;
-    if (seatsDue && seats.status === 'fulfilled') { S.seats = seats.value?.seats || []; SEATS_AT = Date.now(); }   // Recruiting seats (backend/lifecycle.py)
+    if (mine > REFRESH_SHOWN.status) {
+      REFRESH_SHOWN.status = mine;
+      S.status = st.status === 'fulfilled' ? st.value : null;
+      S.statusPending = false;
+      cloudAccessFromStatus();
+    }
+    // A failed read publishes nothing, so an older refresh's good roster can still be shown.
+    if (mine > REFRESH_SHOWN.roster) {
+      if (emps.status === 'fulfilled' && people.status === 'fulfilled' && people.value?.people) {
+        REFRESH_SHOWN.roster = mine;
+        S.emps = namedRoster(emps.value);
+        // /humans carries recruiting seats too: they never replace seats a later refresh already showed.
+        setPeople(mine > REFRESH_SHOWN.seats ? people.value : {...people.value, seats: undefined});
+        S.overviewRosterFresh = true;
+      } else S.overviewRosterFresh = false;
+    }
+    if (seatsDue && seats.status === 'fulfilled' && mine > REFRESH_SHOWN.seats) { REFRESH_SHOWN.seats = mine; S.seats = seats.value?.seats || []; SEATS_AT = Date.now(); }   // Recruiting seats (backend/lifecycle.py)
   } catch (e) { S.overviewRosterFresh = false; }
   await Promise.all([v2, computers]);
   overviewRefresh();
