@@ -51,7 +51,8 @@ pub fn configured(config: &Value) -> Option<Hop> {
 /// hop the company's providers chose, or an older server's fallback without one, compacts where the turn does.
 pub fn compact_at(config: &Value, hop: &Hop) -> Value {
     let named = &config["fallback"]["compact_at"];
-    let ours = !hop.default && configured(config).is_some_and(|f| f.harness == hop.harness && f.model == hop.model);
+    let ours = !hop.default
+        && configured(config).is_some_and(|f| f.harness == hop.harness && f.model == hop.model);
     if ours && !named.is_null() {
         return named.clone();
     }
@@ -685,13 +686,23 @@ mod tests {
             "fallback": {"harness": "grok", "model": "grok-4.6", "compact_at": 500_000}});
         let named = configured(&config).unwrap();
         assert_eq!(compact_at(&config, &named), json!(500_000));
-        let company = Hop { default: true, ..named.clone() };
+        let company = Hop {
+            default: true,
+            ..named.clone()
+        };
         assert_eq!(compact_at(&config, &company), json!(600_000));
-        let other = Hop { model: "kimi-k3".into(), ..named.clone() };
+        let other = Hop {
+            model: "kimi-k3".into(),
+            ..named.clone()
+        };
         assert_eq!(compact_at(&config, &other), json!(600_000));
         // An older server sends no window on the fallback: the turn's.
-        let older = json!({"compact_at": 400_000, "fallback": {"harness": "grok", "model": "grok-4.6"}});
-        assert_eq!(compact_at(&older, &configured(&older).unwrap()), json!(400_000));
+        let older =
+            json!({"compact_at": 400_000, "fallback": {"harness": "grok", "model": "grok-4.6"}});
+        assert_eq!(
+            compact_at(&older, &configured(&older).unwrap()),
+            json!(400_000)
+        );
     }
 
     #[test]
