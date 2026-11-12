@@ -24,15 +24,20 @@ prints the stage, its version, what is still missing and, under "From earlier st
 with its newest or merged commit and the Fixes 2 page. A stage moves on by itself the moment nothing is missing.
 - **Merge.** To leave: the pull request merged. {{app_name}} queues the pull request when the task enters Merge; you do
   nothing while it waits. If GitHub takes it out of the queue you are woken once with the reason, the check and its link.
+  After a removal for `failed_checks`, read the error line of the run's `checks` job first (`gh run view <id> -R <repo>
+  --log-failed`). It names the failing leg and step ("Failed: browser-1: ...") or says "No step failed: the run was cancelled
+  from outside". Only that cancelled line allows choice 1, once for that head. Any other line is choice 3, quoting the failing
+  step and the run link. Never queue an unchanged head a second time: a second removal for failed checks at one head is
+  choice 3 whatever the line says, and Tico refuses the queue.
   Read the failed run (`gh run view <id> -R <repo> --log-failed`), then choose one:
   1. **Queue it again as it is**, only when the failure was not this change's: it came from another pull request in the
      same queue group, a runner died, or the failing test is one the repository has set aside as flaky (its quarantine
      list). Read the repository's rule on flaky tests first (its CLAUDE.md, AGENTS.md or CONTRIBUTING file): a failure
      in what this change touches is real, never queued again as it is, and so is a second removal for the same failure.
-     `tico task queue <id> --version N`.
+     After `failed_checks`, only the cancelled line above allows it. `tico task queue <id> --version N`.
   2. **Push your own fix, then send it back for review**: a rebase on the base branch, a merge conflict, a broken
-     test, or a small code fix. Check out the branch (`gh pr checkout <n> -R <repo>`), fix, push
-     (`git push --force-with-lease` after a rebase), then `tico task move <id> "Fixes 2" -m "<what you pushed and why>"
+     test, or a small code fix. Not after `failed_checks`: that is choice 3. Check out the branch (`gh pr checkout <n> -R <repo>`),
+     fix, push (`git push --force-with-lease` after a rebase), then `tico task move <id> "Fixes 2" -m "<what you pushed and why>"
      --version N`. The person's OK was for the commit the task came into Merge with: a new commit is reviewed and OK'd
      again before it merges, and {{app_name}} refuses to queue it otherwise.
   3. **Send it back to the Builder** when the failure is real and needs real work:
