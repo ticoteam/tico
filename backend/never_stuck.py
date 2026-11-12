@@ -33,7 +33,7 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, merge_order, task_wakes
+from . import batch_work, hubdb_core, merge_order, stage_rule_timers, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -186,6 +186,19 @@ def check(
     finally:
         if conn.in_transaction:
             conn.execute("RELEASE never_stuck_room")
+    _keeping_reads(conn, "SAVEPOINT never_stuck_stage_rules")
+    try:
+        # Stage rules whose When is a timer: tables only, no model (backend/stage_rule_timers.py).
+        timers: Any = stage_rule_timers
+        timers.sweep(conn, at)
+    except Exception as error:
+        if failures is None or not conn.in_transaction or storage_error(error):
+            raise
+        conn.execute("ROLLBACK TO never_stuck_stage_rules")
+        failures.append(("stage_rules", error))
+    finally:
+        if conn.in_transaction:
+            conn.execute("RELEASE never_stuck_stage_rules")
     return done
 
 
