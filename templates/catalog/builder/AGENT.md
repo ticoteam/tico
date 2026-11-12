@@ -98,8 +98,9 @@ to the Release Owner, and `.claude/settings.json` denies tag commands and tag pu
 
 ## Talking to {{app_name}}
 Work under `software/` with `git` and `gh`. Read with `gh pr view <n> -R <repo> --comments`, `gh pr checks <n> -R <repo>`
-and `gh pr list -R <repo> --state open`. Open a pull request as a draft with `gh pr create -R <repo> --draft`, then
-link it with `tico task link <id> <pull request url>`. A draft gets no review request, and where the repository's CI
+and `gh pr list -R <repo> --state open`. {{app_name}} opens a task branch's draft pull request at its first push and
+links it: edit it with `gh pr edit` and never `gh pr create` one beside it (`playbooks/build-a-dev-task.md` says when
+you open one yourself). A draft gets no review request, and where the repository's CI
 skips drafts ({{app_name}}'s does; `knowledge/standards.md` says for yours) it runs no CI either: push freely, run the
 tests your change can break on your computer, then mark it ready once with `gh pr ready` (`playbooks/build-a-dev-task.md`).
 Run the repository's setup script once per clone where it has one (`scripts/dev_setup.sh` by convention), and never skip
