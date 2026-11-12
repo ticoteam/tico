@@ -276,3 +276,30 @@ def test_an_undo_is_not_skipped_for_a_queue_that_is_only_owed(company):
         assert stage(c, task_id) == "Build"
         assert [r[0] for r in c.execute("SELECT kind FROM effects WHERE state='owed'")] == []
     assert gh.prs[(REPO, 1)]["queue_state"] == "none"
+
+
+def test_an_old_undo_retried_after_a_new_head_was_queued_still_runs(company):
+    """The old visit's undo is pinned to the old head: a new visit that queued a newer head does not make it moot. Its
+    dequeue fails once, the new head is queued meanwhile, and the retried undo still posts failure on the old head;
+    the new head ends queued with success."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    old_head = gh.prs[(REPO, 1)]["head_sha"]
+    with company.transaction() as c:
+        E.move(c, task_id, "Build", X.ANA, "Review again")
+        new_head = gh.push(REPO, 1)
+        gh.set_checks(REPO, new_head, "success")
+        seen(c, gh, 1)
+        if stage(c, task_id) != "Merge":
+            E.move(c, task_id, "next", X.ANA)
+    gh.fail_next("dequeue")  # the old undo fails once; the new head's queue is done meanwhile
+    MQ.run(company, gh)
+    MQ.run(company, gh, later(10))
+    MQ.run(company, gh, later(20))
+    with company.read() as c:
+        assert undo_states(c, task_id) == ["done"]
+    assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
+    assert gh.merge_ok[(REPO, old_head)][-1][0] is False
+    assert gh.merge_ok[(REPO, new_head)][-1][0] is True
