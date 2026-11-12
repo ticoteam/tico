@@ -34,7 +34,7 @@ interface Served { rules: Rule[]; writes: {path: string; body: Record<string, un
 
 async function serve(page: Page, errors: string[], mayChange: boolean): Promise<Served> {
   const state: Served = {writes: [], rules: [
-    rule('sr_owner', 'Owner on the team', 'eng', ['build'], {event: 'owner_changes', cond: {owner_team: 'engineering'}, then: 'block', reason: 'Not on Engineering.'}),
+    rule('sr_owner', 'Owner on the team', 'eng', ['build'], {event: 'owner_changes', cond: {owner_not_on_team: 'engineering'}, then: 'block', reason: 'Not on Engineering.'}),
     rule('sr_quiet', 'Quiet bot tasks', 'eng', [], {event: 'timer', timer: {kind: 'quiet', hours: 6}}),
     rule('sr_snooze', 'Snooze only for a real wait', '', [], {event: 'bot_snoozes', jev: 'Waiting on something outside, or blocked?', then: 'block'}),
     rule('sr_spec', 'Spec has a page', 'eng', ['spec']),
@@ -119,7 +119,7 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     // Each rule shows its cost.
     assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] [data-sr-cost]').innerText(), 'Free');
     assert.equal(await desk.locator('#sr-panel [data-sr-rule="sr_snooze"] [data-sr-cost]').innerText(), 'One Jev call per event');
-    assert.match(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] .sr-what').innerText(), /^The owner changes → owner team engineering → Block$/);
+    assert.match(await desk.locator('#sr-panel [data-sr-rule="sr_owner"] .sr-what').innerText(), /^The owner changes → owner not on engineering → Block$/);
     assert.match(await desk.locator('#sr-panel [data-sr-rule="sr_quiet"] .sr-what').innerText(), /^6 h quiet → Tell the manager$/);
 
     // Add rule starts with On = this stage.
@@ -134,11 +134,14 @@ const waitCount = (page: Page, sid: string, n: string) => page.waitForFunction((
     assert.equal(await form.locator('[data-sr-timer]').isHidden(), true, 'no timer unless When is a timer');
     await form.locator('[name=name]').fill('Sent back twice');
     await form.locator('[name=then]').selectOption('tell_owner');
+    // Owner not on team with no team named: the pipeline manager's team.
+    await form.locator('[name=owner_check]').selectOption('not_on');
     await form.locator('[type=submit]').click();
     await desk.locator('#sr-panel [data-sr-rule="sr_new"]').waitFor();
     const added = served.writes.at(-1)!;
     assert.equal(added.path, '/api/v2/stage-rules');
     assert.deepEqual([added.body['pipeline'], added.body['stages'], added.body['then'], added.body['name']], ['eng', ['build'], 'tell_owner', 'Sent back twice']);
+    assert.deepEqual(added.body['cond'], {owner_not_on_team: ''});
     assert.deepEqual(await groupNames(desk, 'stage'), ['Owner on the team', 'Sent back twice']);
     await waitCount(desk, 'build', '4');
     assert.equal(await count(desk, 'spec'), '3', 'a rule on Build is not counted on Spec');

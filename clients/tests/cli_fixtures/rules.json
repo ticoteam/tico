@@ -1841,7 +1841,7 @@
    "--event",
    "owner_changes",
    "--if",
-   "{\"owner_team\": \"engineering\"}",
+   "{\"owner_not_on_team\": \"engineering\"}",
    "--then",
    "block",
    "--reason",
@@ -1852,7 +1852,7 @@
     "tico_rules_add",
     {
      "cond": {
-      "owner_team": "engineering"
+      "owner_not_on_team": "engineering"
      },
      "event": "owner_changes",
      "kind": "stage",
@@ -1879,7 +1879,7 @@
      ],
      "event": "owner_changes",
      "cond": {
-      "owner_team": "engineering"
+      "owner_not_on_team": "engineering"
      },
      "then": "block",
      "reason": "Not on Engineering"

@@ -9,12 +9,14 @@
 'use strict';
 
 type SrEvent = 'enters' | 'owner_changes' | 'bot_snoozes' | 'timer';
+/** When: one event, or actions joined by commas (`enters,owner_changes`). */
+type SrWhen = SrEvent | (string & {});
 type SrThen = 'block' | 'tell_manager' | 'tell_owner' | 'move_back';
 type SrScope = 'stage' | 'pipeline' | 'company';
 /** A stage rule as the API sends it (backend/stage_rules.py view, plus names and `can_edit`). */
 interface StageRule {
   id: string; name: string; pipeline_id: string; stages: string[]; stage_names?: string[]; pipeline_name?: string;
-  event: SrEvent; timer?: {kind?: string; hours?: number}; cond?: Record<string, unknown>; jev?: string;
+  event: SrWhen; timer?: {kind?: string; hours?: number}; cond?: Record<string, unknown>; jev?: string;
   then: SrThen; reason?: string; status: string; scope: SrScope; cost: string; revision: number; can_edit?: boolean;
   created_by?: string; suggests?: string;
 }
@@ -34,7 +36,7 @@ const SR_BOARD = new Map<string, StageRule[] | Promise<void>>();
 /** The Add rule and Edit form's fields by name (`on` is absent for a company rule, whose On is fixed). */
 interface SrControls {
   name: HTMLInputElement; on?: HTMLSelectElement; event: HTMLSelectElement; hours: HTMLInputElement; timer_kind: HTMLSelectElement;
-  owner_team: HTMLInputElement; label: HTMLInputElement; jev: HTMLTextAreaElement; then: HTMLSelectElement; reason: HTMLInputElement;
+  owner_check: HTMLSelectElement; owner_team: HTMLInputElement; label: HTMLInputElement; jev: HTMLTextAreaElement; then: HTMLSelectElement; reason: HTMLInputElement;
 }
 const srControls = (form: HTMLFormElement) => form.elements as unknown as SrControls;
 const srTarget = (ev: Event) => ev.target as HTMLElement;
@@ -124,6 +126,14 @@ async function srReload(note = ''): Promise<void> {
   srDraw();
 }
 
+/** "A task enters or the owner changes": a When of one event or several actions. */
+function srWhen(event: string): string {
+  return event.split(',').filter(Boolean).map((e, i) => {
+    const w = srWord(SR_EVENTS, e);
+    return i ? w.charAt(0).toLowerCase() + w.slice(1) : w;
+  }).join(' or ');
+}
+
 function srHeadHTML(title: string, back = false): string {
   return `<div class="ru-side-h">${back ? '<button class="ghost" type="button" data-sr-back aria-label="Back">‹</button>' : ''}`
     + `<h2>${esc(title)}</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-sr-close aria-label="Close">✕</button></div>`;
@@ -131,10 +141,16 @@ function srHeadHTML(title: string, back = false): string {
 
 /** "When the owner changes → If owner not on engineering → Then Block": the rule in one line. */
 function srSentence(r: StageRule): string {
-  let when = srWord(SR_EVENTS, r.event);
+  let when = srWhen(r.event);
   if (r.event === 'timer' && r.timer?.hours) when = `${r.timer.hours} h ${srWord(SR_TIMERS, r.timer.kind)}`;
-  const ifs = Object.entries(r.cond || {}).filter(([, v]) => v !== '' && v !== null && v !== undefined)
-    .map(([k, v]) => `${k.replace(/_/g, ' ')} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`);
+  const ifs = Object.entries(r.cond || {}).flatMap(([k, v]): string[] => {
+    // An owner's team that is empty means the pipeline manager's team (backend/stage_rules.py CONDITIONS).
+    if (k === 'owner_on_team' || k === 'owner_not_on_team') {
+      return [`owner ${k === 'owner_on_team' ? 'on' : 'not on'} ${typeof v === 'string' && v ? v : "the manager's team"}`];
+    }
+    if (v === '' || v === null || v === undefined) return [];
+    return [`${k.replace(/_/g, ' ')} ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`];
+  });
   if (r.jev) ifs.push(`Jev: ${r.jev}`);
   return `${when}${ifs.length ? ` → ${ifs.join(', ')}` : ''} → ${srWord(SR_THENS, r.then)}`;
 }
@@ -189,16 +205,21 @@ function srFormHTML(r: StageRule | null): string {
     ? '<p class="muted">Company: every pipeline</p>'
     : `<select name="on">${srOptions<string>([['stage', `This stage (${open.stageName})`], ['pipeline', 'The whole pipeline']], on)}</select>`;
   const str = (v: unknown) => (typeof v === 'string' || typeof v === 'number' ? String(v) : '');
+  const owner = 'owner_on_team' in cond ? 'on' : 'owner_not_on_team' in cond ? 'not_on' : '';
+  const team = str(cond['owner_on_team'] ?? cond['owner_not_on_team']);
+  // A When of several actions (a default rule's) is kept as it is unless another is picked.
+  const events: [string, string][] = SR_EVENTS.some(([k]) => k === (r?.event ?? 'enters')) ? SR_EVENTS : [...SR_EVENTS, [r?.event ?? '', srWhen(r?.event ?? '')]];
   return `${srHeadHTML(r ? `Edit · ${r.name}` : `Add rule · ${open.stageName}`, true)}
     <form class="ru-form sr-form" data-sr-form="${esc(r?.id ?? '')}" data-sr-revision="${r?.revision ?? ''}">
       <label class="ru-fl"><span class="ru-lbl">Name</span><input name="name" maxlength="200" required value="${esc(r?.name ?? '')}"></label>
       <div class="ru-fl"><span class="ru-lbl">On</span>${onField}</div>
-      <label class="ru-fl"><span class="ru-lbl">When</span><select name="event">${srOptions(SR_EVENTS, r?.event ?? 'enters')}</select></label>
+      <label class="ru-fl"><span class="ru-lbl">When</span><select name="event">${srOptions(events, r?.event ?? 'enters')}</select></label>
       <div class="ru-fl sr-timer" data-sr-timer><span class="ru-lbl">Timer</span><span class="sr-row">
         <input name="hours" type="number" min="1" max="720" value="${esc(str(r?.timer?.hours) || '6')}" aria-label="Hours"> h
         <select name="timer_kind" aria-label="Timer">${srOptions(SR_TIMERS, r?.timer?.kind ?? 'quiet')}</select></span></div>
       <div class="ru-fl"><span class="ru-lbl">If <span class="ru-opt">(optional)</span></span>
-        <input name="owner_team" maxlength="200" placeholder="Owner on team (a team's id)" aria-label="Owner on team" value="${esc(str(cond['owner_team']))}">
+        <span class="sr-row"><select name="owner_check" aria-label="The owner's team">${srOptions<string>([['', 'Any owner'], ['on', 'Owner on team'], ['not_on', 'Owner not on team']], owner)}</select>
+        <input name="owner_team" maxlength="200" placeholder="A team's id; empty: the manager's team" aria-label="Team" value="${esc(team)}"></span>
         <input name="label" maxlength="200" placeholder="Has label" aria-label="Has label" value="${esc(str(cond['label']))}">
         <textarea name="jev" rows="2" maxlength="1000" placeholder="A question Jev answers" aria-label="A question Jev answers">${esc(r?.jev ?? '')}</textarea></div>
       <label class="ru-fl"><span class="ru-lbl">Then</span><select name="then">${srOptions(SR_THENS, r?.then ?? 'tell_manager')}</select></label>
@@ -232,12 +253,13 @@ function srFormOpen(r: StageRule | null): void {
 function srBody(form: HTMLFormElement, editing: StageRule | null): Record<string, unknown> {
   const open = SR as SrOpen;
   const f = srControls(form);
-  const event = f.event.value as SrEvent;
+  const event = f.event.value;
   const cond: Record<string, unknown> = {...(editing?.cond || {})};
-  for (const [key, input] of [['owner_team', f.owner_team], ['label', f.label]] as const) {
-    const v = input.value.trim();
-    if (v) cond[key] = v; else delete cond[key];
-  }
+  delete cond['owner_on_team'];
+  delete cond['owner_not_on_team'];
+  if (f.owner_check.value) cond[f.owner_check.value === 'on' ? 'owner_on_team' : 'owner_not_on_team'] = f.owner_team.value.trim();
+  const label = f.label.value.trim();
+  if (label) cond['label'] = label; else delete cond['label'];
   const body: Record<string, unknown> = {
     name: f.name.value.trim(), event, cond, jev: f.jev.value.trim(), reason: f.reason.value.trim(),
     timer: event === 'timer' ? {kind: f.timer_kind.value, hours: Number(f.hours.value) || 1} : {},

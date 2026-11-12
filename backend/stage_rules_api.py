@@ -17,7 +17,6 @@ rule reads to its caller.
   edited on the Automations page, as before.
 """
 
-import json
 from typing import Any, Literal
 
 from fastapi import Request
@@ -46,7 +45,9 @@ class StageRuleFields(Contract):
     name: str | None = Field(default=None, max_length=NAME_MAX)
     pipeline: str | None = Field(default=None, max_length=100)
     stages: list[str] | None = Field(default=None, max_length=STAGES_MAX)
-    event: Literal["enters", "owner_changes", "bot_snoozes", "timer"] | None = None
+    event: str | None = Field(
+        default=None, max_length=100, description="enters, owner_changes, bot_snoozes (comma-separated), or timer"
+    )
     timer: dict[str, Any] | None = None
     cond: dict[str, Any] | None = None
     jev: str | None = Field(default=None, max_length=TEXT_MAX)
@@ -123,15 +124,17 @@ def _stages_ok(c, pipeline_id, stages):
 
 
 def _row(c, rule_id):
-    row = c.execute("SELECT * FROM stage_rules WHERE id=?", (rule_id,)).fetchone()
-    if not row:
+    """The rule as stage_rules.view reads it (JSON decoded, `then`, its scope and cost), or 404."""
+    rule = SR.get(c, rule_id)
+    if not rule:
         raise Problem("not_found", "No such stage rule", 404)
-    return dict(row)
+    return rule
 
 
-def view(c, actor, row, names=None):
-    """A rule as its caller reads it: stage_rules.view, the names of its pipeline and stages, `can_edit`."""
-    out = SR.view(row)
+def view(c, actor, rule, names=None):
+    """A rule as its caller reads it: stage_rules.view's (from get or listed), with the names of its pipeline and
+    stages and `can_edit`."""
+    out = dict(rule)
     pid = out.get("pipeline_id") or ""
     stage_names = (names or {}).get(pid)
     if stage_names is None:
@@ -158,10 +161,11 @@ def listing(c, actor, pipeline=None, stage=None, status="active", mine=False):
         _pipeline_row(c, pipeline)
     if stage and stage not in _stage_names(c, pipeline):
         raise Problem("not_found", f"No stage {stage} in {pipeline}", 404)
-    wanted = None if status in (None, "", "any") else status
-    rows = SR.listed(c, pipeline_id=pipeline, stage_id=stage, status=wanted)
-    if status == "any":
-        rows += SR.listed(c, pipeline_id=pipeline, stage_id=stage, status="retired")
+    if status == "retired":
+        rows = [r for r in SR.listed(c, pipeline_id=pipeline, stage_id=stage, retired=True) if r.get("retired_at")]
+    else:
+        wanted = None if status in (None, "", "any") else status
+        rows = SR.listed(c, pipeline_id=pipeline, stage_id=stage, status=wanted, retired=status == "any")
     if mine:
         rows = [r for r in rows if r.get("created_by") == actor]
     names = {}
@@ -301,7 +305,7 @@ def install(app, store, auth, mutate):
                 raise Problem("conflict", "The rule changed since you read it. Read it again.", 409)
             fields = _checked(c, body.model_dump())
             pid = fields.get("pipeline_id", row["pipeline_id"])
-            stages = fields["stages"] if "stages" in fields else json.loads(row["stages"] or "[]")
+            stages = fields["stages"] if "stages" in fields else row["stages"]
             _stages_ok(c, pid, stages)
             if not H.is_bot(who.actor):
                 _refuse_unless(c, who.actor, row["pipeline_id"])
@@ -314,8 +318,9 @@ def install(app, store, auth, mutate):
     def decide(request, rule_id, body, action):
         who = request.state.identity
         auth.domain(who)
-        if not H.is_human(who.actor):
-            raise Problem("forbidden", "A bot suggests rules; a person retires, accepts or skips them.", 403)
+        bot = not H.is_human(who.actor)
+        if bot and action != "retire":
+            raise Problem("forbidden", "A bot suggests rules; a person accepts or skips them.", 403)
 
         def work(c):
             row = _row(c, rule_id)
@@ -327,19 +332,21 @@ def install(app, store, auth, mutate):
                 raise Problem("conflict", "Only a rule in force is retired; skip a suggestion.", 409)
             if action in ("accept", "skip") and row["status"] != "suggested":
                 raise Problem("conflict", "This rule is not a suggestion.", 409)
-            _refuse_unless(c, who.actor, row["pipeline_id"])
+            if not bot:
+                _refuse_unless(c, who.actor, row["pipeline_id"])
             if action == "retire":
-                SR.retire(c, who.actor, rule_id, body.why)
-            else:
-                getattr(SR, action)(c, who.actor, rule_id)
-            return {"id": rule_id}
+                # A bot's retire is a suggestion to retire it, a person's takes it out of force.
+                return {"id": SR.retire(c, who.actor, rule_id, body.why)["id"]}
+            # Accepting a suggested change answers with the rule it changed.
+            return {"id": getattr(SR, action)(c, who.actor, rule_id)["id"]}
 
-        mutate(request, body, work)
-        return fresh(who, rule_id)
+        done = mutate(request, body, work)
+        return fresh(who, done["id"])
 
     @app.post("/api/v2/stage-rules/{rule_id}/retire")
     def stage_rules_retire(request: Request, rule_id: str, body: StageRuleDecide):
-        """Retire a stage rule in force: it stops applying, and stays readable with status=retired."""
+        """Retire a stage rule in force: it stops applying, and stays readable with status=retired. A bot's retire is
+        a suggestion to retire it, which a person accepts or skips."""
         return decide(request, rule_id, body, "retire")
 
     @app.post("/api/v2/stage-rules/{rule_id}/accept")

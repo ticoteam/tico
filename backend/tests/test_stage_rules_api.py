@@ -18,7 +18,6 @@ def engineering(api):
     with api.app.state.store.transaction() as c:
         X.pipeline(c, "eng", "Engineering", stages=({"name": "Build"}, {"name": "Fixes 1"}), manager="human:ben")
         X.pipeline(c, "prod", "Product", stages=({"name": "Spec"},))
-        __import__("backend.stage_rules").stage_rules._ensure(c)  # STUB-ONLY, drop on rebase
 
 
 def add(api, body, token="ana-test", expected=200):
@@ -30,7 +29,7 @@ OWNER_ON_TEAM = {
     "pipeline": "eng",
     "stages": [BUILD],
     "event": "owner_changes",
-    "cond": {"owner_team": "engineering"},
+    "cond": {"owner_not_on_team": "engineering"},
     "then": "block",
     "reason": "The owner is not on the Engineering team.",
 }
@@ -48,11 +47,13 @@ def test_the_stage_panel_lists_every_rule_that_applies_grouped_most_specific_fir
 
     got = get(api, "stage-rules?pipeline=eng&stage=" + BUILD, token="cara-test")
     ids = [r["id"] for r in got["items"]]
-    assert ids == [build["id"], whole["id"], company["id"]]
+    # The default Snooze only for a real wait is the company's, from the start.
+    assert ids == [build["id"], whole["id"], "sr_real_wait", company["id"]]
     assert other_stage["id"] not in ids and other_pipeline["id"] not in ids
-    assert [r["scope"] for r in got["items"]] == ["stage", "pipeline", "company"]
+    assert [r["scope"] for r in got["items"]] == ["stage", "pipeline", "company", "company"]
     # Each rule says what it costs: a Jev question is one call per event, the rest are free.
-    assert [r["cost"] for r in got["items"]] == ["free", "free", "one Jev call per event"]
+    jev = "one Jev call per event"
+    assert [r["cost"] for r in got["items"]] == ["free", "free", jev, jev]
     assert got["items"][0]["stage_names"] == ["Build"] and got["items"][0]["pipeline_name"] == "Engineering"
     # Built in is listed, and read-only: it has no id to edit.
     assert got["built_in"] and all("id" not in b for b in got["built_in"])
@@ -98,8 +99,8 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
     # A suggestion does not apply yet.
     assert made["id"] not in [r["id"] for r in get(api, "stage-rules?pipeline=eng&stage=" + BUILD)["items"]]
     assert [r["id"] for r in get(api, "stage-rules?status=suggested")["items"]] == [made["id"]]
-    # A bot never accepts, skips or retires.
-    for action in ("accept", "skip", "retire"):
+    # A bot never accepts or skips.
+    for action in ("accept", "skip"):
         post(api, f"stage-rules/{made['id']}/{action}", {}, token="ops-test", expected=403)
     # A person who may change the pipeline accepts it: it applies.
     post(api, f"stage-rules/{made['id']}/accept", {}, token="cara-test", expected=403)
@@ -116,16 +117,24 @@ def test_a_bot_only_suggests_and_a_person_accepts_or_skips(api):
     assert get(api, "stage-rules?status=suggested")["items"] == []
     # Accept and skip are for suggestions; retire for a rule in force.
     post(api, f"stage-rules/{made['id']}/accept", {}, token="ben-test", expected=409)
+    # A bot's retire is a suggestion to retire it: the rule stays in force until a person accepts.
+    gone = post(api, f"stage-rules/{made['id']}/retire", {"why": "Covered elsewhere."}, token="ops-test")
+    assert gone["status"] == "suggested" and gone["suggests"] == made["id"]
+    assert made["id"] in [r["id"] for r in get(api, "stage-rules?pipeline=eng&stage=" + BUILD)["items"]]
+    post(api, f"stage-rules/{gone['id']}/accept", {}, token="ben-test")
+    assert made["id"] not in [r["id"] for r in get(api, "stage-rules?pipeline=eng&stage=" + BUILD)["items"]]
     # --mine: only the rules the caller wrote or suggested.
     add(api, {"name": "Ana's", "event": "enters", "then": "tell_owner"})
     assert [r["id"] for r in get(api, "stage-rules?status=any&mine=true", token="ops-test")["items"]] == [
         made["id"],
         change["id"],
+        gone["id"],
     ]
 
 
 def test_the_rules_page_lists_every_kind_of_rule_in_its_group_with_a_count(api):
     engineering(api)
+    before = {g["key"]: g["count"] for g in get(api, "rule-groups")["groups"]}
     add(api, OWNER_ON_TEAM)
     add(api, {**OWNER_ON_TEAM, "name": "Fixes only", "stages": [FIX]})
     add(api, {"name": "From a bot", "pipeline": "eng", "event": "enters", "then": "tell_owner"}, token="ops-test")
@@ -139,7 +148,7 @@ def test_the_rules_page_lists_every_kind_of_rule_in_its_group_with_a_count(api):
     assert labels == ["Company", "Outside", "Pipelines and stages", "Due", "Wakes", "Automations on tasks", "Built in",
                       "Suggested"]
     count = {g["key"]: g["count"] for g in got["groups"]}
-    assert count["internal"] == 1 and count["stages"] == 2
+    assert count["internal"] == 1 and count["stages"] == before["stages"] + 2
     # Suggested holds a bot's org rule and its stage rule.
     assert count["suggested"] == 2
     assert count["builtin"] == len(got["built_in"]) > 0
