@@ -18,6 +18,7 @@ from . import sources as SRC
 
 if TYPE_CHECKING:
     from .heartbeat import Context
+    from .drains import Drains
 
 LOG = logging.getLogger("tico.scheduler")
 
@@ -439,6 +440,9 @@ class Scheduler:
         self.finance_checked = {}  # Finance job -> its last start in this process
         self.marks = {}  # a controlled job's last start in this process, if its record could not be written
         self.step_marks = {}  # a Heartbeat step's last start in this process (backend/heartbeat.py `_due`)
+        # The server's drain workers (backend/drains.py) while it runs them: the automation queue, its email sends and
+        # the Workspace key check run on them, beside this pass; without them the tick drains the queue itself.
+        self.drains: "Drains | None" = None
 
     def finance_due(self, key, at, every):
         last = self.finance_checked.get(key)
@@ -532,6 +536,10 @@ class Scheduler:
             ctx.failures.append({"scheduler": type(exc).__name__})
             raise
         finally:
+            if self.drains is not None:
+                # Each worker is asked for its pass (one more after a pass still running, never two at once), even
+                # when a step of this pass raised: the workers have no timer of their own.
+                self.drains.wake()
             # Written once the whole pass has run, so every job's failure in it is on the row.
             self._record_health(ctx, started)
 
@@ -602,9 +610,13 @@ class Scheduler:
         try:
             from . import automations
 
-            automations.tick(self.store, at)  # schedules, batch times, answered turns, the queue
+            # Schedules, batch times, answered turns, the leases' upkeep; the queue too, unless a worker drains it.
+            automations.tick(self.store, at, drain=self.drains is None)
         except Exception as exc:
             failures.append({"automations": type(exc).__name__})
+        if self.drains is not None:
+            # The drains' failures since the last pass go on this pass's health row, as when they ran in it.
+            failures.extend(self.drains.take_failures())
         with SR.recording(self.store, "screening", failures) as run:
             from . import screening
 
