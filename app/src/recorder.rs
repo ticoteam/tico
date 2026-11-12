@@ -56,7 +56,7 @@ pub(crate) fn installed() -> bool {
 }
 
 /// The link that opens the Recorder on an org: `tico-recorder://open?server=<org address>`. It starts nothing.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn recorder_link(hub: &Url) -> String {
     let mut link = Url::parse("tico-recorder://open").expect("a fixed link");
     link.query_pairs_mut().append_pair("server", hub.as_str());
