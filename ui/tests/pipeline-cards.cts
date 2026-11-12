@@ -15,15 +15,15 @@ const path = require('node:path');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
 
-const me = {id: 'chris', name: 'Chris', email: 'chris@acme.example', role: 'owner', mover: true, cloud: true};
+const me = {id: 'ana', name: 'Ana', email: 'ana@acme.example', role: 'owner', mover: true, cloud: true};
 const config = {version: '0.1.0', app_name: 'Tico', local: true};
-const people = [{id: 'chris', name: 'Chris'}, {id: 'sam', name: 'Sam Rivera'}];
+const people = [{id: 'ana', name: 'Ana'}, {id: 'sam', name: 'Sam Rivera'}];
 const bots = [{name: 'ui-owner', display_name: 'UI Owner', host: 'keeper', status: 'active', can_chat: true, schedules: []},
   {name: 'perf', display_name: 'Performance Owner', host: 'keeper', status: 'active', can_chat: true, schedules: []}];
 const req = {kind: 'owner_done', settings: {}, can_push_past: true, who_oks: 'none', person_id: null, line: ''};
 const stage = (id: string, name: string) => ({id, name, purpose: '', owner: null, by_hand: false, task_limit: null,
   expected_minutes: null, expected_bots_only: false, on_enter: {}, requirements: [req]});
-const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:chris', private: false,
+const pipeline = {id: 'product', name: 'Product', goal: '', prefix: 'P', manager_id: null, owner_id: 'human:ana', private: false,
   factory_id: null, preset: null, settings_version: 1, retired_at: null,
   stages: [stage('ideas', 'Ideas'), stage('spec', 'Spec'), stage('dev', 'In development')],
   done: {id: 'done', name: 'Done'}, closed: {id: 'closed', name: 'Closed'}, may_change: true};
@@ -37,8 +37,8 @@ const brief = (id: string, title: string, extra: Record<string, unknown> = {}) =
 const title = (i: number) => i === 0 ? LONG : i === 4 ? 'Saved carts' : `Product brief: idea number ${i + 1}, a title long enough to need its second line`;
 const IDEAS = Array.from({length: 25}, (_, i) => brief(`i${i}`, title(i),
   i === 1 ? {owner_id: 'human:sam'} : i === 2 ? {requester_id: 'bot:perf', owner_id: 'bot:perf', late: {since: ago(5), level: 'told'}} : {}));
-const TASKS = [...IDEAS, brief('s1', 'Pipeline board: see who asked and who owns each card', {stage_id: 'spec', requester_id: 'human:chris',
-  turn: {state: 'person', who: 'human:chris', line: 'Waiting on Chris', since: ago(2)}})];
+const TASKS = [...IDEAS, brief('s1', 'Pipeline board: see who asked and who owns each card', {stage_id: 'spec', requester_id: 'human:ana',
+  turn: {state: 'person', who: 'human:ana', line: 'Waiting on Ana', since: ago(2)}})];
 
 async function serve(page: Page, errors: string[]): Promise<void> {
   page.on('pageerror', (error: Error) => errors.push(error.message));
