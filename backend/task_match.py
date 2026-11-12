@@ -91,7 +91,7 @@ def parse(
             )
         )
     if turn is not None:
-        m.turn = [v for v in _values(turn, "turn") if v not in hidden]
+        m.turn = [v for v in _values(turn, "turn") or [] if v not in hidden]
         m.sql.append(("status='open'", []))
     if due is not None:
         if due not in DUE:
