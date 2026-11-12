@@ -500,6 +500,40 @@ def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(
     assert 'wake_once' not in detail
 
 
+def test_a_run_cancelled_by_its_concurrency_group_is_not_a_failed_check(api):
+    """Nov 12 stress run, I38: GitHub cancelled a duplicate workflow run (its concurrency group) and the owner was told
+    the checks failed, so it pushed an empty commit. A cancelled suite superseded by a newer one of its App is left
+    out; a cancel with nothing after it says so plainly. A failed or timed-out check is still a failure."""
+    assert [G._check_state(r) for r in ('cancelled', 'stale', 'failure', 'timed_out')] == [
+        'cancelled',
+        'cancelled',
+        'failing',
+        'failing',
+    ]
+    two = {'suite:github-actions#1': 'cancelled', 'suite:github-actions#2': 'passing'}
+    assert G._overall(two) == 'passing'
+    assert G._overall({**two, 'suite:github-actions#2': 'pending'}) == 'pending'
+    assert G._overall({'suite:github-actions#1': 'cancelled', 'suite:vercel#3': 'passing'}) == 'cancelled'
+    assert G._overall({'suite:github-actions#1': 'cancelled', 'lint': 'failing'}) == 'failing'
+    _app(api)
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Duplicate CI', 'body': 'x', 'links': [PR]})
+    hook(api, 'pull_request', pr_event('opened', head={'sha': 'a' * 40}))
+    _suite(api, 'github-actions', 'queued', id=2)  # the newer run starts and cancels the older one
+    _suite(api, 'github-actions', 'completed', 'cancelled', id=1)
+    assert _burst(api, task['id']) == []
+    _suite(api, 'github-actions', 'completed', 'success', id=2)
+    assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
+    # A new commit whose only run was cancelled, with none after it: re-run it, there is no code to fix.
+    hook(api, 'pull_request', pr_event('synchronize', head={'sha': 'b' * 40}))
+    _suite(api, 'github-actions', 'completed', 'cancelled', sha='b' * 40, id=3)
+    assert _burst(api, task['id'])[-1] == (
+        f"Checks finished on tico#412: cancelled, not failed (github-actions); re-run them, there is no code to fix "
+        f"{PR}/checks at {'b' * 12}"
+    )
+    link = get(api, 'tasks/' + task['id'] + '/links')['links'][0]
+    assert link['checks'] == 'cancelled'
+
+
 def test_an_all_skipped_head_reads_pending_never_green(api):
     """A draft pull request's run skips every job; nothing on main requires a check, so a head whose every check was
     skipped has not been checked. It reads pending and finishes nothing; one real pass beside the skips is green."""

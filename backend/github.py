@@ -978,23 +978,54 @@ def _suite_key(suite, run):
 
 
 def _check_state(result):
-    """One check's result as the link keeps it: passing, skipped, pending or failing."""
+    """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
+    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand."""
     return (
         "passing"
         if result in ("success", "neutral")
         else "skipped"
         if result == "skipped"
+        else "cancelled"
+        if result in ("cancelled", "stale")
         else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
     )
 
 
+def _counted(checks):
+    """A head's checks without each cancelled suite that a newer suite of the same App superseded (a concurrency group
+    cancels the older duplicate workflow run when the newer one starts: Nov 12 stress run, I38). GitHub's suite ids
+    only grow; a suite with no id is never superseded."""
+
+    def split(key):
+        app, _, sid = key[6:].partition("#")
+        return app, int(sid) if sid.isdigit() else 0
+
+    newest = {}
+    for key in checks:
+        if key.startswith("suite:"):
+            app, sid = split(key)
+            newest[app] = max(newest.get(app, 0), sid)
+    return {
+        k: v
+        for k, v in checks.items()
+        if not (v == "cancelled" and k.startswith("suite:") and split(k)[1] and split(k)[1] < newest[split(k)[0]])
+    }
+
+
 def _overall(checks):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else passing. A head
-    whose every check was skipped has not been checked (a draft pull request's run skips every job, and nothing on
-    main requires a check), so it reads pending: an all-skipped head never reads green."""
-    states = set(checks.values())
+    """A head's checks as one state: failing if any failed, else pending if any is still going, else cancelled if one
+    was cancelled with nothing newer of its App after it (`_counted`), else passing. A head whose every check was
+    skipped has not been checked (a draft pull request's run skips every job, and nothing on main requires a check), so
+    it reads pending: an all-skipped head never reads green."""
+    states = set(_counted(checks).values())
     return (
-        "failing" if "failing" in states else "pending" if "pending" in states or states <= {"skipped"} else "passing"
+        "failing"
+        if "failing" in states
+        else "pending"
+        if "pending" in states or states <= {"skipped"}
+        else "cancelled"
+        if "cancelled" in states
+        else "passing"
     )
 
 
@@ -1025,13 +1056,15 @@ def _dropped(checks, kept):
     """The worst state of a non-passing check that the stored copy `kept` leaves out, or None. The copy cannot show it,
     so the link keeps this marker (`checks_dropped`) until a fresh read from GitHub (`apply_checks`) stores the head's
     whole list again: the head reads no better than this while the copy's own checks turn green."""
-    gone = [state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped")]
+    gone = [
+        state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped", "cancelled")
+    ]
     return "failing" if "failing" in gone else "pending" if gone else None
 
 
 def _with_dropped(state, dropped):
     """A head's state as a webhook reads it from the stored copy: the copy's state, or the dropped check's if worse."""
-    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else "passing"
+    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else state
 
 
 def _worst(a, b):
@@ -1069,21 +1102,33 @@ def _still_going(detail):
 
 def _finish(c, task, link, detail, full, checks):
     """Every check on head `full` has finished: the head's one `pr_checks_done` per result. A redelivery or a re-run that
-    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. Returns (head, outcome)
-    either way."""
-    failed = list(
-        dict.fromkeys(k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in checks.items() if v == "failing")
-    )
-    outcome = "fail" if failed else "pass"
+    ends the same way says nothing new, unless the bot armed the link again to hear that re-run. A head whose only
+    non-passing check was cancelled (and not superseded, `_counted`) says so: re-run it, there is no code to fix.
+    Returns (head, outcome) either way."""
+    counted = _counted(checks)
+
+    def named(state):
+        return list(
+            dict.fromkeys(
+                k[6:].split("#")[0] if k.startswith("suite:") else k for k, v in counted.items() if v == state
+            )
+        )
+
+    failed, cancelled = named("failing"), named("cancelled")
+    outcome = "fail" if failed else "cancelled" if cancelled else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
         return full, outcome
     detail["checks_done"] = list(dict.fromkeys(finished + [f"{full}:{outcome}"]))[-10:]
     sha = full[:12]
-    done = (
-        f"Checks finished on {link['title']}: {'failed (' + ', '.join(failed) + ')' if failed else 'passed'} "
-        f"{link['url']}/checks" + (f" at {sha}" if sha else "")
+    said = (
+        "failed (" + ", ".join(failed) + ")"
+        if failed
+        else "cancelled, not failed (" + ", ".join(cancelled) + "); re-run them, there is no code to fix"
+        if cancelled
+        else "passed"
     )
+    done = f"Checks finished on {link['title']}: {said} {link['url']}/checks" + (f" at {sha}" if sha else "")
     armed = fire_once(detail, done)
     queue_checks_done(c, task, full, outcome, done, armed)
     return full, outcome

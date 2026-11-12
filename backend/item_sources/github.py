@@ -39,7 +39,9 @@ if TYPE_CHECKING:
 Row = dict[str, Any]
 
 PR_STATES = ("open", "closed", "merged")
-CHECK_STATES = ("none", "pending", "success", "skipped", "failure")  # skipped: every check that counts was skipped
+# skipped: every check that counts was skipped. cancelled: the newest run of a check was cancelled (or went stale) with
+# no run after it, and nothing failed: it is re-run, there is no code to fix.
+CHECK_STATES = ("none", "pending", "success", "skipped", "cancelled", "failure")
 QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
@@ -251,7 +253,8 @@ def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, v
 
 
 def _checks_state(checks: list[Row]) -> str:
-    """failure if any of the checks that count failed, else pending if any runs, else success if at least one passed;
+    """failure if any of the checks that count failed, else pending if any runs, else cancelled if one's newest run was
+    cancelled (`latest_checks` already left out a cancel a newer run superseded), else success if at least one passed;
     skipped when every one was skipped (or neutral): nothing ran and passed, so that is not passing. none when there
     are none. Tico's own check runs (`tico`) never count."""
     states = [str(check.get("state") or "") for check in checks if not check.get("tico")]
@@ -261,6 +264,8 @@ def _checks_state(checks: list[Row]) -> str:
         return "failure"
     if "pending" in states:
         return "pending"
+    if "cancelled" in states:
+        return "cancelled"
     if "success" in states:
         return "success"
     return "skipped"
@@ -280,14 +285,26 @@ def check_key(check: Row) -> str:
 
 def latest_checks(checks: list[Row]) -> list[Row]:
     """One row per check (`check_key`), the newest run of each by its GitHub id (ids only grow); a row with an equal or
-    unknown id replaces the one before it. First-seen order is kept."""
+    unknown id replaces the one before it. First-seen order is kept. A cancelled run is left out when a newer run of
+    the same name and App exists in another suite: a concurrency group cancels the older duplicate of a workflow run,
+    and the newer one is the check (Nov 12 stress run, I38). Only a cancel is superseded so: a red run in one suite is
+    never hidden behind another suite's newer run."""
     out: dict[str, Row] = {}
     for check in checks:
         key = check_key(check)
         old = out.get(key)
         if old is None or int(check.get("id") or 0) >= int(old.get("id") or 0):
             out[key] = check
-    return list(out.values())
+    newest: dict[tuple[str, str], int] = {}
+    for check in out.values():
+        named = (str(check.get("app") or ""), str(check.get("name") or "Checks"))
+        newest[named] = max(newest.get(named, 0), int(check.get("id") or 0))
+    return [
+        check
+        for check in out.values()
+        if check.get("state") != "cancelled"
+        or int(check.get("id") or 0) >= newest[(str(check.get("app") or ""), str(check.get("name") or "Checks"))]
+    ]
 
 
 def run_check(run: Row, app_slug: str | None) -> Row:
@@ -643,8 +660,10 @@ def real_failure(check: object) -> bool:
 
 
 def check_state(status: object, conclusion: object) -> str:
-    """A check run's or status's state as metadata keeps it: pending, success, skipped or failure. A neutral run is
-    skipped: it fails nothing, and it is not a check that ran and passed."""
+    """A check run's or status's state as metadata keeps it: pending, success, skipped, cancelled or failure. A neutral
+    run is skipped: it fails nothing, and it is not a check that ran and passed. A cancelled (or stale) run failed
+    nothing either: GitHub cancels a duplicate run of a concurrency group, or someone did by hand. A failed or timed-out
+    run is a failure."""
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
     result = str(conclusion or status or "")
@@ -652,6 +671,8 @@ def check_state(status: object, conclusion: object) -> str:
         return "success"
     if result in ("neutral", "skipped"):
         return "skipped"
+    if result in ("cancelled", "stale"):
+        return "cancelled"
     if result in ("pending", "queued", "in_progress", "requested", "waiting", ""):
         return "pending"
     return "failure"
@@ -1089,7 +1110,7 @@ WAKE_MERGED_ANYWAY = "merged_anyway"
 WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze (`snooze_news`); the name predates other stages
-CHECKS_DONE = ("success", "failure", "skipped")
+CHECKS_DONE = ("success", "failure", "skipped", "cancelled")
 # "#3417" or "owner/repo#3417" in a snooze's reason: a PR it waits on. A bare number is in the task's own repository.
 PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
@@ -1175,11 +1196,18 @@ def queue(conn: "sqlite3.Connection", task: Row, by: str) -> list[Row]:
     return [e for e in owed if e]
 
 
-def failing_names(metadata: Row) -> str:
-    """The names of the checks that failed on a PR's newest commit, Tico's own left out."""
+def failing_names(metadata: Row, state: str = "failure") -> str:
+    """The names of the checks that failed (or, with `state`, were cancelled) on a PR's newest commit, Tico's own left
+    out, each once."""
     checks: list[Row] = metadata.get("checks") or []
-    names = [str(c.get("name")) for c in checks if c.get("state") == "failure" and not c.get("tico")]
-    return ", ".join(names) or "a check"
+    names = [str(c.get("name")) for c in checks if c.get("state") == state and not c.get("tico")]
+    return ", ".join(dict.fromkeys(names)) or "a check"
+
+
+def cancelled_line(metadata: Row, at: str = "") -> str:
+    """What to say of a PR whose checks were cancelled, not failed: the owner re-runs them instead of fixing code."""
+    where = f" at {at}" if at else ""
+    return f"were cancelled{where}, not failed: {failing_names(metadata, 'cancelled')}. Re-run them; there is no code to fix"
 
 
 def conflicts(conn: "sqlite3.Connection", task_id: str, repo: str, number: int) -> bool:
@@ -1256,6 +1284,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
+        if metadata["checks_state"] == "cancelled":
+            refuse("task_requirement", f"The checks on {ref} {cancelled_line(metadata)}")
         removals = failed_checks_removals(conn, task_id, visit_id, str(metadata["head_sha"]))
         named = [removal for removal in removals if removal.get("real")]
         if named:
@@ -1421,7 +1451,7 @@ def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str, 
 
 
 def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> int:
-    """The checks on a PR's newest commit finished (passed, failed or were all skipped), or finished again another way:
+    """The checks on a PR's newest commit finished (passed, failed, were cancelled or were all skipped), or finished again another way:
     `snooze_news` for each task that links it. Returns how many were woken."""
     state, head = str(after.get("checks_state") or ""), str(after.get("head_sha") or "")
     if after["state"] != "open" or state not in CHECKS_DONE or not head:
@@ -1433,6 +1463,8 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
         lead = f"The checks on {ref} passed at {head[:12]}."
     elif state == "failure":
         lead = f"Checks failed on {ref} at {head[:12]}: {failing_names(after)}."
+    elif state == "cancelled":
+        lead = f"The checks on {ref} {cancelled_line(after, head[:12])}."
     else:
         lead = f"Every check on {ref} was skipped at {head[:12]}."
     return sum(snooze_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
@@ -1947,6 +1979,8 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
         return Standing(
             requirement, NOT_MET, task.get("owner_id"), f"Checks failed on {ref}: {failing_names(metadata)}"
         )
+    if state == "cancelled":
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"Checks on {ref} {cancelled_line(metadata)}")
     if state == "skipped":
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks ran on {ref}: every check was skipped")
     if state == "pending":
@@ -1968,12 +2002,12 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
 
 
 def runs_checks(conn: "sqlite3.Connection", repo: str) -> bool:
-    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed or skipped), not counting
+    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed, cancelled or skipped), not counting
     Tico's own. Read from saved PRs, so it costs no call to GitHub; a repo's first PR has none to go by (C13 then)."""
     prefix = repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "#%"
     found = conn.execute(
         "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' "
-        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped') LIMIT 1",
+        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped', 'cancelled') LIMIT 1",
         (SOURCE, PR, prefix),
     ).fetchone()
     return found is not None
