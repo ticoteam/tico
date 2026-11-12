@@ -61,6 +61,12 @@ pub static APPENDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUs
 pub struct State {
     pub directory: PathBuf,
     conn: Arc<Mutex<Connection>>,
+    /// A second connection for reading the outbox to upload it (`pending_after`). Under WAL a reader does not wait for the
+    /// writer, so an upload's read does not queue behind every turn's appends and their fsyncs on `conn`.
+    reader: Arc<Mutex<Connection>>,
+    /// The event rows written since this process started and not yet acknowledged, summed in memory for
+    /// crate::upload_pace, so pacing a turn's uploads never waits on this connection or its fsyncs.
+    pub outbox: Arc<crate::upload_pace::Outbox>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +77,21 @@ pub struct Unfinished {
     pub phase: String,
     #[allow(dead_code)]
     pub completion: Option<String>,
+}
+
+/// The first 100 events of `aid` past both its stored ack and `acked`.
+fn pending_rows(c: &Connection, aid: &str, acked: i64) -> rusqlite::Result<Vec<Value>> {
+    let mut stmt = c.prepare_cached(
+        "SELECT e.seq, e.kind, e.payload FROM events e JOIN attempts a ON a.id=e.attempt_id \
+         WHERE e.attempt_id=? AND e.seq>max(a.ack,?) ORDER BY e.seq LIMIT 100",
+    )?;
+    let rows = stmt.query_map(params![aid, acked], |r| {
+        let seq: i64 = r.get(0)?;
+        let kind: String = r.get(1)?;
+        let payload: String = r.get(2)?;
+        Ok(json!({"seq": seq, "kind": kind, "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)}))
+    })?;
+    rows.collect()
 }
 
 fn sql(e: rusqlite::Error) -> String {
@@ -100,9 +121,16 @@ impl State {
             .map_err(sql)?;
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| e.to_string())?;
+        let reader = Connection::open(&path).map_err(sql)?;
+        reader
+            .busy_timeout(std::time::Duration::from_secs(10))
+            .map_err(sql)?;
+        reader.execute_batch("PRAGMA query_only=ON;").map_err(sql)?;
         Ok(State {
             directory: directory.to_path_buf(),
             conn: Arc::new(Mutex::new(conn)),
+            reader: Arc::new(Mutex::new(reader)),
+            outbox: Arc::default(),
         })
     }
 
@@ -252,6 +280,7 @@ impl State {
                 params![aid, seq, kind, text],
             )?;
             tx.commit()?;
+            self.outbox.wrote(aid, seq, [(kind, text.len())]);
             Ok(seq)
         })
     }
@@ -278,24 +307,36 @@ impl State {
                     insert.execute(params![aid, first + offset as i64, kind, text])?;
                 }
             }
-            tx.commit()
+            tx.commit()?;
+            self.outbox.wrote(
+                aid,
+                first,
+                rows.iter().map(|(kind, text)| (kind.as_str(), text.len())),
+            );
+            Ok(())
         })
     }
 
     /// At most 100 events past the server's ack, oldest first, as the events endpoint takes them.
     pub fn pending(&self, aid: &str) -> Result<Vec<Value>, String> {
+        self.with(|c| pending_rows(c, aid, 0))
+    }
+
+    /// `pending` on the reader connection, after `acked` too (an ack the server gave that is not stored yet).
+    pub fn pending_after(&self, aid: &str, acked: i64) -> Result<Vec<Value>, String> {
+        let c = self.reader.lock().unwrap_or_else(|p| p.into_inner());
+        pending_rows(&c, aid, acked).map_err(sql)
+    }
+
+    /// The attempt's newest recorded seq (0 before its first event).
+    #[cfg(test)]
+    pub fn last_seq(&self, aid: &str) -> Result<i64, String> {
         self.with(|c| {
-            let mut stmt = c.prepare(
-                "SELECT e.seq, e.kind, e.payload FROM events e JOIN attempts a ON a.id=e.attempt_id \
-                 WHERE e.attempt_id=? AND e.seq>a.ack ORDER BY e.seq LIMIT 100",
-            )?;
-            let rows = stmt.query_map(params![aid], |r| {
-                let seq: i64 = r.get(0)?;
-                let kind: String = r.get(1)?;
-                let payload: String = r.get(2)?;
-                Ok(json!({"seq": seq, "kind": kind, "payload": serde_json::from_str::<Value>(&payload).unwrap_or(Value::Null)}))
-            })?;
-            rows.collect()
+            c.query_row(
+                "SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?",
+                params![aid],
+                |r| r.get(0),
+            )
         })
     }
 
@@ -306,7 +347,9 @@ impl State {
                 params![seq, aid],
             )
             .map(|_| ())
-        })
+        })?;
+        self.outbox.acked(aid, seq);
+        Ok(())
     }
 
     pub fn finish(&self, aid: &str, completion: &Map<String, Value>) -> Result<Value, String> {

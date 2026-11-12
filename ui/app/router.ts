@@ -21,6 +21,7 @@ function route(hash: string = location.hash): void {
   if (hash === DECIDE || hash.startsWith(DECIDE + '?')) {
     const q = new URLSearchParams(hash.split('?')[1] || '');
     DECIDE_WANT = q.get('item') || q.get('task') || q.get('approval') || '';
+    DECIDE_STAGE = DECIDE_WANT ? '' : q.get('stage') || '';
     location.replace(NEEDS_YOU); return;
   }
   overviewStop(); graphStop(); DASH = null;
@@ -101,6 +102,9 @@ function route(hash: string = location.hash): void {
     // A bot's page is at its id; a link that names it by slug (typed, or from before ids) moves to the id.
     const [ref = '', tab] = S.route.slice(6).split('/'), found = botByRef(decodeURIComponent(ref));
     if (found && found.id !== decodeURIComponent(ref)) { location.replace('#/bot/' + encodeURIComponent(found.id) + (tab !== undefined ? '/' + tab : '')); return; }
+    // The Assistant is talked to on the person's own Assistant page: its bot page, or the Home and DM it does not have,
+    // goes on there. Its other tabs (settings, tasks, files) stay on the bot page.
+    if ((found?.id || decodeURIComponent(ref)) === assistantBot() && (!tab || tab === 'home' || tab === 'dm')) { location.replace(ASSISTANT); return; }
     pageBot(decodeURIComponent(ref), tab);
   }
   else if (S.route === THREADS_ROUTE || S.route.startsWith(THREADS_ROUTE + '?')) pageThreads();

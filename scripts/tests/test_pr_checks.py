@@ -513,6 +513,65 @@ def test_rule_6_follows_helpers_matches_names_and_runs_every_script_past_the_lim
     assert {"a", "b"} <= set(picked["browser"]) and any("rule 6" in u for u in picked["uncertain"])
 
 
+def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_path):
+    # Nov 12: #3485 changed taskModalOpen in ui/app/task-modal.ts; task-code.cts calls it but was not selected, and the
+    # release check went red. A script that names a top-level function or const whose definition the diff changes runs;
+    # one that names only an unchanged global of the same file does not.
+    def git(*args):
+        return subprocess.check_output(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@acme.example", *args], cwd=tmp_path, text=True
+        ).strip()
+
+    git("init", "-q", "-b", "main")
+    smoke_tree(tmp_path)
+    modal = (ROOT / "ui/app/task-modal.ts").read_text()
+    source(tmp_path, "ui/app/task-modal.ts", modal)
+    source(tmp_path, "ui/tests/task-code.cts", (ROOT / "ui/tests/task-code.cts").read_text())
+    source(tmp_path, "ui/tests/other.cts", "await page.evaluate(() => taskModalLoadFailed('t', null));\n")
+    git("add", "-A")
+    git("commit", "-qm", "Start")
+    base = git("rev-parse", "HEAD")
+
+    def change(old, new):
+        text = (tmp_path / "ui/app/task-modal.ts").read_text()
+        assert old in text
+        source(tmp_path, "ui/app/task-modal.ts", text.replace(old, new, 1))
+        git("commit", "-qam", "Change")
+        return checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+
+    start = modal.index("async function taskModalOpen(")
+    body = modal.index("\n", start) + 1
+    line = modal[body : modal.index("\n", body) + 1]
+    picked = change(line, line + "  void 0;\n")  # one line inside taskModalOpen
+    assert "task-code" in picked["browser_direct"] and "task-code" in picked["browser"]
+    assert "other" not in picked["browser_direct"]
+    assert checks.changed_definitions(base, "HEAD", ["ui/app/task-modal.ts"], tmp_path) == {
+        "ui/app/task-modal.ts": {"taskModalOpen"}
+    }
+    git("reset", "-q", "--hard", base)
+    picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
+    assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    # A deleted UI file names its old functions: a script still calling one runs.
+    git("reset", "-q", "--hard", base)
+    git("rm", "-q", "ui/app/task-modal.ts")
+    git("commit", "-qm", "Delete")
+    picked = checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+    assert {"task-code", "other"} <= set(picked["browser_direct"])
+    # Without a base (no diff to read), the rule picks nothing new.
+    assert "task-code" not in checks.selection(["ui/app/task-modal.ts"], root=tmp_path, core=[])["browser_direct"]
+
+
+def test_changed_definitions_maps_added_and_removed_lines_to_their_top_level_names():
+    old = "const A = 1;\n\nfunction b() {\n  return A;\n}\n// note\nlet c = 2;\n"
+    new = "const A = 1;\n\nfunction b() {\n  return A + 1;\n}\n// note changed\nlet c = 2;\nasync function d() {}\n"
+    spans = checks.top_level_spans(new)
+    assert [s[0] for s in spans] == ["A", "b", "c", "d"]
+    diff = "@@ -4 +4 @@\n-  return A;\n+  return A + 1;\n@@ -6 +6 @@\n-// note\n+// note changed\n@@ -7,0 +8 @@\n+x\n"
+    assert checks.hunk_names(diff, old, new) == {"b", "d"}
+    # A removed function is named by the old side.
+    assert checks.hunk_names("@@ -3,3 +2,0 @@\n-x\n-y\n-z\n", old, "const A = 1;\n\n// note\nlet c = 2;\n") == {"b"}
+
+
 PHONE_SCRIPTS = {
     f"phone-dead-ends-{state}" for state in ("bot-waiting", "no-computer", "no-credit", "setup-halfway", "sign-off")
 }
@@ -2332,6 +2391,23 @@ def test_a_light_pull_request_runs_the_tests_a_change_reaches_directly_and_the_s
     assert checks.narrow(empty, [], "pull_request", root=tmp_path) is empty
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_migration_change_runs_the_upgrade_tests_even_in_a_light_plan(event, repo_map):
+    # Nov 12: #3469 added a migration with an index on tasks.private. Its light plan kept only the tests one step from
+    # the file, not test_task_privacy.py's legacy upgrade tests, and the release check found the crash instead.
+    migration = "backend/migrations/20261112080000_needs_you_per_person.py"
+    for changed in ([migration], ["backend/migrations/__init__.py"]):
+        picked = checks.selection(changed, event, graph=repo_map, added=changed[:1] if changed == [migration] else [])
+        light = checks.narrow(picked, changed, event, added=[], graph=repo_map)
+        assert set(checks.UPGRADE_TESTS) <= set(light["python"]), changed
+        assert all(light["narrow"]["tier"][t] == 0 for t in checks.UPGRADE_TESTS), changed
+    assert all((ROOT / t).is_file() for t in checks.UPGRADE_TESTS)
+    # Another change keeps its own plan: the upgrade tests it reaches are not lifted to always run.
+    other = ["backend/health.py"]
+    tier = checks.narrow(checks.selection(other, event, graph=repo_map), other, event, graph=repo_map)["narrow"]["tier"]
+    assert not any(tier.get(t) == 0 for t in checks.UPGRADE_TESTS)
+
+
 def test_a_light_plan_caps_its_python_tests_by_priority_and_a_changed_test_always_runs():
     tier = {"changed.py": 0, "smoke.py": 1, "near_short.py": 2, "near_long.py": 2, "far.py": 3}
     seconds = {"changed.py": 50, "smoke.py": 20, "near_short.py": 10, "near_long.py": 40, "far.py": 5}
@@ -2357,7 +2433,7 @@ def test_a_light_pull_request_plan_runs_at_most_four_python_vms_and_lists_what_i
     monkeypatch.setattr(checks, "DependencyMap", lambda root: "graph")
     far = "backend/tests/test_far.py"
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*sorted(files), far], "reason": "measured", "uncertain": []}
 
@@ -2445,7 +2521,7 @@ def test_a_light_plan_adds_the_smoke_set_only_when_it_drops_a_test_and_packs_wit
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
     size = {"n": 14}
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": direct[: size["n"]], "reason": "measured", "uncertain": []}
 
@@ -2510,7 +2586,7 @@ def test_a_light_plan_packs_untimed_files_with_the_cap_estimate_and_keeps_the_sm
     monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
 
-    def fake_selection(changed_files, event, base=None, added=None, graph=None):
+    def fake_selection(changed_files, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"browser": [], "caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": [*changed, "backend/tests/test_far.py"], "reason": "measured", "uncertain": []}
 
@@ -2555,7 +2631,7 @@ def test_no_planned_test_job_runs_past_the_target_for_a_full_or_narrowed_selecti
         json.dumps({**{name: 25800 / 930 for name in files}, **{f"ui/tests/{n}.cjs": 60 for n in names}})
     )
 
-    def fake_selection(changed, event, base=None, added=None, graph=None):
+    def fake_selection(changed, event, base=None, added=None, graph=None, head="HEAD"):
         empty = {"caddy": False, "contracts": False, "conformance": False, "rust": []}
         return {**empty, "python": list(files), "browser": list(names), "reason": "measured", "uncertain": []}
 

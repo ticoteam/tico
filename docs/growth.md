@@ -13,7 +13,9 @@ Examples use Acme, a home-cleaning company.
 ## The page
 
 The head shows the North Star line (when one is set), a **Growth board** link and, when two or more months have numbers, a
-month picker. The owner and admins get **Settings**, which holds the channels, the numbers the maths uses and a **Where
+month picker. The Growth board link, and each "+N more" on the cards, opens Tasks on the company's Growth Experiments
+pipeline (the one the growth packs file ideas into; a channel's keeps its `channel:<slug>` tag); with no such pipeline
+there is no link. The owner and admins get **Settings**, which holds the channels, the numbers the maths uses and a **Where
 numbers come from** link to Sources; anyone else gets a **Sources** link.
 
 The page is the place `growth` (`backend/cards.py`, the same grid and card forms as the Dashboard). A Growth page nobody

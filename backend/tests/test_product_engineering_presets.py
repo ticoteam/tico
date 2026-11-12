@@ -156,8 +156,8 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     assert (validate["person_id"], validate["settings"]["with_release"]) == (None, True)  # Jev only; G15
     fixes_2 = stages["engineering-fixes-2"]["requirements"][1]
     assert (fixes_2["person_id"], fixes_2["who_oks"]) == (ANA, "people_only")
-    assert "checks pass at the newest commit" in fixes_2["settings"]["rubric"]
-    assert "what Reviewer 1 and Reviewer 2 found" in fixes_2["settings"]["rubric"]
+    assert "the checks at the newest commit" in fixes_2["settings"]["rubric"]
+    assert "what Reviewer 1 and Reviewer 2 each found" in fixes_2["settings"]["rubric"]
     # The two person sign-offs are the only people-only OKs, and the only requirements naming a person.
     people_only = sorted(sid for sid, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only")
     assert people_only == ["engineering-fixes-2", "product-spec"]

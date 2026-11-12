@@ -22,7 +22,7 @@ interface Person { id: string; name: string; email: string; role: string; compan
 type Settings = {team: string; weeks?: number};
 // App global: the signed-in person, and the employee list the page loads before it draws.
 declare const S: {me: Person | null; emps?: unknown[]};
-const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
+const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900}, LAPTOP = {width: 1280, height: 800};
 const OWNER: Person = {id: 'ana', name: 'Ana Silva', email: 'ana@acme.example', role: 'owner', company_role: 'owner', cloud: true, bot_admin: true};
 const MEMBER: Person = {id: 'cara', name: 'Cara Diaz', email: 'cara@acme.example', role: 'human', company_role: 'member', cloud: true};
 const ago = (minutes: number) => new Date(Date.now() - minutes * 60000).toISOString();
@@ -31,7 +31,8 @@ const NAMES: Record<string, string> = {tasks_by_status: 'Tasks by status', done_
   my_tasks: 'My tasks', updates: 'Updates'};
 const weeks = (n: number) => Array.from({length: n}, (_, i) => ({week: `2026-${String(8 + Math.floor(i / 4)).padStart(2, '0')}-${String(1 + i % 4 * 7).padStart(2, '0')}`, done: [3, 5, 2, 8, 6, 4, 9, 7][i % 8]!}));
 const DATA: Record<string, (s?: Settings) => unknown> = {
-  tasks_by_status: () => ({counts: {open: 4, doing: 2, waiting: 1, done: 7}}),
+  // The server counts open and done only (backend/cards.py tasks_by_status).
+  tasks_by_status: () => ({counts: {open: 4, done: 7}}),
   done_per_week: s => ({weeks: weeks(s!.weeks || 8)}),
   needs_you: () => ({count: 2, items: [{id: 't1', kind: 'task', title: 'Approve the Acme launch plan', task_id: 't1'},
     {id: 'q1', kind: 'question', title: 'Pick a pricing page layout', task_id: 'q1'}]}),
@@ -361,6 +362,25 @@ async function shot(page: Page, name: string) {
       assert.deepEqual(errors, []);
       await page.close();
     }
-    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone');
+    // Tasks by status shows only what the server counts: Open and Done this week, never a dash, on Dashboard and a team page.
+    for (const viewport of [LAPTOP, PHONE]) {
+      const {page, errors} = await open(browser, {viewport});
+      for (const [hash, h1] of [['#/overview', 'Company'], ['#/team/eng', 'Engineering']] as const) {
+        await page.evaluate(to => { location.hash = to; }, hash);
+        await page.waitForFunction(want => document.querySelector('#main h1')?.textContent === want, h1);
+        const statsGrid = page.locator('#dash-grid .dash-pin').filter({has: page.locator('h2', {hasText: 'Tasks by status'})}).locator('.dash-stats');
+        const stats = statsGrid.locator('.dash-stat');
+        await stats.first().waitFor();
+        const where = `${hash} at ${viewport.width}`;
+        assert.deepEqual(await stats.locator('span').allInnerTexts(), ['Open', 'Done this week'], 'no Doing or Waiting column, ' + where);
+        assert.deepEqual(await stats.locator('strong').allInnerTexts(), ['4', '7'], 'no dash, ' + where);
+        const [grid, ...cells] = await statsGrid.evaluate(el => [el, ...el.children].map(c => c.getBoundingClientRect().width));
+        assert.ok(cells.every(w => w > grid! * 0.4), `the two numbers share the card's width, not half of it, ${where}: ${cells} of ${grid}`);
+        assert.equal(await sideways(page), false, 'no sideways scroll, ' + where);
+      }
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    console.log('Dashboard: My dashboard landing, defaults, Campus tab, edit mode (Edit, Done, Escape), order by keys and drag, add/edit/size/remove a card, pin a page, team page from the sidebar, audience, member, phone, Tasks by status columns');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

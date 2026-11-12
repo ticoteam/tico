@@ -183,8 +183,9 @@ function pageTasks(openId = '') {
   tasksRender(state);
   void tasksLoad(state).then(async () => {
     // An old Decide link to one item (#/decide?item=<id>), or #/task/<id>: that item over the page.
-    const want = DECIDE_WANT; DECIDE_WANT = '';
+    const want = DECIDE_WANT, stage = DECIDE_STAGE; DECIDE_WANT = DECIDE_STAGE = '';
     if (want && TASKS_ST === state) await decideWanted(want);
+    else if (stage && TASKS_ST === state) await decideStageWanted(stage);
   });
   if (openId) taskModalOpen(openId);
 }
@@ -378,7 +379,14 @@ function tasksEventsPut(state: TasksPageState, events: LiveTaskEvent[]): void {
 /** Needs you changed (mended from the ids the event named, hub-v2.ts): You draws it; nothing is read. */
 function tasksNeedsLive(): void {
   const state = TASKS_ST;
-  if (!state || !isTasksRoute(S.route) || state.pipeline || state.archive || state.loading) return;
+  if (!state || !isTasksRoute(S.route) || state.archive || state.loading) return;
+  if (state.pipeline) {   // a stage's ▶ and its count; the phone's stage tabs keep where they were scrolled to
+    const left = document.querySelector('.pv-tabs')?.scrollLeft || 0;
+    tasksRender(state);
+    const tabs = document.querySelector('.pv-tabs');
+    if (tabs) tabs.scrollLeft = left;
+    return;
+  }
   state.needs = [...(S.v2.needs || [])] as NeedsEntry[];
   tasksRender(state);
 }
@@ -483,11 +491,26 @@ function needsRowHTML(it: NeedsEntry): string {
     + (after ? `<span class="tk-after">${after}</span>` : '')
     + `<span class="tk-who">${who ? actorFace(who, 18) : ''}</span><span class="tk-age">${esc(ageShort(it.since))}</span></div>`;
 }
+/** Needs you by stage: a chip per stage with items for the person, in the pipelines' order, then Other; each opens that
+    stage's review (decide.ts). None until a stage of a pipeline in view has items. */
+function tasksStageChipsHTML(state: TasksPageState): string {
+  const counts = needsStageCounts(), total = decideCount();
+  const chips: [string, string, number][] = [];
+  for (const p of state.pipelines) for (const st of p.stages) if (st.id && counts.get(st.id)) chips.push([st.id, st.name, counts.get(st.id)!]);
+  const known = new Set(chips.map(c => c[0]));
+  // A stage of no pipeline in view (retired, or not readable here) is counted under Other.
+  const other = total - chips.reduce((n, c) => n + c[2], 0);
+  if (other > 0) chips.push([DEC_OTHER, 'Other', other]);
+  if (!known.size) return '';
+  return `<div class="tk-stages" role="group" aria-label="Needs you by stage">${chips.map(([id, name, n]) =>
+    `<button type="button" class="tk-stage" data-need-stage="${esc(id)}" aria-label="${esc(`Review ${name}: ${n}`)}"><span>${esc(name)}</span><span class="n tnum">${n}</span></button>`).join('')}</div>`;
+}
 function tasksYouHTML(state: TasksPageState): string {
   const shown = state.needs.filter(it => needsMatch(state, it));
   if (!shown.length) return tasksNone(state);
   const of = (g: string) => shown.filter(it => needsGroup(it) === g).map(needsRowHTML);
-  return tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
+  const chips = state.q.trim() || taskFiltersOn(state.filters) ? '' : tasksStageChipsHTML(state);
+  return chips + tasksGroupHTML('Answer', of('answer')) + tasksGroupHTML('Review', of('review')) + tasksGroupHTML('Do', of('do'));
 }
 /** A pipeline's open tasks by stage, in the pipeline's order, until task-pipelines.ts draws it. */
 function tasksPipelineHTML(state: TasksPageState): string {
@@ -506,6 +529,8 @@ function tasksArchiveHTML(state: TasksPageState): string {
 async function tasksBodyClick(state: TasksPageState, ev: MouseEvent) {
   const el = eventElement(ev);
   if (el?.closest('[data-reload]')) { state.failed = ''; state.loading = true; tasksRender(state); void tasksLoad(state); return; }
+  const chip = el?.closest<HTMLElement>('[data-need-stage]');
+  if (chip) { void decideStageOpen(chip.dataset.needStage || ''); return; }
   const answer = el?.closest<HTMLButtonElement>('[data-need-answer]');
   const row = el?.closest<HTMLElement>('[data-need]');
   const it = row ? state.needs.find(n => n.id === row.dataset.need) : null;

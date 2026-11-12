@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS cloud_machines(
  problem TEXT NOT NULL DEFAULT '', problem_at TEXT, wake_key TEXT, woke_at REAL,
  enroll_by REAL, enroll_fails INTEGER NOT NULL DEFAULT 0, changed_by TEXT, updated_at TEXT, stop_until REAL,
  start_asked_at REAL, create_asked_at REAL, grow_storage INTEGER, grow_note TEXT NOT NULL DEFAULT '',
- grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL);
+ grow_refused_size TEXT, drain_started_at REAL, grow_blocked_until REAL, move_drain REAL);
 CREATE TABLE IF NOT EXISTS cloud_machine_codes(
  code_hash TEXT PRIMARY KEY, bot TEXT NOT NULL, created_at TEXT NOT NULL, replacement_for TEXT);
 """
@@ -178,6 +178,7 @@ SIGNIN_KEY = "cloud-signin-want"  # {since, seen}: when that person first asked,
 SIGNIN_ASK = 45  # the page asks every few seconds: a want not asked for again this long is over
 SIGNIN_START = 5 * 60  # a machine not up this long after the first ask is not coming: the page stops waiting
 UPDATE_WANT = "update:"  # a stopped machine's want to update, keyed "update:" and this server's release
+DRAINED_WANT = "drained-job:"  # a drained bot's waiting turn (`bot_want`): wakes its machine, never runs there yet
 UPDATE_STALE = 15 * 60  # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 UPDATE_RETRY = 6 * 3600  # a runner tries a failed update again this long after it failed (runner-rs follow.rs)
 UPDATE_AGAIN = ":again"  # ends the want of a stopped machine's one more start to try a failed update again
@@ -903,15 +904,19 @@ TEMPORARY_REFUSALS = ("busy", "removing", "version_conflict")
 
 def bind(c, execution, bot, lasting=False):
     """Assign a cloud-mode bot to its machine's computer if it is not on it. False while it can't be (a turn still out
-    on the old computer): asked again at the next look. With `lasting` (a person's choice of a machine), any other
-    refusal raises its Problem; the looks keep it to False. With no machine made yet, a lasting choice is refused
-    before one is made (and billed) when the bot's history exists only on its computer now (`stranded`)."""
+    on the old computer): asked again at the next look, and meanwhile the bot takes no new turn on the old computer
+    (`move_drain`), so a bot that is never idle there still moves once its running turns end. With `lasting` (a
+    person's choice of a machine), any other refusal raises its Problem; the looks keep it to False. With no machine
+    made yet, a lasting choice is refused before one is made (and billed) when the bot's history exists only on its
+    computer now (`stranded`)."""
     machine = home(c, bot) or {}
     if machine.get("deleting"):
+        moving(c, bot, False)
         return False
     target = machine.get("runner_id")
     placed_on = c.execute("SELECT runner_id,generation FROM assignments WHERE bot=?", (bot,)).fetchone()
     if not target:
+        moving(c, bot, False)
         if lasting and placed_on:
             from .execution import stranded
 
@@ -919,6 +924,7 @@ def bind(c, execution, bot, lasting=False):
                 raise Problem("repository_unpublished", blocked, 409)
         return False
     if placed_on and placed_on["runner_id"] == target:
+        moving(c, bot, False)
         return True
     from types import SimpleNamespace
 
@@ -933,11 +939,23 @@ def bind(c, execution, bot, lasting=False):
     except Problem as exc:
         c.execute("ROLLBACK TO cloud_bind")
         c.execute("RELEASE cloud_bind")
+        # Only a turn still out holds the move: any other refusal is not lifted by the bot taking no turns, so it goes
+        # on taking them where it is.
+        moving(c, bot, exc.code == "busy")
         if lasting and exc.code not in TEMPORARY_REFUSALS:
             raise
         return False
     c.execute("RELEASE cloud_bind")
     return True
+
+
+def moving(c, bot, on):
+    """Set or lift a bot's drain for its move (`move_drain`, when it began): while set, the claim gives it no new turn
+    on the computer it is leaving (execution.DRAINING_SQL, reason "moving"). Set only when its running turns hold the
+    move up; lifted the moment it moves (`placed`) or the move is not waiting on them any more. Writes only a change."""
+    found = c.execute("SELECT move_drain FROM cloud_machines WHERE bot=?", (bot,)).fetchone()
+    if found and bool(found["move_drain"]) != on:
+        save(c, bot, move_drain=now() if on else None)
 
 
 def check_host(c, bot, runner_id):
@@ -998,7 +1016,9 @@ def lend_plans(c, execution, bot, runner_id, chooser, new=False):
 def placed(c, bot, runner_id, actor):
     """Execution.assign put the bot on a computer: its own machine's keeps cloud mode on its own, the shared one's on
     the shared one, and any other is the person's choice of computer; a machine left without its bot stops at the next
-    look. A bot with no row yet that is put on the shared machine's computer gets one there."""
+    look. A bot with no row yet that is put on the shared machine's computer gets one there. Any move lifts the bot's
+    drain for a move (`moving`): it has moved."""
+    moving(c, bot, False)
     current = row(c, bot)
     if not current:
         shared = row(c, SHARED)
@@ -1093,7 +1113,7 @@ def facts(c, settings, current, at):
         )
     ranked = []
     for bot in bots:
-        active, want, rank, since = bot_want(c, settings, bot, runner_id, at)
+        active, want, rank, since = bot_want(c, settings, bot, runner_id, at, bool(current["always_on"]))
         out["active"] = out["active"] or active
         out["want_at"] = max(out["want_at"], since)
         if want:
@@ -1263,7 +1283,8 @@ def wake_for(current, found):
             return rest(want), False
     if update and not spent(update):
         return rest(update), False
-    return None, bool(wants)
+    # A drained bot's turn is not expected to run where it was woken for: it is waiting, not stuck.
+    return None, any(not w.startswith(DRAINED_WANT) for w in wants)
 
 
 def runner_updating(c, runner_id, at):
@@ -1275,17 +1296,15 @@ def runner_updating(c, runner_id, at):
     return bool(found) and at - (epoch(found["reported_at"]) or 0) < UPDATE_STALE
 
 
-def bot_want(c, settings, bot, runner_id, at):
+def bot_want(c, settings, bot, runner_id, at, always_on=False):
     """(active, want, rank, since) for one bot of a machine whose computer is `runner_id` (None before its first
     enroll). `rank` orders wants across the shared machine's bots: newer work first, then a move, then a watcher.
-    `since` is when the want arose (the job's queueing, the watcher's due time; 0 for a move or none), epoch seconds."""
+    `since` is when the want arose (the job's queueing, the watcher's due time; 0 for a move or none), epoch seconds.
+    `always_on`: the machine is Always on, which a drained bot (not a paused one) keeps it."""
     from .execution import bot_claimable
 
     found = H.bot(c, bot)
-    if (
-        not (found and found["state"] == "active")
-        or c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone()
-    ):
+    if not (found and found["state"] == "active"):
         return False, None, None, 0
     placed_on = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     if placed_on and placed_on["runner_id"] != runner_id:
@@ -1296,6 +1315,13 @@ def bot_want(c, settings, bot, runner_id, at):
         "ORDER BY created_at DESC,id DESC LIMIT 1",
         (bot,),
     ).fetchone()
+    if c.execute("SELECT 1 FROM bot_control WHERE bot=? AND draining=1", (bot,)).fetchone():
+        # Drained, it takes no work now, but a move (above) and a waiting turn still start its machine: the machine
+        # reports the bot's repository then, and is up for the resume. Else only Always on keeps the machine on.
+        # Its key is its own (DRAINED_WANT): the wake spent on it is never the one the resume needs for `job:<id>`.
+        if newest:
+            return True, DRAINED_WANT + newest["id"], (2, newest["created_at"]), epoch(newest["created_at"]) or 0
+        return always_on, None, None, 0
     if newest and runner_id:
         # Performance holds belong to start admission, not this wake: only a running machine can refresh its samples.
         why, _, _, job = bot_claimable(c, settings, runner_id, bot, with_job=True)
@@ -1819,7 +1845,9 @@ class Manager:
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
         if key != SHARED:
             with self.store.read() as c:
-                unbound = unplaced(c, key)
+                # `bind` lifts a drain for a move on every path but a turn still out ("busy"), so a row with one is
+                # bound again here, including one with nothing left to move to (its machine's computer is gone).
+                unbound = unplaced(c, key) or bool((row(c, key) or {}).get("move_drain"))
             if unbound:  # a write only when there is one to make
                 with self.store.transaction() as c:
                     bind(c, self.execution, key)

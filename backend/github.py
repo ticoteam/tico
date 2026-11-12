@@ -164,6 +164,23 @@ def fire_once(detail, item):
     return True
 
 
+def end_own_snooze(c, task_id, why):
+    """Every check on a head finished: a snooze the owner bot set on its own task is how it waits for them, so it ends
+    here, as SYSTEM, and the head's `pr_checks_done` wakes it (stress run, Nov 12: "wakes when its checks finish" slept
+    40 minutes past them). A snooze anyone else set stays, and so does the owner's while the task waits on a person:
+    those results stay notes (`rules._pr_decision`). True when it ended."""
+    from . import task_engine as E
+
+    row = E.task(c, task_id)
+    snooze = (row or {}).get("snooze") or {}
+    if not row or not snooze or snooze.get("by_id") != row.get("owner_id") or not E.is_bot(row.get("owner_id")):
+        return False
+    if E._turn_of(c, {**row, "snooze": None})[0] != row["owner_id"]:
+        return False
+    E.unsnooze(c, task_id, E.SYSTEM, why)
+    return True
+
+
 def flush_wakes(c):
     """Send each due PR burst independently; keep a failed or blocked notice for retry. A burst is up to three
     messages: its grouped items, its review notes, and one `pr_checks_done` per head that finished."""
@@ -192,6 +209,8 @@ def flush_wakes(c):
                     )
                 if burst.get("notes"):  # reviews that are not a person's: a note for the next run
                     E.tell_owner(c, task["id"], "\n".join(burst["notes"]), f"github:{at}:notes", wake=False)
+                if burst.get("done"):
+                    end_own_snooze(c, task["id"], burst["done"][-1]["item"])
                 for done in burst.get("done", []):
                     E.tell_owner(
                         c,

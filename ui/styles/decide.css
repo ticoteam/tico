@@ -52,7 +52,12 @@
 .dc-done h2{margin:0;font-size:var(--t-xl)}
 @media (max-width:760px){
   /* the whole screen; the sentence and the buttons stay at the bottom while the thing scrolls */
-  .dc-dialog{inset:0;width:100%;height:100dvh;margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
+  /* The visible rectangle (viewport.ts): with the keyboard up, Approve and Send back stay above it. */
+  .dc-dialog{inset:var(--chat-viewport-top,0) 0 auto;width:100%;height:var(--chat-viewport-height,100dvh);margin:0;border:0;border-radius:0;box-shadow:none;padding-top:env(safe-area-inset-top);box-sizing:border-box}
+  .dc-icon{width:44px;height:44px}
+  .dc-chip{min-height:44px;padding:0 14px}
+  .dc-more select,.dc-side select{min-height:44px}
+  .dc-side>div>.dc-acts:last-child{position:sticky;bottom:0;z-index:1;margin:0 -16px;padding:8px 16px 0;background:var(--bg)}
   .dc-wide{display:none}
   .dc-main{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) auto}
   .dc-thing{padding:16px}
