@@ -2020,6 +2020,80 @@ async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
         .unwrap_or(0))
 }
 
+/// Commits on HEAD that no origin branch has, less each whose patch one of `against` already carries: the
+/// pre-rebase copy of a commit that was rebased and pushed from another worktree, or merged, is not unpushed work.
+/// Only a patch-id match counts (`rev-list --cherry-pick`); a merge commit has no patch id and always counts.
+async fn unpushed(path: &Path, env: &Env, against: &[String]) -> R<i64> {
+    let lines = |o: Out| -> HashSet<String> {
+        o.stdout
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect()
+    };
+    let mut left = lines(
+        git(
+            path,
+            env,
+            &["rev-list", "HEAD", "--not", "--remotes=origin"],
+            true,
+        )
+        .await?,
+    );
+    let merges = lines(
+        git(
+            path,
+            env,
+            &["rev-list", "--merges", "HEAD", "--not", "--remotes=origin"],
+            true,
+        )
+        .await?,
+    );
+    for target in against {
+        if left.len() == merges.len() {
+            break;
+        }
+        let target = git(path, env, &["rev-parse", "--verify", "-q", target], false).await?;
+        if !target.ok() {
+            continue;
+        }
+        let range = format!("{}...HEAD", target.stdout.trim());
+        let own = lines(
+            git(
+                path,
+                env,
+                &["rev-list", "--right-only", "--cherry-pick", &range],
+                true,
+            )
+            .await?,
+        );
+        left.retain(|c| merges.contains(c) || own.contains(c));
+    }
+    Ok(left.len() as i64)
+}
+
+/// What `unpushed` compares with: the worktree's branch and HEAD's upstream on origin, and the default branches.
+async fn upstreams(
+    path: &Path,
+    env: &Env,
+    branch: &str,
+    defaults: &HashSet<String>,
+) -> R<Vec<String>> {
+    let mut against = vec![format!("refs/remotes/origin/{branch}")];
+    let upstream = git(
+        path,
+        env,
+        &["rev-parse", "--symbolic-full-name", "@{upstream}"],
+        false,
+    )
+    .await?;
+    if upstream.ok() && upstream.stdout.trim().starts_with("refs/remotes/origin/") {
+        against.push(upstream.stdout.trim().to_string());
+    }
+    against.extend(defaults.iter().map(|d| format!("refs/remotes/origin/{d}")));
+    Ok(against)
+}
+
 /// A folder a tool can rebuild on its own: a Python virtual environment (`pyvenv.cfg`), a cache that declares
 /// itself (`CACHEDIR.TAG`, which Cargo's `target` and `.pytest_cache` write), `node_modules`, or a pytest base
 /// temp folder.
@@ -2655,13 +2729,13 @@ where
             .stdout
             .trim()
             .to_string();
-        let unpushed = ["rev-list", "--count", "HEAD", "--not", "--remotes=origin"];
+        let against = upstreams(&path, env, &branch, &defaults).await?;
         if crate::util::truthy(row.get("release")) {
             // Released while its task is open: the bot may still use it, so nothing is saved on its behalf.
             if dirty {
                 return Err(WtErr::msg("kept: unsaved changes; commit and push them, or discard them, to free this worktree"));
             }
-            if count(&path, env, &unpushed).await? > 0 {
+            if unpushed(&path, env, &against).await? > 0 {
                 return Err(WtErr::msg(
                     "kept: unpushed commits; push them to free this worktree",
                 ));
@@ -2850,7 +2924,7 @@ where
                 git(&path, env, &["switch", &branch], true).await?;
                 moved?;
             }
-        } else if count(&path, env, &unpushed).await? > 0 {
+        } else if unpushed(&path, env, &against).await? > 0 {
             // Its task is closed or its pull requests are finished: the branch is not pushed to again, so the commits
             // go to the snapshot branch.
             if crate::util::truthy(row.get("prs_finished"))
