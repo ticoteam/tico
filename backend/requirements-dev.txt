@@ -17,6 +17,10 @@ anyio==4.15.1
     #   -c requirements.txt
     #   httpx
     #   starlette
+attrs==26.1.0
+    # via
+    #   jsonschema
+    #   referencing
 boto3==1.43.114
     # via
     #   -c requirements.txt
@@ -95,6 +99,10 @@ jmespath==1.1.0
     #   -c requirements.txt
     #   boto3
     #   botocore
+jsonschema==4.26.0
+    # via -r requirements-dev.in
+jsonschema-specifications==2025.9.1
+    # via jsonschema
 livekit==1.1.21
     # via
     #   -c requirements.txt
@@ -182,10 +190,18 @@ pyyaml==6.0.3
     # via
     #   -c requirements.txt
     #   -r requirements.in
+referencing==0.37.0
+    # via
+    #   jsonschema
+    #   jsonschema-specifications
 reportlab==4.5.1
     # via
     #   -c requirements.txt
     #   -r requirements.in
+rpds-py==2026.9.1
+    # via
+    #   jsonschema
+    #   referencing
 s3transfer==0.19.2
     # via
     #   -c requirements.txt

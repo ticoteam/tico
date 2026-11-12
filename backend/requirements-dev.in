@@ -1,6 +1,7 @@
 -c requirements.txt
 -r requirements.in
 pytest>=8,<10
+jsonschema>=4.23,<5  # checks the declared OpenAPI schemas are valid JSON Schema
 playwright>=1.50,<2
 pytest-xdist>=3.6,<4
 time-machine>=2.16,<3  # the factory simulation's fake clock (evals/factory)

@@ -2295,7 +2295,8 @@ GRANOLA_ERROR_DETAIL = {
 
 
 def items(schema):
-    return {"type": "array", "items": schema}
+    """An array schema of one item schema, written like an obj field: "s|i|b|o|n|a|f" or {schema}."""
+    return {"type": "array", "items": _t(schema) if isinstance(schema, str) else schema}
 
 
 ref = lambda name: {"$ref": "#/components/schemas/" + name}

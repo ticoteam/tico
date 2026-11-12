@@ -40,22 +40,8 @@ def union(parts):
     return ' | '.join(seen) if seen else 'never'
 
 
-# openapi_v2 writes a few schemas as bare shorthand letters (items("s")); the served document keeps them as-is.
-SHORTHAND = {
-    's': {'type': 'string'},
-    'i': {'type': 'integer'},
-    'b': {'type': 'boolean'},
-    'o': {'type': 'object'},
-    'n': {'type': ['string', 'null']},
-    'a': {'type': 'array'},
-    'f': {'type': 'number'},
-}
-
-
 def ts_type(schema):
     """The TypeScript type for one JSON Schema node (the subset openapi_v2 uses)."""
-    if isinstance(schema, str):
-        return ts_type(SHORTHAND[schema])
     if schema is True or schema == {}:
         return 'unknown'
     if schema is False:
