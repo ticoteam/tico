@@ -22,6 +22,8 @@ struct Kept {
     stored: HashMap<String, Vec<(i64, String, Value)>>,
     /// When each (attempt, seq) first reached the hub.
     arrived: HashMap<(String, i64), Instant>,
+    /// When the upload that first stored each (attempt, seq) reached the hub, before waiting for the write lock.
+    sent: HashMap<(String, i64), Instant>,
     /// Per events upload: attempt, handler time, the ack it answered (None: refused or answer dropped).
     uploads: Vec<(String, Duration, Option<i64>)>,
     /// Input poll handler times.
@@ -152,6 +154,7 @@ async fn serve(k: Arc<Mutex<Kept>>, b: Arc<Behaviour>, ready: std::sync::mpsc::S
                                         None => {
                                             k.arrived
                                                 .insert((aid.to_string(), seq), Instant::now());
+                                            k.sent.insert((aid.to_string(), seq), began);
                                             rows.push(row);
                                         }
                                     }
@@ -274,13 +277,23 @@ fn reply(deltas: usize, gap: Duration, tool_every: usize) -> Vec<Step> {
     steps
 }
 
-/// Per recorded event: its seq, kind and when it was recorded.
-type Recorded = Vec<(i64, &'static str, Instant)>;
+/// Per recorded event: its seq, kind, when the turn emitted it and when its row was committed to the outbox.
+type Recorded = Vec<(i64, &'static str, Instant, Instant)>;
 
 /// Runs one turn's steps through the real stream loop and drive-loop pass, as crate::execute and crate::drive do:
 /// each event is appended to the outbox and wakes the flusher; once a second the drive loop flushes and polls for
 /// inputs. Returns once the outbox is empty after the last step.
 async fn turn(runner: Arc<Runner>, aid: String, steps: Vec<Step>) -> Recorded {
+    turn_with(runner, aid, steps, true).await
+}
+
+/// `turn`, with or without the drive loop's 1 s pass (without it, only the stream loop uploads).
+async fn turn_with(
+    runner: Arc<Runner>,
+    aid: String,
+    steps: Vec<Step>,
+    with_pass: bool,
+) -> Recorded {
     runner.state.record(&json!({"id": aid})).unwrap();
     let (wake, flags) = (Arc::new(Notify::new()), flags());
     let streamer = tokio::spawn(runner.clone().stream_loop(
@@ -293,6 +306,9 @@ async fn turn(runner: Arc<Runner>, aid: String, steps: Vec<Step>) -> Recorded {
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
+                if !with_pass {
+                    continue;
+                }
                 let _ = runner.flush(&aid).await;
                 let _ = runner
                     .client
@@ -329,9 +345,10 @@ async fn turn(runner: Arc<Runner>, aid: String, steps: Vec<Step>) -> Recorded {
             .off(move |s| s.append_batch(&id, &rows).and_then(|_| s.last_seq(&id)))
             .await
             .unwrap();
+        let written = Instant::now();
         let first_seq = last - queued.len() as i64 + 1;
         for (n, (kind, _, at)) in queued.into_iter().enumerate() {
-            recorded.push((first_seq + n as i64, kind, at));
+            recorded.push((first_seq + n as i64, kind, at, written));
         }
         wake.notify_one();
     }
@@ -391,7 +408,7 @@ async fn ac3_ac4_ac5_under_load_text_waits_but_first_text_and_control_events_go_
         late(first_text.0, first_text.2)
     );
     // AC-4: each tool event and the final message go at once, after every delta before them.
-    for (seq, kind, at) in recorded
+    for (seq, kind, at, _) in recorded
         .iter()
         .filter(|r| r.1 == "tool" || r.1 == "message")
     {
@@ -400,12 +417,12 @@ async fn ac3_ac4_ac5_under_load_text_waits_but_first_text_and_control_events_go_
             "{kind} {seq}: {:?}",
             late(*seq, *at)
         );
-        for (before, _, _) in recorded.iter().filter(|r| r.0 < *seq) {
+        for (before, ..) in recorded.iter().filter(|r| r.0 < *seq) {
             assert!(arrival(&kept, "a-load", *before) <= arrival(&kept, "a-load", *seq));
         }
     }
     // AC-5: no delta waited much past the maximum age (1 s, plus a post).
-    for (seq, _, at) in recorded.iter().filter(|r| r.1 == "delta") {
+    for (seq, _, at, _) in recorded.iter().filter(|r| r.1 == "delta") {
         assert!(
             late(*seq, *at) < Duration::from_millis(1150),
             "delta {seq}: {:?}",
@@ -468,6 +485,85 @@ async fn ac6_ac7_failed_and_lost_answer_uploads_store_every_event_once_in_order_
     std::fs::remove_dir_all(new_dir).ok();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ac5_a_delta_written_during_a_slow_upload_waits_at_most_the_maximum_age_from_its_write() {
+    // A hub write of 300 ms: rows written while an upload is in flight are seen by the stream loop only after it.
+    // Their age counts from their write, so they are sent within 1 s of it, not 1 s after the upload ended.
+    let hub = hub(Behaviour {
+        write: Duration::from_millis(300),
+        ..Default::default()
+    })
+    .await;
+    let (runner, dir) = runner_at(&hub.url, ADAPTIVE);
+    let others: Vec<_> = (0..29).map(|_| runner.upload_load.streaming()).collect();
+    // No tool events (they go at once and would hide the age bound), and 50 deltas a second so a full upload (100
+    // rows) never comes first; the stream loop is the only uploader.
+    let steps = reply(150, Duration::from_millis(20), 1000);
+    let recorded = turn_with(runner.clone(), "a-slow".into(), steps, false).await;
+    drop(others);
+    let kept = hub.kept.lock().unwrap();
+    let mut worst = Duration::ZERO;
+    for (seq, _, _, written) in recorded.iter().filter(|r| r.1 == "delta") {
+        let sent = kept.sent[&("a-slow".to_string(), *seq)];
+        worst = worst.max(sent.saturating_duration_since(*written));
+    }
+    // From its write, a delta is sent within the 1 s maximum age (plus scheduling); counted from when the stream
+    // loop first saw it, the rows written as an upload began would go about 1.3 s after their write.
+    assert!(worst < Duration::from_millis(1150), "{worst:?}");
+    assert!(kept.refused.is_empty(), "{:?}", kept.refused);
+    assert_eq!(kept.stored["a-slow"], local(&runner, "a-slow"));
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_turns_do_not_widen_the_window_and_a_turn_counts_out_a_second_after_its_last_upload() {
+    let hub = hub(Behaviour::default()).await;
+    let (runner, dir) = runner_at(&hub.url, ADAPTIVE);
+    // Twenty turns whose stream loops run but record nothing (waiting on a tool or a person).
+    let idle: Vec<_> = (0..20)
+        .map(|n| {
+            let aid = format!("a-idle-{n:02}");
+            runner.state.record(&json!({"id": aid})).unwrap();
+            tokio::spawn(
+                runner
+                    .clone()
+                    .stream_loop(aid, Arc::new(Notify::new()), flags()),
+            )
+        })
+        .collect();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(runner.upload_load.turns(), 0);
+    // One streaming turn: about 1.2 s of deltas paces at the 50 ms floor, not at the 1 s that 21 turns would set.
+    let steps = reply(120, Duration::from_millis(10), 1000);
+    turn_with(runner.clone(), "a-busy".into(), steps, false).await;
+    let uploads = hub.kept.lock().unwrap().uploads.len();
+    assert!(uploads >= 10, "{uploads} uploads");
+    // A live stream loop: counted while it has rows and for a second after its last upload, then not.
+    let aid = "a-once".to_string();
+    runner.state.record(&json!({"id": aid})).unwrap();
+    let wake = Arc::new(Notify::new());
+    let once = tokio::spawn(
+        runner
+            .clone()
+            .stream_loop(aid.clone(), wake.clone(), flags()),
+    );
+    runner
+        .state
+        .append(&aid, "status", &json!({"waiting": ""}))
+        .unwrap();
+    wake.notify_one();
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(runner.state.pending(&aid).unwrap().is_empty());
+    assert_eq!(runner.upload_load.turns(), 1);
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    assert_eq!(runner.upload_load.turns(), 0);
+    once.abort();
+    for h in idle {
+        h.abort();
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
 fn percentile(values: &mut [Duration], p: f64) -> Duration {
     if values.is_empty() {
         return Duration::ZERO;
@@ -515,6 +611,8 @@ async fn bench_once(name: &str, bounds: Bounds, turns: usize, deltas: usize) -> 
     }
     let kept = hub.kept.lock().unwrap();
     let (mut first, mut control) = (vec![], vec![]);
+    // The same from the row's commit: pacing and the post alone, without the local disk write.
+    let (mut first_w, mut control_w) = (vec![], vec![]);
     for (aid, recorded) in &runs {
         assert_eq!(
             kept.stored[aid],
@@ -523,24 +621,28 @@ async fn bench_once(name: &str, bounds: Bounds, turns: usize, deltas: usize) -> 
         );
         let text = recorded.iter().find(|r| r.1 == "delta").unwrap();
         first.push(arrival(&kept, aid, text.0).saturating_duration_since(text.2));
-        for (seq, _, at) in recorded
+        first_w.push(arrival(&kept, aid, text.0).saturating_duration_since(text.3));
+        for (seq, _, at, written) in recorded
             .iter()
             .filter(|r| !super::MAY_WAIT.contains(&r.1) && r.0 > 1)
         {
             control.push(arrival(&kept, aid, *seq).saturating_duration_since(*at));
+            control_w.push(arrival(&kept, aid, *seq).saturating_duration_since(*written));
         }
     }
     assert!(kept.refused.is_empty(), "{:?}", kept.refused);
     let mut uploads: Vec<Duration> = kept.uploads.iter().map(|u| u.1).collect();
     let mut polls = kept.polls.clone();
     let row = format!(
-        "{name:<9} {turns:>5} {:>13.1} {:>12} {:>12} {:>11} {:>11} {:>14}",
+        "{name:<9} {turns:>5} {:>13.1} {:>12} {:>12} {:>11} {:>11} {:>14} {:>13} {:>15}",
         kept.uploads.len() as f64 / turns as f64,
         ms(percentile(&mut uploads, 0.95)),
         ms(percentile(&mut polls, 0.95)),
         ms(percentile(&mut first, 0.50)),
         ms(percentile(&mut first, 0.95)),
         ms(percentile(&mut control, 0.95)),
+        ms(percentile(&mut first_w, 0.95)),
+        ms(percentile(&mut control_w, 0.95)),
     );
     std::fs::remove_dir_all(dir).ok();
     row
@@ -559,10 +661,11 @@ async fn upload_bench() {
         .map(|v| v.split(',').filter_map(|n| n.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![1, 10, 30]);
     println!(
-        "\n{deltas} deltas a turn, 10 ms apart; times in ms; control = status, tool, final message"
+        "\n{deltas} deltas a turn, 10 ms apart; times in ms; control = status, tool, final message; \
+         w = from the row's commit to the hub, not from the event"
     );
     println!(
-        "{:<9} {:>5} {:>13} {:>12} {:>12} {:>11} {:>11} {:>14}",
+        "{:<9} {:>5} {:>13} {:>12} {:>12} {:>11} {:>11} {:>14} {:>13} {:>15}",
         "runner",
         "turns",
         "uploads/turn",
@@ -570,7 +673,9 @@ async fn upload_bench() {
         "input p95",
         "first p50",
         "first p95",
-        "control p95"
+        "control p95",
+        "first p95 w",
+        "control p95 w"
     );
     for turns in sizes {
         for (name, bounds) in [("fixed", FIXED), ("adaptive", ADAPTIVE)] {

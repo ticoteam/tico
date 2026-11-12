@@ -13,6 +13,8 @@ Each size runs twice: "fixed" is the runner before I07 (first event at once, the
 the load), "adaptive" the current pacing (runner-rs/src/upload_pace.rs). Per row: event uploads per turn, event
 upload p95 and input poll p95 (time in the hub, lock wait included), time from a turn's first delta being
 recorded to reaching the hub (p50, p95), and the same for control events (status, tool, the final message), p95.
+The two "w" columns measure first text and control events again from their row's commit to the local outbox, not
+from the event: pacing and the post alone, without the local disk write.
 Every run also checks that the hub stored each turn's events exactly as the runner recorded them.
 
 The hub's costs are synthetic: the numbers show the mechanism and its slope with concurrency, not production p95.

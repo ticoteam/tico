@@ -32,8 +32,8 @@ pub const MAY_WAIT: [&str; 2] = ["delta", "tokens"];
 /// The outbox rows past the server's ack, summed (Outbox::waiting).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Waiting {
-    /// The oldest waiting row's seq: a new oldest row restarts the age clock.
-    pub first_seq: i64,
+    /// When the oldest waiting row was written: its age bounds how long the rows may wait.
+    pub oldest_at: Option<Instant>,
     pub count: usize,
     /// Payload bytes of the waiting rows.
     pub bytes: u64,
@@ -43,11 +43,12 @@ pub struct Waiting {
     pub text: bool,
 }
 
-/// Each attempt's rows written by this process and not yet acknowledged: (seq, payload bytes, may wait, text).
+/// Each attempt's rows written by this process and not yet acknowledged: (seq, payload bytes, may wait, text, when
+/// written).
 /// crate::state keeps it beside the database (State::append, append_batch, ack). Rows from before a restart are
 /// not here; those go up through recovery's flush, which this does not pace.
 #[derive(Default)]
-pub struct Outbox(Mutex<HashMap<String, VecDeque<(i64, u64, bool, bool)>>>);
+pub struct Outbox(Mutex<HashMap<String, VecDeque<(i64, u64, bool, bool, Instant)>>>);
 
 impl Outbox {
     /// Rows numbered from `first` were committed, in order, as (kind, payload bytes).
@@ -57,6 +58,7 @@ impl Outbox {
         first: i64,
         rows: impl IntoIterator<Item = (&'a str, usize)>,
     ) {
+        let now = Instant::now();
         let mut all = self.0.lock().unwrap_or_else(|p| p.into_inner());
         let queue = all.entry(aid.to_string()).or_default();
         for (offset, (kind, bytes)) in rows.into_iter().enumerate() {
@@ -65,6 +67,7 @@ impl Outbox {
                 bytes as u64,
                 MAY_WAIT.contains(&kind),
                 kind == "delta" || kind == "message",
+                now,
             ));
         }
     }
@@ -92,11 +95,11 @@ impl Outbox {
             return Waiting::default();
         };
         let mut w = Waiting {
-            first_seq: queue.front().map_or(0, |r| r.0),
+            oldest_at: queue.front().map(|r| r.4),
             count: queue.len(),
             ..Waiting::default()
         };
-        for &(_, bytes, may_wait, text) in queue {
+        for &(_, bytes, may_wait, text, _) in queue {
             w.bytes += bytes;
             w.urgent |= !may_wait;
             w.text |= text;
@@ -205,6 +208,48 @@ impl Load {
     }
 }
 
+/// How long after its last upload a turn with nothing waiting still counts toward the load: a turn between bursts
+/// (a tool running, the model thinking) is about to stream again, one that stopped is not.
+pub const IDLE: Duration = Duration::from_secs(1);
+
+/// One stream loop's share of the load: counted while its turn has rows waiting or uploaded within `IDLE`, so idle
+/// turns (waiting on a tool or a person) do not widen the window for the turns that stream.
+pub struct Active<'a> {
+    load: &'a Load,
+    counted: Option<Streaming<'a>>,
+}
+
+impl<'a> Active<'a> {
+    pub fn new(load: &'a Load) -> Self {
+        Active {
+            load,
+            counted: None,
+        }
+    }
+
+    /// Counts the turn in or out at `now`; returns when to look again to count it out, if nothing else wakes it.
+    pub fn update(
+        &mut self,
+        now: Instant,
+        waiting: bool,
+        last_post: Option<Instant>,
+    ) -> Option<Instant> {
+        let recent = last_post.map(|t| t + IDLE).filter(|until| *until > now);
+        if waiting || recent.is_some() {
+            if self.counted.is_none() {
+                self.counted = Some(self.load.streaming());
+            }
+        } else {
+            self.counted = None;
+        }
+        if waiting {
+            None // the rows' own due time wakes the loop
+        } else {
+            recent
+        }
+    }
+}
+
 pub fn window(b: &Bounds, turns: usize, latency: Duration) -> Duration {
     let by_turns = b
         .per_turn
@@ -219,8 +264,6 @@ pub struct Pacer {
     last_post: Option<Instant>,
     /// After a failed upload: not before this.
     retry_at: Option<Instant>,
-    /// The oldest waiting row (its seq) and when this pacer first saw it.
-    oldest: Option<(i64, Instant)>,
 }
 
 impl Pacer {
@@ -235,16 +278,11 @@ impl Pacer {
         b: &Bounds,
     ) -> Option<Instant> {
         if w.count == 0 {
-            self.oldest = None;
             return None;
         }
-        let since = match self.oldest {
-            Some((seq, at)) if seq == w.first_seq => at,
-            _ => {
-                self.oldest = Some((w.first_seq, now));
-                now
-            }
-        };
+        // From when the oldest row was written, not when the pacer first saw it: rows written during an upload are
+        // seen only after it, and a person never waits more than `max_age` for text the bot already wrote.
+        let since = w.oldest_at.unwrap_or(now);
         let at_once = (b.urgent_at_once && (w.urgent || (w.text && !shown)))
             || w.bytes >= b.byte_limit
             || w.count >= b.full;
@@ -263,6 +301,11 @@ impl Pacer {
             Some(retry) => paced.max(retry).max(now),
             None => paced.max(now),
         })
+    }
+
+    /// When the last successful upload ended.
+    pub fn last_post(&self) -> Option<Instant> {
+        self.last_post
     }
 
     /// An upload ended at `now`; a failed one leaves its rows waiting and is tried again a second later.
@@ -285,9 +328,10 @@ mod tests {
 
     const MS: Duration = Duration::from_millis(1);
 
-    fn deltas(first_seq: i64, count: usize) -> Waiting {
+    /// `count` deltas waiting, the oldest written at `written`.
+    fn deltas(written: Instant, count: usize) -> Waiting {
         Waiting {
-            first_seq,
+            oldest_at: Some(written),
             count,
             bytes: 40 * count as u64,
             urgent: false,
@@ -338,6 +382,39 @@ mod tests {
     }
 
     #[test]
+    fn only_turns_with_rows_waiting_or_uploaded_within_a_second_count_toward_the_load() {
+        let load = Load::default();
+        let t0 = Instant::now();
+        let mut idle: Vec<Active> = (0..20).map(|_| Active::new(&load)).collect();
+        for a in &mut idle {
+            assert_eq!(a.update(t0, false, None), None);
+        }
+        assert_eq!(
+            load.turns(),
+            0,
+            "twenty turns waiting on tools do not widen the window"
+        );
+        let mut busy = Active::new(&load);
+        assert_eq!(busy.update(t0, true, None), None);
+        assert_eq!(load.turns(), 1);
+        assert_eq!(load.window(&ADAPTIVE), 50 * MS);
+        // Uploaded and nothing waiting: still counted for a second, then out.
+        assert_eq!(
+            busy.update(t0 + 10 * MS, false, Some(t0 + 10 * MS)),
+            Some(t0 + 1010 * MS)
+        );
+        assert_eq!(load.turns(), 1);
+        assert_eq!(busy.update(t0 + 1010 * MS, false, Some(t0 + 10 * MS)), None);
+        assert_eq!(load.turns(), 0);
+        // Streaming again: counted again, once.
+        busy.update(t0 + 2000 * MS, true, Some(t0 + 10 * MS));
+        busy.update(t0 + 2001 * MS, true, Some(t0 + 10 * MS));
+        assert_eq!(load.turns(), 1);
+        drop(busy);
+        assert_eq!(load.turns(), 0);
+    }
+
+    #[test]
     fn ac3_the_first_visible_text_goes_at_once_under_any_load() {
         let t0 = Instant::now();
         for turns in [1, 10, 30, 500] {
@@ -345,20 +422,20 @@ mod tests {
             // A status line went up a moment ago: the first text still skips the window.
             let mut p = after_upload(t0);
             assert_eq!(
-                p.due(t0 + MS, &deltas(2, 1), false, w, &ADAPTIVE),
+                p.due(t0 + MS, &deltas(t0 + MS, 1), false, w, &ADAPTIVE),
                 Some(t0 + MS)
             );
             // Once it is shown, a later delta waits for the window.
             let mut p = after_upload(t0);
             assert_eq!(
-                p.due(t0 + MS, &deltas(3, 1), true, w, &ADAPTIVE),
+                p.due(t0 + MS, &deltas(t0 + MS, 1), true, w, &ADAPTIVE),
                 Some(t0 + w)
             );
         }
         // A turn's very first upload waits for nothing, as before.
         let mut p = Pacer::default();
         assert_eq!(
-            p.due(t0, &deltas(1, 1), true, 1000 * MS, &ADAPTIVE),
+            p.due(t0, &deltas(t0, 1), true, 1000 * MS, &ADAPTIVE),
             Some(t0)
         );
     }
@@ -368,7 +445,7 @@ mod tests {
         let t0 = Instant::now();
         let w = window(&ADAPTIVE, 30, 5 * MS);
         let mut p = after_upload(t0);
-        let mut waiting = deltas(10, 25);
+        let mut waiting = deltas(t0 + 5 * MS, 25);
         assert_eq!(
             p.due(t0 + 10 * MS, &waiting, true, w, &ADAPTIVE),
             Some(t0 + w)
@@ -393,46 +470,49 @@ mod tests {
     fn ac5_waiting_deltas_go_at_the_maximum_age_or_the_byte_limit_or_a_full_upload() {
         let t0 = Instant::now();
         let w = 1000 * MS;
-        // Age: the oldest was first seen 700 ms after the last upload; it may wait only until a second after that...
-        // ...but the window (last + 1 s) comes first here. With a later upload the age bound decides.
+        // The window (last upload + 1 s) comes before the age bound of a delta written 700 ms after that upload.
         let mut p = after_upload(t0);
         assert_eq!(
-            p.due(t0 + 700 * MS, &deltas(5, 3), true, w, &ADAPTIVE),
+            p.due(t0 + 700 * MS, &deltas(t0 + 700 * MS, 3), true, w, &ADAPTIVE),
             Some(t0 + w)
         );
-        let mut p = Pacer {
-            oldest: Some((5, t0)),
-            ..Default::default()
-        };
-        p.posted(t0 + 500 * MS, true); // an upload by the drive loop's pass, the oldest still waiting after it
+        // Written before a later upload (by the drive loop's pass, or during a slow one) and still waiting: its age,
+        // counted from when it was written, decides, not when the pacer first saw it.
+        let mut p = after_upload(t0 + 500 * MS);
         assert_eq!(
-            p.due(t0 + 600 * MS, &deltas(5, 3), true, w, &ADAPTIVE),
+            p.due(t0 + 600 * MS, &deltas(t0, 3), true, w, &ADAPTIVE),
             Some(t0 + 1000 * MS)
         );
-        // A new oldest row restarts the age clock.
+        // Already past its age when first seen (written as a 300 ms upload began): it goes at once.
+        let mut p = after_upload(t0 + 1300 * MS);
         assert_eq!(
-            p.due(t0 + 700 * MS, &deltas(9, 1), true, w, &ADAPTIVE),
-            Some(t0 + 1500 * MS)
+            p.due(
+                t0 + 1300 * MS,
+                &deltas(t0 + 200 * MS, 3),
+                true,
+                w,
+                &ADAPTIVE
+            ),
+            Some(t0 + 1300 * MS)
         );
         // Bytes: 64 KiB waiting goes at once.
         let mut p = after_upload(t0);
         let big = Waiting {
             bytes: 64 * 1024,
-            ..deltas(5, 40)
+            ..deltas(t0, 40)
         };
         assert_eq!(p.due(t0 + MS, &big, true, w, &ADAPTIVE), Some(t0 + MS));
         // A full upload's worth of rows goes at once.
         let mut p = after_upload(t0);
         assert_eq!(
-            p.due(t0 + MS, &deltas(5, 100), true, w, &ADAPTIVE),
+            p.due(t0 + MS, &deltas(t0 + MS, 100), true, w, &ADAPTIVE),
             Some(t0 + MS)
         );
-        // Nothing waiting: nothing due, and the age clock is cleared.
+        // Nothing waiting: nothing due.
         assert_eq!(
             p.due(t0 + MS, &Waiting::default(), true, w, &ADAPTIVE),
             None
         );
-        assert!(p.oldest.is_none());
     }
 
     #[test]
@@ -442,7 +522,7 @@ mod tests {
         p.posted(t0 + 10 * MS, false);
         let urgent = Waiting {
             urgent: true,
-            ..deltas(4, 2)
+            ..deltas(t0, 2)
         };
         assert_eq!(
             p.due(t0 + 20 * MS, &urgent, true, 50 * MS, &ADAPTIVE),
@@ -462,16 +542,12 @@ mod tests {
         outbox.wrote("a1", 1, [("status", 10)]);
         outbox.wrote("a1", 2, [("delta", 40), ("delta", 40), ("tokens", 20)]);
         let w = outbox.waiting("a1");
-        assert_eq!(
-            (w.first_seq, w.count, w.bytes, w.urgent, w.text),
-            (1, 4, 110, true, true)
-        );
+        assert_eq!((w.count, w.bytes, w.urgent, w.text), (4, 110, true, true));
+        let first_written = w.oldest_at.unwrap();
         outbox.acked("a1", 1);
         let w = outbox.waiting("a1");
-        assert_eq!(
-            (w.first_seq, w.count, w.bytes, w.urgent, w.text),
-            (2, 3, 100, false, true)
-        );
+        assert_eq!((w.count, w.bytes, w.urgent, w.text), (3, 100, false, true));
+        assert!(w.oldest_at.unwrap() >= first_written);
         assert_eq!(outbox.last_seq("a1"), Some(4));
         outbox.acked("a1", 4);
         assert_eq!(outbox.waiting("a1"), Waiting::default());

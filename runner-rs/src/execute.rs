@@ -1459,7 +1459,7 @@ impl Runner {
         wake: Arc<Notify>,
         flags: Arc<Flags>,
     ) {
-        let _streaming = self.upload_load.streaming();
+        let mut active = crate::upload_pace::Active::new(&self.upload_load);
         let bounds = self.upload_bounds;
         let mut pacer = crate::upload_pace::Pacer::default();
         // When to look at the outbox again without a new event: its rows' due time, or None to wait for one.
@@ -1480,6 +1480,8 @@ impl Runner {
             let waiting = self.state.outbox.waiting(&aid);
             let shown = self.first_posted.lock().unwrap().contains(&aid);
             let now = Instant::now();
+            // Counted in before the window is taken, so a turn that starts streaming paces with itself included.
+            let recheck = active.update(now, waiting.count > 0, pacer.last_post());
             due = pacer.due(
                 now,
                 &waiting,
@@ -1488,6 +1490,10 @@ impl Runner {
                 &bounds,
             );
             if due.is_none_or(|at| at > now) {
+                due = match (due, recheck) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
                 continue;
             }
             // A failed post leaves the events in the outbox; they are tried again a second later (or by the drive
