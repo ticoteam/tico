@@ -1785,11 +1785,13 @@ def create_app(settings=None):
         order="queue",
         visible_sql=None,
         narrow=None,
+        keyset=False,
         **more,
     ):
         """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
         list's pipeline, stage or pushed-past filter, task_list_routes.narrowing): it picks the rows only, while the
-        rows are still read with the reader's own visibility."""
+        rows are still read with the reader's own visibility. With `keyset`, the second value is the last row's sort
+        key when there is more (the next page's `after`), not an offset."""
         auth.domain(who)
         visible_sql = visible_sql or auth.task_sql(c, who)
         rows = H.tasks(
@@ -1806,6 +1808,8 @@ def create_app(settings=None):
             **more,
         )
         page, has_more = rows[:limit], len(rows) > limit
+        if keyset:
+            return task_views(page, c, who, visible_sql), H.task_sort_key(page[-1], order) if has_more else None
         return task_views(page, c, who, visible_sql), offset + limit if has_more else None
 
     def visual_view(c, who, rows):

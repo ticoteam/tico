@@ -22,6 +22,8 @@ from urllib.parse import quote, urlsplit
 from fastapi import Query, Request
 from pydantic import Field, StringConstraints
 
+from clients import urlparts
+
 from . import docs_import_run
 from . import manual
 from . import models as M
@@ -53,11 +55,35 @@ FTS = "CREATE VIRTUAL TABLE IF NOT EXISTS docs_fts USING fts5(title, path, body,
 KINDS = ("website", "google_drive", "google_doc", "notion", "github", "other")
 MAX_BODY = 1_000_000
 LIST_MAX = 500
+PATH_MAX = 300  # characters a caller may send; clean_path may add ".md"
+ID_MAX = 16  # "doc-" and 12 hex digits
+# A list cursor is the last row's exact (path, id) as compact JSON in URL-safe base64: at most 4 bytes a character
+# (a JSON escape of `"` or `\` is 2), the id, and the 6 bytes of `["","]`.
+# The ".md" counted at 4 bytes a character leaves 9 spare bytes, enough for a `-N` of up to seven digits that free_path adds on restore.
+CURSOR_MAX = 4 * -(-(4 * (PATH_MAX + 3) + ID_MAX + 6) // 3)
 MIGRATED = "docs_migrated"
 STOP = frozenset(
     "a an and are as at be but by do does for from how i in is it my of on or our the to us was we what "
     "when where which who why will with you your can should".split()
 )
+
+
+# ------------------------------------------------------------------ list cursors
+def list_cursor(row):
+    """Where the next page starts: after this row in `ORDER BY path COLLATE NOCASE, id`."""
+    key = json.dumps([row["path"], row["id"]], ensure_ascii=False, separators=(",", ":"))
+    return base64.urlsafe_b64encode(key.encode()).decode()
+
+
+def after_cursor(cursor):
+    """The (path, id) a list cursor names, unchanged."""
+    try:
+        path, doc_id = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        if isinstance(path, str) and isinstance(doc_id, str):
+            return path, doc_id
+    except (ValueError, TypeError, binascii.Error, UnicodeError):
+        pass
+    raise Problem("validation", "That cursor is not valid", 422)
 
 
 # ------------------------------------------------------------------ paths, addresses, kinds
@@ -71,7 +97,7 @@ def clean_path(raw):
     parts = [part.strip() for part in path.split("/")]
     if (
         not path
-        or len(path) > 300
+        or len(path) > PATH_MAX
         or any(part in ("", ".", "..") for part in parts)
         or any(ord(ch) < 32 for ch in path)
     ):
@@ -85,13 +111,14 @@ def clean_path(raw):
 
 def clean_url(raw):
     url = str(raw or "").strip()
-    parts = urlsplit(url if re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I) else "https://" + url)
+    parts = urlparts.split(url if re.match(r"^[a-z][a-z0-9+.-]*:", url, re.I) else "https://" + url)
     try:
-        host = parts.hostname or ""
+        host = (parts.hostname or "") if parts else ""
     except ValueError:
         host = ""
     if (
-        parts.scheme not in ("http", "https")
+        parts is None
+        or parts.scheme not in ("http", "https")
         or not host
         or "." not in host
         and host != "localhost"
@@ -562,15 +589,12 @@ class Docs:
             marks.append("substr(path,1,?) = ? COLLATE NOCASE")
             args += [len(prefix), prefix]
         if cursor:
-            try:
-                after = base64.urlsafe_b64decode(cursor.encode()).decode()
-            except (ValueError, binascii.Error, UnicodeError) as exc:
-                raise Problem("validation", "That cursor is not valid", 422) from exc
-            marks.append("path COLLATE NOCASE > ?")
-            args.append(after)
+            path, doc_id = after_cursor(cursor)
+            marks.append("(path COLLATE NOCASE > ? OR (path COLLATE NOCASE = ? AND id > ?))")
+            args += [path, path, doc_id]
         with self.store.read() as c:
             rows = c.execute(
-                "SELECT * FROM docs WHERE " + " AND ".join(marks) + " ORDER BY path COLLATE NOCASE LIMIT ?",
+                "SELECT * FROM docs WHERE " + " AND ".join(marks) + " ORDER BY path COLLATE NOCASE, id LIMIT ?",
                 (*args, limit + 1),
             ).fetchall()
             page = rows[:limit]
@@ -578,9 +602,7 @@ class Docs:
             more = len(rows) > limit
             return {
                 "docs": [self.doc_view(c, r, body=False, names=names) for r in page],
-                "next_cursor": base64.urlsafe_b64encode(page[-1]["path"].casefold().encode()).decode()
-                if more and page
-                else None,
+                "next_cursor": list_cursor(page[-1]) if more and page else None,
             }
 
     def read(self, who, doc_id):
@@ -1050,7 +1072,7 @@ def install_docs(app, store, auth, mutate):
         request: Request,
         path_prefix: str = Query(default="", max_length=300),
         limit: int = Query(default=200, ge=1, le=LIST_MAX),
-        cursor: str = Query(default="", max_length=400),
+        cursor: str = Query(default="", max_length=CURSOR_MAX),
         archived: bool = False,
     ):
         return docs.listing(request.state.identity, path_prefix.strip().lstrip("/"), limit, cursor, archived)

@@ -44,6 +44,31 @@ def refusal_text(payload, task_id=None):
     return "\n".join(lines)
 
 
+def _kinds(schema):
+    kind = schema.get("type")
+    return [kind] if isinstance(kind, str) else kind or []
+
+
+def as_json_integers(value, schema):
+    """`value` with each integral float that `schema` types as an integer sent as an int: JSON Schema counts 1.0 as an
+    integer, and the server's strict integer fields refuse a float."""
+    if (
+        isinstance(value, float)
+        and value.is_integer()
+        and "integer" in (kinds := _kinds(schema))
+        and "number" not in kinds
+    ):
+        return int(value)
+    if isinstance(value, dict):
+        props, extra = schema.get("properties", {}), schema.get("additionalProperties", {})
+        return {
+            k: as_json_integers(v, props.get(k, extra if isinstance(extra, dict) else {})) for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [as_json_integers(item, schema.get("items", {})) for item in value]
+    return value
+
+
 def argument_error(value, schema, path="arguments"):
     types = {
         "object": dict,
@@ -54,11 +79,14 @@ def argument_error(value, schema, path="arguments"):
         "boolean": bool,
         "null": type(None),
     }
-    kind = schema.get("type")
-    kinds = [kind] if isinstance(kind, str) else kind or []
-    if kinds and not any(
-        isinstance(value, types[k]) and (k not in ("integer", "number") or not isinstance(value, bool)) for k in kinds
-    ):
+    kinds = _kinds(schema)
+
+    def is_kind(k):  # JSON Schema's numbers: a bool is neither, and 1.0 is an integer
+        if isinstance(value, bool):
+            return k == "boolean"
+        return isinstance(value, types[k]) or k == "integer" and isinstance(value, float) and value.is_integer()
+
+    if kinds and not any(is_kind(k) for k in kinds):
         return f"{path}: expected {' or '.join(kinds)}"
     if "enum" in schema and value not in schema["enum"]:
         return f"{path}: use one of {', '.join(str(v) for v in schema['enum'])}"
@@ -172,7 +200,9 @@ class Protocol:
         missing = [
             k
             for k in entry["inputSchema"].get("required", [])
-            if args.get(k) is None or args.get(k) == "" and properties.get(k, {}).get("minLength") != 0
+            if k not in args
+            or (args[k] is None and "null" not in _kinds(properties.get(k, {})))
+            or (args[k] == "" and properties.get(k, {}).get("minLength") != 0)
         ]
         if missing:
             return self._tool_error(
@@ -180,6 +210,7 @@ class Protocol:
             )
         if error := argument_error(args, entry["inputSchema"]):
             return self._tool_error(rid, {"error": "validation", "detail": error, "retryable": False})
+        args = as_json_integers(args, entry["inputSchema"])
         try:
             result = entry["fn"](self.api, args)
         except ValueError as exc:

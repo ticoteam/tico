@@ -100,6 +100,75 @@ def test_a_merge_redirects_and_an_unmerge_puts_every_row_back(api):
         assert c.execute("SELECT count(*) FROM entity_notes WHERE entity_id = ?", (drop,)).fetchone()[0] == 1
 
 
+def _mention(c, entity_id, text_id):
+    row = {"entity_id": entity_id, "role": "mentioned", "quote": "x", "occurrence": 0, "confidence": 1.0}
+    ES.replace_link_mentions(c, "message", text_id, "r1", [{**row, "method": "exact", "status": "linked"}])
+
+
+def _owner(c, table, row_id):
+    return c.execute(f"SELECT entity_id FROM {table} WHERE id = ?", (row_id,)).fetchone()[0]
+
+
+def test_an_unmerge_waits_for_the_later_merge_of_its_kept_entity_to_be_undone_first(api):
+    with tx(api) as c:
+        _setup_types(c)
+        a = ES.upsert(c, ANA, "organization", match={"domain": "a.example"}, name="A Co")["id"]
+        b = ES.upsert(c, ANA, "organization", match={"domain": "b.example"}, name="B Co")["id"]
+        cc = ES.upsert(c, ANA, "organization", match={"domain": "c.example"}, name="C Co")["id"]
+        note_a = ES.note(c, ANA, a, "A's own note")
+        ES.merge(c, ANA, b, a)
+        ES.merge(c, ANA, cc, b)
+
+        # A's rows now sit on C through B: undoing A first would hand them back while B's undo still claims them.
+        assert refused(ES.unmerge, c, ANA, a).rule == "merged"
+        assert _owner(c, "entity_notes", note_a) == cc
+
+        ES.unmerge(c, ANA, b)
+        ES.unmerge(c, ANA, a)
+        assert _owner(c, "entity_notes", note_a) == a
+        statuses = dict(c.execute("SELECT id, status FROM entities WHERE id IN (?, ?, ?)", (a, b, cc)).fetchall())
+        assert statuses == {a: "active", b: "active", cc: "active"}
+
+
+def test_an_unmerge_leaves_rows_that_moved_on_since_and_recounts_from_the_rows(api):
+    with tx(api) as c:
+        _setup_types(c)
+        keep = ES.upsert(c, ANA, "organization", match={"domain": "keep.example"}, name="Keep Co")["id"]
+        drop = ES.upsert(c, ANA, "organization", match={"domain": "drop.example"}, name="Drop Co")["id"]
+        other = ES.upsert(c, ANA, "organization", match={"domain": "other.example"}, name="Other Co")["id"]
+        moved_on = ES.note(c, ANA, drop, "Later filed under Other Co")
+        _mention(c, drop, "msg_before")
+        ES.merge(c, ANA, keep, drop)
+        before = c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0]
+
+        # After the merge, a person moves one of the drop's notes elsewhere, and the kept entity is mentioned again.
+        c.execute("UPDATE entity_notes SET entity_id = ? WHERE id = ?", (other, moved_on))
+        _mention(c, keep, "msg_after")
+        later = c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0]
+        assert later > before
+
+        ES.unmerge(c, ANA, drop)
+        assert _owner(c, "entity_notes", moved_on) == other
+        row = c.execute("SELECT mentions_count, last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()
+        assert (row[0], row[1]) == (1, later)
+        assert c.execute("SELECT mentions_count FROM entities WHERE id = ?", (drop,)).fetchone()[0] == 1
+
+
+def test_an_unmerge_keeps_the_last_activity_of_a_mention_a_later_merge_brought(api):
+    with tx(api) as c:
+        _setup_types(c)
+        keep = ES.upsert(c, ANA, "organization", match={"domain": "keep.example"}, name="Keep Co")["id"]
+        drop = ES.upsert(c, ANA, "organization", match={"domain": "drop.example"}, name="Drop Co")["id"]
+        other = ES.upsert(c, ANA, "organization", match={"domain": "other.example"}, name="Other Co")["id"]
+        _mention(c, other, "msg_other")  # created before the merge that is undone
+        ES.merge(c, ANA, keep, drop)
+        ES.merge(c, ANA, keep, other)
+        held = c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0]
+
+        ES.unmerge(c, ANA, drop)
+        assert c.execute("SELECT last_activity_at FROM entities WHERE id = ?", (keep,)).fetchone()[0] == held
+
+
 def test_a_mailbox_source_shows_only_to_the_person_who_holds_that_mailbox(api):
     with tx(api) as c:
         _setup_types(c)

@@ -292,10 +292,11 @@ def sse(*events):
 
 class Tail:
     def __init__(self, streams, gets=None):
-        self.streams, self.opened, self.gets = list(streams), [], gets or {}
+        self.streams, self.opened, self.gets, self.timeouts = list(streams), [], gets or {}, []
 
     def stream(self, path, query=None, last_event_id=None, timeout=60):
         self.opened.append((path, dict(query)))
+        self.timeouts.append(timeout)
         nxt = self.streams.pop(0)
         if isinstance(nxt, Exception):
             raise nxt
@@ -376,11 +377,62 @@ def test_tail_stops_on_an_expired_sign_in_or_a_refusal(shell, capsys):
 
 
 def test_tail_ends_at_its_timeout():
-    ticks = iter([0, 0, 5, 11, 11, 11])
+    now = [0]
     client = Tail([Stream(sse(task_event(1, "a", "eng", "x"), task_event(2, "a", "eng", "y")).encode())])
     lines = []
-    events_tail.tail(client, timeout=10, emit=lines.append, note=lambda t: None, clock=lambda: next(ticks))
+
+    def emit(line):
+        lines.append(line)
+        now[0] += 6  # 6 s after the first line, 12 s (past the 10 s timeout) after the second
+
+    events_tail.tail(client, timeout=10, emit=emit, note=lambda t: None, clock=lambda: now[0])
     assert len(lines) == 2 and len(client.opened) == 1
+
+
+class Quiet(Stream):
+    """A healthy stream that only says ready, moves the cursor and sends keepalives; each line takes a second."""
+
+    def __init__(self, body, now):
+        super().__init__(body)
+        self.now = now
+
+    def readline(self, *a):
+        self.now[0] += 1
+        return super().readline(*a)
+
+
+def test_quiet_tail_ends_at_its_timeout():
+    now, slept = [0], []
+    body = sse((None, "ready", {"seq": 1, "topics": ["tasks"]}), (2, "cursor", {"seq": 2})) + ": keepalive\n\n" * 20
+    client = Tail([Quiet(body.encode(), now), APIError("unavailable", "down", retryable=True)])
+    printed = events_tail.tail(
+        client, timeout=3, emit=lambda line: None, note=lambda t: None, clock=lambda: now[0], sleep=slept.append
+    )
+    assert printed == 0
+    assert client.timeouts == [3]  # a read never waits past the requested timeout
+    assert now[0] <= 4 and len(client.opened) == 1  # stops at the deadline, not when the stream ends
+
+    now[0], slept = 0, []
+    client = Tail([APIError("unavailable", "down", retryable=True)])
+    events_tail.tail(
+        client,
+        timeout=0.5,
+        emit=lambda line: None,
+        note=lambda t: None,
+        clock=lambda: now[0],
+        sleep=lambda s: (slept.append(s), now.__setitem__(0, now[0] + s)),
+    )
+    assert slept and max(slept) <= 0.5  # a reconnect wait stops at the deadline too
+
+    class SlowConnect(Tail):  # the connect itself uses up the budget
+        def stream(self, *a, **k):
+            now[0] += 1
+            return super().stream(*a, **k)
+
+    now[0], notes = 0, []
+    client = SlowConnect([APIError("unavailable", "timed out", retryable=True)])
+    events_tail.tail(client, timeout=0.5, emit=lambda line: None, note=notes.append, clock=lambda: now[0])
+    assert notes == [] and len(client.opened) == 1  # no "trying again" note when time is up
 
 
 def test_events_tail_fields_pick_each_line(shell, capsys):

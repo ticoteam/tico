@@ -332,7 +332,7 @@ def task_reassign(
         from . import task_relations
 
         relations: Any = task_relations
-        H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id))
+        H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id), task=task_id)
         H._learner(conn, actor)
         H._learning(conn, actor, target)
     return E.reassign(conn, task_id, target, actor, why, seen_version)

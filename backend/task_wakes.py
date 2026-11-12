@@ -426,10 +426,10 @@ _ONBOARDING = "SELECT onboarding_state FROM bot_config WHERE bot=?"
 
 
 def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> None:
-    """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its sign-in cards) in
-    a few statements for all of them, and keep it in the snapshot's read cache: a pass over many tasks then asks
+    """Read what `cannot_run` asks of each of these bots (its state, its settings, its computer, its run back-off, its
+    sign-in cards) in a few statements for all of them, and keep it in the snapshot's read cache: a pass over many tasks then asks
     "can this bot run" for each bot without reading it again. Nothing without a read cache."""
-    from . import bot_settings, read_cache, reconnects
+    from . import bot_settings, read_cache, reconnects, run_backoff
 
     RC: Any = read_cache
     H = _h()
@@ -463,6 +463,12 @@ def prime_bots(conn: "sqlite3.Connection", actors: Collection[str | None]) -> No
         )
     }
     RC.prime(conn, _ONBOARDING, {(b,): onboarding.get(b) for b in bots})
+    # Most bots have no back-off row: the miss is kept too, or each would be read again.
+    backoff = {
+        str(r["bot"]): r
+        for r in conn.execute("SELECT * FROM run_backoff WHERE bot IN (SELECT value FROM json_each(?))", listed)
+    }
+    RC.prime(conn, cast("Any", run_backoff).GET_SQL, {(b,): backoff.get(b) for b in bots})
     cast("Any", reconnects).prime_open(conn, bots, "login:")
 
 

@@ -624,7 +624,7 @@ window and a gap between sweeps, and it grants no right.
 | Profile | Wakes at once for | Everything else | Takes |
 |---|---|---|---|
 | **Doer** (the default) | people, hand-offs, asks, awaited results | batched, 15 minutes | any task; pulls its open tasks by itself |
-| **Reviewer** | its review or QA request, a result it waits for, people | a note | review and QA requests only (a subtask titled Review 1/2, QA or Security, a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
+| **Reviewer** | its review or QA request, a result it waits for, people | a note | review and QA requests only (a task labelled `review`, which a subtask filed with a title starting Review, Review 1, Review 2, QA or Security gets when it is created; a live-acceptance check, a task that runs production acceptance, top-level or as a subtask, such as "Run waitlist production acceptance" or "Production acceptance run: waitlist", or a top-level "Release QA:" / "Post-release QA:" task); any other task is refused with the reason |
 | **Lead** | people, escalations, a task it asked for finishing or closing, a blocker, OKs | one digest a day (09:00 team time by default) | any task, started only when a person or a bot asks |
 | **Manager** | people, a task given to it, its own clock | a note for its next run, its sub-tasks' results included | any task, started only when a person or a bot asks |
 | **Responder** | people | a note | no task: refused like a bot synced from another platform |

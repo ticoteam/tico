@@ -127,23 +127,43 @@ def tail(
     query = {"topics": ",".join(topics) if topics else None, "task": ",".join(ids) or None}
     deadline = clock() + timeout if timeout else None
     cursor, printed, failures, seen = after, 0, 0, set()
+
+    def left():  # seconds of the timeout still to go; None without one
+        return None if deadline is None else deadline - clock()
+
+    def wait_for(seconds):  # a reconnect wait never outlasts the timeout
+        remaining = left()
+        sleep(seconds if remaining is None else max(0, min(seconds, remaining)))
+
+    def until_deadline(lines):  # keepalives and unprinted frames end the stream at the timeout too
+        for raw in lines:
+            if deadline is not None and clock() >= deadline:
+                return
+            yield raw.decode("utf-8", "replace")
+
     while True:
-        if deadline is not None and clock() >= deadline:
+        remaining = left()
+        if remaining is not None and remaining <= 0:
             return printed
         try:
-            response = client.stream("events", {**query, "after": cursor}, timeout=READ_TIMEOUT)
+            response = client.stream(
+                "events",
+                {**query, "after": cursor},
+                timeout=READ_TIMEOUT if remaining is None else min(READ_TIMEOUT, remaining),
+            )
         except APIError as exc:
             if not exc.retryable:
                 raise
+            if deadline is not None and clock() >= deadline:
+                return printed  # the connect timed out at the requested timeout: no retry to announce
             failures += 1
             wait = min(RECONNECT_MAX, 2 ** min(failures, 5)) + random.random()
             note(f"event stream unavailable ({exc.detail}); trying again in {wait:.0f}s")
-            sleep(wait)
+            wait_for(wait)
             continue
         try:
             with response:
-                lines = (raw.decode("utf-8", "replace") for raw in iter(response.readline, b""))
-                for seq, topic, text in frames(lines):
+                for seq, topic, text in frames(until_deadline(iter(response.readline, b""))):
                     failures = 0
                     try:
                         data = json.loads(text) if text else {}
@@ -175,7 +195,9 @@ def tail(
         except SignInExpired:
             raise
         except (OSError, ValueError) as exc:  # a dropped or stalled connection: resume from the cursor
+            if deadline is not None and clock() >= deadline:
+                return printed  # the read timed out at the requested timeout: not a dropped stream
             note(f"event stream dropped ({type(exc).__name__}); reconnecting after change {cursor}")
-            sleep(1)
+            wait_for(1)
             continue
         # The server ends a stream after about fifteen minutes: reconnect from where it stopped.

@@ -2632,12 +2632,13 @@ def _reach(conn, actor, target, allow_planned=False, allow_held=False):
     return resolved
 
 
-def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False):
+def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
     """A bot a person syncs in from another platform reads only its chat with them, so a task for it would
     sit open with nobody to work it: it is refused with what to do instead. So is a task its profile says it does
     not take (backend/profiles.py): none for a Responder, only review and QA requests for a Reviewer, only its
     watcher's for a Monitor. Returns (rule, why) or None without recording a refusal, so automatic assignment
-    can skip an ineligible bot. `title` and `parent` say what is being filed; `routine` is a routine's own run."""
+    can skip an ineligible bot. `title`, `parent` and `labels` say what is being filed, `task` which existing task is
+    being given; `routine` is a routine's own run."""
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
@@ -2667,11 +2668,13 @@ def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=Fa
             parent,
             routine,
             owner=target,
+            labels=labels,
+            task=task,
         )
 
 
-def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False):
-    if found := task_taking_refusal(conn, actor, target, title, parent, routine):
+def _takes_tasks(conn, actor, target, title=None, parent=None, routine=False, *, labels=None, task=None):
+    if found := task_taking_refusal(conn, actor, target, title, parent, routine, labels=labels, task=task):
         refuse(conn, actor, *found)
 
 
@@ -5507,7 +5510,10 @@ def task_create(
     _learner(conn, actor)
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     _botops_only(conn, actor, target)
-    _takes_tasks(conn, actor, target, title, parent_id, routine)
+    from . import profiles
+
+    labels = profiles.review_labels(title, parent_id, _labels(labels))
+    _takes_tasks(conn, actor, target, title, parent_id, routine, labels=labels)
     _learning(conn, actor, target)
     if occurrence and occurrence_step:
         again = _one(
@@ -7774,6 +7780,24 @@ def labels_in_use(conn, visible="1"):
     ]
 
 
+# A keyset page starts after the last row's sort key: queue order (rank-less last, rank, created, id) or finished order
+# (most recently finished first, id). Row values compare left to right as the ORDER BY sorts. created_at is a nullable
+# column: a missing date is '' here, which sorts where NULL does (before every date ascending, after every date
+# descending), so a row with none is still reached and its key still round-trips as a string.
+KEYSET_SQL = {
+    "queue": "((rank IS NULL), COALESCE(rank, 0), COALESCE(created_at, ''), id) > (?, ?, ?, ?)",
+    "finished": "(COALESCE(done_at,closed_at,updated_at,created_at,''), id) < (?, ?)",
+}
+
+
+def task_sort_key(row, order="queue"):
+    """The sort key `tasks(after=...)` takes, of one raw task row, as a list that survives JSON."""
+    if order == "queue":
+        return [int(row.get("rank") is None), row.get("rank") or 0, row.get("created_at") or "", row["id"]]
+    when = next((row[k] for k in ("done_at", "closed_at", "updated_at", "created_at") if row.get(k) is not None), "")
+    return [when, row["id"]]
+
+
 def tasks(
     conn,
     owner=None,
@@ -7793,14 +7817,23 @@ def tasks(
     snoozed=None,
     q=None,
     exclude_owner=None,
+    match=(),
+    after=None,
+    keys_only=False,
 ):
     """Tasks, newest work first. `visible` is a WHERE fragment over the task's own columns (from
     `Auth.task_sql`), so a caller's page and its `offset` are cut in the query. `updated_since` is a stored timestamp.
     `member` keeps the tasks that actor is on
     in some role (task_roles), or in `role` when given. `ids` limits it to those tasks (a delta
     read's changed ones). `snoozed` is "hide" (leave out snoozed tasks), "only", or None for both.
-    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match."""
+    `exclude_owner` leaves out one owner's tasks. `limit=None` reads every match. `match` is more WHERE fragments
+    over the task's own columns, each with its arguments (backend/task_match.py, the Tasks page's filters). `after` is
+    a keyset start: the sort key of the last row a page gave (`task_sort_key`), so the page holds the rows after it.
+    `keys_only` answers every match's (id, title, number) in order instead, for a filter worked out in Python."""
     sql, args, where = "SELECT * FROM tasks", [], []
+    for fragment, values in match:
+        where.append("(" + fragment + ")")
+        args += list(values)
     if q and q.strip():
         query = q.strip()[:1000]
         if re.fullmatch(r"#\d+", query):
@@ -7853,14 +7886,22 @@ def tasks(
         else:
             where.append(f"status IN ({','.join('?' * len(wanted))})")
             args += wanted
-    if where:
-        sql += " WHERE " + " AND ".join(where)
     if order == "queue":
         ordering = "(rank IS NULL), rank, created_at, id"
     elif order == "finished":
         ordering = "COALESCE(done_at,closed_at,updated_at,created_at) DESC, id DESC"  # most recently done first
     else:
         raise ValueError("task order is queue or finished")
+    if after is not None:
+        # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
+        where.append(KEYSET_SQL[order])
+        args += list(after)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    if keys_only:
+        return conn.execute(
+            "SELECT id, title, number" + sql[len("SELECT *") :] + f" ORDER BY {ordering}", args
+        ).fetchall()
     page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
     if order == "queue" and limit is not None:
         # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the

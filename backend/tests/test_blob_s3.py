@@ -691,3 +691,35 @@ def test_storage_loop_backs_off_and_survives_errors(tmp_path, credential_clients
     assert waits == [30, 60, 120, 240, 480, 960, 1800, 1800]
     assert storage._write_failed and len(passes) == 8
     assert 'pass failed' in caplog.text
+
+
+def test_a_client_built_with_old_keys_is_not_cached_after_rekey(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+    from backend import blob_s3
+
+    settings = SimpleNamespace(blob_keys=('old-id', 'old-secret'), blob_endpoint=None, blob_region='us-east-1')
+    entered, release = threading.Event(), threading.Event()
+
+    def client(settings, config=None, kind=None, region_name=None):
+        keys = settings.blob_keys
+        if keys[0] == 'old-id':
+            entered.set()
+            assert release.wait(10)
+        return SimpleNamespace(keys=keys)
+
+    monkeypatch.setattr(blob_s3, 'client', client)
+    sources = blob_s3.Sources(settings)
+    old = {}
+    caller = threading.Thread(target=lambda: old.setdefault('client', sources.client_for('company')))
+    caller.start()
+    try:
+        assert entered.wait(10)
+        settings.blob_keys = ('new-id', 'new-secret')
+        sources.forget()
+        assert sources.client_for('company').keys[0] == 'new-id'
+    finally:
+        release.set()
+        caller.join(10)
+    assert not caller.is_alive()
+    assert sources.client_for('company').keys[0] == 'new-id'

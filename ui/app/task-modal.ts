@@ -296,7 +296,10 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   const unsnooze = $('[data-task-unsnooze]', d);
   if (unsnooze) unsnooze.onclick = () => change({unsnooze: true}, undefined, 'snooze');
   const answer = $('[data-task-answer]', d);
-  if (answer) answer.onclick = () => decideOpen(String(answer.dataset.taskAnswer));
+  if (answer) answer.onclick = async () => {
+    answer.disabled = true;
+    try { await decideOpenAsk(String(task.id), String(answer.dataset.taskAnswer)); } finally { answer.disabled = false; }
+  };
   taskRequirementsBind(d, task, fresh => { if (d.open && String(d.dataset.task) === String(task.id)) { d.liveTask = fresh; void taskModalShow(fresh, d); } });
   taskPropsBind(d, task, change);
   roadmapTaskBind(d, task, change);

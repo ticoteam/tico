@@ -32,13 +32,23 @@ interface TasksPageState {
   cursor: string;
   /** A live change came while a read was on its way: catch up once it lands. */
   behind: boolean;
-  /** The server holds more of the view than `tasks` (a pipeline over 500 open tasks, an archive over 200). */
+  /** The server holds more of the view than `tasks` (a pipeline over 500 open tasks, an archive over 200, a search's
+   * or a filter's matches over 100). */
   more: boolean;
-  /** The last row the server gave: the next page starts after the rows held up to it. */
+  /** The last row the server gave. */
   edge: TaskBriefV3 | null;
+  /** Where the next page starts: the server's sort key of that last row (a keyset page). */
+  after: string;
+  /** The search and filters the rows were read with (tasksNarrow), and its key: when the page's own differ, the view
+   * is read again with them. */
+  narrow: TaskBriefQuery;
+  readKey: string;
+  /** The view's rows read with no search or filter: a filter's values come from them too, so a filter set does not
+   * take away the values beside it. */
+  base: TaskBriefV3[];
   /** The next page's read, while it is out. */
   paging: Promise<void> | null;
-  /** A page read failed or was overtaken: a search reads on only when More is pressed. */
+  /** A page read failed or was overtaken. */
   stalled: boolean;
   abort: AbortController;
   /** The popover menu's anchor and the filter whose values it shows (task-list-menus.ts). */
@@ -80,7 +90,7 @@ function tasksURLWrite(state: TasksPageState) {
 function pageTasks(openId = '') {
   tasksLeave();
   const state: TasksPageState = {...tasksViewFromURL(), q: '', filters: {}, needs: S.v2.needs ? [...S.v2.needs] as NeedsEntry[] : [],
-    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, paging: null, stalled: false, abort: new AbortController()};
+    tasks: [], pipelines: TASK_PIPELINES || [], loading: true, kept: false, failed: '', feed: taskFeedNew(), cursor: '', behind: false, more: false, edge: null, after: '', narrow: {}, readKey: '', base: [], paging: null, stalled: false, abort: new AbortController()};
   tasksKept(state);
   TASKS_ST = state;
   const main = $('#main');
@@ -126,7 +136,7 @@ function pageTasks(openId = '') {
     if (want) tasksShow(state, {archive: want});
   };
   $('#task-play').onclick = () => decideGoThrough();
-  $('#task-more button').onclick = () => { state.stalled = false; void tasksMore(state, !!state.q.trim() || taskFiltersOn(state.filters)); };
+  $('#task-more button').onclick = () => { state.stalled = false; void tasksMore(state); };
   $('#task-new').onclick = () => openTaskCreate('', {pipeline: state.pipeline || null});
   const search = $('#task-q');
   search.oninput = () => {
@@ -192,12 +202,12 @@ function tasksShow(state: TasksPageState, change: Partial<Pick<TasksPageState, '
   if ('pipeline' in change) state.filters = {};
   tasksMenuClose();
   tasksURLWrite(state);
-  state.tasks = [];
-  state.more = false; state.edge = null; state.stalled = false;
+  state.tasks = []; state.base = [];
+  state.more = false; state.edge = null; state.after = ''; state.stalled = false;
   state.loading = true;
   tasksKept(state);
-  tasksRender(state);
   void tasksLoad(state);
+  tasksRender(state);
 }
 // A view seen before draws its last read at once while the new one is out; the app's own Needs you list wins for You.
 const tasksViewKey = (state: Pick<TasksPageState, 'pipeline' | 'archive'>) => state.pipeline + '|' + state.archive;
@@ -218,37 +228,61 @@ function tasksKept(state: TasksPageState) {
  * Needs you's. */
 function tasksQuery(state: TasksPageState): TaskBriefQuery | null {
   const of = state.pipeline ? {pipeline: state.pipeline} : {};
-  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of};
-  if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of};
+  if (state.archive) return {status: state.archive === 'snoozed' ? 'open' : state.archive, snoozed: state.archive === 'snoozed' ? 'only' : 'hide', ...of, ...state.narrow};
+  if (state.pipeline) return {status: 'open', snoozed: 'hide', ...of, ...state.narrow};
   return null;
 }
+/** The search and the filters as the server takes them (backend/task_match.py): the same meaning as taskFilterMatch, so
+ * the server answers only the matches, a page at a time. */
+function tasksNarrow(state: Pick<TasksPageState, 'q' | 'filters'>): TaskBriefQuery {
+  const f = state.filters, out: TaskBriefQuery = {};
+  const list = (v: string[] | undefined) => v?.length ? [...v] : undefined;
+  if (state.q.trim()) out.search = state.q.trim();
+  const owners = list(f.owner), turn = list(f.waiting_on), stages = list(f.stage), requesters = list(f.asked_by), labels = list(f.tag);
+  if (owners) out.owners = owners;
+  if (turn) out.turn = turn;
+  if (stages) out.stages = stages;
+  if (requesters) out.requesters = requesters;
+  if (labels) out.labels = labels;
+  if (f.due) out.due = f.due;
+  if (f.late) out.late = true;
+  if (f.pushed) out.pushed_past = true;
+  return out;
+}
+/** '' when nothing narrows the view. */
+const tasksNarrowKey = (narrow: TaskBriefQuery) => Object.keys(narrow).length ? taskBriefParams(narrow).toString() : '';
 /** A page of the view: Done and Closed most recent first, the rest in queue order; the archive 200 at a time, a
- * pipeline 500 (the server's most), and 500 when reading the rest. */
-const tasksPageQuery = (state: TasksPageState, query: TaskBriefQuery, rest = false): TaskBriefQuery =>
-  ({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue', limit: state.archive && !rest ? 200 : 500});
+ * pipeline 500 (the server's most), a search's or a filter's matches 100. */
+const tasksPageQuery = (state: TasksPageState, query: TaskBriefQuery): TaskBriefQuery =>
+  ({...query, sort: state.archive && state.archive !== 'snoozed' ? 'finished' : 'queue',
+    limit: Object.keys(state.narrow).length ? 100 : state.archive ? 200 : 500});
 /** The view's order, as its read asks for it: Done and Closed most recent first, the rest in queue order. */
 const tasksOrder = (state: TasksPageState): TaskRowOrder => state.archive && state.archive !== 'snoozed' ? taskFinishedOrder : taskQueueOrder;
-/** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side. */
+/** Whether a task, as the viewer reads it now, belongs in the view: tasksQuery's filters, client-side, the search and
+ * filters it was read with too. */
 function tasksViewHas(state: TasksPageState, t: TaskBriefV3): boolean {
   if (state.pipeline && t.pipeline_id !== state.pipeline) return false;
+  if (state.readKey && !taskFilterMatch(t, state.q, state.filters)) return false;
   if (state.archive === 'snoozed') return t.status === 'open' && !!t.snoozed;
   if (state.archive) return t.status === state.archive;
   return !!state.pipeline && t.status === 'open' && !t.snoozed;
 }
 /** What the view needs: the pipelines (for the view button and the stage names), then You's Needs you, the archive, or
  * the pipeline's open tasks. */
-async function tasksLoad(state: TasksPageState): Promise<void> {
+async function tasksLoad(state: TasksPageState, pipelinesToo = true): Promise<void> {
   const ticket = taskFeedRead(state.feed);
   state.behind = false;
+  state.narrow = tasksNarrow(state); state.readKey = tasksNarrowKey(state.narrow);
+  const narrowed = !!state.readKey;
   let held: LiveTaskEvent[] | null = [];
   try {
     const query = tasksQuery(state);
     const [pipelines, rows] = await Promise.all([
-      tasksPipelinesRead().catch(() => state.pipelines),
+      pipelinesToo ? tasksPipelinesRead().catch(() => state.pipelines) : state.pipelines,
       query ? taskBriefsPage(tasksPageQuery(state, query)) : needsYou(),
     ]);
-    // Kept for the next visit even when the page was left before it landed.
-    S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
+    // Kept for the next visit even when the page was left before it landed; a search's matches are not the view.
+    if (!narrowed || !query) S.lastRead.tasks = {view: tasksViewKey(state), needs: Array.isArray(rows) ? rows : [],
       tasks: Array.isArray(rows) ? [] : rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline)};
     if (TASKS_ST !== state) return;
     held = taskFeedLanded(state.feed, ticket, Array.isArray(rows) ? '' : rows.cursor);
@@ -256,10 +290,11 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
     state.pipelines = pipelines;
     if (state.pipeline && !pipelines.some(p => p.id === state.pipeline)) { state.pipeline = ''; tasksURLWrite(state); }
     state.stalled = false;
-    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; state.more = false; state.edge = null; }
+    if (Array.isArray(rows)) { state.needs = rows; state.cursor = ''; state.more = false; state.edge = null; state.after = ''; }
     else {
       state.tasks = rows.tasks.filter(t => !state.pipeline || t.pipeline_id === state.pipeline); state.cursor = rows.cursor;
-      state.more = rows.more; state.edge = rows.tasks.at(-1) ?? null;
+      state.more = rows.more; state.edge = rows.tasks.at(-1) ?? null; state.after = rows.next;
+      if (!narrowed) state.base = state.tasks.slice();
     }
     state.failed = '';
   } catch (e) {
@@ -273,26 +308,24 @@ async function tasksLoad(state: TasksPageState): Promise<void> {
   tasksRender(state);
   if (state.behind) void tasksCatchUp(state);
 }
-/** The view's next page, or with `rest` every page left (a search or a filter reads them all first, so it finds every
- * task). It starts after the rows held that sort at or before the last row read, so a task put in or taken out live
- * since moves it with them; a row read twice goes in once. Nothing is re-read: the rows held stay, and the events that
- * came meanwhile go over the page as over any read. */
-function tasksMore(state: TasksPageState, rest = false): Promise<void> {
+/** The view's next page (More), of the search's and filters' matches when they are set. It starts after the server's
+ * sort key of the last row it gave (a keyset page), so a task put in or taken out live since skips or repeats nothing;
+ * a row read twice goes in once. Nothing is re-read: the rows held stay, and the events that came meanwhile go over the
+ * page as over any read. */
+function tasksMore(state: TasksPageState): Promise<void> {
   if (state.paging) return state.paging;
   const run = async () => {
-    while (state.more && state.edge && TASKS_ST === state && !state.loading) {
-      const query = tasksQuery(state), view = tasksViewKey(state);
-      if (!query) return;
-      let held: Awaited<ReturnType<typeof taskPageNext>>;
-      try {
-        held = await taskPageNext(state, state.tasks, tasksPageQuery(state, query, rest), state.feed, row => tasksViewHas(state, row), tasksOrder(state),
-          () => TASKS_ST === state && !state.loading && tasksViewKey(state) === view);
-      } catch (e) { state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
-      if (held === 'left') return;
-      if (!held) { state.stalled = true; return; }   // a newer read is out; More stays
-      if (held.length) tasksEventsPut(state, held);
-      if (!rest) return;
-    }
+    if (!state.more || !state.edge || TASKS_ST !== state || state.loading) return;
+    const query = tasksQuery(state), view = tasksViewKey(state), key = state.readKey;
+    if (!query) return;
+    let held: Awaited<ReturnType<typeof taskPageNext>>;
+    try {
+      held = await taskPageNext(state, state.tasks, tasksPageQuery(state, query), state.feed, row => tasksViewHas(state, row), tasksOrder(state),
+        () => TASKS_ST === state && !state.loading && tasksViewKey(state) === view && state.readKey === key);
+    } catch (e) { state.stalled = true; if (TASKS_ST === state) toast(errorMessage(e, 'More did not load.'), true); return; }
+    if (held === 'left') return;
+    if (!held) { state.stalled = true; return; }   // a newer read is out; More stays
+    if (held.length) tasksEventsPut(state, held);
   };
   state.paging = run().finally(() => { state.paging = null; tasksRender(state); });
   tasksRender(state);
@@ -389,12 +422,15 @@ function tasksRender(state: TasksPageState | null) {
   if (!body || !state || TASKS_ST !== state) return;
   tasksHeadPaint(state);
   needsBadgePaint();
-  // A search or a filter over part of the view reads the rest first; More reads the next page.
-  const narrowed = !!state.q.trim() || taskFiltersOn(state.filters);
-  if (narrowed && state.more && !state.paging && !state.stalled && !state.loading && !state.failed) void tasksMore(state, true);
+  // A search or a filter is the server's: a change of either reads its first page of matches (held rows, matched here,
+  // show meanwhile); More reads the next page.
+  if (tasksQuery(state) && tasksNarrowKey(tasksNarrow(state)) !== state.readKey) {
+    state.loading = true; state.kept = true;
+    void tasksLoad(state, false);
+  }
   const more = $('#task-more');
   if (more) {
-    more.hidden = !state.more || (narrowed && !state.stalled) || !!state.failed || state.loading;
+    more.hidden = !state.more || !!state.failed || state.loading;
     ($('button', more) as HTMLButtonElement).disabled = !!state.paging;
   }
   body.dataset.view = state.archive ? 'archive' : state.pipeline ? 'pipeline' : 'you';
@@ -506,9 +542,9 @@ function tasksScopeMenu(state: TasksPageState, anchor: HTMLElement) {
   anchor.setAttribute('aria-expanded', 'true');
 }
 const tasksFilterOn = (f: TaskFilters, k: keyof TaskFilters) => { const v = f[k]; return Array.isArray(v) ? v.length > 0 : !!v; };
-/** The rows a filter's values come from: what the view lists. */
+/** The rows a filter's values come from: what the view lists, and what it listed with no search or filter. */
 const tasksFilterRows = (state: TasksPageState): TaskBriefV3[] =>
-  state.archive || state.pipeline ? state.tasks : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
+  state.archive || state.pipeline ? [...state.base, ...state.tasks] : state.needs.map(it => it.task).filter((t): t is TaskBriefV3 => !!t);
 type TaskFilterValue = {value: string; label: string; face?: string};
 function tasksFilterValues(state: TasksPageState, k: keyof TaskFilters): TaskFilterValue[] {
   if (k === 'due') return [{value: 'overdue', label: 'Overdue'}, {value: 'week', label: 'This week'}, {value: 'any', label: 'Has a date'}];

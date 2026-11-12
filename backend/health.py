@@ -1631,17 +1631,15 @@ def token_failure(c):
     health = c.execute(
         "SELECT last_succeeded_at,last_error,detail FROM service_health WHERE service=?", (GITHUB_HEALTH,)
     ).fetchone()
-    recent = H.shift(H.now(), hours=-RECENT_HOURS)
-    if not (
-        health
-        and health["last_error"]
-        and health["last_error"] > recent
-        and health["last_error"] > (health["last_succeeded_at"] or "")
-    ):
+    if not (health and health["last_error"]):
         return None
     try:
         detail = json.loads(health["detail"] or "{}")
     except ValueError:
+        return None
+    # last_error holds the message; when it failed is detail's failed_at (a row without one predates it).
+    failed_at = str(detail.get("failed_at") or "")
+    if not (failed_at > H.shift(H.now(), hours=-RECENT_HOURS) and failed_at > (health["last_succeeded_at"] or "")):
         return None
     return (
         {"message": str(detail.get("message") or ""), "action": str(detail["action"])} if detail.get("action") else None
@@ -2360,8 +2358,8 @@ def _named_lines(lines, most=5):
 def _fallback_lines(c, settings, on, carrying):
     """One plain line per bot in `on` (from `_fallbacks`) saying what it is set to and what it runs on instead, set on
     each row as `line`; and the summary for Health: those lines, or one line when every bot whose turns carry
-    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, with a line for
-    any other bot in `on`."""
+    `waiting_for_sign_in` ran on the Gateway because its subscription is not signed in on its computer, naming those
+    bots (at most five), with a line for any other bot in `on`."""
     from .shared_bots import follow
 
     if not on:
@@ -2400,8 +2398,16 @@ def _fallback_lines(c, settings, on, carrying):
         models = sorted({_ran_on_words(row) for row in group})
         unsigned = sorted({row["waiting_for_sign_in"] for row in group})
         names = " or ".join(SUBSCRIPTION_NAMES.get(r, _harness_name(r)) for r in unsigned)
+        # Name the bots counted: a bot whose turns ran on what it is set to carries no `waiting_for_sign_in`, so the
+        # group is not every bot on the team.
+        who, more = [_bot_name(c, row["bot"]) for row in group[:5]], len(group) - 5
+        who = (
+            ", ".join(who[:-1]) + " and " + who[-1]
+            if more <= 0
+            else ", ".join(who) + f" and {more} more bot{'s' if more != 1 else ''}"
+        )
         summary = (
-            f"Every bot runs on {' or '.join(models)}, not the model it is set to: its computer has no {names} "
+            f"{who} run on {' or '.join(models)}, not the models they are set to: their computers have no {names} "
             "subscription."
         )
         rest = _named_lines([row["line"] for row in on if row["bot"] not in carrying])
@@ -3973,13 +3979,18 @@ def note_github_token(store, error=None, action=""):
     App itself belongs here (its key, installation or permissions), with what to do about it; a bot whose
     repository is not on GitHub yet is that bot's readiness problem."""
     now = H.now()
-    detail = json.dumps({"message": error, "action": action}) if error else None
+    detail = json.dumps({"message": error, "action": action, "failed_at": now}) if error else None
     with store.read() as c:
         current = c.execute("SELECT last_error,detail FROM service_health WHERE service=?", (GITHUB_HEALTH,)).fetchone()
-        if error:
-            if current and current["last_error"] == error and current["detail"] == detail:
+        if error and current and current["last_error"] == error:
+            try:
+                seen = json.loads(current["detail"] or "{}")
+            except ValueError:
+                seen = {}
+            # The same failure is rewritten at most hourly, so one that keeps happening stays recent.
+            if seen.get("action") == action and str(seen.get("failed_at") or "") > H.shift(now, hours=-1):
                 return
-        elif not current or not current["last_error"] and (current["detail"] or "{}") in ("{}", ""):
+        elif not error and (not current or not current["last_error"] and (current["detail"] or "{}") in ("{}", "")):
             return
     with store.transaction() as c:
         if error:

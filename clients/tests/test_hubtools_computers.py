@@ -204,3 +204,41 @@ def test_subscription_list_names_computers_and_never_a_value():
     got = tool("tico_subscription_list", api)
     assert got["subscriptions"][0]["computers"] == ["Shared cloud machine"] and "usage" not in got["subscriptions"][0]
     assert got["cannot_take_one"] == ["Ana's Mac"]
+
+
+def test_over_mcp_a_required_key_sent_as_null_resets_where_its_schema_allows_null_and_integers_read_as_json_numbers():
+    """A required key present with null is not a missing key: the turns-at-once limit and a task cap are reset with
+    null over MCP, as their schemas say. An absent key, or null where the schema has no null, is still refused before
+    any request. 1.0 is an integer in JSON Schema and is sent as 1, since the server's strict fields refuse a float;
+    1.5 is not an integer."""
+    api = Api(
+        {
+            ("POST", "computers/c1/turns-at-once"): lambda body: {"computer": "c1", **body},
+            ("PUT", "task-caps"): lambda body: {"cap": body},
+        }
+    )
+    protocol = hubtools.Protocol(api, api_error=APIError, kind="owner")
+
+    def call(name, args):
+        return protocol.handle(
+            {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": args}}
+        )["result"]
+
+    reset = call("tico_computer_turns_at_once", {"computer": "c1", "limit": None})
+    assert not reset["isError"] and api.calls[-1] == ("POST", "computers/c1/turns-at-once", {"turns_at_once": None})
+    uncapped = call("tico_task_cap_set", {"sender": "bot:seo", "receiver": "person:p1", "per_day": None})
+    assert not uncapped["isError"] and api.calls[-1][2]["per_day"] is None
+    assert not call("tico_computer_turns_at_once", {"computer": "c1", "limit": 1.0})["isError"]
+    assert api.calls[-1][2] == {"turns_at_once": 1} and type(api.calls[-1][2]["turns_at_once"]) is int
+    assert not call("tico_task_cap_set", {"sender": "bot:seo", "receiver": "person:p1", "per_day": 3.0})["isError"]
+    assert type(api.calls[-1][2]["per_day"]) is int
+
+    sent = len(api.calls)
+    absent = call("tico_computer_turns_at_once", {"computer": "c1"})["structuredContent"]
+    assert absent["error"] == "usage" and "needs limit" in absent["detail"]
+    no_computer = call("tico_computer_turns_at_once", {"computer": None, "limit": 4})["structuredContent"]
+    assert no_computer["error"] == "usage" and "needs computer" in no_computer["detail"]
+    half = call("tico_computer_turns_at_once", {"computer": "c1", "limit": 1.5})["structuredContent"]
+    assert half["error"] == "validation" and "expected integer" in half["detail"]
+    assert call("tico_computer_turns_at_once", {"computer": "c1", "limit": True})["isError"]
+    assert len(api.calls) == sent

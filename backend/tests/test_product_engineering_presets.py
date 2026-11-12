@@ -137,7 +137,7 @@ def test_a_set_up_software_company_gets_product_and_engineering_with_their_roles
     stages = {s["id"]: s for s in product["stages"] + engineering["stages"]}
     assert stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
     limits = {sid: s["task_limit"] for sid, s in stages.items() if s["task_limit"]}
-    assert limits == {"product-spec": 2, "engineering-build": 3}
+    assert limits == {"product-spec": 20, "engineering-build": 3}
     assert [stages[s]["expected_minutes"] for s in ("product-spec", "product-in-development", "product-validate")] == [
         2880,
         7200,
@@ -459,12 +459,13 @@ def _ideas_moves(c):
 
 
 def test_a_request_a_person_files_moves_into_spec_by_itself_and_a_bots_idea_waits_by_hand(c):
-    """G5: a person who files into Product already picked it. Two filed at once both go into Spec (its limit); the third
+    """G5: a person who files into Product already picked it. With Spec's limit at 2, two filed at once both go in; the third
     waits for room, named as room, and goes in first when a slot frees. A bot's idea, and a request moved back into
     Ideas, are held by hand."""
     _team(c)
     _answers(c, software="yes")
     PS.ensure_presets(c)
+    c.execute("UPDATE stages SET task_limit=2 WHERE id='product-spec'")  # a full Spec, whatever the preset's limit
     asked = [X.new_task(c, ANA, f"Request {n}", "product") for n in range(3)]
     brief = X.new_task(c, "bot:pm", "Brief", "product")
     X.settled(c)

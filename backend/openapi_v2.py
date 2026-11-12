@@ -2298,7 +2298,8 @@ GRANOLA_ERROR_DETAIL = {
 
 
 def items(schema):
-    return {"type": "array", "items": schema}
+    """An array schema of one item schema, written like an obj field: "s|i|b|o|n|a|f" or {schema}."""
+    return {"type": "array", "items": _t(schema) if isinstance(schema, str) else schema}
 
 
 ref = lambda name: {"$ref": "#/components/schemas/" + name}
@@ -3208,6 +3209,10 @@ SCHEMAS = {
         {
             "tasks": items(ref("Task")),
             "next_offset": {"type": ["integer", "null"]},
+            "next_after": {
+                "type": ["string", "null"],
+                "description": "Opaque: pass as after for the next keyset page (search and filters kept); null at the end",
+            },
             "cursor": {
                 "type": "string",
                 "description": "Opaque: pass as changed_after to read only what changed since",
@@ -9231,6 +9236,23 @@ SCHEMAS['BotDreamView'] = obj(
     }
 )
 
+# The methods that write. Each /api/v2 write declares the Idempotency-Key header, required unless an exception says not.
+WRITE_METHODS = ("post", "put", "patch", "delete")
+# PUTs whose handlers never pass through Store.mutate, so they accept a write without the key.
+PUT_WITHOUT_KEY = frozenset(
+    {
+        "/api/v2/bots/{bot}/github-repos",
+        "/api/v2/bots/{bot}/repositories",
+        "/api/v2/finance/bills-address",
+        "/api/v2/hooks/wake-url",
+        "/api/v2/inbound/inboxes/{ident}/audience",
+        "/api/v2/postal/addresses/{address_id}/grants/{grantee_type}/{grantee_id}",
+        "/api/v2/postal/settings",
+        "/api/v2/repositories/settings",
+        "/api/v2/repositories/{owner}/{repo}",
+    }
+)
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "
@@ -10473,14 +10495,15 @@ def spec(app):
         granola = path.startswith("/api/v2/meetings/granola")
         if inbound:
             op["security"] = [{"serviceKey": []}]
-        if method in ("post", "patch", "delete") and path.startswith("/api/v2/"):
+        if method in WRITE_METHODS and path.startswith("/api/v2/"):
+            keyless = method == "put" and path in PUT_WITHOUT_KEY
             parameters = op.setdefault("parameters", [])
             parameters[:] = [p for p in parameters if (p.get("name"), p.get("in")) != ("Idempotency-Key", "header")]
             parameters.append(
                 {
                     "name": "Idempotency-Key",
                     "in": "header",
-                    "required": not (inbound or granola or connection),
+                    "required": not (inbound or granola or connection or keyless),
                     "schema": {"type": "string"},
                     "description": (
                         "Not needed: the pair (service key, `key`) makes a repeated call harmless, and the header "
@@ -10490,6 +10513,8 @@ def spec(app):
                         if connection
                         else "Optional. Sync uses a two-minute debounce; connecting starts a new device sign-in."
                         if granola
+                        else "Optional: this write does not check the header."
+                        if keyless
                         else "1-200 characters. Reusing a key with the same body replays the first answer."
                     ),
                 }
