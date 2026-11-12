@@ -2691,3 +2691,118 @@ async fn session_destinations_refuse_the_install_before_the_turn_writes() {
         }
     }
 }
+
+/// A base clone with a Builder's task worktree on `tico/t1` (one commit past main) and a second bot's worktree that
+/// took the same branch and rebased it onto a newer main, as `checkout -B` lets it before Git 2.44
+/// (`--ignore-other-worktrees` does the same on a newer Git). Returns (builder, the commit it last had).
+fn branch_moved_under_the_builder(root: &Path) -> (PathBuf, String) {
+    let (bare, seed) = remote(root, "product");
+    let base = root.join("base");
+    sh(
+        root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    let builder = root.join("tasks").join("builder");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            "tico/t1",
+            builder.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    std::fs::write(builder.join("drill.md"), "B3\n").unwrap();
+    sh(&builder, &["add", "-A"]);
+    sh(&builder, &["commit", "-qm", "drill"]);
+    let before = sh(&builder, &["rev-parse", "HEAD"]);
+    commit_and_push(&seed, "other.md", "main moved\n");
+    let owner = root.join("tasks").join("release-owner");
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            "tico/t1-release-owner",
+            owner.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    sh(&owner, &["fetch", "-q", "origin"]);
+    sh(
+        &owner,
+        &["checkout", "-q", "--ignore-other-worktrees", "tico/t1"],
+    );
+    sh(&owner, &["rebase", "-q", "origin/main"]);
+    (builder, before)
+}
+
+#[tokio::test]
+async fn a_branch_rebased_from_another_worktree_catches_the_builders_files_up_to_it() {
+    let tmp = Tmp::new();
+    let (builder, before) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    // HEAD moved under the Builder: its index still holds the old commit, which reads as staged changes undoing main.
+    assert!(sh(&builder, &["status", "--porcelain"]).contains("other.md"));
+
+    assert!(worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), "");
+    assert_eq!(
+        std::fs::read_to_string(builder.join("other.md")).unwrap(),
+        "main moved\n"
+    );
+    assert_ne!(sh(&builder, &["rev-parse", "HEAD"]), before);
+    // Caught up once: the next pass finds nothing to do.
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+}
+
+#[tokio::test]
+async fn a_moved_branch_with_a_real_edit_in_the_builders_tree_is_left_as_it_is() {
+    let tmp = Tmp::new();
+    let (builder, _) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    std::fs::write(builder.join("drill.md"), "B3, edited\n").unwrap();
+    let status = sh(&builder, &["status", "--porcelain"]);
+
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), status);
+    assert_eq!(
+        std::fs::read_to_string(builder.join("drill.md")).unwrap(),
+        "B3, edited\n"
+    );
+}
+
+#[tokio::test]
+async fn a_bots_own_staged_revert_is_not_a_moved_branch() {
+    let tmp = Tmp::new();
+    let (builder, _) = branch_moved_under_the_builder(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    sh(&builder, &["reset", "-q", "--hard", "HEAD"]);
+    // The bot's own work: HEAD stays where it put it, and its index holds an earlier commit of the branch.
+    sh(&builder, &["revert", "--no-commit", "HEAD"]);
+    let status = sh(&builder, &["status", "--porcelain"]);
+    assert!(!status.is_empty());
+
+    assert!(!worktrees::catch_up_moved_branch(&builder, "link-1", &env)
+        .await
+        .unwrap());
+    assert_eq!(sh(&builder, &["status", "--porcelain"]), status);
+}

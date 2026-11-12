@@ -1592,6 +1592,10 @@ async fn inspect_inner(
         }
         verify_ready_registration(workspace, &merged, &d, &repo).await?;
     }
+    if !not_ready {
+        *step = "catch up its moved branch";
+        catch_up_moved_branch(&path, &text_of(&row["id"]), env).await?;
+    }
     *step = "read its changes";
     result["state"] = json!(if not_ready { "pending" } else { "present" });
     result["dirty_files"] = json!(git(&path, env, &["status", "--porcelain"], true)
@@ -1951,6 +1955,60 @@ async fn fast_forward(path: &Path, branch: &str, target: &str, env: &Env) -> R<(
     // A concurrent branch update must fail rather than discard its new commits.
     git(path, env, &["update-ref", &r#ref, &head, &previous], true).await?;
     Ok(())
+}
+
+/// Bring the index and files up to HEAD when another worktree moved this one's branch under it (a rebase or
+/// `checkout -B` there; Git before 2.44 lets `checkout -B` take a branch another worktree has). HEAD then names the
+/// new commit while the index and files keep the old one, which reads as staged changes that would undo the move.
+/// Only the provable case is touched: this worktree's own HEAD log ends at a commit the branch held before, the index
+/// is exactly that commit's tree and the files match the index. Then `read-tree -m -u` switches from that commit to
+/// HEAD as a checkout would, refusing to overwrite an untracked file. Anything else, a real edit included, stays.
+/// True when it caught up; each catch-up is a `worktree_caught_up` flight record naming the link and both commits.
+pub async fn catch_up_moved_branch(path: &Path, link: &str, env: &Env) -> R<bool> {
+    let branch = git(path, env, &["symbolic-ref", "-q", "HEAD"], false).await?;
+    let head = git(path, env, &["rev-parse", "--verify", "-q", "HEAD"], false).await?;
+    if !branch.ok() || !head.ok() {
+        return Ok(false);
+    }
+    let (branch, head) = (branch.stdout.trim(), head.stdout.trim());
+    // The newest entry of this worktree's own HEAD log: where this worktree last put HEAD itself.
+    let last = git(
+        path,
+        env,
+        &["reflog", "-n", "1", "--format=%H", "HEAD"],
+        false,
+    )
+    .await?;
+    let last = last.stdout.trim();
+    if !is_sha(last) || last == head {
+        return Ok(false);
+    }
+    let held = git(path, env, &["reflog", "--format=%H", branch], false).await?;
+    if !held.ok()
+        || !held.stdout.lines().any(|l| l.trim() == last)
+        || !git(
+            path,
+            env,
+            &["diff", "--cached", "--quiet", last, "--"],
+            false,
+        )
+        .await?
+        .ok()
+        || !git(path, env, &["diff", "--quiet", "--"], false)
+            .await?
+            .ok()
+        || !git(path, env, &["read-tree", "-m", "-u", last, head], false)
+            .await?
+            .ok()
+    {
+        return Ok(false);
+    }
+    let mut record = Map::new();
+    record.insert("link".into(), json!(link));
+    record.insert("from".into(), json!(last));
+    record.insert("to".into(), json!(head));
+    crate::flight::emit("worktree_caught_up", record);
+    Ok(true)
 }
 
 async fn count(path: &Path, env: &Env, args: &[&str]) -> R<i64> {
@@ -2580,6 +2638,7 @@ where
         if ignored.split('\0').any(|n| !n.is_empty() && !build_file(n)) {
             return Err(WtErr::msg("kept: ignored files"));
         }
+        catch_up_moved_branch(&path, &own(row, "id"), env).await?;
         let dirty = !git(&path, env, &["status", "--porcelain"], true)
             .await?
             .stdout
