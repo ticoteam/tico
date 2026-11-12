@@ -147,7 +147,7 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 
 - `GET /events?who=<refs, comma>&from=<ISO>&to=<ISO>&kinds=event,run,due,away` → `{from, to, calendars:[calendar
   view], occurrences:[...], month_counts?:[...], errors:[{ref, reason}]}`. Default who=me, kinds all, window ≤ 62
-  days (422 beyond). A person's calendar also includes runs of bots that report to them unless that bot is in `who`.
+  days (422 beyond). Runs come only from bots in `who`: a person's calendar does not add the bots that report to them.
   One failing Google calendar → its error in `errors`, never an empty success. Windows > 7 days return
   `month_counts` instead of run occurrences.
 - Calendar view: `{ref, type, id, name, home, time_zone, work_starts, work_ends, work_days, can_write}`.
@@ -204,7 +204,7 @@ All under `/api/v2/calendar`. Callers: people, owner, bots. Reads use `store.rea
 
 ## UI (track ui; TypeScript, strict)
 
-- `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|week|month|list&date=YYYY-MM-DD&q=…`),
+- `ui/app/calendar.ts` (page, route `#/calendar`, query `?who=…&view=day|3day|week|month|list&date=YYYY-MM-DD&q=…`),
   `ui/app/calendar-row.ts` (sidebar row), `ui/styles/calendar.css`; registered in `ui/app/router.ts` and
   `ui/index.html`. Spec §12.
 - Sidebar order (decision 2): Finish setup (when shown), Tasks, Calendar, Threads, Updates, Company (Strategy,

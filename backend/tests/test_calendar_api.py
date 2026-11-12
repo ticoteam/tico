@@ -176,6 +176,16 @@ def test_google_tico_and_runs_merge_into_one_list(api, google):
     assert google_one["calendar"]["ref"] == "human:ben" and google_one["can"]["edit"] is False  # people view
 
 
+def test_a_persons_calendar_leaves_out_the_runs_of_bots_that_report_to_them_until_one_is_added(api, google):
+    people(api)
+    _, bot_id = bot(api, "scheduler", reports_to="human:ana")
+    add_run(api, bot_id, at(9), at(9.25))
+    own = events(api, f"who=me&{WINDOW}")["occurrences"]
+    assert [o for o in own if o["kind"] == "run"] == []  # only you: the manager's own calendar has no bot runs
+    added = events(api, f"who=me,bot:{bot_id}&{WINDOW}")["occurrences"]
+    assert [(o["kind"], o["calendar"]["ref"]) for o in added] == [("run", "bot:" + bot_id)]
+
+
 def test_a_failing_google_calendar_is_an_error_and_the_others_still_answer(api, google):
     people(api)
     google.connected |= {"ana@acme.example", "ben@acme.example", "cara@acme.example"}

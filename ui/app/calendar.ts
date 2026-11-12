@@ -1,25 +1,30 @@
 /* ui/app/calendar.ts — The Calendar page (#/calendar; spec 2026-11-10-calendar §12.3-12.5, docs/dev/calendar-contract.md).
-   A standard week grid that opens on the viewer, with Day, Month and List. Colour says who (each calendar in view has a
-   hue), shape says what: a filled block is an event, an outlined one a bot run (dashed until it starts), a pill in the
-   top row something due, a hatched block Busy. The one search box adds calendars, finds events, suggests narrowing words
-   and hands the words to the Assistant. People only view here (decision 13): Google events open in Google.
-   Address: #/calendar?who=<refs>&view=day|week|month|list&date=YYYY-MM-DD&q=<words>&open=<occurrence id>
+   A standard week grid that opens on the viewer alone, with Day, 3 days, Month and List. Colour says who (each calendar
+   in view has a hue), shape says what, and nothing is drawn as an outline: an event is a solid block with a strong left
+   edge, a bot run a lighter solid tint of its bot's colour (striped until it starts), a pill in the top row something
+   due, a hatched block Busy. One header line, no title (spec calendar-page-cleanup): Today, the arrows, the range, the
+   chips and Add (people, bots, "Bots that report to me", "Everyone" and what to show), then search folded to an icon,
+   the view switch and ⋯. The search box adds calendars, finds events, suggests narrowing words and hands the words to
+   the Assistant. People only view here (decision 13): Google events open in Google.
+   Address: #/calendar?who=<refs>&view=day|3day|week|month|list&date=YYYY-MM-DD&q=<words>&open=<occurrence id>
    Shapes, Join and the time helpers are in calendar-row.ts.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-type CalViewName = 'day' | 'week' | 'month' | 'list';
+type CalViewName = 'day' | '3day' | 'week' | 'month' | 'list';
 type CalToggle = 'event' | 'run' | 'due';
 // One thing drawn: an occurrence, the calendars in view it is on (a shared event is drawn once), and for a block of
 // short runs the runs it holds.
 interface CalItem { key: string; o: CalOccurrence; refs: string[]; s: Date; e: Date; runs?: CalOccurrence[]; }
 interface CalDrop { cals: CalView[]; events: CalOccurrence[]; i: number; open: boolean; calSeq: number; evSeq: number; }
+// The Add menu: whether it is open, the words in its box and the people and bots it lists (read once it first opens).
+interface CalAdd { open: boolean; q: string; cals: CalView[] | null; }
 interface CalPage {
   run: number; who: string[]; view: CalViewName; date: string; q: string; open: string;
-  data: CalEventsAnswer | null; error: string; loaded: number; card: string; drop: CalDrop;
+  data: CalEventsAnswer | null; error: string; loaded: number; card: string; drop: CalDrop; add: CalAdd;
   items: Map<string, CalItem>; hues: Map<string, number>;
 }
-const CAL_VIEWS: [CalViewName, string][] = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['list', 'List']];
+const CAL_VIEWS: [CalViewName, string][] = [['day', 'Day'], ['3day', '3 days'], ['week', 'Week'], ['month', 'Month'], ['list', 'List']];
 const CAL_TOGGLES: [CalToggle, string][] = [['event', 'Events'], ['run', 'Runs'], ['due', 'Due']];
 const CAL_HUES = [152, 214, 278, 28, 338, 188, 52, 0, 248, 104];
 const CAL_WORDS: [string, string][] = [['with:', 'with:'], ['bot:', 'bot:'], ['kind:', 'kind:'], ['before:', 'before:'], ['after:', 'after:'],
@@ -73,12 +78,14 @@ const calWeekStart = (d: Date) => calAddDays(calMidnight(d), -((d.getDay() + 6) 
 function calWindow(view: CalViewName, date: string): [Date, Date] {
   const d = calWhen(date);
   if (view === 'day') return [calMidnight(d), calAddDays(d, 1)];
+  if (view === '3day') return [calMidnight(d), calAddDays(d, 3)];
   if (view === 'month') { const first = new Date(d.getFullYear(), d.getMonth(), 1), s = calWeekStart(first); return [s, calAddDays(s, 42)]; }
   const s = calWeekStart(d); return [s, calAddDays(s, 7)];
 }
 function calStep(p: CalPage, dir: number): string {
   const d = calWhen(p.date);
   if (p.view === 'day') return calDay(calAddDays(d, dir));
+  if (p.view === '3day') return calDay(calAddDays(d, 3 * dir));
   if (p.view === 'month') return calDay(new Date(d.getFullYear(), d.getMonth() + dir, 1));
   return calDay(calAddDays(d, 7 * dir));
 }
@@ -115,28 +122,30 @@ function pageCalendar(r: string): void {
   }
   const run = (CALP?.run || 0) + 1;
   CALP = {run, ...want, data: null, error: '', loaded: 0, card: '', drop: {cals: [], events: [], i: 0, open: false, calSeq: 0, evSeq: 0},
-    items: new Map(), hues: new Map()};
+    add: {open: false, q: '', cals: null}, items: new Map(), hues: new Map()};
+  // One line, no title: the sidebar says where you are and the tab still says Calendar. A phone takes two lines.
   $('#main').innerHTML = `<div class="cal" id="cal-root">
-    <header class="cal-h1"><h1>Calendar</h1>
-      <div class="cal-sr" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="cal-dd"><span class="nav-icon" aria-hidden="true">search</span>
+    <header class="cal-h">
+      <button type="button" class="ghost small cal-today" data-cal-today>Today</button>
+      <span class="cal-nav"><button type="button" class="ghost small cal-ib" data-cal-step="-1" aria-label="Previous"><span class="nav-icon" aria-hidden="true">chevron_left</span></button><button type="button" class="ghost small cal-ib" data-cal-step="1" aria-label="Next"><span class="nav-icon" aria-hidden="true">chevron_right</span></button></span>
+      <b class="cal-range" data-cal-range></b>
+      <i class="cal-br" aria-hidden="true"></i>
+      <div class="cal-chips" data-cal-chips></div>
+      <div class="cal-add"><button type="button" class="ghost small cal-add-b" data-cal-add aria-haspopup="dialog" aria-expanded="false"><span class="nav-icon" aria-hidden="true">add</span>Add</button>
+        <div class="cal-addm" role="dialog" aria-label="Add people and bots" data-cal-addm hidden></div></div>
+      <div class="cal-sr" role="combobox" aria-expanded="false" aria-haspopup="listbox" aria-owns="cal-dd"><button type="button" class="ghost small cal-ib cal-sr-ic" data-cal-find aria-label="Search (/)" title="Search (/)"><span class="nav-icon" aria-hidden="true">search</span></button>
         <input type="search" id="cal-q" placeholder="Name, event, with:" autocomplete="off" spellcheck="false" aria-label="Search calendars and events" aria-controls="cal-dd" aria-autocomplete="list">
         <div class="cal-dd" id="cal-dd" role="listbox" hidden></div></div>
       <div class="theme-seg cal-views" role="radiogroup" aria-label="View" data-cal-views></div>
       <div class="cal-more"><button type="button" class="ghost small cal-ib" data-cal-more aria-label="More" aria-haspopup="menu" aria-expanded="false"><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
         <div class="cal-menu" role="menu" data-cal-menu hidden><button type="button" role="menuitemcheckbox" data-cal-record aria-checked="true">Record calls I join</button></div></div>
     </header>
-    <div class="cal-h2">
-      <button type="button" class="ghost small" data-cal-today>Today</button>
-      <span class="cal-nav"><button type="button" class="ghost small cal-ib" data-cal-step="-1" aria-label="Previous"><span class="nav-icon" aria-hidden="true">chevron_left</span></button><button type="button" class="ghost small cal-ib" data-cal-step="1" aria-label="Next"><span class="nav-icon" aria-hidden="true">chevron_right</span></button></span>
-      <b class="cal-range" data-cal-range></b>
-      <div class="cal-chips" data-cal-chips></div>
-      <div class="cal-lays" role="group" aria-label="Show" data-cal-lays></div>
-    </div>
     <div class="cal-strip" data-cal-strip></div>
     <div class="cal-body" data-cal-body>${skelRows(6)}</div>
   </div>`;
   const q = document.querySelector<HTMLInputElement>('#cal-q');
   if (q) q.value = CALP.q;
+  if (CALP.q) calFindOpen(false);
   calBind();
   calHead(); calWrite(CALP);
   void calLoad();
@@ -161,7 +170,7 @@ async function calLoad(): Promise<void> {
   calBody();
   if (p.open) { const id = p.open; p.open = ''; calOpenById(id); }
 }
-// Hues: the calendars in view in order, then anyone else drawn (a bot that reports to you).
+// Hues: the calendars in view in order, then anyone else drawn (an attendee's calendar).
 function calHues(p: CalPage): void {
   p.hues = new Map();
   for (const c of p.data?.calendars || []) if (!p.hues.has(c.ref)) p.hues.set(c.ref, p.hues.size);
@@ -184,8 +193,7 @@ function calHead(): void {
   const views = p.data?.calendars?.length ? p.data.calendars : p.who.map(ref => ({ref, type: ref.split(':')[0] || '', id: ref.split(':')[1] || '', name: calRefName(ref)}));
   set('[data-cal-chips]', views.map(c => `<span class="cal-chip" style="--h:${calHue(c.ref)}" data-cal-chip="${esc(c.ref)}"><span class="cal-chip-n">${esc(c.name || calRefName(c.ref))}</span>${
     views.length > 1 || c.ref !== calMe() ? `<button type="button" data-cal-rm="${esc(c.ref)}" aria-label="Remove ${esc(c.name)}">×</button>` : ''}</span>`).join(''));
-  const on = calKinds();
-  set('[data-cal-lays]', CAL_TOGGLES.map(([k, label]) => `<button type="button" aria-pressed="${on[k]}" data-cal-lay="${k}"><i class="cal-gl ${k}" aria-hidden="true"></i>${label}</button>`).join(''));
+  calAddDraw();
   // Phone: a week strip over the list.
   const [s] = calWindow('week', p.date);
   set('[data-cal-strip]', Array.from({length: 7}, (_, i) => calAddDays(s, i)).map(d => `<button type="button" data-cal-date="${calDay(d)}" aria-pressed="${calDay(d) === p.date}"${calDay(d) === calDay(new Date()) ? ' class="today"' : ''}><span>${esc(d.toLocaleDateString(undefined, {weekday: 'narrow'}))}</span><b>${d.getDate()}</b></button>`).join(''));
@@ -202,6 +210,78 @@ function calRefName(ref: string): string {
 function calMenuDraw(): void {
   const b = document.querySelector<HTMLElement>('#cal-root [data-cal-record]');
   if (b) b.setAttribute('aria-checked', String(calRecordOn()));
+}
+
+// ----------------------------------------------------------------- Add: people, bots and what to show
+// The bots that report to the viewer directly, as refs (the rule the server used to apply to "Me" on its own).
+const calMyBots = (): string[] => (S.emps || []).filter(e => e.reports_to === calMe() && e.status !== 'archived' && e.state !== 'archived').map(e => 'bot:' + e.id);
+// Everyone Add can list: the server's people and bots, the viewer first; the roster stands in until it answers.
+function calAddList(p: CalPage): CalView[] {
+  const roster: CalView[] = [
+    ...(S.people || []).map(x => ({ref: 'human:' + x.id, type: 'human', id: String(x.id), name: String(x.name || x.id)})),
+    ...(S.emps || []).filter(e => e.status !== 'archived' && e.state !== 'archived').map(e => ({ref: 'bot:' + e.id, type: 'bot', id: e.id, name: botDisplayName(e.id)})),
+  ];
+  const listed = (p.add.cals || roster).filter(c => c.type === 'human' || c.type === 'bot'), me = calMe();
+  const mine = listed.find(c => c.ref === me) || {ref: me, type: 'human', id: me.slice(6), name: calRefName(me)};
+  return [mine, ...listed.filter(c => c.ref !== me)];
+}
+async function calAddRead(p: CalPage): Promise<void> {
+  if (p.add.cals) return;
+  try {
+    const a = await get<{calendars: CalView[]}>(`${CAL_API}/calendars`);
+    if (CALP !== p) return;
+    p.add.cals = (a.calendars || []).filter(c => c.type === 'human' || c.type === 'bot');
+  } catch { return; }      // the roster stands in
+  calAddDraw();
+}
+// The menu's box is drawn once when it opens (it keeps its words and focus); the rows under it redraw.
+function calAddOpen(open: boolean): void {
+  const p = CALP, root = document.getElementById('cal-root'); if (!p || !root) return;
+  const menu = root.querySelector<HTMLElement>('[data-cal-addm]'), btn = root.querySelector<HTMLElement>('[data-cal-add]'); if (!menu || !btn) return;
+  p.add.open = open; menu.hidden = !open; btn.setAttribute('aria-expanded', String(open));
+  if (!open) { menu.innerHTML = ''; p.add.q = ''; return; }
+  menu.innerHTML = `<label class="cal-addm-sr"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-cal-addq placeholder="Find a person or bot" autocomplete="off" spellcheck="false" aria-label="Find a person or bot"></label>
+    <div data-cal-addrows></div>`;
+  calAddDraw();
+  menu.querySelector<HTMLInputElement>('[data-cal-addq]')?.focus({preventScroll: true});
+  void calAddRead(p);
+}
+function calAddDraw(): void {
+  const p = CALP, host = document.querySelector<HTMLElement>('#cal-root [data-cal-addrows]'); if (!p || !host || !p.add.open) return;
+  const words = p.add.q.trim().toLowerCase(), mine = calMyBots(), on = calKinds();
+  const rows = calAddList(p).filter(c => !words || c.name.toLowerCase().split(/\s+/).some(w => w.startsWith(words)) || c.name.toLowerCase().startsWith(words));
+  const quick = words ? '' : `<div class="cal-addm-quick">
+      <button type="button" data-cal-quick="mine"${mine.length ? '' : ' disabled'}><span class="nav-icon" aria-hidden="true">smart_toy</span><span class="l">Bots that report to me</span><span class="n" data-cal-quick-n>${mine.length}</span></button>
+      <button type="button" data-cal-quick="all"><span class="nav-icon" aria-hidden="true">groups</span><span class="l">Everyone</span></button></div>`;
+  const list = rows.map(c => {
+    const ticked = p.who.includes(c.ref);
+    return `<label class="cal-addm-row"><input type="checkbox" data-cal-pick="${esc(c.ref)}"${ticked ? ' checked' : ''}><i class="cal-cd${ticked ? '' : ' off'}" style="--h:${calHue(c.ref)}" aria-hidden="true"></i><span class="l">${esc(c.ref === calMe() ? `${c.name} (me)` : c.name)}</span>${c.type === 'bot' ? '<span class="m">Bot</span>' : ''}</label>`;
+  }).join('') || '<p class="cal-addm-none">No one by that name</p>';
+  const show = `<div class="cal-addm-h">Show</div><div class="cal-lays" role="group" aria-label="Show">${CAL_TOGGLES.map(([k, label]) =>
+    `<button type="button" aria-pressed="${on[k]}" data-cal-lay="${k}"><i class="cal-gl ${k}" aria-hidden="true"></i>${label}</button>`).join('')}</div>`;
+  // Redrawn under the pointer: the control that had focus keeps it, so the keyboard and Escape still work.
+  const had = host.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+  const again = had ? ['calPick', 'calQuick', 'calLay'].map(k => [k, had.dataset[k]] as const).find(([, v]) => v) : undefined;
+  host.innerHTML = `${quick}<div class="cal-addm-list" role="group" aria-label="People and bots">${list}</div>${show}`;
+  if (again) {
+    const attr = again[0].replace(/[A-Z]/g, c => '-' + c.toLowerCase());
+    host.querySelector<HTMLElement>(`[data-${attr}="${CSS.escape(again[1] || '')}"]`)?.focus({preventScroll: true});
+  }
+}
+// Add these calendars to the view (or, for one unticked, take it away), then read again.
+function calWhoSet(p: CalPage, who: string[]): void {
+  p.who = who.length ? [...new Set(who)] : [calMe()];
+  calCardClose(); calWrite(p); calHead(); void calLoad();
+}
+// Search folds to an icon; the icon and "/" open the same box with the cursor in it.
+function calFindOpen(focus = true): void {
+  const sr = document.querySelector<HTMLElement>('#cal-root .cal-sr'); if (!sr) return;
+  sr.classList.add('open');
+  if (focus) document.querySelector<HTMLInputElement>('#cal-q')?.focus();
+}
+function calFindFold(): void {
+  const input = document.querySelector<HTMLInputElement>('#cal-q');
+  if (input && !input.value.trim() && document.activeElement !== input) document.querySelector('#cal-root .cal-sr')?.classList.remove('open');
 }
 
 // ----------------------------------------------------------------- what is drawn
@@ -302,7 +382,7 @@ function calBody(): void {
   const html = p.view === 'month' ? calMonth(p) : p.view === 'list' ? calList(p) : calGrid(p);
   body.innerHTML = (p.error ? `<p class="err">${esc(p.error)}</p>` : '') + errs + html;
   body.dataset.view = p.view;
-  if (p.view === 'day' || p.view === 'week') {
+  if (p.view === 'day' || p.view === '3day' || p.view === 'week') {
     // Open on the working day: the first hour shown is the top, and now is in view when it is today.
     const now = body.querySelector<HTMLElement>('.cal-nowl');
     const scroller = body.querySelector<HTMLElement>('.cal-scroll');
@@ -332,10 +412,10 @@ function calGrid(p: CalPage): string {
   else {
     const days: Date[] = [];
     for (let d = s; d < e; d = calAddDays(d, 1)) days.push(d);
-    // Week shows the working days, and a weekend day only when something is on it.
+    // Week shows the working days, and a weekend day only when something is on it; Day and 3 days show every day.
     const work = (cals[0]?.work_days || 'mon,tue,wed,thu,fri').split(',');
     const wd = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-    const shown = p.view === 'day' ? days : days.filter(d => work.includes(wd[d.getDay()] || '') || items.some(it => calOn(it, d)));
+    const shown = p.view !== 'week' ? days : days.filter(d => work.includes(wd[d.getDay()] || '') || items.some(it => calOn(it, d)));
     cols = shown.map(d => ({day: d, ref: '', today: calDay(d) === today,
       head: `${esc(d.toLocaleDateString(undefined, {weekday: 'short'}))} <span>${d.getDate()}</span>`}));
   }
@@ -596,7 +676,7 @@ function calBind(): void {
   const root = document.getElementById('cal-root'), input = document.querySelector<HTMLInputElement>('#cal-q'); if (!root || !input) return;
   input.addEventListener('input', () => calSearchInput(input.value));
   input.addEventListener('focus', () => { if (CALP && input.value.trim()) { CALP.drop.open = true; calDropDraw(); } });
-  input.addEventListener('blur', () => setTimeout(() => { if (CALP && document.activeElement !== input) { CALP.drop.open = false; calDropDraw(); } }, 150));
+  input.addEventListener('blur', () => setTimeout(() => { if (CALP && document.activeElement !== input) { CALP.drop.open = false; calDropDraw(); calFindFold(); } }, 150));
   input.addEventListener('keydown', ev => {
     const p = CALP, dd = document.getElementById('cal-dd'); if (!p || !dd) return;
     const rows = [...dd.querySelectorAll<HTMLElement>('button')];
@@ -613,6 +693,16 @@ function calBind(): void {
       input.value = ''; calSearchInput(''); p.drop.open = false; calDropDraw(); input.blur();
     }
   });
+  root.addEventListener('input', ev => {
+    const t = eventElement(ev);
+    if (CALP && t instanceof HTMLInputElement && t.matches('[data-cal-addq]')) { CALP.add.q = t.value; calAddDraw(); }
+  });
+  root.addEventListener('change', ev => {
+    const p = CALP, t = eventElement(ev);
+    if (!p || !(t instanceof HTMLInputElement) || !t.dataset.calPick) return;
+    const ref = t.dataset.calPick;
+    calWhoSet(p, t.checked ? [...p.who, ref] : p.who.filter(r => r !== ref));
+  });
   const dd = document.getElementById('cal-dd');
   dd?.addEventListener('mousedown', ev => ev.preventDefault());      // the box keeps focus
   dd?.addEventListener('click', ev => { const b = eventElement(ev)?.closest<HTMLElement>('button'); if (b) void calDropTake(b); });
@@ -621,7 +711,13 @@ function calBind(): void {
     const at = (sel: string) => t.closest<HTMLElement>(sel);
     const moved = () => { calCardClose(); calWrite(p); calHead(); void calLoad(); };
     const view = at('[data-cal-view]'), step = at('[data-cal-step]'), date = at('[data-cal-date]'), rm = at('[data-cal-rm]');
-    const lay = at('[data-cal-lay]'), more = at('[data-cal-more]'), item = at('[data-cal-item]');
+    const lay = at('[data-cal-lay]'), more = at('[data-cal-more]'), item = at('[data-cal-item]'), quick = at('[data-cal-quick]');
+    if (at('[data-cal-add]')) { calAddOpen(!p.add.open); return; }
+    if (quick) {
+      const all = quick.dataset.calQuick === 'all' ? calAddList(p).map(c => c.ref) : calMyBots();
+      calWhoSet(p, [...p.who, ...all]); return;
+    }
+    if (at('[data-cal-find]')) { calFindOpen(); return; }
     if (view) { const v = CAL_VIEWS.find(([name]) => name === view.dataset.calView); if (v) p.view = v[0]; moved(); return; }
     if (step) { p.date = calStep(p, Number(step.dataset.calStep)); moved(); return; }
     if (at('[data-cal-today]')) { p.date = calDay(new Date()); moved(); return; }
@@ -634,14 +730,10 @@ function calBind(): void {
       else void calLoad();
       return;
     }
-    if (rm) {
-      const ref = rm.dataset.calRm || '';
-      p.who = p.who.filter(r => r !== ref); if (!p.who.length) p.who = [calMe()];
-      moved(); return;
-    }
+    if (rm) { const ref = rm.dataset.calRm || ''; calWhoSet(p, p.who.filter(r => r !== ref)); return; }
     if (lay) {
       const k = CAL_TOGGLES.find(([name]) => name === lay.dataset.calLay)?.[0];
-      if (k) { calKindsSet(k, !calKinds()[k]); calCardClose(); calHead(); calBody(); }
+      if (k) { calKindsSet(k, !calKinds()[k]); calCardClose(); calAddDraw(); calBody(); }
       return;
     }
     if (more) {
@@ -669,15 +761,17 @@ document.addEventListener('click', ev => {
   if (child) { const it = CALP.items.get(child.dataset.calChild || ''); if (it) calCard(it, card); return; }
   if (t.closest('#cal-card [data-cal-x]')) { calCardClose(); return; }
   if (card && !card.contains(t) && !t.closest('[data-cal-item]')) calCardClose();
+  if (CALP.add.open && !t.closest('.cal-add') && t.isConnected) calAddOpen(false);
   const menu = document.querySelector<HTMLElement>('#cal-root [data-cal-menu]');
   if (menu && !menu.hidden && !t.closest('.cal-more')) { menu.hidden = true; document.querySelector('#cal-root [data-cal-more]')?.setAttribute('aria-expanded', 'false'); }
 });
 document.addEventListener('keydown', ev => {
   if (!CALP || !document.getElementById('cal-root')) return;
   const t = eventElement(ev);
+  if (ev.key === 'Escape' && CALP.add.open) { ev.preventDefault(); calAddOpen(false); document.querySelector<HTMLElement>('#cal-root [data-cal-add]')?.focus(); return; }
   if (ev.key === 'Escape' && document.getElementById('cal-card')) { calCardClose(); return; }
   if (ev.key === '/' && !ev.metaKey && !ev.ctrlKey && !t?.closest('input, textarea, select, [contenteditable]')) {
-    ev.preventDefault(); document.querySelector<HTMLInputElement>('#cal-q')?.focus();
+    ev.preventDefault(); calFindOpen();
   }
 });
 // Fresh on focus and every three minutes while shown: Google calendars are read live, never pushed.
