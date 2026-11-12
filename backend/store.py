@@ -2264,6 +2264,12 @@ class Store:
                         "messages_refs_task",
                         "messages(json_extract(refs, '$.task')) WHERE json_extract(refs, '$.task') IS NOT NULL",
                     ),
+                    # The replies to an update (updates.thread) and the feed's reply counts (updates.listing):
+                    # both scanned every message. Partial, so chat without refs.update adds no entry.
+                    (
+                        "messages_refs_update",
+                        "messages(json_extract(refs,'$.update')) WHERE json_extract(refs,'$.update') IS NOT NULL",
+                    ),
                     # Runs by when their record closed: bot hours, health, the usage reads.
                     ("attempts_settled", "attempts(settled_at)"),
                     # A bot's last settled run (the team list's latest run): one seek.
