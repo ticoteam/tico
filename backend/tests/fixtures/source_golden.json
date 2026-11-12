@@ -7009,8 +7009,8 @@
    },
    {
     "kind": "dequeue_pr",
-    "state": "moot",
-    "tries": 0,
+    "state": "done",
+    "tries": 1,
     "ref": "acme/app#1",
     "head": "sha1",
     "error": null
@@ -7038,6 +7038,11 @@
     "acme/app",
     1,
     "sha1"
+   ],
+   [
+    "dequeue",
+    "acme/app",
+    1
    ],
    [
     "ready",

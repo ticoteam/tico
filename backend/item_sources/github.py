@@ -1661,11 +1661,13 @@ def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
 
 def undo_moot(conn: "sqlite3.Connection", effect: Row) -> bool:
     """An `undo` of a visit that left Merge takes the PR out of the queue for good, whoever else queued it: it is moot
-    while an open visit (the task's next one, or another task's on the same PR) still wants that PR queued at the same
-    head (`queued_by_tico`). Against another head it is carried out, and `recorded` queues the wanted head again."""
+    while an open visit (the task's next one, or another task's on the same PR) has queued that PR at the same head
+    (`queued_by_tico`, done). A queue still only owed does not count: it may be mooted unrun, which owes no undo, and
+    the PR would stay queued; it runs after this older undo anyway. Against another head the undo is carried out, and
+    `recorded` queues the wanted head again."""
     if effect["action"] != QUEUE or not effect.get("pinned"):
         return False
-    return queued_by_tico(conn, *_pr_of(effect), str(effect["pinned"]))
+    return queued_by_tico(conn, *_pr_of(effect), str(effect["pinned"]), states=("done",))
 
 
 def _wanted_again(conn: "sqlite3.Connection", effect: Row) -> None:
@@ -1682,7 +1684,7 @@ def _wanted_again(conn: "sqlite3.Connection", effect: Row) -> None:
         (SOURCE, QUEUE, SA.ACT, str(effect["item_key"]), str(effect["visit_id"]), SA.UNDO),
     )
     for row in found:
-        LOG.info(
+        LOG.warning(
             "merge queue: old undo %s dequeued %s; visit %s is owed its queue again",
             effect["id"],
             row["item_key"],
@@ -1816,17 +1818,20 @@ def _merged_anyway(conn: "sqlite3.Connection", task_id: str, visit_id: str, ref:
 
 
 # ----------------------------------------------------------------------------- the merge queue's own commit
-def queued_by_tico(conn: "sqlite3.Connection", repo: str, number: int, head_sha: str) -> bool:
+def queued_by_tico(
+    conn: "sqlite3.Connection", repo: str, number: int, head_sha: str, states: tuple[str, ...] = ("owed", "done")
+) -> bool:
     """Whether Tico's Merge stage queues the PR at exactly `head_sha`: a `queue` action at that head, done or still
     owed (GitHub may ask for the group's checks before the enqueue's answer is recorded), in the open visit of an open
-    task, and not taken back."""
+    task, and not taken back. `states` narrows it (`undo_moot`: done only)."""
+    marks = ",".join("?" * len(states))
     found = conn.execute(
         "SELECT 1 FROM effects e JOIN visits v ON v.id = e.visit_id JOIN tasks t ON t.id = v.task_id "
-        "WHERE e.source=? AND e.action=? AND e.kind=? AND e.state IN ('owed','done') AND lower(e.item_key)=lower(?) "
+        f"WHERE e.source=? AND e.action=? AND e.kind=? AND e.state IN ({marks}) AND lower(e.item_key)=lower(?) "
         "AND lower(e.pinned)=lower(?) AND v.left_at IS NULL AND t.status='open' AND NOT EXISTS (SELECT 1 FROM effects u "
         "WHERE u.visit_id = e.visit_id AND u.source = e.source AND u.action = e.action AND u.kind=? "
         "AND lower(u.item_key) = lower(e.item_key))",
-        (SOURCE, QUEUE, SA.ACT, pr_key(repo, number), head_sha, SA.UNDO),
+        (SOURCE, QUEUE, SA.ACT, *states, pr_key(repo, number), head_sha, SA.UNDO),
     ).fetchone()
     return found is not None
 

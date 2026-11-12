@@ -171,7 +171,8 @@ def test_an_undo_already_out_when_the_new_visit_queues_owes_the_queue_again(comp
         assert current(c, task_id) == ([("act", "done")], [])
         assert MQ.pr(c, REPO, 1)["queue_state"] == "queued"
     assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
-    assert queue_calls(gh) == ["enqueue", "enqueue", "dequeue", "enqueue"]
+    # the second pass dequeues too (the new queue was only owed then), and the held dequeue lands after it queued
+    assert queue_calls(gh) == ["enqueue", "dequeue", "enqueue", "dequeue", "enqueue"]
 
 
 def test_an_old_undo_at_another_head_runs_and_the_new_head_is_queued_again(company):
@@ -254,3 +255,24 @@ def test_a_pr_github_merged_stays_merged(company):
         assert [r[0] for r in c.execute("SELECT kind FROM effects WHERE state='owed'")] == []
     assert gh.prs[(REPO, 1)]["state"] == "merged"
     assert queue_calls(gh) == ["enqueue", "dequeue"]
+
+
+def test_an_undo_is_not_skipped_for_a_queue_that_is_only_owed(company):
+    """Back and forward: the old visit's undo is not moot against the new visit's queue while that queue is only owed.
+    The new queue's call fails once, and the task goes back before its retry: that owed queue is mooted unrun (no undo
+    of its own), so the old undo must already have taken the PR out."""
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        back_and_forward(c, task_id)
+    gh.fail_next("ready")  # the new visit's first call fails: tried again later
+    MQ.run(company, gh)
+    with company.transaction() as c:
+        E.move(c, task_id, "Build", X.ANA, "Review again")
+    MQ.run(company, gh)
+    with company.read() as c:
+        assert stage(c, task_id) == "Build"
+        assert [r[0] for r in c.execute("SELECT kind FROM effects WHERE state='owed'")] == []
+    assert gh.prs[(REPO, 1)]["queue_state"] == "none"
