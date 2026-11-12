@@ -142,11 +142,11 @@ let browser: import('playwright').Browser | null = null;
     return {ms: performance.now() - t, rows: window.__rows.get(k) || 0};
   }, [A, Array.from({length: 20}, (_, i) => edit(N - 3, i + 1, `Before ${i + 1}`))] as [number, Live[]]);
   await reset(page);
-  const one = await page.evaluate(([k, ev]) => {
-    const view = [...THV_VIEWS].find(v => v.key === k)!, t = performance.now();
-    threadViewsLive(ev[0], ev[1]); thvDraw(view);
-    return performance.now() - t;
-  }, [A, edit(N - 3, 100, 'One draw')] as [number, Live]);
+  // One draw of a changed list, the median of three so one slow draw does not set the bar.
+  const one = await page.evaluate(([k, evs]) => {
+    const view = [...THV_VIEWS].find(v => v.key === k)!, ms = evs.map(ev => { const t = performance.now(); threadViewsLive(ev[0], ev[1]); thvDraw(view); return performance.now() - t; });
+    return ms.sort((a, b) => a - b)[1]!;
+  }, [A, [100, 101, 102].map(r => edit(N - 3, r, `One draw ${r}`))] as [number, Live[]]);
   await reset(page);
   const edits = Array.from({length: 20}, (_, i) => edit(N - 3, 200 + i, `Edit number ${i + 1}`));
   const {ms: liveMs, rows: during} = await burstIn(page, edits);
@@ -158,6 +158,8 @@ let browser: import('playwright').Browser | null = null;
   assert.match(await page.locator(`.th-msg[data-mid="m${N - 3}"] .th-body`).innerText(), /Edit number 20/);
   assert.equal(before1.rows, 20);
   assert.ok(after1.ms < before1.ms / 2, `a frame's draw costs less than drawing each edit: ${after1.ms} vs ${before1.ms}`);
+  // The spec's AC-1 target, within 2× of one draw, with room for a busy CI machine.
+  assert.ok(after1.ms <= 2 * one + 25, `the burst costs at most about two draws: ${after1.ms} vs one draw ${one}`);
 
   // ---- Measure 2 (AC-2): 20 status changes build no list and redraw the status rows once.
   await reset(page);
