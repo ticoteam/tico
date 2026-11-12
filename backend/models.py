@@ -316,6 +316,8 @@ class TaskOwner(Contract):
     why: Why | None = None
     version: Version | None = None
     on_behalf_of: ID | None = None
+    # A person overturns the stage rule that blocks this owner (Owner on the team); a bot's is refused all the same.
+    set_anyway: bool = False
 
 
 class TaskSnooze(Contract):

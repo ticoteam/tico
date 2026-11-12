@@ -288,50 +288,42 @@ def owner_for(stage_row: Row, assignee: str | None, current: str | None = None) 
     return stage_row.get("owner") or None
 
 
-def cannot_work(conn: "sqlite3.Connection", task_id: str, pipeline_id: str, stage_row: Row, who: str | None) -> str:
-    """Why bot `who` cannot do the work of `stage_row`, a work stage owned by the task's assignee in a pipeline whose
-    work is code (Engineering's On deck, Build and Fixes): it has write access to none of the repositories the task's
-    work is in (stage_inputs.repositories), so it can open no pull request there. A Product Owner a handoff left as
-    assignee, read-only on the product's repository, once snoozed a Build task for days. "" when it can, when `who` is
-    no bot or the stage is not the assignee's, or when Tico cannot tell (no GitHub App, no repository In use). A builder
-    that a kickback returns a task to has write access, so it keeps it."""
-    import sqlite3
+def owner_ruled(
+    conn: "sqlite3.Connection", row: Row, stage_row: Row, owner: str | None, event: str = "enters"
+) -> tuple[str | None, str, Row | None]:
+    """`owner` (owner_for) for the task in `stage_row`, or None with the history line and the rule when a stage rule
+    blocks that owner (backend/stage_rules.py, e.g. Owner on the team): the stage then has nobody, as with no
+    assignee, and the pipeline's manager is woken to pick one (C25). The task still enters."""
+    from . import stage_rules as _stage_rules
 
-    from . import repositories as RP
-    from . import stage_inputs
-    from .store import Problem
+    stage_rules: Any = _stage_rules  # untyped module
 
-    if stage_row["kind"] != "work" or stage_row.get("owner") != "assignee" or not who or not is_bot(who):
-        return ""
-    repos = stage_inputs.repositories(conn, task_id, lambda _: True, pipeline_id)
-    if not repos:
-        return ""
-    try:
-        app = conn.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
-    except sqlite3.OperationalError:
-        return ""  # GitHub was never set up here
-    if not app:
-        return ""
-    reads: Any = RP
-    try:
-        grants: list[Row] = reads.access(conn, _core.actor_id(who), app[0])["effective"]
-    except Problem:
-        return ""  # no such bot: nothing to judge
-    writes = {str(g["full_name"]).lower() for g in grants if g.get("access") == "write"}
-    if any(repo.lower() in writes for repo in repos):
-        return ""
-    names = ", ".join(repos)
-    return f"{_h().actor_name(conn, who)} cannot work {stage_row['name']}: it has no write access to {names}"
+    found = stage_rules.owner_check(conn, row, stage_row, owner, event)
+    if not found:
+        return owner, "", None
+    return None, found[1], found[0]
 
 
-def owner_able(
-    conn: "sqlite3.Connection", task_id: str, pipeline_id: str, stage_row: Row, owner: str | None
-) -> tuple[str | None, str]:
-    """`owner` (owner_for) for the task in `stage_row`, or None with why when it is a bot that cannot work the stage
-    (`cannot_work`): the stage then has nobody, as with no assignee, and the pipeline's manager is woken to pick one
-    (C25)."""
-    why = cannot_work(conn, task_id, pipeline_id, stage_row, owner)
-    return (None, why) if why else (owner, "")
+def _owner_rule(conn: "sqlite3.Connection", row: Row, owner: str | None, by: str, set_anyway: bool) -> Row | None:
+    """A stage rule on `owner_changes` that blocks `owner` (Owner on the team): a bot is refused, naming the rule; a
+    person is refused unless they Set anyway, which returns the rule they overturned. Tico's own changes (a rule's
+    action included) are not judged."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    if not owner or by == SYSTEM:
+        return None
+    found = stage_rules.owner_check(conn, row, row["stage"], owner, "owner_changes")
+    if not found:
+        return None
+    rule, line = found
+    if is_human(by) and set_anyway:
+        return rule
+    told = f"{line} (rule {rule['id']})"
+    if is_human(by):
+        told += ". Set anyway to give it all the same."
+    _refuse(conn, by, "task_stage_rule", told, row["id"], version=row.get("version"))
 
 
 def not_shared(conn: "sqlite3.Connection", row: Row, who: str) -> Row | None:
@@ -616,7 +608,7 @@ def enter(
             _refuse(conn, by, "not-found", "No such task to file under", task_id)
         if depth(conn, parent) >= MAX_DEPTH:
             _refuse(conn, by, "task_too_deep", f"Sub-tasks nest at most {MAX_DEPTH} deep", task_id)
-    owner, unable = owner_able(conn, task_id, pipeline_id, first, owner_for(first, assignee))
+    owner, unable, ruled = owner_ruled(conn, {**row, "pipeline_id": pipeline_id}, first, owner_for(first, assignee))
     if unable:
         assignee = None
     # The rule a move into a stage keeps keeps a new task out of its first stage too: a private task never goes where
@@ -649,8 +641,14 @@ def enter(
         None,
         first["id"],
         unable or None,
-        {"move": "new", "owner": owner, "parent": parent, **({"owner_cannot_work": unable} if unable else {})},
+        {"move": "new", "owner": owner, "parent": parent, **({"stage_rule": ruled["id"]} if ruled else {})},
     )
+    if ruled:
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+
+        stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": owner_for(first, assignee) or ""})
     if above:
         _drop_stale(conn, str(parent))  # the parent waits on it now: its owner's queued wake for the parent goes
     _owned(conn, row, _task(conn, task_id), by)
@@ -968,9 +966,8 @@ def move(
     _close_visit(conn, visit, how, by, why, ts)
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
-    owner, unable = owner_able(
-        conn, task_id, row["pipeline_id"], target, owner_for(target, row.get("assignee_id"), row.get("owner_id"))
-    )
+    wanted = owner_for(target, row.get("assignee_id"), row.get("owner_id"))
+    owner, unable, ruled = owner_ruled(conn, row, target, wanted)
     task_wakes.drop(conn, task_id)  # what was queued was about the visit that just closed
     status = {"work": "open", "done": "done", "closed": "closed"}[target["kind"]]
     extra: Row = {}
@@ -1006,9 +1003,15 @@ def move(
             "owner": owner,
             "was_owner": row.get("owner_id"),
             **({"pushed_past": pushed} if pushed else {}),
-            **({"owner_cannot_work": unable} if unable else {}),
+            **({"stage_rule": ruled["id"]} if ruled else {}),
         },
     )
+    if ruled:
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+
+        stage_rules.record(conn, task_id, ruled, unable, SYSTEM, data={"owner": wanted or ""})
     _owned(conn, row, _task(conn, task_id), by)
     moved = _task(conn, task_id)
     if target["kind"] == "work":
@@ -1298,6 +1301,8 @@ def reassign(
     by: str,
     why: str | None = None,
     seen_version: int | str | None = None,
+    *,
+    set_anyway: bool = False,
 ) -> Row:
     """Change who owns the task for this visit. Same writer, so it is logged and raises the version. It resets the
     tries, drops the old owner's queued wakes for the task (a bot that still has a turn, named on an OK, keeps its
@@ -1314,13 +1319,18 @@ def reassign(
     if owner == row.get("owner_id"):
         return row
     _may_name(conn, by, owner, task_id)
+    overturned = _owner_rule(conn, row, owner, by, set_anyway)
     ts = H.now()
     fields: Row = {"owner_id": owner, "version": int(row.get("version") or 0) + 1, "updated_at": ts}
     if row["stage"].get("owner") == "assignee":
         fields["assignee_id"] = owner
     _write(conn, task_id, **fields)
     _reset_ladder(conn, row["visit"], ts, by)  # the old owner's wakes go with its turn
-    revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, why, {"stage": row["stage_id"]})
+    said = ". ".join(p for p in (why, f"Overturned rule {overturned['name']}" if overturned else "") if p) or why
+    data: Row = {"stage": row["stage_id"], **({"overturned_rule": overturned["id"]} if overturned else {})}
+    revision = _event(conn, task_id, by, "reassign", row.get("owner_id"), owner, said, data)
+    if overturned:
+        H.event(conn, by, "stage_rule.overturned", task_id, {"rule": overturned["id"], "owner": owner})
     moved = _task(conn, task_id)
     # What follows the owner: its private default, sessions, worktree, followers, place in the new owner's queue
     # (backend/task_effects.py). Before the wake, so a task that just became private wakes only who may read it.
@@ -1595,30 +1605,22 @@ def snooze(
     _need_why(conn, by, why, "snooze it", task_id)
     ts = H.now()
     visit = row["visit"]
-    # The owner bot that cannot work its stage (`cannot_work`) does not set the task aside where nobody sees it: the
-    # manager bot gets it, to give it to someone who can.
-    unable = cannot_work(conn, task_id, row["pipeline_id"], row["stage"], by) if by == row.get("owner_id") else ""
-    if unable:
-        # A long snooze dodges both the snooze count and Late, so the manager is told now, with why. The task stays
-        # with the manager, so Health's Tasks reading counts it "with a manager" until someone who can build has it.
-        from . import never_stuck
-
-        tried = f"{unable}, and it tried to snooze the task" + (f" ({why})" if why else "") + "."
-        _event(conn, task_id, by, "snooze_refused", None, None, why, {"owner_cannot_work": unable})
-        if never_stuck.to_manager(conn, task_id, f"{tried} Reassign it to a builder."):
-            return _unable_note(_task(conn, task_id), unable)
-    if unable or (is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES):
+    # A stage rule on a bot's snooze whose If is fixed conditions only (no model call inside a write) blocks it here;
+    # one with a Jev question was asked before the write (task_moves_routes, stage_rules.judge_snooze).
+    blocked = stage_rules_snooze(conn, row, by, why, until)
+    if blocked:
+        _refuse(
+            conn, by, "task_stage_rule", blocked, task_id, row=row, then=("ask", "file"), version=row.get("version")
+        )
+    if is_bot(by) and int(visit.get("bot_snoozes") or 0) >= BOT_SNOOZES:
         conn.execute(
             "UPDATE visits SET level='manager', tries=0, next_try_at=? WHERE id=? AND level='owner'", (ts, visit["id"])
         )
         # The manager bot has it now: what was still queued for a bot with no turn would start runs nobody asked for.
         # A bot named on an OK or an answer that still waits keeps its wake.
         _drop_stale(conn, task_id)
-        if not unable:
-            _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
+        _event(conn, task_id, by, "snooze_refused", None, None, why, {"snoozes": visit.get("bot_snoozes")})
         out = _task(conn, task_id)
-        if unable:
-            return _unable_note(out, unable)
         out["note"] = f"Snoozed {BOT_SNOOZES} times in this stage. The manager has it now."
         return out
     if row.get("snooze"):
@@ -1631,19 +1633,29 @@ def snooze(
         conn.execute("UPDATE visits SET bot_snoozes = bot_snoozes + 1 WHERE id=?", (visit["id"],))
     task_wakes.drop(conn, task_id)  # nothing wakes for a snoozed task
     _event(conn, task_id, by, "snooze", None, until, why)
+    H.event(conn, by, "task.snoozed", task_id, {"until": until, "why": why or "", "stage": row["stage_id"]})
     out = _task(conn, task_id)
     if not until and is_bot(by):
         _tell_manager(conn, out, f"On ice, with no end date: {why}", f"on_ice:{out['snooze']['id']}")
     return out
 
 
-def _unable_note(out: Row, unable: str) -> Row:
-    """The refused snooze's result, its `note` saying who has the task now: the manager bot, or a person when the
-    ladder had already reached one or the visit's runs were used up."""
-    level = _part(out, "visit").get("level")
-    whom = "A person has it now" if level == "person" else "The manager has it now"
-    out["note"] = f"{unable}. {whom}, to give it to someone who can."
-    return out
+def stage_rules_snooze(conn: "sqlite3.Connection", row: Row, by: str, why: str | None, until: str | None) -> str:
+    """The refusal a fixed-condition stage rule gives a bot's snooze of `row` ("" when none): "Rule <name>: <reason>
+    (rule <id>)". Jev's rules are not asked here."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+
+    found = stage_rules.judge_snooze(conn, row, by, why or "", until, fixed_only=True)
+    return refusal_line(found[0], found[1]) if found else ""
+
+
+def refusal_line(rule: Row, line: str) -> str:
+    """What a bot a stage rule blocked is told: the rule's line, its reason, and the rule's id."""
+    reason = str(rule.get("reason") or "")
+    said = line if reason and reason in line else f"{line}. {reason}".rstrip(". ")
+    return f"{said} (rule {rule['id']})"
 
 
 def unsnooze(conn: "sqlite3.Connection", task_id: str, by: str, why: str | None = None) -> Row:

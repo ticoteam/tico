@@ -73,11 +73,6 @@ _CODE = (
     "SELECT 1 FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id JOIN requirements r ON r.stage_id = s.id "
     "WHERE t.id=? AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
 )
-# The same, for a pipeline named by its id: a task being entered into it is not in it yet (task_engine.enter).
-_CODE_PIPELINE = (
-    "SELECT 1 FROM stages s JOIN requirements r ON r.stage_id = s.id "
-    "WHERE s.pipeline_id=? AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
-)
 _IN_USE = "SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0 ORDER BY full_name COLLATE NOCASE"
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
@@ -286,14 +281,11 @@ def of(
     return out
 
 
-def repositories(
-    conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool], pipeline_id: str | None = None
-) -> list[str]:
+def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> list[str]:
     """The GitHub repositories a task's work is in, `owner/name`: those of the PRs linked to it and to the tasks it
     filed that `readable(task_id)` allows. With none linked, on a pipeline whose stages read PRs (Engineering), every
     repository In use (docs/repositories.md), from the moment the task is filed: a Builder woken on a filed task once
-    worked in its own checkout and asked a person which repository to use. Empty otherwise. `pipeline_id` is the
-    pipeline the task is going into, when it is not in it yet."""
+    worked in its own checkout and asked a person which repository to use. Empty otherwise."""
     import sqlite3
 
     from .item_sources import github as G
@@ -306,7 +298,7 @@ def repositories(
             found.setdefault(repo.lower(), repo)
     if found:
         return list(found.values())
-    if not conn.execute(*((_CODE_PIPELINE, (pipeline_id,)) if pipeline_id else (_CODE, (task_id,)))).fetchone():
+    if not conn.execute(_CODE, (task_id,)).fetchone():
         return []
     try:
         return [str(row[0]) for row in conn.execute(_IN_USE).fetchall()]

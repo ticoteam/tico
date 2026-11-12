@@ -297,10 +297,11 @@ def task_reassign(
     seen_version: int | str | None = None,
     *,
     mover: bool | None = None,
+    set_anyway: bool = False,
 ) -> Row:
     """Give the task to another owner for this stage. Checked as any hand-over is: the actor reaches the new owner,
     the new owner takes tasks, the General Manager stays in the department, and a bot's hand-over to a person passes the
-    strategy rules."""
+    strategy rules. `set_anyway`: a person overturns the stage rule that blocks this owner (E.reassign)."""
     from . import task_engine as E
 
     H = _h()
@@ -335,7 +336,7 @@ def task_reassign(
         H._takes_tasks(conn, actor, target, row.get("title"), relations.parent_of(conn, task_id), task=task_id)
         H._learner(conn, actor)
         H._learning(conn, actor, target)
-    return E.reassign(conn, task_id, target, actor, why, seen_version)
+    return E.reassign(conn, task_id, target, actor, why, seen_version, set_anyway=set_anyway)
 
 
 # ----------------------------------------------------------------------------- asks and answers

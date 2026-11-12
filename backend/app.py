@@ -5400,6 +5400,9 @@ def create_app(settings=None):
 
     install_meeting_items(app, store, mutate, task_create, auth)
     pipeline_judges.install(app, store, mutate, auth)
+    from . import stage_rules
+
+    stage_rules.install(store)
     from . import presence
 
     presence.install(app, store, mutate, auth)

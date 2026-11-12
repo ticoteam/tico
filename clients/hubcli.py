@@ -961,6 +961,9 @@ def parser():
     s.add_argument("owner", help="a bot slug, a person id, or me")
     s.add_argument("-m", "--why", help="why, in one plain sentence")
     s.add_argument("--version", type=int, help=version_help)
+    s.add_argument(
+        "--set-anyway", action="store_true", help="a person gives it all the same when a stage rule refused this owner"
+    )
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task reassign")
     s = task.add_parser(
