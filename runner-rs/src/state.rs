@@ -299,6 +299,42 @@ impl State {
         })
     }
 
+    /// The attempt's newest recorded seq (0 before its first event).
+    pub fn last_seq(&self, aid: &str) -> Result<i64, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?",
+                params![aid],
+                |r| r.get(0),
+            )
+        })
+    }
+
+    /// The rows `pending` would send, summed for crate::upload_pace: the oldest seq, how many, their payload bytes,
+    /// whether one may not wait (a kind outside upload_pace::MAY_WAIT) and whether one is visible text.
+    pub fn waiting(&self, aid: &str) -> Result<crate::upload_pace::Waiting, String> {
+        self.with(|c| {
+            c.query_row(
+                &format!(
+                    "SELECT coalesce(min(e.seq),0), count(*), coalesce(sum(length(CAST(e.payload AS BLOB))),0), \
+                     coalesce(max(e.kind NOT IN ({})),0), coalesce(max(e.kind IN ('delta','message')),0) \
+                     FROM events e JOIN attempts a ON a.id=e.attempt_id WHERE e.attempt_id=? AND e.seq>a.ack",
+                    crate::upload_pace::may_wait_sql()
+                ),
+                params![aid],
+                |r| {
+                    Ok(crate::upload_pace::Waiting {
+                        first_seq: r.get(0)?,
+                        count: r.get::<_, i64>(1)? as usize,
+                        bytes: r.get::<_, i64>(2)? as u64,
+                        urgent: r.get::<_, i64>(3)? != 0,
+                        text: r.get::<_, i64>(4)? != 0,
+                    })
+                },
+            )
+        })
+    }
+
     pub fn ack(&self, aid: &str, seq: i64) -> Result<(), String> {
         self.with(|c| {
             c.execute(

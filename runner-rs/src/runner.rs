@@ -92,6 +92,9 @@ pub struct Runner {
     flush_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// Attempts whose first streamed text has reached the server (one timing mark each).
     pub first_posted: Mutex<HashSet<String>>,
+    /// Turns streaming on this runner and recent upload times: how long later text waits (crate::upload_pace).
+    pub upload_load: crate::upload_pace::Load,
+    pub upload_bounds: crate::upload_pace::Bounds,
     /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
     assignments: Mutex<Arc<Vec<Value>>>,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
@@ -207,6 +210,8 @@ impl Runner {
             accounts: AtomicBool::new(false),
             flush_locks: Mutex::new(HashMap::new()),
             first_posted: Mutex::new(HashSet::new()),
+            upload_load: crate::upload_pace::Load::default(),
+            upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
@@ -363,6 +368,9 @@ impl Runner {
     }
 
     /// Send the attempt's unacknowledged events, 100 at a time, keyed on their seq range so a retry is one write.
+    /// Only the events recorded when it starts (once it holds the attempt's flush lock): one recorded during an
+    /// upload waits for the next flush, which its append's wake asks for, so a slow server does not turn one flush
+    /// into back-to-back uploads of a few deltas each (crate::upload_pace paces those).
     pub async fn flush(&self, aid: &str) -> Result<(), ApiError> {
         let lock = self
             .flush_locks
@@ -372,13 +380,23 @@ impl Runner {
             .or_default()
             .clone();
         let _held = lock.lock().await;
+        let id = aid.to_string();
+        let upto = if self.upload_bounds.flush_snapshot {
+            self.state
+                .off(move |s| s.last_seq(&id))
+                .await
+                .map_err(|e| ApiError::new("state", e, 0, false))?
+        } else {
+            i64::MAX
+        };
         loop {
             let id = aid.to_string();
-            let batch = self
+            let mut batch = self
                 .state
                 .off(move |s| s.pending(&id))
                 .await
                 .map_err(|e| ApiError::new("state", e, 0, false))?;
+            batch.retain(|e| e["seq"].as_i64().is_some_and(|seq| seq <= upto));
             if batch.is_empty() {
                 return Ok(());
             }
@@ -390,6 +408,7 @@ impl Runner {
             let had_text = batch
                 .iter()
                 .any(|e| e["kind"] == "delta" || e["kind"] == "message");
+            let began = Instant::now();
             let result = self
                 .client
                 .post(
@@ -397,7 +416,9 @@ impl Runner {
                     &json!({"events": batch}),
                     Some(&key),
                 )
-                .await?;
+                .await;
+            self.upload_load.observe(began.elapsed());
+            let result = result?;
             if had_text && self.first_posted.lock().unwrap().insert(aid.to_string()) {
                 mark("first_delta_posted", aid);
             }

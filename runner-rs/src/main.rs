@@ -104,6 +104,7 @@ mod state;
 mod subscription_refresh;
 mod tls;
 mod turn_users;
+mod upload_pace;
 mod util;
 mod warm;
 mod watchers;
