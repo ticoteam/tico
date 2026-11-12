@@ -118,8 +118,8 @@ p:empty{display:none}
 .settings-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 .settings-toolbar p{margin:0;color:var(--muted);font-size:var(--t-base)}
 .settings-bots-table{table-layout:fixed;min-width:0}
-/* Room for a computer's name ("Ana's Mac mini"): the model and fallback give some of theirs. */
-.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:22%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:19%}.settings-bots-table th:nth-child(5){width:14%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
+/* Room for a computer's name ("Ana's Mac mini") and a model's whole name, effort and window ("Opus 5.5 MED 400K") beside Tasks. */
+.settings-bots-table th:nth-child(1){width:30px}.settings-bots-table th:nth-child(2){width:19%}.settings-bots-table th:nth-child(3){width:7%}.settings-bots-table th:nth-child(4){width:24%}.settings-bots-table th:nth-child(5){width:12%}.settings-bots-table th:nth-child(6){width:8%}.settings-bots-table th:nth-child(7){width:15%}.settings-bots-table th:nth-child(8){width:76px}.settings-bots-table th:nth-child(9){width:56px}
 .settings-bots-table td{vertical-align:middle;min-width:0;padding-top:7px;padding-bottom:7px;padding-right:var(--s2)}
 /* Model, fallback and computer read as text until hovered; the model pickers open in a popover (.sb-choice-pop). */
 .sb-pick{display:flex;align-items:center;gap:4px;width:100%;max-width:100%;min-width:0;margin-left:-7px;padding:5px 7px;border:1px solid transparent;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
@@ -167,6 +167,8 @@ p:empty{display:none}
    marked, with a dot, when they run on another. It opens the task-model row under the bot (.sb-task-row). */
 .sb-model-wrap{display:flex;align-items:center;gap:4px;min-width:0}
 .sb-model-wrap>.sb-pick{flex:1 1 auto;width:auto}
+/* The cell keeps the button's -7px pull on its box, not the button: a shrink-to-fit box loses a negative margin from its width. */
+.sb-model-wrap>.settings-choice{flex:0 1 auto;margin-left:-7px}.sb-model-wrap>.settings-choice>.sb-pick{width:auto;margin-left:0}
 .sb-model-match{display:block;white-space:normal;overflow-wrap:anywhere;color:var(--muted);font-size:var(--t-xs);margin-top:4px}
 .sb-task-mark{flex:none;display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:1px solid transparent;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-xs);cursor:pointer;opacity:.45}
 tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=true]{opacity:1}

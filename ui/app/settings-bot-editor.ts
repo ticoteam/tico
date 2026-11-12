@@ -353,7 +353,7 @@ function settingsEditBot(slug = '', inline = false) {
     // A task model picked here changes the Task effort choices: the efforts of the model that would run tasks.
     rows.addEventListener('tico:choice', (event: Event) => {
       const box = eventElement(event)?.closest<HTMLElement & {picker?: {valid(): boolean; value(): string; changed(): boolean}}>('[data-bot-choice][data-kind=task]'), select: HTMLSelectElement | null | undefined = rows.querySelector('[data-task-effort]');
-      if (!box?.picker?.valid() || !select) return;
+      if (!box?.picker?.valid() || !select) { paintPending(); return; }
       // Only settingsBotEditorRows(e) draws a Task model picker, so e (and bot) is a bot here.
       const bot = S.emps.find(row => row.id === slug) || e, value = box.picker.value();
       const choice = value ? settingsChoiceFromValue(value) : null, efforts = settingsModelEfforts(settingsTaskRunsOn(bot!, choice?.model || ''));
