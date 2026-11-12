@@ -539,6 +539,66 @@ def turn(
     return bots[0].who
 
 
+def on_person(
+    conn: "sqlite3.Connection", row: Row, waits: Sequence[Wait], seen: dict[str, str | None] | None = None
+) -> bool:
+    """Whether the task waits only on a person's OK or answer, so it gives up its slot in a stage with a limit
+    (docs/pipelines-v3.md, "Limits"): every wait on it is an ask of a person, and none is a bot's, Jev's, GitHub's or a
+    sub-task's. A task the ladder brought to a person (level `person`) is stuck work, not review, and so is one whose
+    owner bot cannot run (Paused): both keep their slot, or freeing it would hide them."""
+    visit: Row = row.get("visit") or {}
+    if (visit.get("level") or "owner") == "person" or row.get("snooze"):
+        return False
+    if not waits or any(wait.state != PERSON or not wait.ask for wait in waits):
+        return False
+    owner = row.get("owner_id")
+    return not (is_bot(owner) and task_wakes.cannot_run(conn, owner, _seen(conn) if seen is None else seen))
+
+
+@dataclass(frozen=True)
+class Slots:
+    """A limited stage's tasks as its limit counts them: `held`, the open tasks that are not snoozed and hold a slot,
+    and `on_person`, (task id, since) for each that waits only on a person's OK or answer (`on_person`), `since` being
+    when the newest of its asks began."""
+
+    held: int
+    on_person: tuple[tuple[str, str], ...]
+
+
+_IN_STAGE = (
+    "SELECT t.id FROM tasks t WHERE t.pipeline_id IS NOT NULL AND t.stage_id=? AND t.status='open' "
+    "AND NOT EXISTS (SELECT 1 FROM snoozes s WHERE s.task_id = t.id AND s.ended_at IS NULL)"
+)
+
+
+def slots(conn: "sqlite3.Connection", stage_id: str) -> Slots:
+    """How a stage's open, unsnoozed tasks stand against its limit (`Slots`). One read of the tasks, then each one's
+    requirements; a task with nothing missing holds its slot without reading its waits (it waits for room ahead, which
+    would ask the next stage the same). Kept for the snapshot: a write discards it."""
+
+    def build() -> Slots:
+        ids = [str(found[0]) for found in conn.execute(_IN_STAGE, (stage_id,)).fetchall()]
+        read = prime(conn, ids)
+        seen = _seen(conn)
+        held, person = 0, list[tuple[str, str]]()
+        for task_id in ids:
+            row = read[task_id] if task_id in read else E.task(conn, task_id)
+            if not row:
+                continue
+            standings = R.standings(conn, row)
+            waits = of(conn, row, seen, standings) if any(not s.met for s in standings) else []
+            if waits and on_person(conn, row, waits, seen):
+                # The newest ask names the freed slot's room wake; the visit's start keeps the key whole without one.
+                visit: dict[str, Any] = row.get("visit") or {}
+                since = max(str(wait.since or "") for wait in waits) or str(visit.get("entered_at") or "")
+                person.append((task_id, since))
+            else:
+                held += 1
+        return Slots(held, tuple(person))
+
+    return read_cache.value(conn, ("stage_slots", stage_id), build, shared=True)
+
+
 def waiting_on(conn: "sqlite3.Connection", task_id: str) -> list[Wait]:
     """What the task waits on, headline first. Never empty for an open task; empty for a Done or Closed one, and for a
     task that is not on the engine."""

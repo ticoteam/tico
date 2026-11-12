@@ -4,11 +4,13 @@
 .pv{display:flex;flex-direction:column;gap:8px;min-width:0;min-height:0}
 
 /* A stage's header: its name and its count, a button for whoever may change the pipeline. */
-.pv-stage-h{display:inline-flex;align-items:baseline;gap:6px;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left}
+.pv-stage-h{display:inline-flex;flex-wrap:wrap;align-items:baseline;gap:2px 6px;min-width:0;padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left}
 button.pv-stage-h{cursor:pointer}
 button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-stage-name{font-weight:600}
 .pv-stage-n{color:var(--muted);font-size:var(--t-sm)}
+/* "15 wait on a person": tasks in a limited stage that hold no slot (they wait only on a person's OK or answer). */
+.pv-stage-person{padding:1px 7px;border-radius:999px;background:var(--wait-bg);color:var(--wait-ink);font-size:var(--t-xs);font-weight:500;white-space:nowrap}
 
 /* Columns: one per work stage, side by side, sharing the width (200px to 480px each), scrolling sideways past that. */
 .pv-cols{display:flex;gap:12px;align-items:flex-start;overflow-x:auto;padding:0 2px 12px;min-height:0}
@@ -35,6 +37,7 @@ button.pv-stage-h:hover .pv-stage-name{text-decoration:underline}
 .pv-tab{flex:none;min-height:44px;padding:0 14px;border:0;border-radius:999px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);white-space:nowrap;cursor:pointer}
 .pv-tab.on{background:var(--surface2);color:var(--ink)}
 .pv-phone-head .pv-play{height:44px;margin:0 0 4px;padding:0 14px}
+.pv-phone-head .pv-stage-person{flex:none;margin:0 0 4px}
 
 /* A refused move: the engine's line, or "Move to X without Y?" with a why. */
 .pv-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;background:var(--wait-bg);color:var(--wait-ink)}

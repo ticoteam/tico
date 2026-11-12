@@ -90,7 +90,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C1.** A bot should give an end date when it snoozes, and its wake says so. It is not required. A bot's snooze with
   no end date shows as "On ice", the manager bot is told once, and it is listed on the manager's rail. After 3 snoozes
   by a bot in one stage, the next goes to the manager bot. *Draft 4 refused a bot's snooze with no end date.*
-- **C2.** A snoozed task gives up its slot in a stage that has a limit.
+- **C2.** A snoozed task gives up its slot in a stage that has a limit, and so does one that waits only on a person's
+  OK or answer ("Limits").
 - **C3.** Push past is off by default for **PR merged** and **In a release** only. It is on for everything else, Checks
   pass included. A task that can't be pushed past can still be moved back or closed.
 - **C4.** What counts as progress, and resets the 3 tries: a move, a requirement changing state, a new commit, a new
@@ -144,8 +145,9 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   with no owner. It decides: reassign, move back, move on, snooze or close. The owner stays the owner. *Confirmed Nov
   9.*
 - **C26.** Done and Closed are not columns on a pipeline. They are behind the archive button, with Snoozed.
-- **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. The setting is
-  called Limit. The word "pool" is gone.
+- **C27.** A stage header is a name and a number: how many tasks, or "2/3" where the stage has a limit. Against a limit
+  the number counts tasks that hold a slot, and beside it "15 wait on a person" counts those waiting only on a person's
+  OK or answer. The setting is called Limit. The word "pool" is gone.
 - **C28.** Needs you is the one place to check. It holds every requirement with your name, every task you own, and every
   @ of you by a person, on a task or in a channel, until you reply. A bot's @ on a task only marks it unread: a bot that
   needs you has to use a requirement. A task never waits on an @, and an @ sends no push. A bot that @s someone and stops
@@ -406,7 +408,15 @@ change), but the note is handed on, so the next stage and the person who OKs Fix
 
 ### Limits
 
-- A stage's limit counts its open tasks that are not snoozed.
+- A stage's limit counts its open tasks that are not snoozed and hold a slot. A task holds a slot unless every wait on
+  it is a person's OK or an answer it asks a person for, and none is a bot's, Jev's, GitHub's or a sub-task's: bots
+  keep working while people review. A task the ladder brought to a person, or whose bot is Paused, still holds its slot:
+  that is stuck work, not review. Every check for room counts this way: requests leaving Ideas, the "has room" wake,
+  filling free slots, moves by hand and by the engine, "No room in …" and the Heartbeat's over-the-limit check.
+  *Changed Nov 12: on Tico Team Spec sat at 20 of 20 with 15 waiting on one person's OK, and nothing left Ideas.*
+- When a task's turn becomes a person's, its slot frees at once, as when a task leaves: the oldest waiting task takes
+  it, and the by-hand stage's owner gets its one "has room" wake. When a person's answer gives the turn back to a bot
+  (sent back, or answered with work left), the task keeps its place: the stage may sit over its limit, as after Back.
 - Only forward moves need room. Back, Close and Reopen never wait.
 - When a slot frees, the oldest waiting task takes it. This runs right after the move that freed the slot, and again on
   the Heartbeat.
@@ -837,7 +847,7 @@ Success Monitoring. Who manages a pipeline is that pipeline's setting, and a per
   Stages: Ideas → Building → Running → Done · Closed
   - **Ideas.** By hand. One line each: what to try and why. Ideas rest here, a person's too: nothing wakes, chases
     or marks them Late, and a freed slot in Building wakes nobody. The owner starts one of its own when Building has
-    room ("No room in Building. It holds 6: move it again when one leaves." when it has none); a person can start any.
+    room ("No room in Building. It holds 6 a bot is working on: move it again when one leaves." when it has none); a person can start any.
   - **Building.** The real thing, not yet live: the email, the page change, the ad. Limit 6. To leave: a **Go-live
     page** (the thing that goes live, its copy or a picture of it; the metric, the prediction as a number, the cost,
     how long it runs, when to stop early, and the brand check passed or, with no brand card published yet, a plain
@@ -1415,7 +1425,8 @@ Rules:
 
 Examples, as drawn: "Ideas 12", "Spec 2/2", "Build 2/3", "Review 1 0".
 
-- A name and a number. Where the stage has a limit, the number is "how many / the limit".
+- A name and a number. Where the stage has a limit, the number is "how many hold a slot / the limit", then "n wait on a
+  person" when any wait only on a person's OK or answer (C27).
 - No other words. Tapping it opens the stage's settings (S11).
 
 ### S9. A pipeline's state

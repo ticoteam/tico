@@ -59,15 +59,32 @@ const pvShown = (state: PvState, t: TaskAny): TaskAny => {
   return to ? {...t, stage_id: to} : t;
 };
 
-/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. */
-function pvStageCount(state: PvState, stage: PipelineStageRec): string {
-  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id).length;
-  return stage.task_limit ? `${n}/${stage.task_limit}` : String(n);
+/** A list row that waits only on a person's OK or answer: it holds no slot in a stage with a limit (`on_person`). */
+const pvOnPerson = (t: TaskAny): boolean => !!(t as {on_person?: boolean}).on_person;
+
+/** How many of a limited stage's open tasks wait only on a person; 0 for a stage without a limit, where every task
+ * counts the same. */
+function pvPersonCount(state: PvState, stage: PipelineStageRec): number {
+  if (!stage.task_limit) return 0;
+  return state.tasks.filter(t => pvShown(state, t).stage_id === stage.id && pvOnPerson(t)).length;
 }
 
-/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise. */
+/** "15 wait on a person" beside a limited stage's number; '' when none do. */
+const pvPersonHTML = (n: number): string =>
+  n ? `<span class="pv-stage-person tnum">${n} ${n === 1 ? 'waits' : 'wait'} on a person</span>` : '';
+
+/** "Ideas 12", "Spec 2/2": the stage's name and its number of open tasks, out of its limit when it has one. Against a
+ * limit it counts the tasks that hold a slot: one waiting only on a person's OK or answer does not (`pvPersonCount`). */
+function pvStageCount(state: PvState, stage: PipelineStageRec): string {
+  const n = state.tasks.filter(t => pvShown(state, t).stage_id === stage.id).length;
+  return stage.task_limit ? `${n - pvPersonCount(state, stage)}/${stage.task_limit}` : String(n);
+}
+
+/** S8: a stage's header. It opens the stage's settings for whoever may change the pipeline, and is plain text otherwise.
+ * Beside a limited stage's number, "15 wait on a person" keeps the tasks that hold no slot in view. */
 function pvStageHeadHTML(state: PvState, stage: PipelineStageRec): string {
-  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>`;
+  const pill = pvPersonHTML(pvPersonCount(state, stage));
+  const inner = `<span class="pv-stage-name">${esc(stage.name)}</span><span class="pv-stage-n tnum">${esc(pvStageCount(state, stage))}</span>${pill}`;
   return state.rec.may_change
     ? `<button type="button" class="pv-stage-h" data-pv-settings="${esc(stage.id ?? '')}">${inner}</button>`
     : `<span class="pv-stage-h">${inner}</span>`;
@@ -122,7 +139,8 @@ function pvPhoneHTML(state: PvState): string {
   }).join('');
   const rows = pvInStage(state, shown).map(t => taskRowHTML(t, {look: 'list'})).join('');
   const on = stages.find(s => s.id === shown), play = on ? pvPlayHTML(on) : '';
-  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${play}</div><div class="pv-rows pv-phone">${rows}</div>`;
+  const pill = pvPersonHTML(on ? pvPersonCount(state, on) : 0);
+  return `<div class="pv-phone-head"><div class="pv-tabs" role="tablist" aria-label="Stages">${tabs}</div>${pill}${play}</div><div class="pv-rows pv-phone">${rows}</div>`;
 }
 
 function pvBarHTML(bar: PvBar | null): string {

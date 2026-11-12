@@ -3597,6 +3597,7 @@ SCHEMAS = {
             "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
             "snoozed": "b",
             "pushed_past": "b",
+            "on_person": "b",
         }
     ),
     "GranolaStatus": obj(
