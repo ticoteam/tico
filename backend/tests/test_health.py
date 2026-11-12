@@ -1,6 +1,7 @@
 """Health: every check is computed from live state, and people who are not administrators see counts only."""
 
 import json
+import re
 
 import pytest
 
@@ -1651,6 +1652,7 @@ def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(mo
     assert check_at(5)["status"] == "ok"
     stale = check_at(15)
     assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
+    assert re.search(r"since \d\d:\d\d UTC;", stale["summary"])  # a clock time, not the ISO stamp
     assert check_at(120)["status"] == "bad"
 
 

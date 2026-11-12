@@ -1604,9 +1604,10 @@ def _token_heavy(c, threshold):
 DELETED_BOT = "Deleted bot"
 
 
-def _bot_name(c, bot):
+def _bot_name(c, bot, missing=None):
+    """Its display name or slug; for a bot with no row, `missing`, else the id as given."""
     row = c.execute("SELECT display_name,slug FROM bots WHERE id=?", (bot,)).fetchone()
-    return (row["display_name"] or row["slug"]) if row else DELETED_BOT
+    return (row["display_name"] or row["slug"]) if row else bot if missing is None else missing
 
 
 def _bot_names(c, bots):
@@ -1621,7 +1622,7 @@ def _bot_names(c, bots):
                 f"SELECT id,display_name,slug FROM bots WHERE id IN ({','.join('?' * len(part))})", part
             )
         )
-    return {bot: found.get(bot, DELETED_BOT) for bot in bots}
+    return {bot: found.get(bot, bot) for bot in bots}
 
 
 def _clock(at):
@@ -3485,14 +3486,13 @@ def view(c, who, settings, auth, github, config):
 
             overload = overloads[computer["id"]]
             if overload:
-                names = _bot_names(c, [b["bot"] for b in overload["bots"]])
                 checks.append(
                     _check(
                         "performance:" + computer["id"],
                         "Load",
                         "warn",
                         f"{computer['label']}: {'overloaded now' if not overload['ended_at'] else 'was overloaded'}"
-                        f" ({describe(overload, names.get)}).",
+                        f" ({describe(overload, lambda bot: _bot_name(c, bot, DELETED_BOT))}).",
                         [_fix("Open Performance", "#/computers/" + computer["id"] + "/performance")],
                     )
                 )
