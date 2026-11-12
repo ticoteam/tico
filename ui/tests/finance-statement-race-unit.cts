@@ -197,6 +197,23 @@ async function main(): Promise<void> {
   previews[2]!.resolve(answer('flipped', 7));
   await flush();
   assert.equal(box.html, drawn, 'a closed dialog draws no late preview');
+  // 4c. A new file previewed while the old file's preview is still on its way: the old press ending does not turn the
+  // button back on before the new preview lands.
+  open('sept.csv');
+  const oldPress = press();
+  await flush();
+  fileInput.files = [statement('oct.csv')];
+  fileChange!();
+  const newPress = press();
+  await flush();
+  previews[0]!.resolve(answer('auto'));
+  await flush();
+  assert.equal(save.disabled, true, "the button stays off while the new file's preview is on its way");
+  previews[1]!.resolve(answer('auto', 3));
+  assert.equal(await oldPress, 'open');
+  assert.equal(await newPress, 'open');
+  assert.equal(save.disabled, false);
+  assert.equal(save.textContent, 'Post 3 rows', "the new file's preview is the one drawn");
 
   // 5. A post whose answer is lost keeps its preview and key; Post again is the same action.
   open();

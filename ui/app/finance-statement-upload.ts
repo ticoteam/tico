@@ -97,6 +97,10 @@ function finStmtReset(form: HTMLFormElement): void {
 // show its reply, and Post works only on a shown preview (phase 'reviewed') with the snapshot that preview captured.
 function finStatementUpload(money: FinStmtMoney): void {
   let phase: FinStmtPhase = 'empty', revision = 0, state: FinStmtState | null = null;
+  // The newest preview request, so a press whose own preview went stale waits for it before the button comes back.
+  let latest: Promise<unknown> = Promise.resolve();
+  // Read through a function: a check made before an await says nothing about the phase after it.
+  const previewing = (): boolean => phase === 'previewing';
   const body = `<label>File<input type="file" name="file" accept=".csv,.ofx,.qfx,text/csv" required></label>
     <div class="fin-stmt" data-fin-stmt-review hidden></div>`;
   const submit = (form: HTMLFormElement) => finNeed(form.querySelector<HTMLButtonElement>('[type=submit]'), 'the submit button');
@@ -111,7 +115,9 @@ function finStatementUpload(money: FinStmtMoney): void {
     submit(form).disabled = true;
     let shown: FinStmtReview;
     try {
-      shown = await post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name, signs});
+      const asked: Promise<FinStmtReview> = post('/v2/finance/statements/preview', {money_account_id: money.id, file: data, file_name: file.name, signs});
+      latest = asked;
+      shown = await asked;
     } catch (e) {
       if (mine !== revision) return;
       phase = 'error';
@@ -142,6 +148,8 @@ function finStatementUpload(money: FinStmtMoney): void {
     const snap = state;
     if (phase !== 'reviewed' || !snap || snap.file !== file) {
       await review(form, file, await finStmtBase64(file), 'auto');
+      // A newer preview took over while this one was on its way: keep the button busy until that one lands.
+      for (let waiting: Promise<unknown> | null = null; previewing() && waiting !== latest;) { waiting = latest; await waiting.catch(() => undefined); }
       return false;
     }
     if (snap.review.new === 0) throw new Error('No new rows to post');
@@ -174,5 +182,5 @@ function finStatementUpload(money: FinStmtMoney): void {
     finStmtReset(form);
     submit(form).disabled = false;
   });
-  dlg.addEventListener('close', () => { forget(); });
+  dlg.addEventListener('close', () => { forget(); phase = 'empty'; });
 }
