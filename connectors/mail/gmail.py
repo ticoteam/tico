@@ -27,6 +27,10 @@ class HistoryExpired(Failure):
 
 RETRY_STATUS = (403, 429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 4
+# Reads per Gmail batch call (read_many). A read costs 5 of the ~250 quota units a user may spend a second, so 50 reads
+# at once is at Google's limit: keep this between 25 and 50, and send one batch call at a time.
+READ_GROUP = 50
+MODIFY_GROUP = 1000  # messages.batchModify takes at most 1,000 ids
 MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 INLINE_RAW_LIMIT = 4 * 1024 * 1024  # a bigger draft goes up as media (_draft_body)
 ATTACHMENT_REF_RE = re.compile(r"a[1-9][0-9]{0,5}\Z")
@@ -91,8 +95,11 @@ class Gmail:
                 if attempt == attempts - 1 or not _retryable(e):
                     break
                 self.sleep(2**attempt)
-        raise Failure(
-            f"Gmail {what} failed for {self.mailbox}: {last}", gmail_hint(last, self.mailbox), status=_status(last)
+        raise self._failed(what, last)
+
+    def _failed(self, what, exc):
+        return Failure(
+            f"Gmail {what} failed for {self.mailbox}: {exc}", gmail_hint(exc, self.mailbox), status=_status(exc)
         )
 
     def _pages(self, method, params, key, limit=None, what="list"):
@@ -142,6 +149,61 @@ class Gmail:
     def get(self, msg_id, fmt="full"):
         return self._exec(self.service.users().messages().get(userId="me", id=msg_id, format=fmt), "messages.get")
 
+    def read_many(self, ids, fmt="full"):
+        """Yield (id, raw message or Failure) for each id, in the order asked, whatever order Gmail answers in.
+
+        Reads go READ_GROUP at a time in one Gmail batch call, one call at a time. A read that fails with a retryable
+        error is retried on its own (only the reads still owed go in the next call) with `_exec`'s backoff and attempt
+        limit; the rest of its group is not read again. A read that fails for good comes back as its Failure, for the
+        caller to raise or skip. Without a batch seam (`_tico_batch`, auth.build_service) each id is one `get`."""
+        ids = list(ids)
+        for start in range(0, len(ids), READ_GROUP):
+            group = ids[start : start + READ_GROUP]
+            yield from zip(group, self._read_group(group, fmt), strict=True)
+
+    def _read_group(self, group, fmt):
+        batch_of = getattr(self.service, "_tico_batch", None)
+        if batch_of is None:
+            out = []
+            for mid in group:
+                try:
+                    out.append(self.get(mid, fmt))
+                except Failure as e:
+                    out.append(e)
+            return out
+        done, owed = {}, list(range(len(group)))
+        for attempt in range(MAX_ATTEMPTS):
+            last = attempt == MAX_ATTEMPTS - 1
+            answers = {}
+            batch = batch_of(lambda rid, response, exc, answers=answers: answers.__setitem__(rid, (response, exc)))
+            for k in owed:
+                batch.add(self.service.users().messages().get(userId="me", id=group[k], format=fmt), request_id=str(k))
+            try:
+                batch.execute()
+            except Exception as e:  # noqa: BLE001 - the batch call itself, as _exec: a socket error, a 5xx, a redirect
+                if last or not _retryable(e):
+                    failed = self._failed("messages.get", e)
+                    done.update((k, failed) for k in owed)
+                    break
+                self.sleep(2**attempt)
+                continue
+            again = []
+            for k in owed:
+                response, exc = answers.get(str(k), (None, None))
+                if exc is None and response is None:
+                    exc = RuntimeError("the batch answer had no part for this message")
+                if exc is None:
+                    done[k] = response
+                elif not last and _retryable(exc):
+                    again.append(k)
+                else:
+                    done[k] = self._failed("messages.get", exc)
+            owed = again
+            if not owed:
+                break
+            self.sleep(2**attempt)
+        return [done[k] for k in range(len(group))]
+
     def get_attachment(self, msg_id, attachment_id):
         """Fetch one attachment through the authenticated Gmail service."""
         return self._exec(
@@ -190,11 +252,24 @@ class Gmail:
         return {"history": out[:limit] if limit else out, "historyId": latest}
 
     # -- state changes ----------------------------------------------
-    def modify(self, msg_id, add=(), remove=()):
+    def _may_organize(self):
         oauth.require(self.granted, "labels", self.mailbox, "label, archive or mark mail read")
         oauth.company_allows(self.company, self._part_of or "labels", self.mailbox, "label, archive or mark mail read")
+
+    def modify(self, msg_id, add=(), remove=()):
+        self._may_organize()
         body = {"addLabelIds": list(add), "removeLabelIds": list(remove)}
         return self._exec(self.service.users().messages().modify(userId="me", id=msg_id, body=body), "messages.modify")
+
+    def batch_modify(self, msg_ids, add=(), remove=()):
+        """The same labels added and removed on up to MODIFY_GROUP messages in one call; Gmail applies it to all or
+        none. The same checks as `modify` run first."""
+        self._may_organize()
+        msg_ids = list(dict.fromkeys(msg_ids))
+        if len(msg_ids) > MODIFY_GROUP:
+            raise ValueError(f"messages.batchModify takes at most {MODIFY_GROUP} ids, got {len(msg_ids)}")
+        body = {"ids": msg_ids, "addLabelIds": list(add), "removeLabelIds": list(remove)}
+        return self._exec(self.service.users().messages().batchModify(userId="me", body=body), "messages.batchModify")
 
     # -- drafts and sending (stage 2; every caller is behind policy.py and lint.py) --
     def create_draft(self, raw, thread_id=""):
