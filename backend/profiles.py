@@ -88,6 +88,11 @@ PRODUCTION_ACCEPTANCE_RUN_TITLE = re.compile(
     r"\s+production acceptance\b" + _ACCEPTANCE_RUN_AFTER + r"|production acceptance run\b)",
     re.I,
 )
+# Review work is marked on the task: a task labelled `review` is checked, not built, whatever its title says.
+REVIEW_LABEL = "review"
+# Legacy filing: a subtask titled for one of the old board's check steps (Review 1/2, QA, Security) gets the label when
+# it is created (review_labels, H.task_create). After that only the label counts, and the title is for people.
+CHECK_TITLE = re.compile(r"^(?:Review(?:\s+[12])?|QA|Security)\s*:", re.I)
 # The numbers a former Token saver bot keeps.
 TOKEN_SAVER_OPTIONS = {"batch_seconds": TOKEN_SAVER_SECONDS, "batch_scope": "bot", "sweep_seconds": 2 * 3600}
 
@@ -305,13 +310,30 @@ def config_of(c, bot):
 
 
 # ---------------------------------------------------------------------------------------------------- the tasks it takes
-def is_review_task(c, row, *, parent_id=None):
+def review_labels(title, parent_id, labels):
+    """The labels a new task is filed with: `labels`, and REVIEW_LABEL for a subtask titled for a check step."""
+    if parent_id and REVIEW_LABEL not in labels and CHECK_TITLE.match(str(title or "").strip()):
+        return [*labels, REVIEW_LABEL]
+    return labels
+
+
+def is_review_task(c, row, *, parent_id=None, labels=None):
     """One classification for creation, assignment, pull, wakes and Health.
 
-    Explicit release QA and a production acceptance run (top-level, or linked to a parent: Dev 750 ruling on 34f2faaf)
-    are review work. A live acceptance request needs a parent.
-    `parent_id` lets creation check the same rule before the child row exists.
+    A task labelled REVIEW_LABEL is review work. So are explicit release QA and a production acceptance run (top-level,
+    or linked to a parent: Dev 750 ruling on 34f2faaf). A live acceptance request needs a parent.
+    `parent_id` and `labels` let creation check the same rule before the row exists.
     """
+    if labels is None and row.get("id"):
+        labels = [
+            r[0]
+            for r in c.execute(
+                "SELECT tags.key FROM task_tags JOIN tags ON tags.id=task_tags.tag_id WHERE task_tags.task_id=?",
+                (row["id"],),
+            )
+        ]
+    if REVIEW_LABEL in (labels or ()):
+        return True
     title = str(row.get("title") or "").strip()
     if RELEASE_QA_TITLE.match(title):
         return True
@@ -326,11 +348,12 @@ def _is_production_acceptance_run(title):
     return bool(PRODUCTION_ACCEPTANCE_TITLE.search(title) and PRODUCTION_ACCEPTANCE_RUN_TITLE.match(title))
 
 
-def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None):
+def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, owner=None, labels=None, task=None):
     """(rule, why): the refusal rule and the words saying what to do instead, when the bot's profile means it takes no
     such task; None when it does. A Responder is refused like a synced bot (`external-bot`).
     A task its watcher (Tico's own actor) opens or a routine runs is its own work; a Responder takes no task at
-    all. `parent` is the id of the ticket the task is filed under."""
+    all. `parent` is the id of the ticket the task is filed under; `labels` a new task's labels, `task` the id of one
+    being given to the bot."""
     spec = spec_of(config)
     if spec is None or spec["takes"] == "all":
         return None
@@ -344,12 +367,12 @@ def refusal(c, name, config, actor, title=None, parent=None, routine=False, *, o
     if actor == H.KEEPER or routine:
         return None
     if takes == "review":
-        if is_review_task(c, {"title": title, "owner_id": owner}, parent_id=parent):
+        if is_review_task(c, {"id": task, "title": title, "owner_id": owner}, parent_id=parent, labels=labels):
             return None
         return (
             "profile",
-            f"{name} is a reviewer: it takes review and QA requests only: explicit release QA, "
-            "or review, QA and acceptance subtasks under the ticket they check. File this that way, or give the task to a "
+            f"{name} is a reviewer: it takes review and QA requests only: a task labelled {REVIEW_LABEL}, explicit "
+            "release QA, or review, QA and acceptance subtasks under the ticket they check. File this that way, or give the task to a "
             f"bot that does the work. If {name} should do ordinary tasks, change its profile.",
         )
     return (

@@ -372,6 +372,39 @@ def test_a_reviewer_may_be_handed_a_review_child_but_not_an_ordinary_task_and_st
         assert routines.create(c, "human:ana", "checker", {"title": "Weekly sweep", "cron": "0 9 * * 1"}) is not None
 
 
+@pytest.mark.parametrize(("title", "child"), RELEASE_QA_TITLES)
+def test_a_reviewer_is_given_each_documented_review_and_qa_request(api, title, child):
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        parent = H.task_create(c, "bot:ops", "Build checkout", "x", "bot:cpo")["id"] if child else None
+        made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent)
+        assert P.is_review_task(c, H.task(c, made["id"])) and not P.mismatches(c)
+
+
+def test_review_work_is_the_review_label_not_the_title(api):
+    """Review 1/2, QA and Security subtasks are filed with the review label; from then on the label, not the title,
+    says the task is review work: at creation, reassignment and in Health."""
+    with api.app.state.store.transaction() as c:
+        add_bot(c, "checker")
+        put(c, "checker", P.REVIEWER)
+        parent = H.task_create(c, "bot:ops", "Build checkout", "x", "bot:cpo")["id"]
+        for title in ("Review 1: checkout", "QA: checkout", "Security: checkout"):
+            made = H.task_create(c, "bot:ops", title, "x", "bot:checker", parent_id=parent)
+            assert P.REVIEW_LABEL in H.task_labels(H.task(c, made["id"]))
+        # Any title, explicitly labelled: created for the reviewer, or given to it later.
+        H.task_create(c, "bot:ops", "Look over checkout", "x", "bot:checker", labels=[P.REVIEW_LABEL])
+        later = H.task_create(c, "bot:ops", "Check the checkout copy", "x", "bot:cpo", labels=[P.REVIEW_LABEL])
+        H.task_update(c, "bot:ops", later["id"], owner="bot:checker", seen_version=later["version"])
+        assert not P.mismatches(c)
+        # The title is a label for people: the same words without a parent, or unlabelled, are ordinary work.
+        with pytest.raises(H.Refused):
+            H.task_create(c, "bot:ops", "QA: orphan review", "x", "bot:checker")
+        plain = H.task_create(c, "bot:ops", "Look over billing", "x", "bot:cpo", parent_id=parent)
+        with pytest.raises(H.Refused):
+            H.task_update(c, "bot:ops", plain["id"], owner="bot:checker", seen_version=plain["version"])
+
+
 def test_a_monitor_and_a_reviewer_still_run_their_automation_turns(api):
     """A routine moved to Automations runs on a task its automation files; a Monitor or Reviewer refusing it would stop
     the bot's own scheduled check (TIDY's hourly stuck-bot check failed this way on v0.5.0)."""
