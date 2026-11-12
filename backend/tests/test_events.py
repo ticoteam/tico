@@ -246,7 +246,7 @@ def test_every_source_writes_its_topic(api):
             "VALUES('g1',?,'ops','Ship it','active','human:ana',?,?)",
             (cid, H.now(), H.now()),
         )
-    ) == {("messages", "goal")}
+    ) == {("messages", "goal"), ("runner", "work")}  # ops's computer: its running turn reads the goal again
     loose = post(api, "tasks", {"owner": "ben", "title": "Remove this", "body": "Please."})
     with store.read() as c:
         before = E.latest(c)
