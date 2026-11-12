@@ -65,7 +65,7 @@ architecture) and C (the screens).
 
 - **All tasks** sit in a pipeline, in this build. General is a visible pipeline with a generic manager.
 - **General:** when the bot says done, it is Done. It can be reopened with a note.
-- **Never stuck:** a bot gets 3 tries (2 min, 15 min, 1 h), then its manager bot, then a person.
+- **Never stuck:** a bot gets 3 tries (2 min, 15 min, 50 min), then its manager bot, then a person.
 - **One ask:** everything you are asked is the task. You see the page itself, then Approve, or Send back with notes. The
   notes go to the bot.
 - **Person OKs** on the new Tico Team: the spec before it is built, and the review page before merge. The rest is bots
@@ -486,7 +486,7 @@ asks three things: what is missing, who has to supply it, and are they on it?
 
 Every 10 s, for each open task: what is missing, who has it, and are they on it?
 
-1. **The owner bot.** Woken with what is missing. Stops early: woken again after 2 min, then 15 min, then 1 h.
+1. **The owner bot.** Woken with what is missing. Stops early: woken again after 2 min, then 15 min, then 50 min.
 2. After 3 tries with no change: **the manager bot.** Told who tried and what is missing. Same 3 tries. Also gets tasks
    that are Late.
 3. After 3 tries with no change: **a person.** One item in Needs you: Try again, Reassign, Move back, Close or Snooze. No
@@ -1068,7 +1068,7 @@ def never_stuck(now):                                # Heartbeat, every 10 s. No
             # a person, a paused bot, Jev, GitHub, another task, room: nobody to wake. Screens read the same waits.
             if w.is_bot and not w.bot.cannot_run and not live_run_or_queued_wake(t, w.bot):
                 if progress_mark(t) != t.visit.progress_mark:  reset_tries(t)
-                if now >= t.visit.next_try_at:  wake_or_go_up_a_level(t)   # 2 min, 15 min, 1 h
+                if now >= t.visit.next_try_at:  wake_or_go_up_a_level(t)   # 2 min, 15 min, 50 min
         if late(t, now):  hand_to_manager_once(t);  hand_to_person_once_at_3x(t)
     fill_open_slots()                                # oldest waiting task first
 ```
@@ -1920,7 +1920,7 @@ failure can be replayed exactly. It runs in CI, not on your machine.
 
 Numbered in order so they can be cited (scenario 1 to 52).
 
-1. A bot stops early with nothing changed: woken at 2 min, 15 min and 1 h, then the manager, then one person's list. At
+1. A bot stops early with nothing changed: woken at 2 min, 15 min and 50 min, then the manager, then one person's list. At
    most 7 runs.
 2. A bot comments "working on it" and stops: counts as stopped early.
 3. A wake is lost: the next pass queues it again. Never two.
