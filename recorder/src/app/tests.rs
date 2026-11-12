@@ -74,7 +74,10 @@ fn app(store: Store, directory: &std::path::Path) -> Recorder {
         keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
     });
     let lock = AppLock::acquire(directory).unwrap();
-    Recorder::new(store, Some(lock), true).unwrap()
+    let mut app = Recorder::new(store, Some(lock), true).unwrap();
+    // No call app on the mic unless a test says so (the real read is this Mac's).
+    app.apps_on_mic = || Ok(vec![]);
+    app
 }
 fn connection(id: &str, name: &str) -> Destination {
     Destination {
@@ -1988,6 +1991,81 @@ fn stopping_a_call_by_hand_gives_the_source_back_and_skips_finish() {
             .any(|row| row == "POST /api/v2/live-meetings"),
         "no live meeting is made for a call"
     );
+}
+
+/// The apps on the mic, as `call_apps_read` takes them.
+fn on_mic(apps: &[&str]) -> Result<Vec<String>, String> {
+    Ok(apps.iter().map(|app| app.to_string()).collect())
+}
+
+#[test]
+fn a_call_recording_stops_by_itself_once_call_apps_leave_the_mic_and_gives_the_source_back() {
+    static READS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let tico = FakeTico::start(|method, path| source_answer(method, path, "live"));
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = call_app(directory.path(), &tico);
+    app.apps_on_mic = || {
+        READS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Ok(vec!["com.google.Chrome.helper".into()])
+    };
+    app.link(&call_link(&tico));
+    settle(&mut app, |app| !app.status_view()["recording"].is_null());
+    let id = recording(&app).expect("the source records");
+    // While recording, the apps on the mic are read in the background (macOS).
+    settle(&mut app, |_| {
+        READS.load(std::sync::atomic::Ordering::Relaxed) > 0
+    });
+    if cfg!(target_os = "macos") {
+        assert!(READS.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    }
+    let start = Instant::now();
+    let at = |seconds| start + Duration::from_secs(seconds);
+    app.call_apps_read(&id, on_mic(&["com.google.Chrome.helper"]), at(0));
+    // Chrome leaves the mic; Willow (dictation) stays on it and does not count.
+    app.call_apps_read(&id, on_mic(&["com.seewillow.WillowMac"]), at(2));
+    app.call_apps_read(&id, on_mic(&["com.seewillow.WillowMac"]), at(16));
+    assert_eq!(
+        recording(&app).as_deref(),
+        Some(id.as_str()),
+        "14 s is not yet"
+    );
+    app.call_apps_read(&id, on_mic(&["com.seewillow.WillowMac"]), at(17));
+    assert_eq!(app.status_view()["message"], "Call ended");
+    // Stopped as by Stop: the call's source goes back and the recording is kept as in Tico.
+    settle(&mut app, |_| {
+        tico.asked(&format!("DELETE {}", claim_path())) == 1
+    });
+    assert_eq!(tico.asked(&format!("DELETE {}", claim_path())), 1);
+    settle(&mut app, |app| app.status_view()["recording"].is_null());
+    assert!(app.status_view()["recording"].is_null());
+    assert!(sent_to(&app.store.get(&id).unwrap().deliveries, "acme"));
+}
+
+#[test]
+fn a_recording_without_a_call_app_on_the_mic_never_stops_by_itself() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut app = join_app(directory.path());
+    let id = app.record(None).expect("recording");
+    let start = Instant::now();
+    let at = |seconds| start + Duration::from_secs(seconds);
+    // In person, or a voice memo: only dictation on the mic, or nothing.
+    for second in (0..120).step_by(2) {
+        let apps: &[&str] = if second % 4 == 0 {
+            &["com.seewillow.WillowMac"]
+        } else {
+            &[]
+        };
+        app.call_apps_read(&id, on_mic(apps), at(second));
+    }
+    assert_eq!(recording(&app).as_deref(), Some(id.as_str()));
+    // A read that fails turns it off for this recording: it keeps recording whatever comes after.
+    app.call_apps_read(&id, Err("Core Audio -1".into()), at(120));
+    app.call_apps_read(&id, on_mic(&["us.zoom.xos"]), at(122));
+    app.call_apps_read(&id, on_mic(&[]), at(124));
+    app.call_apps_read(&id, on_mic(&[]), at(160));
+    assert_eq!(recording(&app).as_deref(), Some(id.as_str()));
+    app.stop_by_hand();
+    settle(&mut app, |app| app.status_view()["recording"].is_null());
 }
 
 #[test]

@@ -249,6 +249,18 @@ pub fn start_meeting_audio() -> Result<Source> {
     }
 }
 
+/// Bundle ids of the other apps taking microphone input now (`call_end` reads these). macOS only.
+pub fn apps_on_mic() -> Result<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::apps_on_mic()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        bail!("Reading which apps use the microphone is not implemented on this platform")
+    }
+}
+
 /// A real-time test tone in place of a microphone, for profiling and demos without a device:
 /// 48 kHz in 10 ms packets, a tone that pauses now and then like speech.
 pub fn start_synthetic(channel: Channel) -> Source {
