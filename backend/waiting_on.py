@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, replace
 from itertools import chain
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from . import hubdb_core, pipeline_rights, pr_conflicts, read_cache, task_wakes
+from . import hubdb_core, merge_order, pipeline_rights, pr_conflicts, read_cache, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 
@@ -98,9 +98,13 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
     if not said.about or shown(said.about):
         return said
     if isinstance(said, Wait):
+        if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
+            return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)
+    if said.state == R.WAITING and merge_order.is_order(said.requirement):
+        return replace(said, on=None, line=merge_order.UNNAMED, about=None)
     if said.state == R.WAITING:
         return replace(said, on=None, line=SUB_TASK_OPEN, about=None)
     return replace(said, line=SUB_TASK_CLOSED, about=None)
@@ -412,6 +416,8 @@ def of(
             out.append(Wait(TASKS, first, title, requirement_id, since, about=first))
         return True
 
+    # While it waits on a task it merges after, GitHub's "Not queued until #40 merges" is that same wait (merge_order).
+    ordered = any(merge_order.is_order(s.requirement) for s in unmet)
     shut = unreadable(conn, row, unmet)  # asked, and may not open it
     for standing in unmet:
         requirement = standing.requirement
@@ -428,6 +434,10 @@ def of(
             if not pr_conflicts.held(standing):
                 out.append(_turn(conn, row, standing.on or has, line, None, since, False, seen))
             continue
+        if standing.state == R.WAITING and merge_order.is_order(requirement):
+            # It goes after a task that has not merged: that task's, like a filed task; nobody is woken (merge_order).
+            out.append(Wait(TASKS, standing.on, line, merge_order.wait_id(row["id"]), since, about=standing.about))
+            continue
         if standing.state == R.WAITING and requirement["kind"] == "linked_done":
             if standing.on not in on_tasks:
                 on_tasks.add(standing.on or "")
@@ -435,6 +445,8 @@ def of(
         elif standing.state == R.WAITING and standing.on == R.JEV:
             out.append(Wait(JEV, None, line, requirement["id"], since))
         elif standing.state == R.WAITING and R.outside(standing.on):
+            if ordered and requirement.get("condition") == "pr_merged":
+                continue
             out.append(Wait(SOURCE, standing.on, line, requirement["id"], since))  # who: the source, e.g. github
         elif standing.state == R.WAITING:
             # An OK or an answer waits on whoever it names: a person, or a bot that was named to approve. One that names

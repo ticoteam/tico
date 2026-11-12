@@ -350,9 +350,12 @@ lists all of them. The list is never empty for an open task. Each state's look i
    - If not: After 2 hours of checks it is the bot's turn; a drop from the merge queue is the owner's turn at once. A
      release that never comes turns Late.
 7. **Other tasks**
-   - Starts: It filed tasks that are still open.
-   - Ends: The last one ends. The owner is woken once.
-   - If not: Those tasks have their own turn.
+   - Starts: It filed tasks that are still open; or, in a stage that queues PRs (Merge), it goes after a task that
+     has not merged yet ("After #40: waits for it to merge", see Merge).
+   - Ends: The last one ends. The owner is woken once. For an order: the earlier task merges (or is Done) and the PRs
+     are queued; or it is closed without merging, and it is the owner's turn once ("#40 closed without merging. Queue
+     it, or send it back.").
+   - If not: Those tasks have their own turn. A task waiting on its order wakes nobody and is not Late.
 8. **A full stage**
    - Starts: Everything is met and the next stage is full.
    - Ends: A slot frees. Oldest first.
@@ -819,7 +822,9 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   Snooze), a bot's snooze in Merge ends when GitHub takes the PR out of the queue or merges it, or its base branch
   moves (once per base commit; not while the PR is queued or its checks run, nor when the reason names a PR to wait
   for). Only in Merge: before it, every merge into main would wake the bot. A person's snooze stays. *Added Nov 11: Tico Team's Release Owner slept to guessed clock times, up to 90
-  minutes past the merge it waited for.*
+  minutes past the merge it waited for.* A task that goes after another one ("after #40": `tico task after 42 40`,
+  or `--after` when filing) is not queued while #40 is open and has not merged; see "GitHub", Merge. *Added Nov 12:
+  in conflict-storm drill B the order "B6, then B7" lived on a side task, and B7 merged first.*
 - **Release.** Owner: Release Owner. To leave: In a release. Can't be pushed past. Expected time: 1 day. The Release
   Owner cuts the release with `tico task release` (see "GitHub", Release).
 
@@ -1113,6 +1118,20 @@ late. Nothing depends on the exact 10 seconds.
   working it out) is read again 1, 5 and 15 minutes later. Queuing again is refused while the PR's link says it
   conflicts. The refusal, and a removal for a conflict, tell the owner to send the task back to Fixes 2, where the
   Builder rebases it ("No merge conflict" before Merge).
+  **An order between tasks** (backend/merge_order.py). A task may go after other tasks: `tico task after <task>
+  <earlier>` (`--remove` takes it off), `--after` on `tico task file` and `tico task create`, the MCP tools'
+  `after`. Whoever may change the later task sets it; the earlier one need only be readable. A loop ("#40 already
+  goes after #42") and an order on or after a task that has ended are refused. Before Merge it changes nothing: both
+  build and are reviewed side by side. In Merge, one check holds the queue (`merge_order.held`, asked on entering,
+  when a PR's metadata comes late and by `tico task queue`): while a task it goes after is open and has not merged
+  its PRs (a task with no PR: until it is Done), its PRs are not queued. Its turn is that task's, "After #40: waits
+  for it to merge" (PR merged says "Not queued until #40 merges"); nobody is woken and it is not Late. A bot's `tico
+  task queue` is refused ("Waits for #40 to merge"); a person may queue it anyway, and its history says "Queued
+  before #40 merged". When #40 merges a PR or moves on, the tasks after it are read again: one no longer held is
+  queued then, and if GitHub now says it conflicts, the owner's send-back to Fixes 2 names #40 for the Builder to
+  rebase onto. When #40 is closed without merging, the order ends and it is the owner's turn once: Tico does not
+  queue it by itself. Both tasks show the order, read-only: "After #40 · Merge" and "Before #42 · Build" (to a
+  reader who cannot open #40: "After a task you can't open").
 - **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise Reviewer 2
   reads it in Fixes 2 (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,

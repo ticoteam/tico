@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterable
 from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Any, cast
 
-from . import batch_work, hubdb_core, task_wakes
+from . import batch_work, hubdb_core, merge_order, task_wakes
 from . import task_engine as E
 from . import task_requirements as R
 from . import waiting_on as W
@@ -748,7 +748,10 @@ def _late(
     spent = _spent(conn, visit, at)
     if spent < minutes * 60:
         return
-    if _next_release_only(conn, W.of(conn, row, seen) if waits is None else waits):
+    waits = W.of(conn, row, seen) if waits is None else waits
+    if waits and merge_order.is_order_wait(waits[0].requirement_id):
+        return  # it goes after a task that has not merged: not Late, and nobody is woken (merge_order)
+    if _next_release_only(conn, waits):
         _late_release(conn, row, at, spent, minutes, done)
         return
     manager = _manager(conn, row, seen)

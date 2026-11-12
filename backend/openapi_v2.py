@@ -1030,8 +1030,8 @@ STABLE = [
         "post",
         "Tasks",
         "relateTask",
-        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up), or take the relation off "
-        "with remove. A task waits on no relation",
+        "Relate another task to this one ({task, kind}: related, duplicate_of, follow_up, after), or take the relation "
+        "off with remove. A task waits on no relation but after, in Merge: its PRs are not queued until task merged",
         "TaskResult",
     ),
     (
@@ -2648,11 +2648,17 @@ SCHEMAS = {
         },
         relations={
             "type": "object",
-            "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up): "
-            "each {id, title, status, owner, direction}. A task waits on no relation. Sub-tasks are in the task's "
-            "children.",
+            "description": "Related tasks the reader may open, by kind (parent, related, duplicate_of, follow_up, "
+            "after): each {id, title, status, owner, direction}; an `after` entry also has the other task's number and "
+            "stage (out: this task merges after it; in: it merges after this one). A task waits on no relation but "
+            "after, in Merge. Sub-tasks are in the task's children.",
             "additionalProperties": items(
-                obj({"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"})
+                obj(
+                    {"id": "s", "title": "s", "status": "s", "owner_id": "s", "direction": "s"},
+                    ["id", "title", "status", "owner_id", "direction"],
+                    number={"type": ["integer", "null"]},
+                    stage={"type": ["string", "null"]},
+                )
             ),
         },
         body={

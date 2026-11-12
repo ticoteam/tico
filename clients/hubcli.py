@@ -915,6 +915,7 @@ def parser():
     s.add_argument("--top", action="store_true", help="put it at the top of the owner's queue")
     s.add_argument("--link", action="append", help="a URL to attach (a pull request, an issue, a document)")
     s.add_argument("--goal", help="the goal this task serves (tico goal list); optional")
+    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.add_argument(
         "--dry-run", dest="dry_run", action="store_true", help="print the checks a create would fail and write nothing"
     )
@@ -1011,6 +1012,7 @@ def parser():
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
+    s.add_argument("--after", action="append", help="a task it merges after (repeat for more): Merge waits for it")
     s.set_defaults(fn="task file")
     s = task.add_parser("update", help="edit a task's fields: title, body, due, labels, privacy, goal; with --version")
     visibility = s.add_mutually_exclusive_group()
@@ -1164,6 +1166,11 @@ def parser():
     )
     s.add_argument("--remove", action="store_true", help="take it off instead")
     s.set_defaults(fn="task relate")
+    s = task.add_parser("after", help="this task merges after another: <id> <task>; Merge waits for it")
+    s.add_argument("id", help="the task that merges later")
+    s.add_argument("task", help="the task it merges after")
+    s.add_argument("--remove", action="store_true", help="take the order off instead")
+    s.set_defaults(fn="task after")
     s = task.add_parser("label", help="add or remove labels on a task")
     s.add_argument("id")
     s.add_argument("--add", action="append")
