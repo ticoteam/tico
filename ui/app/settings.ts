@@ -570,7 +570,7 @@ async function renderSettingsPageOwners() {
   const host = $('#set-page-owners');
   if (!host || formBusy(host)) return;
   let pages: Record<string, {bot?: string | null; name?: string}>;
-  try { pages = (await get<{pages?: Record<string, {bot?: string | null; name?: string}>}>('/v2/page-owners', {fresh: true})).pages || {}; }
+  try { pages = ((await get('/v2/page-owners', {fresh: true})) as {pages?: Record<string, {bot?: string | null; name?: string}>}).pages || {}; }
   catch (e) { if (host.isConnected) host.innerHTML = `<div class="empty">${esc(errorMessage(e, 'Something went wrong.'))}</div>`; return; }
   if (!host.isConnected || formBusy(host)) return;
   const bots = S.emps.filter(e => e.id && !['planned', 'archived'].includes(String(e.state || e.status || '')))

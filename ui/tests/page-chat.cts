@@ -33,7 +33,7 @@ let BROWSER: import('playwright').Browser;
 async function openAutomationsWith(owner: string | null, viewport: {width: number; height: number}, hash: string,
                                    answer: ThreadsFakeSupport.ThreadsAnswer, dmReads: string[]) {
   return openAutomations(BROWSER, {viewport, hash,
-    tweak: fx => { fx.employees.push({name: OWNER, display_name: 'Automations Owner', host: 'keeper', status: 'active'}); },
+    tweak: fx => { (fx.employees as Record<string, string>[]).push({name: OWNER, display_name: 'Automations Owner', host: 'keeper', status: 'active'}); },
     routes: async page => {
       await page.route('**/api/**', async route => {
         const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
