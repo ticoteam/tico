@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import re
 import threading
 import uuid
@@ -21,6 +22,8 @@ from .imports import MeetingImport
 from .models import Contract
 from .store import H, Problem, encode
 from .views import human_only
+
+log = logging.getLogger("tico.live_meetings")
 
 # Seconds between polls of a meeting's event stream. Tests set it to 0 rather than replacing asyncio.sleep, which
 # is process-wide and would also stop the server's own loop-lag probe from ever yielding.
@@ -747,6 +750,7 @@ def _enqueue(c, rid, bots, *, source_key, window_index=None, transcript_seq=None
         if not attached:
             skipped.append({"bot": slug, "reason": "not_attached"})
             continue
+        _abandon_lost_claims(c, rid, slug)
         replying = c.execute(
             "SELECT t.id FROM live_meeting_turns t JOIN live_meetings m ON m.id=t.meeting_id "
             "WHERE t.meeting_id=? AND t.bot=? AND t.status IN ('pending','claimed') "
@@ -862,8 +866,80 @@ def _attachment_authority(c, auth, rid, bot):
     return None
 
 
-def claim_runner_turn(c, rid, turn_id, bot, *, auth=None):
-    """Mark a turn claimed when its normal durable Hub runner job is leased."""
+# A claim through the meeting API has no lease behind it: a client that loses the claim's answer or crashes would keep
+# its bot busy for the rest of the meeting. Such a claim nobody answers in this long ends as `claim_abandoned` (never
+# run again: the turn may have acted). A runner's claim is held by its job, whose lease recovery is its own.
+CLAIM_ABANDON_SECONDS = 300
+LIVE_JOB_STATES = "('queued','leased','running','input')"
+
+
+def _job_owner(c, attempt_id, rid):
+    """The claim owner a call made from runner attempt `attempt_id` speaks for: `job:<job id>` when that job is one of
+    meeting `rid`'s turns (the turn's own run, or a later turn steered into it). None otherwise: a direct client runs in
+    no attempt, and a call from an unrelated run (a task turn) claims as a direct client does, so a lost claim of
+    it ends after CLAIM_ABANDON_SECONDS rather than when that other run ends."""
+    if not attempt_id:
+        return None
+    row = c.execute(
+        "SELECT j.id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "WHERE a.id=? AND json_extract(m.refs,'$.live_meeting.meeting_id')=?",
+        (attempt_id, rid),
+    ).fetchone()
+    return "job:" + row[0] if row else None
+
+
+def _holds(turn, job):
+    """Whether the delivery `job` (a runner job's owner, or None for a direct client) holds claimed `turn`. One owner
+    per claim, whichever transport made it; a claim from before owners were recorded is held by either."""
+    held = turn["claim_owner"]
+    if held is None:
+        return True
+    return held == job if job else held.startswith("direct:")
+
+
+def _claimed_by(owner):
+    return "runner" if (owner or "").startswith("job:") else "direct"
+
+
+def _abandon_lost_claims(c, rid, bot=None):
+    """End each claimed turn in meeting `rid` (of `bot`, if given) nobody answered within CLAIM_ABANDON_SECONDS and no
+    live runner job holds: skipped as `claim_abandoned`, so the bot is no longer busy and a reply after it posts
+    nothing. A direct claim cancels its turn's job, so it never has one; a runner claim lives as long as its job."""
+    cutoff = H.shift(H.now(), seconds=-CLAIM_ABANDON_SECONDS)
+    rows = c.execute(
+        "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND status='claimed' AND claimed_at<?"
+        + (" AND bot=?" if bot else "")
+        + " ORDER BY created_at,id",
+        (rid, cutoff, bot) if bot else (rid, cutoff),
+    ).fetchall()
+    for turn in rows:
+        owner = turn["claim_owner"] or ""
+        if owner.startswith("job:"):
+            alive = c.execute(f"SELECT 1 FROM jobs WHERE id=? AND state IN {LIVE_JOB_STATES}", (owner[4:],)).fetchone()
+        else:
+            alive = c.execute(
+                "SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id "
+                f"WHERE j.state IN {LIVE_JOB_STATES} AND json_extract(m.refs,'$.live_meeting.turn_id')=? LIMIT 1",
+                (turn["id"],),
+            ).fetchone()
+        if alive:
+            continue
+        log.warning(
+            "live_meeting_claim_abandoned meeting=%s turn=%s bot=%s by=%s claimed_at=%s",
+            rid,
+            turn["id"],
+            turn["bot"],
+            _claimed_by(owner),
+            turn["claimed_at"],
+        )
+        _finish_pass(c, rid, turn, "claim_abandoned")
+
+
+def claim_runner_turn(c, rid, turn_id, bot, *, auth=None, job=None):
+    """Claim a turn for one delivery: the runner job `job` (`job:<job id>`) whose lease takes it, or a direct client of
+    the meeting API (None). The claim records its owner; a turn another delivery holds is `claimed_elsewhere`, and a
+    runner job that finds it so is canceled. The same direct client claiming again (its answer was lost) gets the
+    same claim."""
     turn = c.execute(
         "SELECT * FROM live_meeting_turns WHERE id=? AND meeting_id=? AND bot=?", (turn_id, rid, bot)
     ).fetchone()
@@ -885,12 +961,20 @@ def claim_runner_turn(c, rid, turn_id, bot, *, auth=None):
         _finish_pass(c, rid, turn, "bot_detached")
         return {"id": turn_id, "status": "skipped", "reason": "bot_detached"}
     if turn["status"] == "claimed":
-        return {"id": turn_id, "status": "claimed"}
+        if not _holds(turn, job):
+            if job:
+                _cancel_queued_turn_job(c, turn_id, "Live meeting turn is claimed through the bot API")
+            return {"id": turn_id, "status": "claimed_elsewhere"}
+        return {"id": turn_id, "status": "claimed", "by": _claimed_by(turn["claim_owner"] or job)}
     if turn["status"] != "pending":
         raise Problem("turn_state", "This live meeting turn is no longer available", 409)
-    c.execute("UPDATE live_meeting_turns SET status='claimed',claimed_at=? WHERE id=?", (H.now(), turn_id))
+    owner = job or "direct:" + str(uuid.uuid4())
+    c.execute(
+        "UPDATE live_meeting_turns SET status='claimed',claimed_at=?,claim_owner=? WHERE id=?",
+        (H.now(), owner, turn_id),
+    )
     _event(c, rid, "meeting.bot_turn_claimed", {"turn_id": turn_id, "bot": bot})
-    return {"id": turn_id, "status": "claimed"}
+    return {"id": turn_id, "status": "claimed", "by": _claimed_by(owner)}
 
 
 def complete_runner_turn(
@@ -933,6 +1017,8 @@ def complete_runner_turn(
     ).fetchone()
     if not turn or turn["status"] in ("replied", "skipped"):
         return
+    if turn["status"] == "claimed" and attempt_id and not _holds(turn, _job_owner(c, attempt_id, rid)):
+        return  # another delivery holds this turn: it is theirs to answer
     if _meeting(c, rid)["state"] == "ended":
         _finish_pass(c, rid, turn, "meeting_ended_before_reply")
         return
@@ -991,7 +1077,8 @@ def _retry_empty(c, rid, turn, bot):
         return False
     model = turn["ran_model"] if retries == 0 else None
     c.execute(
-        "UPDATE live_meeting_turns SET status='pending',claimed_at=NULL,retries=? WHERE id=?", (retries + 1, turn["id"])
+        "UPDATE live_meeting_turns SET status='pending',claimed_at=NULL,claim_owner=NULL,retries=? WHERE id=?",
+        (retries + 1, turn["id"]),
     )
     _event(
         c,
@@ -1714,6 +1801,8 @@ def _reply(c, rid, who, turn_id, text, *, at_ms=None, transcript_seq=None):
         raise Problem("turn_state", "This bot turn is no longer available", 409)
     if turn["status"] != "claimed":
         raise Problem("turn_claim", "Claim this meeting turn before replying", 409)
+    if not _holds(turn, _job_owner(c, who.attempt_id, rid)):
+        raise Problem("turn_claimed", "Another delivery of this bot is answering this meeting turn", 409)
     current = _meeting(c, rid)
     if _is_pass(text):
         _finish_pass(c, rid, turn, "bot_pass")
@@ -1844,10 +1933,24 @@ class Routing:
     def sweep(self):
         """Route each meeting live in the last two hours again (the scheduler's tick): a no-op where every elapsed window
         is routed. A meeting left live after its transcript stopped has nothing new to route."""
+        cutoff = H.shift(H.now(), seconds=-CLAIM_ABANDON_SECONDS)
         with self.app.state.store.read() as c:
             rows = c.execute(
                 "SELECT id FROM live_meetings WHERE state='live' AND updated_at>=?", (H.shift(H.now(), seconds=-7200),)
             ).fetchall()
+            lost = [
+                row["id"]
+                for row in rows
+                if c.execute(
+                    "SELECT 1 FROM live_meeting_turns WHERE meeting_id=? AND status='claimed' AND claimed_at<? LIMIT 1",
+                    (row["id"], cutoff),
+                ).fetchone()
+            ]
+        if lost:
+            # A claim nobody answered in time ends here too, not only when its bot is next invited.
+            with self.app.state.store.transaction() as c:
+                for rid in lost:
+                    _abandon_lost_claims(c, rid)
         for row in rows:
             self.later(row["id"])
 
@@ -2397,8 +2500,10 @@ def install_live_meetings(app, store, auth, write):
         with store.read() as c:
             _require_read(c, auth, who, rid)
             rows = c.execute(
-                "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? AND status='pending' "
-                "ORDER BY created_at,id",
+                # A turn this bot claimed through this API stays listed until it is answered or abandoned, so a
+                # client that lost the claim's answer or restarted finds it again. A runner's claim is not listed.
+                "SELECT * FROM live_meeting_turns WHERE meeting_id=? AND bot=? "
+                "AND (status='pending' OR status='claimed' AND claim_owner LIKE 'direct:%') ORDER BY created_at,id",
                 (rid, H.actor_id(who.actor)),
             ).fetchall()
             view = _view(c, auth, who, rid)
@@ -2406,6 +2511,7 @@ def install_live_meetings(app, store, auth, write):
                 "turns": [
                     {
                         "id": r["id"],
+                        "status": r["status"],
                         "window_index": r["window_index"],
                         "transcript_seq": r["transcript_seq"],
                         "source_key": r["source_key"],
@@ -2427,7 +2533,10 @@ def install_live_meetings(app, store, auth, write):
             raise Problem("identity", "Only bots claim meeting turns", 403)
 
         def work(c):
-            result = claim_runner_turn(c, rid, turn_id, H.actor_id(who.actor), auth=auth)
+            job = _job_owner(c, who.attempt_id, rid)
+            result = claim_runner_turn(c, rid, turn_id, H.actor_id(who.actor), auth=auth, job=job)
+            if result["status"] == "claimed_elsewhere":
+                raise Problem("turn_claimed", "Another delivery of this bot is answering this meeting turn", 409)
             if result["status"] == "claimed":
                 _cancel_queued_turn_job(c, turn_id, "Live meeting turn was claimed through the bot API")
             return result
