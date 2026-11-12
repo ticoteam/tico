@@ -364,7 +364,15 @@ class ConnectorPublisher:
                 }
             except Exception as exc:
                 body = {"status": "failed", "kind": "error", "message": type(exc).__name__, "hint": "Connect again."}
-            self.client.post(f"connectors/mail/google/{request['id']}/result", body)
+            try:
+                # `id` is this connect or disconnect, not the person (backend/google_connect.py).
+                self.client.post(f"connectors/mail/google/{request['id']}/result", body)
+            except APIError as exc:
+                if exc.code != "stale":
+                    raise
+                # The person connected again or disconnected meanwhile: this answer is for nothing current, and the
+                # next claim takes the one that replaced it.
+                log(f"Connect Google {request['id']} was replaced before its result was sent; nothing changed")
             done += 1
         return done
 
