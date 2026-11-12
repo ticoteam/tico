@@ -316,7 +316,7 @@ def test_in_release_waits_for_a_release_that_holds_the_merge(c):
     F.save_release(c, REPO, {"tag": "v2.0.0-rc.1", "commit_sha": "r1", "published_at": H.now()}, 4)
     rc = F.releases(c, REPO, prereleases=True)[0]
     F.save_included(c, rc["id"], "m", True)
-    assert R.KINDS["item"](c, row, req, None).line == "Waiting for the next release of acme/app"  # a dash: pre-release
+    assert R.KINDS["item"](c, row, req, None).line == "In v2.0.0-rc.1"  # pre-releases count by default
     found = R.KINDS["item"](c, row, {**req, "settings": {"prereleases": True}}, None)
     assert (found.state, found.line) == (R.MET, "In v2.0.0-rc.1")
     found = R.KINDS["item"](c, row, {**req, "settings": {"release_repo": "acme/server"}}, None)
