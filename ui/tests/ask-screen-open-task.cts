@@ -1,7 +1,8 @@
 // A task that waits on the person's own answer opens on its ask (the ask screen, ui/app/decide.ts), from wherever it is
 // opened; the ask screen links to the task's own page; and a note can carry screenshots and files.
 // - opened by a #/task/ link, a list row's open (taskModalOpen) or a link in chat: the ask screen on that ask, not the task page;
-// - a task waiting on someone else opens the task page as before;
+// - a task waiting on someone else opens the task page as before; one whose first wait is someone else's but which also
+//   waits on the person's own ask opens on that ask;
 // - "Open task #N ↗" opens the task page, which stays open; closing it leaves no ask screen behind;
 // - Notes is 7 lines in a 420 px column, and grows with its text before it scrolls;
 // - a pasted screenshot and a picked file show under the note with ✕; copied text pastes as text;
@@ -12,7 +13,7 @@
 import type {Page} from 'playwright';
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
-const {open, fixtures} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
+const {open, fixtures, needsOf} = require('./tasks-page.cts') as import('./tasks-page.cts').Api;
 // The page's own opener (ui/app/task-modal.ts), as list rows and board cards call it.
 declare function taskModalOpen(id: string): Promise<void>;
 
@@ -67,6 +68,20 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         await page.locator('.md a[href="#/task/t-1"]').click();
         await card(page).waitFor({timeout: 5000});
         assert.equal(await card(page).locator('.dc-q').innerText(), 'Approve the spec for Checkout flow');
+        assert.deepEqual(errors, []);
+      } finally { await page.close(); }
+    }
+
+    // The first wait is someone else's (a list row carries only that one), and the person's own ask is behind it: the ask.
+    {
+      const tasks = fixtures(), needs = needsOf(tasks), t2 = tasks.find(t => t.id === 't-2')!;
+      t2.turn = {...t2.turn!, who: 'human:sam', line: 'Waiting on Sam', requirement_id: 'r9'};
+      const {page, errors} = await open(browser, {tasks, needs});
+      try {
+        await page.evaluate(() => { void taskModalOpen('t-2'); });
+        await card(page).waitFor({timeout: 5000});
+        assert.equal(await card(page).locator('.dc-q').innerText(), 'Which plan do new signups get?');
+        assert.equal(await page.locator('#task-modal[open]').count(), 0);
         assert.deepEqual(errors, []);
       } finally { await page.close(); }
     }
@@ -130,6 +145,11 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         assert.equal(await paste(page, [], 'plain words'), false);
         // A screenshot pasted, then a file picked with 📎.
         await paste(page, [{name: 'image.png', type: 'image/png'}]);
+        // Typing goes on in the note after a paste: the files row redraws, the note keeps its focus, caret and words.
+        await page.locator('.dc-file').waitFor();
+        await page.keyboard.type(' typed after');
+        assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-notes', 'the note keeps the focus after a paste');
+        assert.ok((await notes.inputValue()).endsWith(' typed after'), 'words typed after a paste land in the note');
         await page.locator('.dc-attach input[type=file]').setInputFiles({name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello')});
         const rows = card(page).locator('.dc-file');
         await page.waitForFunction(() => document.querySelectorAll('.dc-file').length === 2);
@@ -139,6 +159,10 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
 
         // The picked file failed: Send back names it, with Retry, and sends nothing.
         await page.locator('.dc-file[data-state="failed"]').waitFor({timeout: 5000});
+        // An upload ending (here, failing) redraws its row and leaves the note as it was.
+        await page.keyboard.type(' and more');
+        assert.equal(await page.evaluate(() => document.activeElement?.id), 'dc-notes');
+        assert.ok((await notes.inputValue()).endsWith(' typed after and more'));
         await notes.fill('Needs a mobile layout');
         await card(page).locator('[data-dc="sendback"]').click();
         await card(page).locator('.err', {hasText: 'notes.txt did not upload'}).waitFor({timeout: 5000});
@@ -173,7 +197,8 @@ const paste = (page: Page, files: {name: string; type: string}[], text = '') => 
         assert.equal(await notes.getAttribute('rows'), '4');
         await notes.fill('A note typed on a phone. '.repeat(8));
         await paste(page, [{name: 'image.png', type: 'image/png'}]);
-        await page.locator('.dc-file').waitFor();
+        // Measured once the upload has settled, so no redraw runs under the measurement.
+        await page.locator('.dc-file:not([data-state="up"])').waitFor({timeout: 5000});
         for (const what of ['approve', 'sendback', 'skip']) {
           const box = await card(page).locator(`[data-dc="${what}"]`).boundingBox();
           assert.ok(box && box.y >= 0 && box.y + box.height <= 844, `${what} is on screen`);

@@ -1290,7 +1290,7 @@ Mark met, Message Product Owner twice. New: Approve and Send back.
 - **Right:** the sentence "Approve the spec for Checkout flow" as the heading; under it "Product Owner · version 2"; a
   "Open task #80 ↗" link; a "Notes" box; buttons "Approve" (main) and "Send back".
 
-**Opening a task opens its ask.** A task waiting on your own answer opens on this screen from anywhere (the board, a
+**Opening a task opens its ask.** A task waiting on your own answer (any of its waits, not only the first) opens on this screen from anywhere (the board, a
 task list, a `#/task/<id>` link, a link in chat, a bot's page), with ‹ › through the rest of Needs you; any other task
 opens its page. "Open task #N ↗" opens the task's page, which stays open; its Answer comes back here.
 
@@ -1298,7 +1298,8 @@ opens its page. "Open task #N ↗" opens the task's page, which stays open; its 
 pasted into it, a file dropped on the right side or one picked with 📎 Attach (up to 10) uploads to the task's Files at
 once and shows under the note with ✕. Send back waits until they are up ("Uploading 1 of 2…"), names a failed one with
 Retry and sends nothing; the note it sends ends with each file's name and id, so the bot's wake lists them. A question's
-"Something else" box works the same way.
+"Something else" box works the same way. Approve on an OK of exactly what was shown sends that OK alone, and says so under
+the files. Moving on with ‹ › or Skip leaves the uploaded files on the task's Files, and a toast says so.
 
 The phone view is in [S17](#s17-on-a-phone). What changed since the version you last saw is highlighted in the page.
 

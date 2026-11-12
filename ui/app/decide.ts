@@ -264,10 +264,20 @@ async function decideOpenAsk(taskId: string, rid: string, quiet = false): Promis
 /** Opening a task from anywhere (the board, a list, a #/task/ link, a link in chat, a bot's page): a task waiting on the
     person's own answer opens on that ask in this screen, as a click in Needs you does. False, and nothing said, when it
     is not waiting on them or the ask is not in their Needs you; the task page opens then (taskModalShow). */
-async function decideTaskOpen(task: {id: string | number; turn?: {ask?: boolean | null; requirement_id?: string | null; who?: string | null} | null; status?: string | null}): Promise<boolean> {
-  const turn = task.turn, me = myActor();
-  if (S.me?.role === 'bot' || !turn?.ask || !turn.requirement_id || !me || turn.who !== me || ['done', 'closed'].includes(String(task.status || ''))) return false;
-  return decideOpenAsk(String(task.id), turn.requirement_id, true);
+type DecWait = {ask?: boolean | null; requirement_id?: string | null; who?: string | null};
+async function decideTaskOpen(task: {id: string | number; turn?: DecWait | null; waits?: DecWait[] | null; status?: string | null}): Promise<boolean> {
+  const me = myActor(), id = String(task.id);
+  if (S.me?.role === 'bot' || !me || ['done', 'closed'].includes(String(task.status || ''))) return false;
+  // Any of the task's waits that is their own ask counts, not only the first (another person's OK may head the list).
+  const waits = task.waits?.length ? task.waits : task.turn ? [task.turn] : [];
+  const rid = waits.find(w => w.ask && w.requirement_id && w.who === me)?.requirement_id
+    // A list row carries only its first wait: an ask of theirs behind it is in the Needs you already read, oldest first.
+    || decideHeldAsk(id);
+  return rid ? decideOpenAsk(id, rid, true) : false;
+}
+function decideHeldAsk(taskId: string): string {
+  const it = [...decideSource(), ...needsHeld()].find(x => x.kind === 'ask' && decideTaskId(x) === taskId);
+  return it ? decideRid(it) : '';
 }
 /** ▶ on a stage: every page of Needs you is read first, then the stage's items are walked. False when none wait. */
 async function decideStageOpen(stage: string): Promise<boolean> {
@@ -322,13 +332,18 @@ function decideGo(st: DecState, id: string | null) {
 }
 function decideStep(st: DecState, dir: number) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + dir];
-  if (next) decideGo(st, next);
+  if (next) { decideFilesLeft(st); decideGo(st, next); }
 }
 /** Skip (every width; a phone has no ‹ ›): the next item, nothing answered; from the last, the first one still waiting,
     which is the first one skipped. */
 function decideSkip(st: DecState) {
   const live = decideLive(st), i = live.indexOf(st.at || ''), next = live[i + 1] || live[0];
-  if (next && next !== st.at) decideGo(st, next);
+  if (next && next !== st.at) { decideFilesLeft(st); decideGo(st, next); }
+}
+/** Moving on unsent: the note's files stay on the task's Files (each uploaded when added), and the toast says where. */
+function decideFilesLeft(st: DecState) {
+  const up = st.files.filter(f => f.state !== 'failed').length;
+  if (up) toast(`${up === 1 ? '1 file stays' : `${up} files stay`} on the task's Files`);
 }
 /** After an answer: the next item, else the one before, else All caught up. */
 function decideAfter(st: DecState, id: string) {
@@ -479,6 +494,10 @@ function decidePaintSide(st: DecState) {
   const same = host.querySelector<HTMLElement>('[data-key]')?.dataset.key === it.id;
   const held = same ? host.querySelector<HTMLInputElement>('#dc-other')?.value : undefined;
   const heldNote = same ? host.querySelector<HTMLTextAreaElement>('#dc-notes')?.value : undefined;
+  // So does the caret: a redraw while someone types (a refusal, the end of a send) leaves them typing in the same box.
+  const typing = document.activeElement;
+  const caret = same && typing instanceof HTMLTextAreaElement && host.contains(typing) && typing.id
+    ? {id: typing.id, from: typing.selectionStart, to: typing.selectionEnd, dir: typing.selectionDirection ?? undefined} : null;
   host.innerHTML = `<div data-key="${esc(it.id)}">${head}${err}${body}</div>`;
   // Skip sits in the answer row, on every width; an item with no row of its own (a typed choice) gets one.
   if (!st.sheet && decideLive(st).length > 1) {
@@ -491,7 +510,14 @@ function decidePaintSide(st: DecState) {
   const note = host.querySelector<HTMLTextAreaElement>('#dc-notes');
   if (note && heldNote) note.value = heldNote;
   host.querySelectorAll<HTMLTextAreaElement>('textarea[data-dc-grow]').forEach(decideGrow);
+  const back = caret ? host.querySelector<HTMLTextAreaElement>(`#${caret.id}`) : null;
+  if (caret && back && !back.disabled) { back.focus({preventScroll: true}); back.setSelectionRange(caret.from, caret.to, caret.dir); }
   decideNeedsText($('.decide')!);
+}
+/** A file added or finished redraws only the files row, so the note keeps its focus, caret and text. */
+function decideFilesPaint(st: DecState) {
+  const row = $('.decide .dc-side [data-dc-attach]');
+  if (row) row.outerHTML = decideFilesHTML(st); else decidePaintSide(st);
 }
 // ---- the note: its size, and the screenshots and files that go with it
 const decidePhone = () => matchMedia('(max-width:760px)').matches;
@@ -513,8 +539,11 @@ function decideFilesHTML(st: DecState): string {
     + `<span class="muted dc-file-state">${f.state === 'up' ? 'Uploading…' : f.state === 'failed' ? esc(f.error || 'Did not upload') : ''}</span>`
     + (f.state === 'failed' ? `<button type="button" class="linkish" data-dc="file-retry" data-dc-key="${f.key}">Retry</button>` : '')
     + `<button type="button" class="dc-file-x" data-dc="file-drop" data-dc-key="${f.key}" aria-label="Remove ${esc(f.file.name)}" title="Remove">✕</button></li>`).join('');
-  const full = st.files.length >= DEC_FILES_MAX;
-  return `<div class="dc-files" data-dc-attach>${rows ? `<ul>${rows}</ul>` : ''}`
+  const full = st.files.length >= DEC_FILES_MAX, it = decideCurrent(st);
+  // An OK of exactly what was shown (okGive) carries only that OK: the files go with Send back, and the row says so.
+  const bound = rows && it && decideKind(it) === 'ok' && st.ok.get(decideOkKey(it))?.state === 'ready'
+    ? '<p class="muted dc-file-note">Approve sends no note or files; Send back sends both.</p>' : '';
+  return `<div class="dc-files" data-dc-attach>${rows ? `<ul>${rows}</ul>` : ''}${bound}`
     + `<label class="dc-attach${full ? ' disabled' : ''}" title="Paste a screenshot, drop a file, or pick one"><input type="file" multiple data-dc-pick${full ? ' disabled' : ''} hidden>📎 Attach</label></div>`;
 }
 /** Files join the note on screen: each one uploads to the task's Files at once (the same upload as the task page). */
@@ -528,7 +557,7 @@ function decideFilesAdd(st: DecState, files: File[]) {
     st.files.push(f);
     decideFileUpload(st, it.id, taskId, f);
   }
-  decidePaintSide(st);
+  decideFilesPaint(st);
 }
 function decideFileUpload(st: DecState, item: string, taskId: string, f: DecFile) {
   f.state = 'up'; f.error = '';
@@ -542,7 +571,7 @@ function decideFileUpload(st: DecState, item: string, taskId: string, f: DecFile
       if (!body.file_id) throw new Error('The upload gave no file id');
       f.id = body.file_id; f.state = 'done';
     } catch (e) { f.state = 'failed'; f.error = errorMessage(e, 'Did not upload'); }
-    if (DEC === st && st.at === item && st.files.includes(f) && !st.busy) decidePaintSide(st);
+    if (DEC === st && st.at === item && st.files.includes(f) && !st.busy) decideFilesPaint(st);
   })();
 }
 /** Before a note goes: every file is up. While some upload it says "Uploading 1 of 2…"; a failed one is named, with

@@ -173,8 +173,9 @@ function taskModalRunsKeep(d: ModalDialog, keep: TaskChatState | null) {
 async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail; direct?: boolean} = {}) {
   // A task opened (not redrawn) while it waits on the person's own answer opens on that ask, from wherever it was opened
   // (the board, a list, a #/task/ link, a link in chat, a bot's page); its Open task ↗ comes back here with `direct`. The
-  // task's conversation (opts.thread) is asked for by name and opens as it is.
-  if (!d?.open && !opts.direct && !opts.thread) {
+  // task's conversation asked for by name (opts.thread, as a bot's chat opens it) opens as it is; a phone board's card
+  // (thread with ask) is the board, so it opens on the ask too.
+  if (!d?.open && !opts.direct && (!opts.thread || opts.ask)) {
     const load = ++TASK_MODAL_LOAD;
     if (await decideTaskOpen(task)) return;
     if (load !== TASK_MODAL_LOAD) return;      // another task was opened meanwhile

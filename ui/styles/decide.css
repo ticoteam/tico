@@ -52,6 +52,7 @@
 .dc-attach:hover{color:var(--ink)}
 .dc-attach.disabled{opacity:.5;cursor:default}
 .dc-status{margin:0;font-size:var(--t-sm)}
+.dc-file-note{margin:4px 0 0;font-size:var(--t-sm)}
 .dc-acts,.dc-choices,.dc-more,.dc-chips{display:flex;flex-wrap:wrap;gap:8px}
 .dc-acts button,.dc-choices button{min-height:44px;padding:0 16px;border-radius:12px;font-weight:600}
 .dc-more{padding-top:4px}
