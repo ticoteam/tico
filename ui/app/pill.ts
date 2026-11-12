@@ -97,6 +97,7 @@ function chatIdentityRestore() {
   CHAT_PENDING.clear();
   for (const [slug, u] of chatPendingRead()) CHAT_PENDING.set(slug, u);
   chatDrafts();
+  if (typeof thvDraftTexts === 'function') thvDraftTexts();   // a bot's Home, DM or thread words (thread-view.ts)
 }
 function chatDraftSave(P: Pill) {
   if (P?.mode !== 'chat' || !P.slug) return;
@@ -548,6 +549,7 @@ function pastedFiles(clipboard: DataTransfer | null | undefined): File[] {
   let files = Array.from(clipboard.files || []);
   if (!files.length) files = Array.from(clipboard.items || []).filter(item => item.kind === 'file')
     .map(item => item.getAsFile()).filter((f): f is File => f !== null);
+  // Two different files copied together with the same name, size and type would also merge; rare enough to accept.
   const seen = new Set<string>();
   return files.map(pillTyped).filter(f => {
     const key = `${f.name}\n${f.size}\n${f.type}`;
