@@ -156,8 +156,8 @@ REVIEW_RUBRIC = (
 # it: CI still running or re-running when the page was written (the stage's own Checks pass holds it until they pass), a
 # decision left to the person (keep the change, a target missed), a commit made after the reviews that Reviewer 2 reads
 # before the person is asked, and no line restating the work its title and spec already name. Naming each brought those
-# pages to 0.78 to 0.93; "a line that only says it passed is not output" and "leaves any of them out" keep a page with no
-# check output or without one reviewer under 0.3.
+# pages to 0.73 to 0.93 (the lowest, I08, says nothing of the change but its PR). "A line that only says it passed is
+# not output" and "leaves any of them out" keep a page with no check output or without one reviewer under 0.3.
 FIXES_2_RUBRIC = (
     "Shows four things: what was built (the work's title and spec say what was asked, so naming the work or its PR is "
     "enough); output from how it was checked (test counts or command output; a line that only says it passed is not "
@@ -166,7 +166,8 @@ FIXES_2_RUBRIC = (
     "to fix. Only these four count. A page that leaves any of them out, such as one reviewer's findings, does not meet "
     "it. A page with all four meets it even when it reports a target missed, asks the person to decide something "
     "(whether to keep the change, a spec question), lists what was not checked, or says commits were made after the "
-    "reviews and a reviewer has not read them yet: the person and Tico handle those."
+    "reviews and a reviewer has not read them yet: the person and Tico handle those. A page may tell only what changed "
+    "since the reviews when it names the work or its PR."
 )
 # A spec with no acceptance criteria passed the old line at p 0.72 to 0.81 (rc.4 eval, Nov 11); the scope's in and out
 # and checkable criteria are what a builder builds from. "Only these three count" (rc.5, Nov 11): good specs of the
