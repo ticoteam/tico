@@ -363,10 +363,13 @@ def diff_id(files: object) -> str | None:
     its added and removed lines without whitespace, line numbers or context, as `git patch-id` reads a patch. A file
     GitHub gives no patch for (binary, or too large) counts by its contents at the commit (`sha`). None when GitHub left
     part of the diff out: DIFF_FILES_MAX files or more, or a file with neither patch nor contents."""
-    if not isinstance(files, list) or len(files) >= DIFF_FILES_MAX:
+    if not isinstance(files, list):
+        return None
+    listed = cast("list[object]", files)
+    if len(listed) >= DIFF_FILES_MAX:
         return None
     parts: list[str] = []
-    rows = [cast("Row", f) for f in cast("list[object]", files) if isinstance(f, dict)]
+    rows = [cast("Row", f) for f in listed if isinstance(f, dict)]
     for found in sorted(rows, key=lambda f: str(f.get("filename") or "")):
         status = str(found.get("status") or "")
         patch = found.get("patch")
