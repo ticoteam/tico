@@ -7,7 +7,7 @@
 // kept. Prints the burst bench (Measures 1 and 2 of the I20 spec): list builds and milliseconds, drawing per event (as
 // before) against once per frame. Fixtures only.
 const {chromium} = require('playwright') as typeof import('playwright');
-const assert = require('node:assert/strict') as typeof import('node:assert/strict');
+const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const fs = require('node:fs') as typeof import('node:fs');
 const {html, uiFile} = require('./support/page.cts') as import('./support/page.cts').Api;
 const {unrouted} = require('./support/routes.cts') as import('./support/routes.cts').Api;
@@ -261,7 +261,8 @@ let browser: import('playwright').Browser | null = null;
   }, [A, B]);
   const snap = (k: number) => page.evaluate(key => {
     const v = [...THV_VIEWS].find(x => x.key === key)!;
-    const norm = (s: string) => s.replaceAll(`th-upd-${v.key}-`, 'th-upd-K-').replace(/(data-th-since="[^"]*">)[^<]*/g, '$1');
+    // Clocks and "5m ago" read the time of their draw, which differs between the two views by a few milliseconds.
+    const norm = (s: string) => s.replaceAll(`th-upd-${v.key}-`, 'th-upd-K-').replace(/(data-th-since="[^"]*">)[^<]*/g, '$1').replace(/(<time\b[^>]*>)[^<]*/g, '$1');
     return {list: norm(v.el.querySelector('.thv-list')!.innerHTML), title: v.el.querySelector('.thv-title')!.outerHTML, pin: v.el.querySelector('[data-thv-pin]')?.outerHTML,
       placeholder: v.el.querySelector('.thv-composer .p-text')?.getAttribute('placeholder')};
   }, k);
