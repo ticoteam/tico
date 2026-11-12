@@ -23,6 +23,8 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from clients import urlparts
+
 from . import personal_tokens
 from .store import H, Problem, digest
 
@@ -99,8 +101,8 @@ def server_metadata(settings):
 
 
 def _redirect_ok(uri):
-    parts = urlsplit(uri)
-    if parts.fragment or not parts.netloc:
+    parts = urlparts.split(uri)
+    if parts is None or parts.fragment or not parts.netloc:
         return False
     if parts.scheme == "https":
         return True
