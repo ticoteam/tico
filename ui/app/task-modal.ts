@@ -946,7 +946,7 @@ function taskCommentsRender(state: TaskChatState, data: ModalDetail, sent = '') 
   const files = tfFiles(state.dialog);
   // The run answering the thread; otherwise the bot's next run on this task, when it is queued: what it waits for.
   const live = taskLiveHTML(data.execution, state.stopping, sent);
-  const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}${data.waiting_for.startsWith('Out of credit') ? ` <a class="link" href="${BOT_BILLING}">Add credit</a>` : ''}</p>`;
+  const wait = live || !data.waiting_for ? live : `<p class="muted task-wait" role="status">${esc(data.waiting_for)}${taskCreditActionHTML(data.waiting_for)}</p>`;
   // Two or more task updates in a row are one "N task updates" row, shut until opened (ui/app/hub-v2.ts sourceRunsHTML).
   const said = lines.filter(x => x.kind !== 'event' || commentLineHTML(x, 0, lines, files, state.id));
   const isUpdate = (x: ModalLine) => x.kind !== 'event' && !!x.message && !askOf(x.message) && isSourceLine(x.message) && rowSource(x.message).kind === 'task_update';
@@ -1087,6 +1087,10 @@ function taskDeferredHTML(t: ModalTask) {
   const more = [q.run ? `run ${String(q.run).slice(0, 8)}` : '', q.at ? `handed over ${ago(q.at)}` : ''].filter(Boolean).join(', ');
   return `<p class="task-wait task-deferred" data-task-deferred="${esc(state)}"><span class="lbl">Deferred: ${esc(label)}</span> ${esc(q.words || '')}${more ? ` <span class="muted">(${esc(more)})</span>` : ''}</p>`;
 }
+function taskCreditActionHTML(line: string | null | undefined): string {
+  return line?.startsWith('Out of credit') ? ` <a class="link" data-cloud-pay href="${esc(cloudBillingUrl())}" target="_blank" rel="noopener noreferrer">Add credit</a>` : '';
+}
+
 // The task in full. The header holds actions only: Snoozed (a button that wakes it), the Screen icon, 👍 👎, the age, then
 // Done and Close for whoever may use them as labelled buttons, then "…" and ✕. Who has it now is one line under the title
 // (the turn's own words), with Answer when it is your ask; then the details, To leave <stage> and the rest.
@@ -1104,7 +1108,7 @@ function hubModalHTML(t: ModalTask, opts: {thread?: boolean} = {}) {
   const snooze = t.snooze || null;
   // The thread view's own header pieces: back, the title in the bar, and Details (task-modal.css hides the rest).
   const thread = !!opts.thread;
-  const creditAction = turn?.line.startsWith('Out of credit') ? ` <a class="link" href="${BOT_BILLING}">Add credit</a>` : '';
+  const creditAction = taskCreditActionHTML(turn?.line);
   const turnLine = turn?.line ? `<p class="task-wait"${yours ? ' data-task-yours' : ''}>${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${creditAction}${yours
     ? ` <button type="button" class="primary tmodal-act" data-task-answer="${esc(turn.requirement_id)}">Answer</button>` : ''}</p>` : '';
   return `<div class="tmodal-head">${thread ? `<button class="ghost peek-btn tthread-only tthread-back" type="button" data-thread-back aria-label="Back to chat" title="Back to chat"><svg viewBox="0 0 12 12" width="14" height="14" aria-hidden="true" focusable="false"><path d="M7.5 3l-3 3 3 3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
