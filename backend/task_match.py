@@ -1,3 +1,4 @@
+# pyright: strict
 """The Tasks page's search and filters, answered on the server (perf I16).
 
 A search or a filter on a pipeline or the archive used to read every page of the view into the browser and match
@@ -19,7 +20,10 @@ ids; a task the reader may not read is never a candidate, so it is in no page an
 
 import json
 import re
+import sqlite3
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass, field
+from typing import Any, cast
 
 from .store import Problem
 
@@ -27,7 +31,7 @@ DUE = ("overdue", "week", "any")
 MAX_VALUES = 200
 
 
-def _values(raw, name):
+def _values(raw: str | None, name: str) -> list[str] | None:
     if raw is None:
         return None
     out = [v.strip() for v in str(raw).split(",") if v.strip()]
@@ -36,12 +40,12 @@ def _values(raw, name):
     return out
 
 
-def words(search):
+def words(search: str | None) -> list[str]:
     """The search's words as the page splits and lowers them: a leading # dropped from each."""
     return [w.lower().removeprefix("#") for w in re.split(r"\s+", str(search or "").lower()) if w]
 
 
-def text_hit(found, title, number, labels):
+def text_hit(found: Sequence[str], title: str | None, number: int | None, labels: Sequence[str]) -> bool:
     """Whether every word is in the title, the number or a label (task-row.ts `taskFilterMatch`)."""
     hay = f"{title or ''}  {'' if number is None else number} {' '.join(labels)}".lower()
     return all(w in hay for w in found)
@@ -49,27 +53,26 @@ def text_hit(found, title, number, labels):
 
 @dataclass
 class Match:
-    sql: list = field(default_factory=list)  # (fragment, args) over the task's own columns
-    words: list = field(default_factory=list)
-    turn: list | None = None
+    sql: list[tuple[str, list[Any]]] = field(default_factory=lambda: [])  # (fragment, args) over the task's columns
+    words: list[str] = field(default_factory=lambda: [])
+    turn: list[str] | None = None
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         return bool(self.sql or self.words or self.turn is not None)
 
 
 def parse(
-    c,
-    now,
-    search="",
-    owners=None,
-    stages=None,
-    requesters=None,
-    labels=None,
-    turn=None,
-    due=None,
-    late=None,
-    hidden=frozenset(),
-):
+    now: str,
+    search: str = "",
+    owners: str | None = None,
+    stages: str | None = None,
+    requesters: str | None = None,
+    labels: str | None = None,
+    turn: str | None = None,
+    due: str | None = None,
+    late: bool | None = None,
+    hidden: Collection[str] = (),
+) -> Match:
     """The page's filters as a Match; empty (falsy) when none is set. `hidden` are the people this reader may not
     see (teammate_access.Known): the page shows their ids as blank, so a filter on one matches nothing there."""
     m = Match(words=words(search)[:50])
@@ -113,30 +116,32 @@ def parse(
     return m
 
 
-def kept(c, m, candidates, visible_sql):
+def kept(c: sqlite3.Connection, m: Match, candidates: Sequence[Sequence[Any]], visible_sql: str) -> list[str]:
     """Of `candidates` ([(id, title, number)], the rows the SQL filters leave), the ids the search and Waiting on keep."""
     from . import task_reads
 
-    ids = [row[0] for row in candidates]
+    reads: Any = task_reads  # an untyped module
+    ids: list[str] = [str(row[0]) for row in candidates]
     if m.words:
-        labels = {tid: [] for tid in ids}
+        labels: dict[str, list[str]] = {tid: [] for tid in ids}
         for part in _chunks(ids):
             for tid, key in c.execute(
                 "SELECT task_tags.task_id, tags.key FROM task_tags JOIN tags ON tags.id=task_tags.tag_id "
                 "WHERE task_tags.task_id IN (SELECT value FROM json_each(?))",
                 (json.dumps(part),),
             ):
-                labels[tid].append(key)
-        ids = [tid for tid, title, number in candidates if text_hit(m.words, title, number, labels[tid])]
+                labels[str(tid)].append(str(key))
+        ids = [str(tid) for tid, title, number in candidates if text_hit(m.words, title, number, labels[str(tid)])]
     if m.turn is not None:
-        wanted, out = set(m.turn), []
+        wanted: set[str] = set(m.turn)
+        out: list[str] = []
         for part in _chunks(ids):
-            rows = task_reads.brief(c, [{"id": tid} for tid in part], visible_sql)
+            rows = cast(list[dict[str, Any]], reads.brief(c, [{"id": tid} for tid in part], visible_sql))
             out += [row["id"] for row in rows if row["turn"] and row["turn"].get("who") in wanted]
         ids = out
     return ids
 
 
-def _chunks(ids, size=500):
+def _chunks(ids: list[str], size: int = 500) -> Iterator[list[str]]:
     for start in range(0, len(ids), size):
         yield ids[start : start + size]
