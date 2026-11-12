@@ -18,7 +18,8 @@ The demo world is built once per worker that runs this module (its module fixtur
 backend/tests/worker_schedule.py) and kept untouched (`world`); each test migrates its own copy of it, so no test sees
 another's migration. The build is most of the module's time, and pytest's per-test window (faulthandler_timeout) counts
 fixture setup, so the first test only builds the world and checks it holds the rows the migration moves: the reader-set
-tests after it each start from a built world. Each reader set is read in one snapshot with one viewer per actor, as
+tests after it each start from a built world. For the same reason the demo world's migration (`migrated_demo`) is
+shared by the demo test, which checks it kept every reader set, and the roster-removal test, which starts from it. Each reader set is read in one snapshot with one viewer per actor, as
 one request reads many threads (`threads.Viewer`), from rows fetched in bulk.
 """
 
@@ -212,16 +213,28 @@ def threads_sets(threads, settings, expected):
         close(store)
 
 
-def migrated(settings, world_name, directory):
-    """Today's reader sets read (on an untouched copy), then the world migrated: it must keep every reader set. Returns
-    the threads module, today's sets and the sets after the migration."""
+def migrated(settings, directory):
+    """Today's reader sets read (on an untouched copy), then the world migrated and its sets read again: (today's sets,
+    the sets after the migration)."""
     threads = importlib.import_module("backend.threads")
     expected = today_sets(untouched_copy(settings, directory))
     migrate(settings, threads)
-    got = threads_sets(threads, settings, expected)
+    return expected, threads_sets(threads, settings, expected)
+
+
+def assert_kept(expected, got, world_name):
     lines = differences(labeled(*expected), labeled(*got))
     assert not lines, report(lines, world_name, "after threads.migrate (each line: expected before, got after)")
-    return threads, expected, got
+
+
+@pytest.fixture(scope="module")
+def migrated_demo(world, tmp_path_factory):
+    """The demo world migrated once: (its settings, its folder, today's sets, the sets after the migration). The demo
+    test checks the two sets match; the removal test starts from a copy of the migrated folder, so each test's window
+    holds only its own reads."""
+    directory = tmp_path_factory.mktemp("threads-migration-demo")
+    settings = copy_folder(world, directory)
+    return (settings, directory / "demo", *migrated(settings, directory))
 
 
 def test_the_demo_world_holds_every_legacy_shape_the_migration_moves(world, tmp_path):
@@ -241,15 +254,20 @@ def test_the_demo_world_holds_every_legacy_shape_the_migration_moves(world, tmp_
 
 
 def test_the_devcopy_world_keeps_every_reader_set(world, tmp_path):
-    migrated(devcopy_world(world, tmp_path), "devcopy", tmp_path)
+    assert_kept(*migrated(devcopy_world(world, tmp_path), tmp_path), "devcopy")
 
 
-def test_the_demo_world_keeps_every_reader_set_and_a_removal_widens_none(world, tmp_path):
+def test_the_demo_world_keeps_every_reader_set(migrated_demo):
+    _, _, expected, got = migrated_demo
+    assert_kept(expected, got, "demo")
+
+
+def test_a_roster_removal_after_the_migration_widens_no_reader_set(migrated_demo, tmp_path):
     """Taking someone off the org chart after the migration may narrow reader sets but never widens them: the roster is
     read live, as it is today. Ben has no reports (the bots report to the Assistant), so his removal moves nobody else's
     access. He is primary for the support and inbox bots, the people whose shared rooms would change."""
-    settings = copy_folder(world, tmp_path)
-    threads, expected, before = migrated(settings, "demo", tmp_path)
+    settings, folder, expected, before = migrated_demo
+    settings = copy_folder((settings, folder), tmp_path)
     api = TestClient(create_app(settings), base_url="http://127.0.0.1:8765")
     api.headers["Authorization"] = "Bearer " + settings.local_owner_token_file.read_text().strip()
     reply = api.post("/api/v2/people/ben", json={"left": True}, headers={"Idempotency-Key": "roster-ben-left"})
@@ -260,7 +278,7 @@ def test_the_demo_world_keeps_every_reader_set_and_a_removal_widens_none(world, 
             assert standing(c, "ben") == "left"
     finally:
         close(store)
-    after = threads_sets(threads, settings, expected)
+    after = threads_sets(importlib.import_module("backend.threads"), settings, expected)
     # Compared with the reader sets just before the removal, so only what the removal itself did is counted.
     widened = [
         line for line in differences(labeled(*before), labeled(*after)) if "expected hidden, got readable" in line
