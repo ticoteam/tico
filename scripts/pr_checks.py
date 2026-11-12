@@ -41,8 +41,6 @@ def ui_map_key(name):
 
 
 CONFORMANCE = "runner_support/tests/test_conformance.py"
-# These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
-# recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
 # A new or changed file under MIGRATIONS runs the tests that upgrade a legacy or fixture database through every
 # migration, in a light plan too: they reach a migration only through the app's start, past a light plan's depth, and
 # a migration that assumes a column a later legacy migration adds (#3469: an index on tasks.private) breaks only there.
@@ -55,6 +53,8 @@ UPGRADE_TESTS = (
     "backend/tests/test_upgrade.py",  # a database an older release made boots twice
     "backend/tests/test_upgrade_boot.py",  # schema_pre_cleanup.sql through create_app and backend.boot
 )
+# These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
+# recorded release times are CLI 108s, MCP 34s and goldens 3s; four workers keep it below the 180s job target with setup.
 CONTRACT_TESTS = ("backend/tests/test_e2e_mcp.py", "backend/tests/test_e2e_cli.py", "e2e/tests/test_contract.py")
 CONTRACT_INPUTS = (
     "backend/",
@@ -1323,7 +1323,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
                 and ui_map_key(name) not in UI_MAP
             ):
                 direct |= named_after(name, runnable)
-        defined = changed_definitions(base, head, [n for n in names if n in live], root)
+        defined = changed_definitions(base, head, names, root)  # a deleted file's old functions too
         direct |= callers(root, set().union(*defined.values()), runnable)
         if len(direct) > BROWSER_ALL_OVER:
             uncertain.append(f"rule 6: {len(direct)} browser scripts picked: every script the release check runs")

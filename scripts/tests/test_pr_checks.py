@@ -551,6 +551,12 @@ def test_rule_6_runs_the_scripts_that_name_a_ui_function_the_diff_changes(tmp_pa
     git("reset", "-q", "--hard", base)
     picked = change("function taskModalLoadFailed(", "function taskModalLoadFailed(/* changed */ ")
     assert "other" in picked["browser_direct"] and "task-code" not in picked["browser_direct"]
+    # A deleted UI file names its old functions: a script still calling one runs.
+    git("reset", "-q", "--hard", base)
+    git("rm", "-q", "ui/app/task-modal.ts")
+    git("commit", "-qm", "Delete")
+    picked = checks.selection(["ui/app/task-modal.ts"], root=tmp_path, base=base, head="HEAD", core=[])
+    assert {"task-code", "other"} <= set(picked["browser_direct"])
     # Without a base (no diff to read), the rule picks nothing new.
     assert "task-code" not in checks.selection(["ui/app/task-modal.ts"], root=tmp_path, core=[])["browser_direct"]
 
