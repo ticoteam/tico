@@ -2806,3 +2806,95 @@ async fn a_bots_own_staged_revert_is_not_a_moved_branch() {
         .unwrap());
     assert_eq!(sh(&builder, &["status", "--porcelain"]), status);
 }
+
+/// A released task worktree on `tico/12345678-build` whose one commit was pushed, then rebased onto a newer main from
+/// elsewhere, force-pushed to the branch and merged; this tree still sits on the pre-rebase copy. Returns
+/// (workspace, worktree, its link row).
+fn released_tree_behind_a_rebase(
+    root: &Path,
+) -> (PathBuf, PathBuf, serde_json::Map<String, Value>) {
+    let (bare, seed) = remote(root, "product");
+    let workspace = root.join("workspace");
+    let base = workspace.join("repos").join("org__product");
+    std::fs::create_dir_all(workspace.join("repos")).unwrap();
+    sh(
+        root,
+        &[
+            "clone",
+            "-q",
+            bare.to_str().unwrap(),
+            base.to_str().unwrap(),
+        ],
+    );
+    let path = workspace.join("tasks/12345678/org__product");
+    let branch = "tico/12345678-build";
+    sh(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--no-track",
+            "-b",
+            branch,
+            path.to_str().unwrap(),
+            "origin/main",
+        ],
+    );
+    std::fs::write(path.join("task.md"), "task\n").unwrap();
+    sh(&path, &["add", "-A"]);
+    sh(&path, &["commit", "-qm", "Task"]);
+    sh(&path, &["push", "-q", "origin", branch]);
+    commit_and_push(&seed, "other.md", "main moved\n");
+    sh(&seed, &["fetch", "-q", "origin", branch]);
+    sh(&seed, &["checkout", "-q", "-b", "pr", "FETCH_HEAD"]);
+    sh(&seed, &["rebase", "-q", "origin/main"]);
+    sh(
+        &seed,
+        &["push", "-q", "--force", "origin", &format!("pr:{branch}")],
+    );
+    sh(&seed, &["push", "-q", "origin", "pr:main"]);
+    sh(&base, &["fetch", "-q", "origin"]);
+    let row = json!({
+        "id": "link1", "task_id": "12345678abcdef", "path": "tasks/12345678/org__product", "repo": "org/product",
+        "branch": branch, "default_branch": "main", "state": "present", "release": true, "prs_finished": true
+    });
+    (workspace, path, row.as_object().unwrap().clone())
+}
+
+#[tokio::test]
+async fn a_released_tree_on_the_pre_rebase_copy_of_a_merged_commit_is_freed() {
+    let tmp = Tmp::new();
+    let (workspace, path, mut row) = released_tree_behind_a_rebase(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    assert_eq!(
+        sh(
+            &path,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"]
+        ),
+        "1"
+    );
+
+    worktrees::act(&workspace, &mut row, "remove", &env, &[], || async { true })
+        .await
+        .unwrap();
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn a_released_tree_with_a_commit_nowhere_upstream_is_kept() {
+    let tmp = Tmp::new();
+    let (workspace, path, mut row) = released_tree_behind_a_rebase(&tmp.0);
+    let env = turn_env(&tmp.0, &[]);
+    std::fs::write(path.join("task.md"), "task, more\n").unwrap();
+    sh(&path, &["commit", "-qam", "More"]);
+
+    let kept = worktrees::act(&workspace, &mut row, "remove", &env, &[], || async { true })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        kept.text(),
+        "kept: unpushed commits; push them to free this worktree"
+    );
+    assert!(path.join("task.md").exists());
+}
