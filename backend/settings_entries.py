@@ -769,7 +769,7 @@ ENTRIES = TEAM_RULES + [
         value="json",
         card=_card("models", "settings-subs"),
         read="computer-subscriptions",
-        words="give assign subscription computer claude codex",
+        words="give assign subscription computer claude codex person plans failover next plan reset",
     ),
     # Bots
     S(

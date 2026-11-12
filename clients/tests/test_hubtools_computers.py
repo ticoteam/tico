@@ -206,6 +206,46 @@ def test_subscription_list_names_computers_and_never_a_value():
     assert got["cannot_take_one"] == ["Ana's Mac"]
 
 
+def test_subscription_list_names_each_computer_given_a_persons_plans_the_plan_in_use_and_why():
+    api = Api(
+        {
+            ("GET", "model-subscriptions"): {"subscriptions": []},
+            ("GET", "computer-subscriptions"): {
+                "assignments": [
+                    {"runner_id": "r1", "runtime": "claude", "subscription_id": "s1", "person": "", "set": None},
+                    {
+                        "runner_id": "r2",
+                        "runtime": "claude",
+                        "subscription_id": "p2",
+                        "person": "human:ana",
+                        "set": {
+                            "person": "human:ana",
+                            "person_name": "Ana",
+                            "plans": 3,
+                            "on": "p2",
+                            "on_name": "Plan 2",
+                            "why": {"kind": "held", "plan": "Plan 1", "until": "2026-11-13T09:00:00Z"},
+                        },
+                    },
+                ],
+                "capable": ["r1", "r2"],
+            },
+            ("GET", "computers"): COMPUTERS,
+        }
+    )
+    got = tool("tico_subscription_list", api)
+    assert got["people_plans"] == [
+        {
+            "computer": "Ana's Mac",
+            "tool": "claude",
+            "plans": "Ana's plans",
+            "count": 3,
+            "on": "Plan 2",
+            "why": "Plan 1 at its limit until 2026-11-13T09:00:00Z",
+        }
+    ]
+
+
 def test_over_mcp_a_required_key_sent_as_null_resets_where_its_schema_allows_null_and_integers_read_as_json_numbers():
     """A required key present with null is not a missing key: the turns-at-once limit and a task cap are reset with
     null over MCP, as their schemas say. An absent key, or null where the schema has no null, is still refused before

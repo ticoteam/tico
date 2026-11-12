@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS model_subscriptions(
  updated_at TEXT NOT NULL, owner_id TEXT NOT NULL DEFAULT '', credential_at TEXT);
 CREATE TABLE IF NOT EXISTS computer_subscriptions(
  runner_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, set_by TEXT NOT NULL,
- updated_at TEXT NOT NULL, PRIMARY KEY(runner_id, runtime));
+ updated_at TEXT NOT NULL, person TEXT NOT NULL DEFAULT '', PRIMARY KEY(runner_id, runtime));
 CREATE INDEX IF NOT EXISTS computer_subscriptions_sub ON computer_subscriptions(subscription_id);
 CREATE TABLE IF NOT EXISTS attempt_subscriptions(
  attempt_id TEXT NOT NULL, runtime TEXT NOT NULL, subscription_id TEXT NOT NULL, revision INTEGER NOT NULL,
@@ -186,12 +186,14 @@ class SubscriptionConnected(Contract):
 
 
 class ComputerSubscription(Contract):
-    """Give a computer a subscription for one runtime; a null `subscription` takes it off. `confirm` accepts that the
+    """Give a computer a subscription for one runtime, or a person's plans for it (`person`: every plan for that runtime
+    the person owns, used in turn); a null `subscription` and no `person` takes it off. `confirm` accepts that the
     computer's live runs on that runtime stop and start again."""
 
     runner_id: ID
     runtime: str = Field(pattern="^(claude|codex)$")
     subscription: ID | None = None
+    person: str | None = Field(default=None, max_length=120)
     confirm: bool = False
 
 
@@ -288,7 +290,10 @@ def runner_takes(runner):
 
 def _given(c):
     """{(runner_id, runtime): subscription (no value)} for every computer given one, read once per snapshot: the claim
-    asks for every bot on every poll, and most installs have none."""
+    asks for every bot on every poll, and most installs have none. A computer given a person's plans (`person`) names
+    the plan in use now as its subscription (its `id` is '' when that plan is gone) and lists the person's plans for
+    that runtime (`members`, oldest first): the set is read from the plans' owners each time, so a plan the person adds
+    later joins it and one given to someone else leaves it."""
     from . import read_cache
 
     values = read_cache.cache(c)
@@ -296,24 +301,45 @@ def _given(c):
         return values["model_subscriptions.given"]
     found = {}
     if _present(c):
+        people = set()
         for r in c.execute(
-            "SELECT g.runner_id AS runner_id,g.runtime AS runtime,s.id,s.name,s.kind,s.revision,"
-            "s.status FROM computer_subscriptions g JOIN model_subscriptions s "
-            "ON s.id=g.subscription_id"
+            "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
+            "s.status FROM computer_subscriptions g LEFT JOIN model_subscriptions s "
+            "ON s.id=g.subscription_id WHERE s.id IS NOT NULL OR g.person<>''"
         ):
-            found[(r["runner_id"], r["runtime"])] = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
+            sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status")}
+            if r["person"]:
+                sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
+                people.add(r["person"])
+            found[(r["runner_id"], r["runtime"])] = sub
+        if people:
+            members = {}
+            for m in c.execute(
+                f"SELECT id,name,kind,revision,status,status_at,owner_id,created_at FROM model_subscriptions "
+                f"WHERE owner_id IN ({','.join('?' * len(people))}) ORDER BY created_at, id",
+                sorted(people),
+            ):
+                runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
+                if owned(m["kind"]):
+                    members.setdefault((m["owner_id"], runtime), []).append(
+                        {k: m[k] for k in ("id", "name", "kind", "revision", "status", "status_at", "created_at")}
+                    )
+            for (_, runtime), sub in found.items():
+                if sub.get("person"):
+                    sub["members"] = members.get((sub["person"], runtime), [])
     if values is not None:
         values["model_subscriptions.given"] = found
     return found
 
 
 def given_to(c, runner_id):
-    """[(runtime, subscription id)] the computer is given, whatever their status."""
-    return [(runtime, sub["id"]) for (rid, runtime), sub in _given(c).items() if rid == runner_id]
+    """[(runtime, subscription id)] the computer is given, whatever their status: for a person's plans, the one in use."""
+    return [(runtime, sub["id"]) for (rid, runtime), sub in _given(c).items() if rid == runner_id and sub["id"]]
 
 
 def still_given(c, runner_id, runtime, subscription_id):
-    """Whether the computer is given this subscription for `runtime` now (whatever its status)."""
+    """Whether the computer is given this subscription for `runtime` now (whatever its status): for a person's plans,
+    whether it is the plan in use."""
     sub = _given(c).get((runner_id, runtime))
     return bool(sub) and sub["id"] == subscription_id
 
@@ -322,19 +348,76 @@ RUNNER_READINESS_SQL = "SELECT readiness FROM runners_with_state WHERE id=?"
 RUNNER_CAPABILITIES_SQL = "SELECT capabilities FROM runners_with_state WHERE id=? AND revoked_at IS NULL"
 
 
+def _held(c, sid, runtime, loads=None):
+    from . import login_holds
+
+    return login_holds.holding(c, "", login_holds.subscription_login(sid), runtime, loads=loads) == "held"
+
+
+def available(c, sub, runtime, loads=None):
+    """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
+    and of that runtime."""
+    return (
+        bool(sub)
+        and bool(sub.get("id"))
+        and sub["status"] != "needs_reconnect"
+        and KINDS.get(sub["kind"], {}).get("runtime") == runtime
+        and not _held(c, sub["id"], runtime, loads)
+    )
+
+
+def pick_key(sub, usage):
+    """Where an available plan of a person's set comes in the pick: the soonest weekly reset first (the 5-hour window
+    resets too often to sort by), then the more usage left, then the oldest plan. A plan with no weekly reset known
+    (never used here, or its window has just reset) comes after every plan with one, oldest first."""
+    resets = (usage or {}).get("weekly_resets_at") or ""
+    used = (usage or {}).get("weekly_used_pct")
+    return (not resets, resets, used if isinstance(used, (int, float)) else 0, sub.get("created_at") or "", sub["id"])
+
+
+def _ordered(c, subs, runtime, ctx=None):
+    """Available `subs` in pick order (`pick_key`), reading each one's weekly reading once."""
+    if len(subs) < 2:
+        return list(subs)
+    ctx = _listing(c) if ctx is None else ctx
+    return sorted(subs, key=lambda sub: pick_key(sub, _plan_usage(c, row(c, sub["id"]) or sub, runtime, ctx)))
+
+
+def _pick(c, runner_id, runtime, entry, loads=None):
+    """The plan a turn on `runtime` here signs in with from a person's set (`entry`, as `_given` reads it), or None when
+    every plan is held or needs reconnecting. The plan in use stays while it is available, so a bot's session does not
+    restart each time the readings shift; else the next is the first available plan in pick order (`pick_key`). Read
+    once per snapshot: the claim asks for every bot on every poll."""
+    from . import read_cache
+
+    current = next((m for m in entry["members"] if m["id"] == entry["id"]), None)
+    if current and available(c, current, runtime, loads):
+        return current
+    values = read_cache.cache(c)
+    key = ("model_subscriptions.pick", runner_id, runtime)
+    if values is not None and key in values:
+        return values[key]
+    ready = [m for m in entry["members"] if available(c, m, runtime, loads)]
+    chosen = (_ordered(c, ready, runtime) or [None])[0]
+    if values is not None:
+        values[key] = chosen
+    return chosen
+
+
 def in_effect(c, runner_id, runtime, loads=None):
     """The subscription a turn on `runtime` on this computer signs in with, or None for the computer's own login (none
     given, the one given needs reconnecting or is held at a usage limit until its reset, or a runner too old to take
     one). A held one is passed over like one that needs reconnecting: the turn runs on the computer's own login, else
     the Gateway under the company's choice, else waits; it never waits on the subscription's hold. After the reset its
-    first turn is the hold's probe as usual (backend/login_holds.py)."""
+    first turn is the hold's probe as usual (backend/login_holds.py). A computer given a person's plans signs in with
+    the one `_pick` names, and falls back the same way only when every one of them is passed over."""
     given = loads.given if loads is not None else _given(c)
     sub = given.get((runner_id, runtime)) if given else None
-    if not sub or sub["status"] == "needs_reconnect" or KINDS.get(sub["kind"], {}).get("runtime") != runtime:
+    if sub and sub.get("person"):
+        sub = _pick(c, runner_id, runtime, sub, loads)
+    elif not available(c, sub, runtime, loads):
         return None
-    from . import login_holds
-
-    if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime, loads=loads) == "held":
+    if not sub:
         return None
     if loads is not None:
         runner = loads.runner_of(c, runner_id, live=True)
@@ -434,16 +517,36 @@ def _listing(c, sid=None):
     from . import login_holds
     from .subscriptions import subscription_meta
 
-    where, args = ("WHERE g.subscription_id=?", (sid,)) if sid else ("", ())
+    # A plan in a person's set counts as given to each computer given that set, for its readings: the turns there that
+    # sign in with it report its windows as a single plan's do.
+    member = (
+        "(g.person<>'' AND g.person=(SELECT owner_id FROM model_subscriptions m WHERE m.id=?) "
+        "AND g.runtime=(CASE (SELECT kind FROM model_subscriptions m WHERE m.id=?) "
+        + " ".join(f"WHEN '{k}' THEN '{v['runtime']}'" for k, v in KINDS.items() if owned(k))
+        + " END))"
+    )
+    where, args = (f"WHERE g.subscription_id=? OR {member}", (sid, sid, sid)) if sid else ("", ())
     grants = {}
+    sets = {}
     for g in H._rows(
         c.execute(
-            "SELECT g.subscription_id,g.runner_id,g.runtime,g.updated_at AS granted_at "
+            "SELECT g.subscription_id,g.runner_id,g.runtime,g.person,g.updated_at AS granted_at "
             f"FROM computer_subscriptions g {where} ORDER BY g.runner_id, g.runtime",
             args,
         )
     ):
-        grants.setdefault(g["subscription_id"], []).append(g)
+        if g["person"]:
+            sets.setdefault((g["person"], g["runtime"]), []).append(g)
+        elif g["subscription_id"]:
+            grants.setdefault(g["subscription_id"], []).append(g)
+    if sets:
+        people = sorted({person for person, _ in sets})
+        for m in c.execute(
+            f"SELECT id,owner_id,kind FROM model_subscriptions WHERE owner_id IN ({','.join('?' * len(people))})",
+            people,
+        ):
+            if owned(m["kind"]):
+                grants.setdefault(m["id"], []).extend(sets.get((m["owner_id"], KINDS[m["kind"]]["runtime"]), []))
     computers = f"SELECT g.runner_id FROM computer_subscriptions g {where}"
     runners = {
         r["id"]: r
@@ -595,7 +698,7 @@ def _plan_usage(c, sub, runtime, ctx):
         return _reason("Update the computer to see usage")
     now = datetime.now(timezone.utc)
     account_of_plan = _plan_identity(sub)
-    best, percent_missing, outside = None, False, False
+    best, weekly, percent_missing, outside = None, None, False, False
     for grant in readers:
         runner_id = grant["runner_id"]
         profile = ctx["ready"][runner_id].get("computer_profile") or ""
@@ -627,9 +730,14 @@ def _plan_usage(c, sub, runtime, ctx):
             candidate = (reading["used_percent"], reported, label, reading.get("resets_at"))
             if best is None or candidate[:2] > best[:2]:
                 best = candidate
+            if window == "weekly" and reading.get("resets_at") and (weekly is None or reported > weekly[1]):
+                weekly = candidate
     if best:
         used, _, label, resets = best
-        return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets}
+        # The weekly window's reset decides where the plan comes in a person's set (`pick_key`), whichever window is
+        # the most used.
+        week = {"weekly_resets_at": weekly[3], "weekly_used_pct": weekly[0]} if weekly else {}
+        return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets, **week}
     if percent_missing:
         return _reason("No percentage from the plan")
     if outside:
@@ -669,13 +777,38 @@ def view(c, sub, ctx=None):
 
 
 def listed(c):
+    """Every subscription as Settings > Models lists it, each plan with where it comes in its owner's plans for its
+    runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
+    other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
+    in with it now (`in_use_on`)."""
     if not _present(c):
         return []
     subs = H._rows(
         c.execute("SELECT * FROM model_subscriptions ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,))
     )
     ctx = _listing(c) if subs else None
-    return [view(c, s, ctx) for s in subs]
+    views = [view(c, s, ctx) for s in subs]
+    if not views:
+        return views
+    from types import SimpleNamespace
+
+    holds = SimpleNamespace(holds=ctx["holds"])  # read once by `_listing`: no read per computer
+    using = {}
+    for (runner_id, runtime), entry in _given(c).items():
+        on = _pick(c, runner_id, runtime, entry, holds) if entry.get("person") else entry if entry["id"] else None
+        if on and available(c, on, runtime, holds):
+            using.setdefault(on["id"], []).append(runner_id)
+    groups = {}
+    for v in views:
+        v["in_use_on"] = using.get(v["id"], [])
+        v["order"] = None
+        if owned(v["kind"]) and v["owner_id"] and available(c, v, v["runtime"], holds):
+            groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
+    for plans in groups.values():
+        plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
+        for n, v in enumerate(plans, 1):
+            v["order"] = n
+    return views
 
 
 def kinds():
@@ -693,26 +826,84 @@ def kinds():
     ]
 
 
+def set_state(c, runner_id, runtime, entry):
+    """What a computer given a person's plans is on now, and why, for its cell in Settings > Computers and for agents:
+    {person, person_name, plans, on (the plan's id or None), on_name, why}. `why` is {kind, plan, until}: "soonest" (the
+    plan in use has the soonest reset with usage left), "held" or "reconnect" (the plan it moved from, the latest to be
+    held or need reconnecting, is at its limit until `until` or needs reconnecting), "all_held" (every plan is passed
+    over; `until` is the first hold to end, and the turn runs on the computer's own login, the Gateway or waits) or
+    "none" (the person owns no plan for that tool now)."""
+    from . import login_holds
+
+    members = entry.get("members") or []
+    on = _pick(c, runner_id, runtime, entry) if members else None
+    person = H.human(c, H.actor_id(entry["person"])) or {}
+    passed = []
+    for m in members:
+        if on and m["id"] == on["id"]:
+            continue
+        if m["status"] == "needs_reconnect":
+            passed.append(("reconnect", m.get("status_at") or "", m, None))
+            continue
+        hold = login_holds.get(c, "", login_holds.subscription_login(m["id"]), runtime)
+        if hold and (hold.get("until") or "") > H.now():
+            passed.append(("held", hold.get("since") or "", m, hold["until"]))
+    if not members:
+        why = {"kind": "none", "plan": None, "until": None}
+    elif not on:
+        ends = [until for kind, _, _, until in passed if kind == "held"]
+        why = {"kind": "all_held", "plan": None, "until": min(ends) if ends else None}
+    elif passed:
+        kind, _, m, until = max(passed, key=lambda p: p[1])
+        why = {"kind": kind, "plan": m["name"], "until": until}
+    else:
+        why = {"kind": "soonest", "plan": None, "until": None}
+    return {
+        "person": entry["person"],
+        "person_name": person.get("name") or person.get("email") or H.actor_id(entry["person"]),
+        "plans": len(members),
+        "on": on["id"] if on else None,
+        "on_name": on["name"] if on else None,
+        "why": why,
+    }
+
+
 def assignments(c):
     """What `GET computer-subscriptions` answers: every computer's subscription per runtime, and the computers that
-    can take one (the rest need an update)."""
-    given = (
-        [
-            {"runner_id": r["runner_id"], "runtime": r["runtime"], "subscription_id": r["subscription_id"]}
-            for r in c.execute(
-                "SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
-                "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime"
+    can take one (the rest need an update). A computer given a person's plans names the person (`person`), the plan in
+    use as its `subscription_id` and its `set` (`set_state`); a single subscription's `person` is '' and its `set` null."""
+    given = []
+    if _present(c):
+        entries = _given(c)
+        for r in c.execute(
+            "SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
+            "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime"
+        ):
+            entry = entries.get((r["runner_id"], r["runtime"]))
+            if not entry:
+                continue
+            state = set_state(c, r["runner_id"], r["runtime"], entry) if r["person"] else None
+            given.append(
+                {
+                    "runner_id": r["runner_id"],
+                    "runtime": r["runtime"],
+                    "subscription_id": (state["on"] or "") if state else r["subscription_id"],
+                    "person": r["person"] or "",
+                    "set": state,
+                }
             )
-        ]
-        if _present(c)
-        else []
-    )
     capable = [
         r["id"]
         for r in c.execute("SELECT id,capabilities FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")
         if runner_takes(r)
     ]
-    return {"assignments": given, "capable": capable}
+    people = {}
+    for runtime in RUNTIMES:
+        for owner, plans in plan_owners(c, runtime).items():
+            person = H.human(c, H.actor_id(owner)) or {}
+            people.setdefault(owner, {"id": owner, "name": person.get("name") or person.get("email") or owner})
+            people[owner][runtime] = len(plans)
+    return {"assignments": given, "capable": capable, "people": list(people.values())}
 
 
 # ------------------------------------------------------------------------------------------------ permissions
@@ -1026,7 +1217,9 @@ def remove(c, settings, who, sid, confirm=False):
         running = sum(p["running"] for p in plans)
         if running:
             _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": computers})
-    c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=?", (sid,))
+    # A computer given the owner's plans keeps them: its set moves on at the next turn (`settle`).
+    c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,))
+    c.execute("UPDATE computer_subscriptions SET subscription_id='' WHERE subscription_id=?", (sid,))
     stopped = reset = 0
     for runner_id, runtime in given:
         done = _restart(c, settings, runner_id, runtime)
@@ -1039,16 +1232,47 @@ def remove(c, settings, who, sid, confirm=False):
     return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": reset}
 
 
+def plan_owners(c, runtime):
+    """{owner actor: [plan ids, oldest first]} of the people who own at least one plan for `runtime`: the people a
+    computer's picker offers for it. An API key has no owner and is in no person's set."""
+    kinds = [k for k, spec in KINDS.items() if spec["runtime"] == runtime and owned(k)]
+    out = {}
+    if not _present(c) or not kinds:
+        return out
+    for r in c.execute(
+        f"SELECT id,owner_id FROM model_subscriptions WHERE owner_id<>'' AND kind IN ({','.join('?' * len(kinds))}) "
+        "ORDER BY created_at, id",
+        kinds,
+    ):
+        out.setdefault(r["owner_id"], []).append(r["id"])
+    return out
+
+
+def _person_for(c, value, runtime):
+    """`value` as the actor whose plans a computer is given for `runtime`, or a Problem: a person who owns at least one
+    plan for that runtime (one who owns none is not offered)."""
+    text = str(value or "").strip()
+    pid = H.actor_id(text)
+    actor = "human:" + pid if pid and (":" not in text or text.startswith("human:")) else ""
+    if not actor or actor not in plan_owners(c, runtime):
+        raise Problem("person", f"Choose a person who owns a {RUNTIME_LABELS.get(runtime, runtime)} plan", 422)
+    return actor
+
+
 def give(c, settings, who, body):
-    """Give a computer a subscription for one runtime, switch it, or take it off (`subscription` null). A change stops
-    the computer's live runs on that runtime (confirmed first), starts its sessions of that runtime fresh, and re-judges
-    the bots there that were Rate limited on the old sign-in. A runner too old to take one keeps signing in with its own
-    login, so there it is only recorded: nothing stops, nothing is re-judged."""
+    """Give a computer a subscription for one runtime, a person's plans for it (`person`), switch it, or take it off
+    (neither). A change stops the computer's live runs on that runtime (confirmed first), starts its sessions of that
+    runtime fresh, and re-judges the bots there that were Rate limited on the old sign-in. A runner too old to take one
+    keeps signing in with its own login, so there it is only recorded: nothing stops, nothing is re-judged. A person's
+    plans start on the plan the rule picks now (`_pick`)."""
     runner = c.execute(
         "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (body.runner_id,)
     ).fetchone()
     if not runner:
         raise Problem("not_found", "Computer not found", 404)
+    if body.person and body.subscription:
+        raise Problem("person", "Choose a person's plans or one subscription, not both", 422)
+    person = _person_for(c, body.person, body.runtime) if body.person else ""
     sub = row(c, body.subscription) if body.subscription else None
     if body.subscription and not sub:
         raise Problem("not_found", "Subscription not found", 404)
@@ -1060,41 +1284,103 @@ def give(c, settings, who, body):
             422,
         )
     current = c.execute(
-        "SELECT subscription_id FROM computer_subscriptions WHERE runner_id=? AND runtime=?",
+        "SELECT subscription_id,person FROM computer_subscriptions WHERE runner_id=? AND runtime=?",
         (body.runner_id, body.runtime),
     ).fetchone()
     want = sub["id"] if sub else None
-    out = {"runner_id": body.runner_id, "runtime": body.runtime, "subscription_id": want}
-    if (current[0] if current else None) == want:
-        return {**out, "stopped": 0, "sessions_reset": 0}
+    out = {"runner_id": body.runner_id, "runtime": body.runtime, "subscription_id": want, "person": person}
+    had = (current["person"] or None, None if current["person"] else current["subscription_id"]) if current else None
+    if had == (person or None, want) or (not current and not person and not want):
+        return {
+            **out,
+            "subscription_id": current["subscription_id"] if current else None,
+            "stopped": 0,
+            "sessions_reset": 0,
+        }
     takes = runner_takes(runner)
     if takes and not body.confirm:
         plan = _plan(c, settings, body.runner_id, body.runtime)
         if plan["running"]:
             _confirm(plan)
-    if want:
+    if person:
+        _set(c, body.runner_id, body.runtime, "", who.actor, person)
+        first = _pick(c, body.runner_id, body.runtime, _given(c)[(body.runner_id, body.runtime)])
+        if first:
+            c.execute(
+                "UPDATE computer_subscriptions SET subscription_id=? WHERE runner_id=? AND runtime=?",
+                (first["id"], body.runner_id, body.runtime),
+            )
+        out["subscription_id"] = first["id"] if first else None
+    elif want:
         _set(c, body.runner_id, body.runtime, want, who.actor)
     else:
         c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (body.runner_id, body.runtime))
     done = _restart(c, settings, body.runner_id, body.runtime) if takes else {"stopped": 0, "sessions_reset": 0}
-    H.event(
-        c,
-        who.actor,
-        "subscription.given" if want else "subscription.taken_off",
-        want or current[0],
-        {"runner": body.runner_id, "runtime": body.runtime, **done},
-    )
+    if person:
+        action, target = "subscription.person_given", person
+    else:
+        action = "subscription.given" if want else "subscription.taken_off"
+        target = want or current["person"] or current["subscription_id"]
+    H.event(c, who.actor, action, target, {"runner": body.runner_id, "runtime": body.runtime, **done})
     return {**out, **done}
 
 
-def _set(c, runner_id, runtime, subscription_id, actor):
-    """Record that the computer signs `runtime` in with the subscription: one per runtime (`give` and `lend` write it)."""
+def _set(c, runner_id, runtime, subscription_id, actor, person=""):
+    """Record that the computer signs `runtime` in with the subscription, or with `person`'s plans: one per runtime
+    (`give` and `lend` write it)."""
     c.execute(
-        "INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated_at) "
-        "VALUES(?,?,?,?,?) ON CONFLICT(runner_id,runtime) DO UPDATE SET "
-        "subscription_id=excluded.subscription_id,set_by=excluded.set_by,updated_at=excluded.updated_at",
-        (runner_id, runtime, subscription_id, actor, H.now()),
+        "INSERT INTO computer_subscriptions(runner_id,runtime,subscription_id,set_by,updated_at,person) "
+        "VALUES(?,?,?,?,?,?) ON CONFLICT(runner_id,runtime) DO UPDATE SET "
+        "subscription_id=excluded.subscription_id,set_by=excluded.set_by,updated_at=excluded.updated_at,"
+        "person=excluded.person",
+        (runner_id, runtime, subscription_id, actor, H.now(), person),
     )
+
+
+def _why_moved(c, entry, runtime):
+    """Why a person's set left the plan it was on: it is gone, given to someone else, needs reconnecting or is held."""
+    old = next((m for m in entry["members"] if m["id"] == entry["id"]), None)
+    if not entry["id"]:
+        return "removed"
+    if not old:
+        return "left_set"
+    if old["status"] == "needs_reconnect":
+        return "needs_reconnect"
+    return "held" if _held(c, old["id"], runtime) else "available"
+
+
+def settle(c, settings, runner_id, chosen):
+    """A claim on a computer given a person's plans: when the turn signs in with another plan than the set was on (the
+    old one is held, needs reconnecting, is gone or left the set, or a hold has ended after every plan was held), the
+    set moves to it, between turns, never in one: every session of that runtime on the computer starts fresh, as a
+    change of subscription does, and the move is an event (`subscription.set_moved`: computer, tool, person, from, to,
+    why). Runs already going on the old plan are left to finish. Call it before the claim reads its session epochs."""
+    for item in chosen:
+        runtime, sub = item["runtime"], item["subscription"]
+        entry = _given(c).get((runner_id, runtime))
+        if not entry or not entry.get("person") or entry["id"] == sub["id"]:
+            continue
+        why = _why_moved(c, entry, runtime)
+        c.execute(
+            "UPDATE computer_subscriptions SET subscription_id=? WHERE runner_id=? AND runtime=?",
+            (sub["id"], runner_id, runtime),
+        )
+        reset = _reset(c, settings, runner_id, runtime)
+        H.event(
+            c,
+            H.KEEPER,
+            "subscription.set_moved",
+            sub["id"],
+            {
+                "runner": runner_id,
+                "runtime": runtime,
+                "person": entry["person"],
+                "from": entry["id"],
+                "to": sub["id"],
+                "why": why,
+                "sessions_reset": reset,
+            },
+        )
 
 
 def bot_runtimes(c, settings, bot):

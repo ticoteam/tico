@@ -944,7 +944,17 @@ section.card>header .settings-head-act{margin-left:auto}
 }
 .subs-name{font-weight:500}
 .subs-kind{color:var(--muted)}
-.subs-owner{color:var(--muted)}
+.subs-order{width:1%;text-align:center}
+/* Settings > Models: one group per owner (avatar, name, count), in pick order; the plan in use is tinted. */
+.subs-group-head th{padding-top:14px;text-transform:none;letter-spacing:0;font-size:var(--t-base);color:var(--fg);font-weight:600}
+.subs-group:first-of-type .subs-group-head th{padding-top:9px}
+.subs-group-title{display:inline-flex;align-items:center;gap:8px}
+.subs-group-title .muted{font-weight:400}
+.subs-noone{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--surface2);color:var(--muted)}
+.subs-you{font-size:var(--t-sm);font-weight:400}
+.subs-in-use td{background:color-mix(in srgb,var(--ok) 8%,transparent)}
+.subs-pick-line{display:block;margin-top:2px;font-size:var(--t-sm)}
+.subs-pick-mark{color:var(--muted)}.subs-pick-mark.in-use{color:var(--ok)}
 .subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
 .subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
 .subs-bar{display:inline-block;width:28px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
@@ -1000,6 +1010,8 @@ section.card>header .settings-head-act{margin-left:auto}
 }
 @media (prefers-reduced-motion:reduce){.plan-spin{animation-duration:3s}}
 .subs-cell{display:inline-flex;align-items:center;gap:6px}
+.subs-cell-set{flex-direction:column;align-items:flex-start;gap:2px}
+.subs-set-line{font-size:var(--t-sm);white-space:normal;max-width:260px}
 .subs-pick{height:28px;max-width:200px;padding:0 24px 0 8px;font-size:var(--t-sm)}
 .settings-machines td,.settings-machines th{white-space:nowrap}
 .settings-machines td.num,.settings-machines th.num{text-align:right;padding-right:16px}

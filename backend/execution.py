@@ -5172,6 +5172,8 @@ class Execution:
         # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
         subscribed = model_subscriptions.for_claim(c, runner, config)
+        # A computer given a person's plans moves to the next one here, between turns (its sessions start fresh).
+        model_subscriptions.settle(c, self.store.settings, runner["id"], subscribed)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
