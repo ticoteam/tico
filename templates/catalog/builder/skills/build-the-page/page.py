@@ -86,16 +86,16 @@ def figure(n, path, data, arrows, shown, caption):
         f'<figure class="shot"><svg viewBox="0 0 {w} {h}" width="{shown}" role="img" '
         f'aria-label="{html.escape(Path(path).name)}">',
         f'<defs><marker id="arrow{n}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" '
-        f'orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--fail)"/></marker></defs>',
+        f'orient="auto"><path d="M0 0L10 5L0 10z" style="fill:var(--fail,#c53030)"/></marker></defs>',
         f'<image href="data:{mime};base64,{base64.b64encode(data).decode()}" width="{w}" height="{h}"/>',
     ]
     for num, x1, y1, x2, y2 in arrows:
         parts.append(
             f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" marker-end="url(#arrow{n})" '
-            f'style="stroke:var(--fail);stroke-width:{stroke}"/>'
-            f'<circle cx="{x1}" cy="{y1}" r="{r}" style="fill:var(--fail)"/>'
+            f'style="stroke:var(--fail,#c53030);stroke-width:{stroke}"/>'
+            f'<circle cx="{x1}" cy="{y1}" r="{r}" style="fill:var(--fail,#c53030)"/>'
             f'<text x="{x1}" y="{y1}" dy="0.35em" text-anchor="middle" '
-            f'style="fill:#fff;font:700 {round(r * 1.2)}px var(--sans)">{num}</text>'
+            f'style="fill:#fff;font:700 {round(r * 1.2)}px var(--sans,system-ui,sans-serif)">{num}</text>'
         )
     parts.append("</svg>" + caption + "</figure>")
     return "".join(parts)

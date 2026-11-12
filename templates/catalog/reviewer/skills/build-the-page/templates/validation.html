@@ -2,16 +2,16 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Checked in production: {{change}}</title>
 <style>
-.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans);color:var(--ink)}
+.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
 .pg h1{font-size:var(--t-lg);margin:0 0 8px}
 .pg h2{font-size:var(--t-md);margin:24px 0 8px}
-#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail);background:var(--surface)}
+#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
 #lead p{margin:2px 0}
 .pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
 figure.shot{margin:0;max-width:100%}
 figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
 figcaption{color:var(--muted);margin-top:6px;max-width:640px}
-.met{color:var(--ok);font-weight:600}.notmet{color:var(--fail);font-weight:600}.nc{color:var(--wait);font-weight:600}
+.met{color:var(--ok,#2f7a4f);font-weight:600}.notmet{color:var(--fail,#c53030);font-weight:600}.nc{color:var(--wait,#b7791f);font-weight:600}
 @media (max-width:600px){.pair{flex-direction:column}}
 </style></head><body><main class="pg">
 <h1>Checked in production: {{change}} · {{YYYY-MM-DD}}</h1>

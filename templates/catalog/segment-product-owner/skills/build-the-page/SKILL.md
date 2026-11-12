@@ -80,7 +80,7 @@ Each `<figure data-shot="...">` in a template takes its arrows in `data-arrows`,
 `1: 600,120 -> 420,1500` is arrow 1, from its numbered tail to its head. Open the picture to read the positions. A phone
 picture from `tico bot app-shot` is twice its width in pixels (780 for 390). Point at the thing, not on it; at most
 five arrows a picture, and the same number for the same thing in the before, the after and the criterion that checks
-it. `page.py build` draws them in Tico's red (`var(--fail)`), scaled to the picture.
+it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so it stays red outside the app), scaled to the picture.
 
 ## Steps
 
