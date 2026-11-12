@@ -123,7 +123,8 @@ def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
     Anyone on the way who left, was removed or cannot sign in is skipped, and on a private task anyone who cannot read
     it. A private task then falls to whoever asked for it, else a person on its reader list, a group's by its members
     now (`H.reader_actors`). None only when nobody can sign in, or nobody who can reads it. The never-stuck
-    check hands a task to this same person (never_stuck._person)."""
+    check hands a task to this same person (never_stuck._person).
+    One person's Needs you reads only `candidates`: a new way this names a person must be added there."""
     from . import hubdb
 
     H: Any = hubdb
@@ -242,7 +243,8 @@ def holder(conn: "sqlite3.Connection", row: Row) -> str | None:
     """Who has the task's own work now, as an actor: the owner, or whoever the ladder handed it to (the manager bot,
     then a person). A person's own task stays theirs whatever the ladder did. A task with no owner is its pipeline
     manager's to hand out. A person who left or was removed has nothing: it falls to `person_for`. Never None while
-    the company has a person."""
+    the company has a person.
+    One person's Needs you reads only `candidates`: a new way this names a person must be added there."""
     visit: Row = row.get("visit") or {}
     level = visit.get("level") or "owner"
     pipe: Row = row.get("pipeline") or {}
@@ -370,7 +372,8 @@ def of(
 ) -> list[Wait]:
     """`waiting_on` for a task already read with `task_engine.task()`. `seen` keeps "can this bot run" for one pass
     over many tasks; without it, the snapshot keeps them (`_seen`). `standings` saves reading them again when the
-    caller has them."""
+    caller has them.
+    One person's Needs you reads only `candidates`: a new way this names a person must be added there."""
     seen = _seen(conn) if seen is None else seen
     stage = row["stage"]
     if stage["kind"] != "work":
@@ -679,11 +682,22 @@ def _ladder_people(conn: "sqlite3.Connection", person: str) -> tuple[bool, set[s
     return company, pipelines
 
 
+# Every bot the company has, and every bot an open task, a stage, a pipeline or an ask names, as bot ids.
+_NAMED_BOTS = (
+    "SELECT id FROM bots UNION SELECT substr(owner_id, 5) FROM tasks WHERE owner_id LIKE 'bot:%' AND status='open' "
+    "UNION SELECT substr(person_id, 5) FROM requirements WHERE person_id LIKE 'bot:%' AND withdrawn_at IS NULL "
+    "UNION SELECT substr(manager_id, 5) FROM pipelines WHERE manager_id LIKE 'bot:%' "
+    "UNION SELECT substr(owner, 5) FROM stages WHERE owner LIKE 'bot:%' AND retired_at IS NULL "
+    "UNION SELECT substr(notes, 5) FROM answers WHERE answer='give' AND notes LIKE 'bot:%' AND undone_at IS NULL"
+)
+
+
 def _blocked_bots(conn: "sqlite3.Connection", person: str, company: bool) -> set[str]:
     """The bots that cannot run whose fixer (`_fixer`) is `person`: the bots they own, and for the company's person
-    every bot (a cause that stops them all, an owner who left)."""
+    every bot (a cause that stops them all, an owner who left), and every bot a task or a stage still names that has
+    no `bots` row (task_wakes: "was removed", which only the company's person fixes)."""
     if company:
-        bots = [str(found[0]) for found in conn.execute("SELECT id FROM bots").fetchall()]
+        bots = [str(found[0]) for found in conn.execute(_NAMED_BOTS).fetchall()]
     else:
         bots = [
             str(found[0])
@@ -716,7 +730,8 @@ def _held_tasks(conn: "sqlite3.Connection") -> set[str]:
 
 def candidates(conn: "sqlite3.Connection", person: str) -> list[str]:
     """The open tasks that can put something in `person`'s Needs you, in id order: every task `needs_by_person` would
-    list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`, `needs_by_person`):
+    list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`,
+    `needs_by_person`):
 
     - it is theirs (its owner), the ladder already brought it to them (its visit's person), or a requirement on its
       stage or visit names them, or was given to them;
@@ -1075,7 +1090,8 @@ def _botops_reviews(conn: "sqlite3.Connection", bot: str) -> bool:
 def _fixer(conn: "sqlite3.Connection", bot: str, cause: str | None) -> str | None:
     """The person who can get a bot running again: the company's owner for a cause that stops every bot, else the
     bot's owner while they are still here, else the company's owner. An owner who cannot act gives the person the
-    company falls back on (`company_person`)."""
+    company falls back on (`company_person`).
+    One person's Needs you reads only `candidates`: a new way this names a person must be added there."""
     if cause not in task_wakes.COMPANY_WIDE:
         owner = _bot_owner(conn, bot)
         if owner:

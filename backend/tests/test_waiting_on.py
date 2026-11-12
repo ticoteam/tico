@@ -24,8 +24,13 @@ BUILD = (
 
 @pytest.fixture
 def c(company):
+    """After each test, every person's own Needs you is the one every person's pass gives them: a new way a wait
+    reaches a person that `waiting_on.candidates` misses fails here."""
     with company.transaction() as conn:
         yield conn
+        every = W.needs_by_person(conn)
+        for person in every:
+            assert W.needs(conn, person) == every[person], person
 
 
 @pytest.fixture

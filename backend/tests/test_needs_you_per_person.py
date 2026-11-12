@@ -25,8 +25,13 @@ SHIP = ({"name": "Ship", "owner": "bot:builder", "requirements": [X.github("pr_o
 
 @pytest.fixture
 def c(company):
+    """After each test, every person's own Needs you is the one every person's pass gives them: a new way a wait
+    reaches a person that `waiting_on.candidates` misses fails here."""
     with company.transaction() as conn:
         yield conn
+        every = W.needs_by_person(conn)
+        for person in every:
+            assert W.needs(conn, person) == every[person], person
 
 
 def _same_for_everyone(c):
@@ -104,6 +109,16 @@ def test_a_bot_its_owner_fixes_lists_every_task_it_holds_up_though_they_own_none
     [paused] = W.needs(c, BEN)
     assert (paused["kind"], paused["bots"], sorted(paused["tasks"])) == ("paused", ["bot:reviewer"], held)
     _same_for_everyone(c)
+
+
+def test_a_bot_with_no_row_is_the_company_persons_to_fix(c):
+    """A stage's OK names a bot that was removed: only the company's person can fix it, and she does in her own read."""
+    X.bot(c, "builder")
+    X.pipeline(c, "notes", "Notes", NOTES)
+    X.new_task(c, ANA, "Draft the FAQ", "notes", assignee="bot:builder")
+    c.execute("UPDATE requirements SET person_id='bot:ghost' WHERE person_id='bot:helper'")
+    every = _same_for_everyone(c)
+    assert [(n["kind"], n["line"]) for n in every[ANA]] == [("paused", "ghost was removed")]
 
 
 def test_two_people_reading_together_each_get_their_own_list(c):
