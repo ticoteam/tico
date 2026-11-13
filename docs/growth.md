@@ -258,13 +258,14 @@ Ads and Social Ads (the growth channel packs in the same section).
 The page reads both forms. An open task in Growth Experiments or Growth Monitoring shows on the Growth board in the
 lane its stage gives (Running is Live, Watching and Slipping are Working, with Slipping marked, Building is In
 development, Ideas is On deck) and on its channel's row; a move into Running is a test's start marker, and a move from
-Growth Experiments to Done (kept, with its `result:` tag) or Closed (dropped) its finish marker. Success Experiments and
+Growth Experiments to Done (kept, with its `result:` tag) or Closed (dropped) its finish marker. A stage a team added
+to Growth Experiments or Monitoring reads as that pipeline's first stage. Success Experiments and
 Success Monitoring are not read here.
 
 The older form, an idea as a General task with a stage label (`growth:ideas` or `idea:on-deck`, `idea:in-development`,
 `growth:running` or `idea:live`, `idea:working`, `growth:measuring`, `idea:paused`; backend/marketing_tasks.py), is still
 read the same way: taking a running label starts a test, and Done or Closed finishes it. A task in a Growth pipeline
-that also carries a stage label shows once, where its pipeline stage says. The Growth Manager and the segment Marketing
+that also carries a stage label shows once, where its pipeline stage says, and starts by its moves alone. The Growth Manager and the segment Marketing
 Owners still file ideas that way.
 
 Bets are company claims and live on the Strategy page. A marketing task does not link to a bet, so this page has no bet

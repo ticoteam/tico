@@ -163,6 +163,23 @@ def test_a_move_into_running_starts_a_test_and_done_or_closed_finishes_it_with_i
     )
 
 
+def test_a_test_with_both_a_running_stage_and_a_running_label_starts_once(company):
+    """A task with both forms counts once and its pipeline stage wins: filed into Running with growth:running, or
+    moved into Running and labelled idea:live later, gives one start. A label-only idea still starts by its label."""
+    with company.transaction() as c:
+        _set_up(c)
+        filed = _filed(c, "Pricing headline", "growth-experiments", RUNNING, labels=["growth:running"])
+        moved = _filed(c, "Door hangers", "growth-experiments", BUILDING)
+        _move(c, moved, RUNNING)
+        H.task_update(c, ANA, moved, labels=["idea:live"])
+        labelled = H.task_create(c, ANA, "Weekend discount", "Try it.", OWNER, labels=["idea:on-deck"], lint=False)
+        labelled = labelled["id"]
+        H.task_update(c, ANA, labelled, labels=["idea:live"])
+        found = GN._markers(c, _ReadsAll(), None, "2000-01-01T00:00:00")
+    starts = sorted(m["task_id"] for m in found if m["kind"] == "started")
+    assert starts == sorted([filed, moved, labelled])
+
+
 def test_a_test_restored_from_the_trash_does_not_finish_or_start_again(api):
     with api.app.state.store.transaction() as c:
         _set_up(c)

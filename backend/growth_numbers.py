@@ -9,8 +9,9 @@
 - `kpis`: the KPI tree by growth role, each with its last 24 readings as the sparkline plots them (one value per period,
   partials left out, oldest first). A KPI with no growth field is left out; `other` holds one with a stage or loop but
   no role.
-- `markers`: when a marketing idea's test started (it took a `growth:running` or `idea:live` label) or the idea finished
-  (done: `kept`; closed: `dropped`), newest first, at most 200 (backend/marketing_tasks.py). Each is one marker, so an
+- `markers`: when a marketing idea's test started (it moved into a Growth Experiments Running stage, or, never having
+  been in Growth Experiments, took a `growth:running` or `idea:live` label) or the idea finished (done: `kept`, with its
+  `result` tag when it has one; closed: `dropped`), newest first, at most 200 (backend/marketing_tasks.py). Each is one marker, so an
   idea started twice gives two. The window is the first month's start to now (the last twelve months when there are no
   cohorts).
 
@@ -226,7 +227,8 @@ def _markers(c, auth, who, since):
     visible = auth.task_sql(c, who)
     every, running = _experiment_stages(c)
     # A start is a label change onto a running label, or a move into a Growth Experiments Running stage from anywhere
-    # else (or a task filed straight into it). A finish is a move that ended the task (into Done or Closed, by a
+    # else (or a task filed straight into it). A task that has been in Growth Experiments starts by its moves alone,
+    # so one with both forms starts once: its pipeline stage wins over its label. A finish is a move that ended the task (into Done or Closed, by a
     # person, a bot or a close of the task above it) while it was an idea or from a Growth Experiments stage. A task
     # put back from the trash as it ended did not end again, nor start again.
     rows = H._rows(
@@ -234,13 +236,15 @@ def _markers(c, auth, who, since):
             "SELECT e.kind AS event, e.subject_id AS task_id, e.created_at, e.old, e.new, s.kind AS stage, t.title, "
             "t.goal_id FROM history_events e JOIN tasks t ON t.id=e.subject_id "
             "LEFT JOIN stages s ON e.kind='move' AND s.id=e.new "
-            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL}) "
+            f"WHERE e.subject_type='task' AND e.created_at>=? AND ((e.kind='labels' AND {STARTED_SQL} "
+            "AND NOT EXISTS (SELECT 1 FROM history_events m WHERE m.subject_type='task' "
+            f"AND m.subject_id=e.subject_id AND m.kind='move' AND m.new IN ({_marks(len(every))}))) "
             "OR (e.kind='move' AND coalesce(json_extract(e.data, '$.move'), '')!='restored' AND ("
             f"(e.new IN ({_marks(len(running))}) AND coalesce(e.old, '') NOT IN ({_marks(len(running))})) "
             f"OR (s.kind IN ('done','closed') AND ({_has_any(LABELS_THEN, MT.LABELS)} "
             f"OR e.old IN ({_marks(len(every))})))))) "
             f"AND t.id IN (SELECT id FROM tasks WHERE {visible}) ORDER BY e.created_at DESC, e.rowid DESC LIMIT ?",
-            [since, *MT.STARTED, *MT.STARTED, *running, *running, *MT.LABELS, *every, MARKERS_MAX],
+            [since, *MT.STARTED, *MT.STARTED, *every, *running, *running, *MT.LABELS, *every, MARKERS_MAX],
         )
     )
     tags, results = {}, {}
