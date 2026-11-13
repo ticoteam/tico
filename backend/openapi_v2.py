@@ -1342,7 +1342,9 @@ STABLE = [
         "get",
         "Files",
         "listBotFiles",
-        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page",
+        "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; "
+        "q (every word, in the name, text or path) and kind (a Library kind: page, document, image, data, media, other) "
+        "narrow the same list",
         "BotFileList",
     ),
     (

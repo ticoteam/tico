@@ -6,6 +6,9 @@
 //! or hard links, nothing outside the checkout. Each upload is a row in an outbox in the runner's state database
 //! keyed by bot, path and content digest; the key is also the request's idempotency key, so a retry lands once.
 //! A file that could not go is reported as not synced, never shown with a link that opens nothing.
+//! Each upload says when its content last changed (`modified`: the file's last commit time, else its own time), so a
+//! checkout published for the first time lists by when each file was written. A file published before that was sent
+//! (no `file_dated` row) goes once more with its time; the hub keeps the bytes it has and corrects only the time.
 
 use std::collections::HashSet;
 use std::os::unix::fs::MetadataExt;
@@ -70,6 +73,9 @@ CREATE TABLE IF NOT EXISTS file_outbox(
   tries INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS file_published(
   bot TEXT NOT NULL, rel TEXT NOT NULL, digest TEXT NOT NULL, PRIMARY KEY(bot, rel));
+CREATE TABLE IF NOT EXISTS file_times(key TEXT PRIMARY KEY, modified REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS file_dated(
+  bot TEXT NOT NULL, rel TEXT NOT NULL, PRIMARY KEY(bot, rel));
 CREATE TABLE IF NOT EXISTS file_refused(
   bot TEXT NOT NULL, rel TEXT NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(bot, rel, reason));
 ";
@@ -339,6 +345,37 @@ pub fn pushed_commit(root: &Path, rel: &str) -> String {
     }
 }
 
+/// When a file's content last changed: the time of the last commit that touched it, when the checkout holds it as
+/// committed; else the file's own time (a file the bot just wrote). A fresh checkout gives every file the time it was
+/// copied, which says nothing about when it was written (backend/files.py content_time).
+pub fn content_time(root: &Path, rel: &str) -> f64 {
+    let env = crate::safegit::clean_environment(&crate::env::process_environment());
+    let git = |args: &[&str]| -> Option<(bool, String)> {
+        let mut cmd = crate::isolation::std_command("git");
+        cmd.args(crate::safegit::args(root))
+            .args(args)
+            .env_clear()
+            .envs(&env)
+            .stdin(std::process::Stdio::null());
+        let out = cmd.output().ok()?;
+        Some((
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).trim().to_string(),
+        ))
+    };
+    let committed = git(&["ls-files", "--error-unmatch", "--", rel]).is_some_and(|(ok, _)| ok)
+        && git(&["diff", "--quiet", "HEAD", "--", rel]).is_some_and(|(ok, _)| ok);
+    if committed {
+        if let Some(Ok(seconds)) = git(&["log", "-1", "--format=%ct", "HEAD", "--", rel])
+            .filter(|(ok, _)| *ok)
+            .map(|(_, out)| out.parse::<f64>())
+        {
+            return seconds;
+        }
+    }
+    mtime(&root.join(rel))
+}
+
 pub const MAKE_PAGE_ORIGIN: &str = ".tico-make-page-attempt";
 
 fn now() -> f64 {
@@ -361,7 +398,7 @@ pub fn prepare(
     }
     let seen: HashSet<String> = state.with(|c| {
         c.execute_batch(TABLES)?;
-        let mut q = c.prepare("SELECT rel FROM file_published WHERE bot=?1 UNION SELECT rel FROM file_refused WHERE bot=?1")?;
+        let mut q = c.prepare("SELECT p.rel FROM file_published p JOIN file_dated d ON d.bot=p.bot AND d.rel=p.rel WHERE p.bot=?1 UNION SELECT rel FROM file_refused WHERE bot=?1")?;
         let rows = q.query_map([bot], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<HashSet<_>>>();
         rows
     })?;
@@ -400,8 +437,9 @@ pub fn prepare(
                 continue;
             }
         };
+        // ":t": the upload carries its content time (a key from before it named the same bytes without one).
         let key = format!(
-            "file:{bot}:{}:{}",
+            "file:{bot}:{}:{}:t",
             &sha256_hex(rel.as_bytes())[..16],
             &digest[..32]
         );
@@ -410,10 +448,11 @@ pub fn prepare(
         } else {
             String::new()
         };
+        let modified = content_time(root, &rel);
         let stop = state.with(|c| {
             // Accepted now: a later refusal of this file is news again.
             c.execute("DELETE FROM file_refused WHERE bot=?1 AND rel=?2", params![bot, rel])?;
-            let same = c.query_row("SELECT 1 FROM file_published WHERE bot=?1 AND rel=?2 AND digest=?3", params![bot, rel, digest], |_| Ok(())).optional()?;
+            let same = c.query_row("SELECT 1 FROM file_published p JOIN file_dated d ON d.bot=p.bot AND d.rel=p.rel WHERE p.bot=?1 AND p.rel=?2 AND p.digest=?3", params![bot, rel, digest], |_| Ok(())).optional()?;
             let queued_already = c.query_row("SELECT 1 FROM file_outbox WHERE key=?1", [&key], |_| Ok(())).optional()?;
             if same.is_some() || queued_already.is_some() {
                 return Ok(Some(false));
@@ -424,6 +463,10 @@ pub fn prepare(
             c.execute(
                 "INSERT INTO file_outbox(key,bot,attempt_id,root,rel,digest,commit_sha,created) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![key, bot, attempt_id, resolved, rel, digest, commit, now()],
+            )?;
+            c.execute(
+                "INSERT OR REPLACE INTO file_times(key,modified) VALUES(?1,?2)",
+                params![key, modified],
             )?;
             Ok(Some(true))
         })?;
@@ -466,10 +509,12 @@ struct Row {
     digest: String,
     commit_sha: String,
     tries: i64,
+    modified: f64,
 }
 
 fn query(row: &Row, extra: &[(&str, &str)]) -> String {
     let name = row.rel.rsplit('/').next().unwrap_or(&row.rel);
+    let modified = format!("{:.3}", row.modified);
     let mut pairs = vec![
         ("bot", row.bot.as_str()),
         ("attempt", &row.attempt_id),
@@ -478,6 +523,9 @@ fn query(row: &Row, extra: &[(&str, &str)]) -> String {
     ];
     if !row.commit_sha.is_empty() {
         pairs.push(("commit", &row.commit_sha));
+    }
+    if row.modified > 0.0 {
+        pairs.push(("modified", &modified));
     }
     pairs.extend_from_slice(extra);
     pairs
@@ -503,10 +551,10 @@ pub async fn drain(state: &State, client: &Client) -> usize {
     let rows: Vec<Row> = state
         .with(|c| {
             c.execute_batch(TABLES)?;
-            let mut q = c.prepare("SELECT key,bot,attempt_id,root,rel,digest,commit_sha,tries FROM file_outbox WHERE phase='pending' ORDER BY created LIMIT ?1")?;
+            let mut q = c.prepare("SELECT o.key,o.bot,o.attempt_id,o.root,o.rel,o.digest,o.commit_sha,o.tries,coalesce(t.modified,0) FROM file_outbox o LEFT JOIN file_times t ON t.key=o.key WHERE o.phase='pending' ORDER BY o.created LIMIT ?1")?;
             let rows = q
                 .query_map([DRAIN_BATCH as i64], |r| {
-                    Ok(Row { key: r.get(0)?, bot: r.get(1)?, attempt_id: r.get(2)?, root: r.get(3)?, rel: r.get(4)?, digest: r.get(5)?, commit_sha: r.get(6)?, tries: r.get(7)? })
+                    Ok(Row { key: r.get(0)?, bot: r.get(1)?, attempt_id: r.get(2)?, root: r.get(3)?, rel: r.get(4)?, digest: r.get(5)?, commit_sha: r.get(6)?, tries: r.get(7)?, modified: r.get(8)? })
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>();
             rows
@@ -536,6 +584,10 @@ fn mark(state: &State, row: &Row, phase: &str, error: &str, tries: Option<i64>) 
             c.execute(
                 "INSERT OR REPLACE INTO file_published VALUES(?1,?2,?3)",
                 params![row.bot, row.rel, row.digest],
+            )?;
+            c.execute(
+                "INSERT OR IGNORE INTO file_dated VALUES(?1,?2)",
+                params![row.bot, row.rel],
             )?;
         }
         Ok(())
@@ -745,7 +797,7 @@ mod tests {
         assert_eq!(
             key,
             format!(
-                "file:ops:{}:{}",
+                "file:ops:{}:{}:t",
                 &sha256_hex(b"reports/a.md")[..16],
                 &sha256_hex(b"# A")[..32]
             )
@@ -878,7 +930,7 @@ mod tests {
         let client = Client::new(&url, "t", 5, 0).unwrap();
         assert_eq!(drain(&state, &client).await, 1);
         let request = seen.lock().unwrap()[0].clone();
-        assert!(request.starts_with("POST /api/v2/files/uploads?bot=ops&attempt=att-1&path=reports%2Fa.md&name=a.md HTTP/1.1"), "{request}");
+        assert!(request.starts_with("POST /api/v2/files/uploads?bot=ops&attempt=att-1&path=reports%2Fa.md&name=a.md&modified="), "{request}");
         assert!(request
             .to_lowercase()
             .contains("content-type: application/octet-stream"));
@@ -914,6 +966,92 @@ mod tests {
             })
             .unwrap();
         assert_eq!(phase, "failed");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn content_time_is_the_last_commit_else_the_files_own_and_old_publishes_go_once_more_with_it() {
+        let dir = checkout();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .current_dir(&dir)
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .env("GIT_AUTHOR_DATE", "@1757000000 +0000")
+                .env("GIT_COMMITTER_DATE", "@1757000000 +0000")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        std::fs::write(dir.join("reports/old.md"), "# Old").unwrap();
+        git(&["init", "-q"]);
+        git(&["add", "reports/old.md"]);
+        git(&["commit", "-q", "-m", "old"]);
+        // A fresh checkout's file says when it was copied; its commit says when it was written.
+        assert_eq!(content_time(&dir, "reports/old.md"), 1757000000.0);
+        std::fs::write(dir.join("reports/new.md"), "# New").unwrap();
+        assert!(
+            content_time(&dir, "reports/new.md") > 1757000000.0,
+            "not committed: its own time"
+        );
+        std::fs::write(dir.join("reports/old.md"), "# Old, edited").unwrap();
+        assert!(
+            content_time(&dir, "reports/old.md") > 1757000000.0,
+            "edited since its commit"
+        );
+        std::fs::write(dir.join("reports/old.md"), "# Old").unwrap();
+
+        // Published before uploads carried a time: queued once more, under a key of its own, with the time.
+        let state = State::open(&dir.join("state")).unwrap();
+        state
+            .with(|c| {
+                c.execute_batch(TABLES)?;
+                c.execute(
+                    "INSERT INTO file_published VALUES('ops','reports/old.md',?1)",
+                    [sha256_hex(b"# Old")],
+                )
+            })
+            .unwrap();
+        std::fs::remove_file(dir.join("reports/new.md")).unwrap();
+        assert_eq!(
+            prepare(&state, "ops", "a1", &dir, &json!({}), false, &[])
+                .unwrap()
+                .0,
+            1
+        );
+        let (key, modified): (String, f64) = state
+            .with(|c| {
+                c.query_row(
+                    "SELECT o.key,t.modified FROM file_outbox o JOIN file_times t ON t.key=o.key",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert!(key.ends_with(":t"));
+        assert_eq!(modified, 1757000000.0);
+        state
+            .with(|c| {
+                c.execute("UPDATE file_outbox SET phase='done'", [])?;
+                c.execute("INSERT INTO file_dated VALUES('ops','reports/old.md')", [])
+            })
+            .unwrap();
+        assert_eq!(
+            prepare(&state, "ops", "a2", &dir, &json!({}), false, &[])
+                .unwrap()
+                .0,
+            0,
+            "sent with its time once: not again"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 }

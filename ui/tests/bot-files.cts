@@ -2,7 +2,10 @@
 // the name without its extension, three rows and "N more" / "Less" inline, no counts, subtitle or buttons. The whole
 // row opens the file. A linked document opens at its provider
 // (a new tab), a stored file in the review view (ui/app/file-review.ts; a CSV as a table, a quoted comma kept in one cell),
-// a file that did not sync is plain text, never a storage address; on a computer and on a phone.
+// a file that did not sync is plain text, never a storage address; on a computer and on a phone. Expanded, a search
+// field and the filter icon narrow the list on the server (q, kind). The files a bot names in a message are links to them
+// (ui/app/file-mentions.ts), asked of the server in one request; a bare name two files share stays text unless the
+// folder named before it says which.
 // Fixtures only, no network.
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
@@ -14,6 +17,7 @@ const {html, uiFile} = require('./support/page.cts') as PageSupport.Api;
 const {unrouted} = require('./support/routes.cts') as Routes.Api;
 const {t} = (() => { try { return require('./support/load.cts') as import('./support/load.cts').Api; } catch { return {t: (ms: number) => ms}; } })();   // load.cjs arrives with #254
 const shots = process.env.TICO_SCREENSHOT_DIR;
+declare function fileMentionLinks(html: string, bot: string): string;   // ui/app/file-mentions.ts, in the page
 
 const now = Date.now(), iso = (ms: number) => new Date(now + ms).toISOString(), min = 60e3;
 const bots = [{name: 'cmo', display_name: 'AI CMO', org_parent: '', host: 'keeper', status: 'active', can_chat: true,
@@ -37,7 +41,10 @@ const CSV = files.find(f => f.title === 'Traffic export')!;
 CSV.name = 'traffic.csv';
 const csvText = 'page,note,visits\r\n/home,"Hello, world",120\r\n/pricing,"Two\nlines ""quoted""",80\r\n' + Array.from({length: 1200}, (_, i) => `/p${i},row,${i}`).join('\n') + '\n';
 
-interface State { rows: Row[]; listed: (string | null)[]; patched: unknown[]; opened: string[]; thumbs?: string[] }
+interface State { rows: Row[]; listed: (string | null)[]; patched: unknown[]; opened: string[]; thumbs?: string[]; asked?: string[]; mentions?: string[][] }
+// What the mentions route knows, as the server would answer (backend/files.py Files.mentions): paths and unique names.
+const NAMED: Record<string, string> = {'reports/ticket-topics.csv': 'file-csv', 'ticket-topics.csv': 'file-csv',
+  'drafts/2026-11-10-paiva-reply/notes-for-chris.docx': 'file-titled'};
 // A 2x2 PNG, an image's thumbnail.
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DwnwEIGBgY/jMwAAA3BAP9Wq7fJQAAAABJRU5ErkJggg==', 'base64');
 
@@ -65,9 +72,15 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') return json({tasks: []});
     if (p === '/api/v2/conversations') return json({conversations: []});
+    if (p === '/api/v2/bots/cmo/files/mentions') {
+      state.mentions = [...(state.mentions || []), q.getAll('m')];
+      return json({bot: 'cmo', files: Object.fromEntries(q.getAll('m').filter(m => NAMED[m]).map(m => [m, state.rows.find(f => f.id === NAMED[m])]))});
+    }
     if (p === '/api/v2/bots/cmo/files') {
       state.listed.push(q.get('limit'));
-      const limit = Number(q.get('limit')), rows = state.rows;
+      state.asked = [...(state.asked || []), url.search];
+      const limit = Number(q.get('limit')), want = (q.get('q') || '').toLowerCase(), kind = q.get('kind');
+      const rows = state.rows.filter(f => (!want || f.title.toLowerCase().includes(want)) && (!kind || f.kind === kind));
       return json({bot: 'cmo', files: rows.slice(0, limit), total: rows.length, next_cursor: rows.length > limit ? 'next' : null,
         has_more: rows.length > limit, can_manage: true, actors: {}});
     }
@@ -217,10 +230,53 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
     assert.equal((await card.locator('[data-bf-all]').innerText()).trim(), '16 more');
     assert.ok(state.thumbs!.length <= asked + 1, `kinds: thumbnails asked ${state.thumbs!.length} times`);
+    // Expanded: search and the filter icon (no word), asked of the server, still newest first; Less clears both.
+    assert.equal(await card.locator('.bf-tools').isVisible(), false, 'find: no search while folded');
+    await card.locator('[data-bf-all]').click();
+    await card.locator('.bf-q').fill('budget');
+    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 1);
+    assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['Q4 budget / final'], 'find: the server\'s answer');
+    assert.ok(state.asked!.some(a => /[?&]q=budget(&|$)/.test(a)) && !state.asked!.some(a => /q=b(&|$)|q=bu(&|$)/.test(a)), 'find: one request once typing stops');
+    assert.equal((await card.locator('.bf-fbtn').innerText()).trim(), '', 'find: the filter icon, no word');
+    await card.locator('.bf-q').fill('');
+    await card.locator('.bf-fbtn').click();
+    await card.locator('[data-bf-kind="data"]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 1);
+    assert.deepEqual(await card.locator('.bf-name').allInnerTexts(), ['.json'], 'find: one kind');
+    assert.ok(state.asked!.at(-1)!.includes('kind=data'));
+    await card.locator('.bf-q').fill('nothing like it');
+    await card.locator('.bf-none').waitFor();
+    assert.equal((await card.locator('.bf-none').innerText()).trim(), 'Nothing matches.');
+    await card.locator('[data-bf-less]').click();
+    await page.waitForFunction(() => document.querySelectorAll('#bot-files .bf-row').length === 3);
+    assert.ok(!/[?&](q|kind)=/.test(state.asked!.at(-1)!) && await card.locator('.bf-tools').isHidden(), 'find: Less clears search and kind');
+    // A message's files: a path, a unique bare name, a bare name after its folder; a bare name two files share (no folder
+    // before it) and a web address stay as they are. One request asks them all.
+    const said = '<ul><li>See <code>reports/ticket-topics.csv</code> and ticket-topics.csv</li>'
+      + '<li>In <code>drafts/2026-11-10-paiva-reply/</code>: <code>notes-for-chris.docx</code></li>'
+      + '<li>Also notes-for-chris.docx and <a href="https://example.test/a.pdf">https://example.test/a.pdf</a></li></ul>';
+    const linked = await page.evaluate(async said => {
+      const first = fileMentionLinks(said, 'cmo');
+      for (let i = 0; i < 100 && !fileMentionLinks(said, 'cmo').includes('data-file-ref'); i++) await new Promise(r => setTimeout(r, 50));
+      const host = document.createElement('div');
+      host.id = 'said';
+      host.innerHTML = fileMentionLinks(said, 'cmo');
+      document.body.append(host);
+      return {first, refs: [...host.querySelectorAll<HTMLElement>('a[data-file-ref]')].map(a => [a.textContent, a.dataset.fileRef])};
+    }, said);
+    assert.equal(linked.first, said, 'mentions: text until the server answers');
+    assert.deepEqual(linked.refs, [['reports/ticket-topics.csv', 'file-csv'], ['ticket-topics.csv', 'file-csv'], ['notes-for-chris.docx', 'file-titled']], 'mentions: one file each, never a guess');
+    assert.equal(state.mentions!.length, 1, 'mentions: one request');
+    // Clicked as a message's link is (the fixture's host sits under the sidebar, so the click is sent to it).
+    await page.locator('#said a[data-file-ref="file-titled"]').evaluate(a => (a as HTMLElement).click());
+    await page.waitForSelector('dialog.frv[open]');
+    await until(() => state.opened.includes('file-titled'));
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('dialog.frv', {state: 'detached'});
     if (shots) await card.screenshot({path: path.join(shots, 'bot-files-kinds.png')});
     assert.deepEqual(errors, [], 'kinds: page errors');
     await page.close();
-    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names without extensions, 16 more');
+    console.log('bot files card (kinds): marks, a thumbnail and its fallback, names without extensions, 16 more; search, kind, named files as links');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });
 async function until(test: () => boolean, ms = 5000) { for (const end = Date.now() + t(ms); !test(); ) { if (Date.now() > end) throw new Error('timed out'); await new Promise(r => setTimeout(r, 50)); } }
