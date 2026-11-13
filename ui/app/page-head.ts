@@ -65,6 +65,8 @@ function pageHead(o: PageHeadOptions): string {
 // was drawn without is added in its place.
 function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void {
   const q = (sel: string) => head.querySelector<HTMLElement>(':scope > ' + sel);
+  // tools folded into ⋯ go back to their row first, so the part is found and a new ⋯ list does not drop them
+  if (part === 'tools' || part === 'more') pageHeadFold(head, false);
   if (part === 'title') { const t = q('.ph-t'); if (t) t.innerHTML = html; return; }
   if (part === 'tabs') {
     let nav = q('.ph-tabs');
@@ -88,10 +90,38 @@ function pageHeadSet(head: HTMLElement, part: PageHeadPart, html: string): void 
   pageHeadFitSoon();
 }
 
-// Too narrow for one row (above a phone's 760px): the header gives way in steps and never hides a control. First the
-// tools take a row of their own under it (.ph-wrap); if the title, tabs, ⋯ and the button still do not fit, the tabs
-// take theirs too (.ph-wrap2), wrapping inside it. The filled button stays on the title's row. A phone's layout is CSS.
+// Too narrow for one row (above a phone's 760px), the header gives way in the spec's order and never hides a control
+// for good: a search shrinks first (to 160px, CSS); then the tools fold into ⋯ (.ph-fold, a ⋯ is added where the page
+// has none); if the title, tabs, ⋯ and the button still do not fit, the tabs take a second row (.ph-wrap), with the
+// tools back beside them where they fit there. The title and the filled button keep the first row, and a button's words
+// never wrap (task #450: Rules took three rows at 1280, and Outside's Add rule wrapped and moved the title down).
+// A phone's layout is CSS.
 const PAGE_HEAD_PHONE = matchMedia('(max-width:760px)');
+const pageHeadTools = (head: HTMLElement) => head.querySelector<HTMLElement>(':scope > .ph-tools, :scope > .ph-menu > .ph-tools');
+// Move the tools into the ⋯ menu (first, above its own items) or back to their place in the row, just before the ⋯.
+function pageHeadFold(head: HTMLElement, fold: boolean): void {
+  const tools = pageHeadTools(head);
+  if (!tools || fold === (tools.parentElement !== head)) return;
+  if (fold) {
+    if (!tools.firstChild) return;
+    let menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
+    if (!menu) {
+      const seq = ++PAGE_HEAD_SEQ;
+      tools.insertAdjacentHTML('afterend', pageHeadMore('', `ph-more-${seq}`, `ph-menu-${seq}`));
+      menu = head.querySelector<HTMLElement>(':scope > .ph-menu');
+      if (!menu) return;
+      menu.dataset['phMade'] = '';
+    }
+    menu.prepend(tools);
+    head.classList.add('ph-fold');
+    return;
+  }
+  const menu = tools.parentElement as HTMLElement;
+  if (menu.matches(':popover-open')) menu.hidePopover();
+  head.querySelector(':scope > .ph-more')?.before(tools);
+  if (menu.dataset['phMade'] !== undefined) { head.querySelector(`:scope > .ph-more[popovertarget="${CSS.escape(menu.id)}"]`)?.remove(); menu.remove(); }
+  head.classList.remove('ph-fold');
+}
 function pageHeadOver(head: HTMLElement): boolean {
   const box = head.getBoundingClientRect();
   const right = box.right - parseFloat(getComputedStyle(head).paddingRight) + 0.5;
@@ -103,12 +133,26 @@ function pageHeadOver(head: HTMLElement): boolean {
   }
   return false;
 }
+// The tabs and the tools on the second row together: the tools did not wrap under the tabs.
+function pageHeadRowShared(head: HTMLElement): boolean {
+  const tabs = head.querySelector(':scope > .ph-tabs')?.getBoundingClientRect(), tools = head.querySelector(':scope > .ph-tools')?.getBoundingClientRect();
+  return !tabs || !tools || !tools.width || tools.top < tabs.bottom - 0.5;
+}
 function pageHeadFit(head: HTMLElement): void {
-  head.classList.remove('ph-wrap', 'ph-wrap2');
+  // Folded tools someone is using (typing in the search, the ⋯ open) stay where they are until they are done.
+  const tools = pageHeadTools(head), menu = tools?.parentElement;
+  const busy = !!tools && menu !== head && (tools.contains(document.activeElement) || !!menu?.matches(':popover-open'));
+  head.classList.remove('ph-wrap');
+  if (!busy) pageHeadFold(head, false);
   if (PAGE_HEAD_PHONE.matches || !head.isConnected) return;
   if (!pageHeadOver(head)) return;
+  pageHeadFold(head, true);
+  if (!pageHeadOver(head)) return;
   head.classList.add('ph-wrap');
-  if (pageHeadOver(head)) head.classList.add('ph-wrap2');
+  if (busy) return;
+  pageHeadFold(head, false);
+  if (!pageHeadOver(head) && pageHeadRowShared(head)) return;
+  pageHeadFold(head, true);
 }
 // The sidebar opening or closing changes a header's width without a window resize: watch each header's width.
 const PAGE_HEAD_WIDTH = new WeakMap<Element, number>();
@@ -126,15 +170,20 @@ let PAGE_HEAD_FIT = 0;
 // Once per frame however many changes ask: a page draws its header and fills its parts in quick succession.
 function pageHeadFitSoon(): void {
   if (PAGE_HEAD_FIT) return;
-  PAGE_HEAD_FIT = requestAnimationFrame(() => { PAGE_HEAD_FIT = 0; pageHeadFitAll(); });
+  PAGE_HEAD_FIT = requestAnimationFrame(() => {
+    PAGE_HEAD_FIT = 0;
+    pageHeadFitAll();
+    PAGE_HEAD_CHANGES.takeRecords();   // the fit's own moves (tools in and out of ⋯) are not changes to fit again for
+  });
 }
 // A header is drawn into #main with innerHTML and filled later (counts, buttons, chips); the window resizes. Each of
 // these fits the headers again.
 addEventListener('resize', pageHeadFitSoon);
-new MutationObserver(records => {
+const PAGE_HEAD_CHANGES = new MutationObserver(records => {
   // pageHeadFit's own class change on the header is not a change to fit again for
   if (records.some(r => r.target instanceof Element && !(r.type === 'attributes' && r.target.matches('header.ph')) && (r.target.closest('header.ph') || [...r.addedNodes].some(n => n instanceof Element && (n.matches('header.ph') || !!n.querySelector('header.ph')))))) pageHeadFitSoon();
-}).observe(document.documentElement, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class']});
+});
+PAGE_HEAD_CHANGES.observe(document.documentElement, {childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['hidden', 'class']});
 
 // The ⋯ menu is a native popover (outside click and Escape close it): place it under its button, right-aligned, and
 // close it once an item is chosen. One listener for every header; `toggle` does not bubble, so it is caught on the way down.
