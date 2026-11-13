@@ -155,6 +155,8 @@ let pinsAtOpen = ['t-plan'], unreadAtOpen = ['t11', 't4', 't-gdm'];
 let dmRows: Thr[] | null = null, callsOff = false, railOff = false, threadsOff: boolean | 'odd' = false, threadsGate: Gate[] | null = null;
 // Start call as the server answers it: the call it makes (after a moment), or none.
 let callMade: {id: string; state: string; connector: string} | null = null, joinRefused = false, startWait = 150;
+// Ana's private chat with Ops, when a block sets it: what GET /v2/threads/dm?create=false answers; PATCH archives it.
+let opsDm: (Thr & {archived_at?: string | null}) | null = null;
 let startGate: Gate[] | null = null, leaveGate: Gate[] | null = null, callLive: {id: string; state: string; connector: string} | null = null;
 async function open(browser: import('playwright').Browser, who: string, {phone = false, sse = null}: {phone?: boolean; sse?: Sse | null} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
@@ -268,7 +270,14 @@ async function open(browser: import('playwright').Browser, who: string, {phone =
       if (bob && actor === 'bot:ops') return json({error: 'not_found'}, 404);
       return homes[actor] ? json(timeline[homes[actor]!]!().thread) : json({error: 'not_found'}, 404);
     }
+    if (p === '/api/v2/threads/dm' && opsDm && method === 'GET' && url.searchParams.get('create') === 'false' && url.searchParams.get('with') === 'bot:ops') return json(opsDm);
     if (p === '/api/v2/threads/dm') return json({error: 'not_found'}, 404);
+    if (opsDm && p === '/api/v2/threads/' + opsDm.id && method === 'PATCH') {
+      const body = JSON.parse(req.postData() || '{}'); seen.patches.push(body);
+      opsDm = {...opsDm, archived_at: body.archived ? at(0) : null};
+      return json(opsDm);
+    }
+    if (opsDm && p === `/api/v2/threads/${opsDm.id}/timeline`) return json({thread: opsDm, breadcrumb: [], next_cursor: null, messages: [{...msg('o1', 1, 'bot:ops', 'Just us here.'), thread_id: opsDm.id}]});
     const tl = p.match(/^\/api\/v2\/threads\/([^/]+)\/timeline$/);
     if (tl && timeline[tl[1]!]) return json(timeline[tl[1]!]!());
     if (tl && known(tl[1]!)) return json({thread: known(tl[1]!), breadcrumb: [{id: tl[1], title: known(tl[1]!)!.title}], next_cursor: null,
@@ -1027,7 +1036,10 @@ let browser: import('playwright').Browser | null = null;
     await page.goto('https://tico-ui.test/#/bot/ops');
     const tabs = page.locator('#btabs [data-bt]');
     await tabs.first().waitFor();
-    assert.deepEqual((await tabs.allInnerTexts()).slice(0, 2), ['Chat', 'Tasks']);
+    // The tabs are icons people know (#282): a chat bubble, the Tasks check and ⋯, each naming itself on hover and to a screen reader.
+    assert.deepEqual(await tabs.evaluateAll(els => els.map(b => [b.getAttribute('aria-label'), (b as HTMLElement).title, b.querySelector('.nav-icon')?.textContent ?? (b.querySelector('svg') ? 'svg' : '')])),
+      [['Chat', 'Chat', 'chat_bubble'], ['Tasks', 'Tasks', 'task_alt'], ['More', 'More', 'svg']]);
+    assert.equal(await tabs.evaluateAll(els => els.map(b => [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim()).join('')), '', 'no words in the tabs');
     for (const width of [390, 320]) {
       await page.setViewportSize({width, height: 700});
       for (const box of await tabs.evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()))) assert.ok(box.right <= width && box.height >= 36, `a tab at ${width}: ` + JSON.stringify(box));
@@ -1037,6 +1049,7 @@ let browser: import('playwright').Browser | null = null;
     await shot(page, 'bot-tabs-phone');
     await page.locator('#bot-incognito').tap();
     await page.waitForFunction(() => location.hash.endsWith('/dm') && document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'true');
+    assert.equal(await page.locator('#bot-incognito .bi-label').isVisible(), false, 'Incognito is the lock alone, raised when on');
     await page.locator('#bot-incognito').tap();
     await page.waitForFunction(() => document.querySelector<HTMLElement>('#bot-incognito')!.getAttribute('aria-pressed') === 'false');
     await page.getByText('Weekly numbers are in the doc.').waitFor();
@@ -1269,6 +1282,50 @@ let browser: import('playwright').Browser | null = null;
     assert.deepEqual(seen.errors, [], 'no page errors');
     await page.close();
     pinsAtOpen = ['t-plan'];
+  }
+  // ---- Ana's private chat with Ops (#282): its Archive leaves the top line for More, as a word that turns into Unarchive.
+  {
+    opsDm = {id: 't-opsdm', title: 'Chat with Ops', audience: 'personal', last_seq: 1, last_unread_seq: 1, me: me(0, {can_manage: true}),
+      dm_with: [{actor: 'bot:ops', name: 'Ops'}], dm_with_count: 1, archived_at: null};
+    const {page, seen} = await open(browser, 'ana');
+    await page.setViewportSize({width: 1000, height: 800});
+    await page.goto('https://tico-ui.test/#/bot/ops/dm');
+    await page.getByText('Just us here.').waitFor();
+    await page.locator('#bot-incognito[aria-pressed="true"]').waitFor();
+    assert.equal(await page.locator('#bot-incognito .bi-label').isVisible(), false, 'the lock, no word');
+    assert.equal(await page.locator('#bot-top-acts [data-thv-archive]').isVisible(), false, 'no Archive in the top line');
+    assert.deepEqual(await page.locator('#bot-top').evaluate(top => [...top.querySelectorAll<HTMLElement>('button, a')]
+      .filter(b => b.offsetParent && !/\p{L}/u.test(b.innerText) && !b.getAttribute('aria-label')).map(b => b.outerHTML.slice(0, 160))), [],
+      'a button with no word in the top line names itself');
+    await page.locator('#btabs [data-bt="info"]').click();
+    const row = page.locator('#bot-more-top #bot-dm-arch');
+    await row.waitFor();
+    assert.equal((await row.innerText()).trim(), 'Archive private chat');
+    await row.click();
+    await page.locator('.toast', {hasText: 'Archived'}).waitFor();
+    assert.deepEqual(seen.patches.at(-1), {archived: true});
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await page.locator('#bot-dm-arch').click();
+    assert.deepEqual(seen.patches.at(-1), {archived: false});
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    // The toast's Undo puts the row back too.
+    await page.locator('#bot-dm-arch').click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Unarchive private chat');
+    await page.locator('.toast button', {hasText: 'Undo'}).last().click();
+    await page.waitForFunction(() => document.querySelector('#bot-dm-arch')?.textContent?.trim() === 'Archive private chat');
+    assert.deepEqual(seen.patches.slice(-2), [{archived: true}, {archived: false}], 'Undo sent one unarchive');
+    await shot(page, 'bot-more-archive-private-chat');
+    assert.deepEqual(seen.errors, []);
+    await page.close();
+    opsDm = null;
+    // A bot with no private chat shows no row.
+    const {page: none} = await open(browser, 'ana');
+    await none.setViewportSize({width: 1000, height: 800});
+    await none.goto('https://tico-ui.test/#/bot/ops/info');
+    await none.locator('#bot-more-top').waitFor({state: 'attached'});
+    await none.waitForTimeout(300);
+    assert.equal(await none.locator('#bot-dm-arch').count(), 0, 'no private chat: no row');
+    await none.close();
   }
   {
     const {page} = await open(browser, 'bob', {phone: true});

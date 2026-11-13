@@ -556,9 +556,9 @@ const thvCanPost = (view: ThvView) => view.opts.canPost ?? (view.thread ? !!view
 // Archive on a root thread the viewer manages (not a Home): it leaves Threads and Catch up (threadsArchive). An archived
 // one offers Unarchive.
 const thvArchivable = (t: ThvThread | null | undefined) => !!t && !t.parent_id && t.audience !== 'home' && !!t.me?.can_manage;
-const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive aria-label="${t.archived_at ? 'Unarchive' : 'Archive'}" title="${t.archived_at ? 'Unarchive' : 'Archive'}"><span class="nav-icon" aria-hidden="true">${t.archived_at ? 'unarchive' : 'archive'}</span></button>` : '';
+const thvArchiveHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t ? `<button type="button" class="ghost thv-arch" data-thv-archive>${t.archived_at ? 'Unarchive' : 'Archive'}</button>` : '';
 // Delete, only when the server says the thread is deletable: every message deleted and nobody else in it.
-const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread" title="Delete thread"><span class="nav-icon" aria-hidden="true">delete</span></button>` : '';
+const thvDeleteHTML = (t: ThvThread | null | undefined) => thvArchivable(t) && t?.deletable ? `<button type="button" class="ghost thv-del" data-thv-delete aria-label="Delete thread">Delete</button>` : '';
 function thvActsHTML(view: ThvView) {
   const t = view.thread!, list = view.memberList;
   const members = !t.parent_id && ['members', 'personal', 'company', 'team'].includes(t.audience);

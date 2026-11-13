@@ -211,6 +211,8 @@ async function shot(page: Page, name: string) {
       await page.mouse.move(to.x + 20, to.y + 20, {steps: 8});
       await page.mouse.up();
       await page.waitForFunction(() => document.querySelector('#dash-grid .dash-pin h2')?.textContent.startsWith('Latest'));
+      // The card moves on screen before its order request reaches the fake: wait for that third write, not the last one so far.
+      for (const end = Date.now() + 10000; fake.writes.length < 3 && Date.now() < end;) await new Promise(r => setTimeout(r, 25));
       assert.deepEqual(fake.writes.at(-1)![2].ids, ['p4', 'p2', 'p1', 'p3']);
 
       // Add a card from its form: Done per week over 12 weeks, large.

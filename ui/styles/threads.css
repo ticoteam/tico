@@ -203,9 +203,9 @@ a.src-name:hover{color:var(--ink);text-decoration:underline}
 .bot-top-acts[hidden]{display:none}
 .bot-top-acts .thv-titleline{gap:4px;padding:0}
 @media (max-width:1099px){.bot-top-acts{order:2}}
-/* Incognito (a private DM, not the team's Home): a lock in the top line beside More; it says Incognito only while on */
+/* Incognito (a private DM, not the team's Home): a lock in the top line beside More, raised while on */
 .bot-incognito{order:3;flex:none;align-self:center;display:inline-flex;align-items:center;justify-content:center;gap:5px;min-width:32px;height:32px;padding:0 6px;border:0;border-radius:6px;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);cursor:pointer}
-.bot-incognito[hidden],.bot-incognito:not([aria-pressed=true]) .bi-label{display:none}
+.bot-incognito[hidden],.bot-incognito .bi-label{display:none}   /* an icon, raised when on (#282) */
 .bot-incognito .nav-icon{font-size:18px}
 @media (max-width:1099px){.bot-incognito{order:2}}
 .pill-thread .p-pill{border-color:var(--g5)}   /* the composer's edge reads against the page (3:1) */
