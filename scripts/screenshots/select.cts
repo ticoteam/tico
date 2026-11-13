@@ -54,7 +54,7 @@ const SHARED: string[] = [
 // Files of features no PAGES entry shows. A change to one says so in the reason instead of shooting every page. A
 // page's own `ui` globs win over this list: a file both name belongs to the page.
 const UNSHOWN: string[] = [
-  'ui/vendor/**', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
+  'ui/vendor/**', 'ui/app/file-review.ts', 'ui/styles/file-review.css', 'ui/app/settings-*.js', 'ui/app/settings-*.ts', 'ui/app/vault.ts', 'ui/app/catalog.ts', 'ui/app/cloud-*.ts', 'ui/app/team-add.ts',
   'ui/app/integrations.ts', 'ui/app/mail.ts', 'ui/app/email-preview.ts', 'ui/app/messaging.ts', 'ui/app/sql.ts',
   'ui/app/assistant-page.ts', 'ui/app/skills*.ts', 'ui/app/tags.ts', 'ui/app/roadmaps.ts', 'ui/app/company-page.ts',
   'ui/app/computer-*.ts', 'ui/app/dashboard.ts', 'ui/app/overview*.ts', 'ui/app/pages.ts', 'ui/app/replay.ts',
