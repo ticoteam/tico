@@ -77,8 +77,19 @@ CLI = (
         "login fill",
         "type the username, password or 2FA code into a box on the page",
         args=(Arg("ref", metavar="eN"),),
+        example='tico login fill slack password --ref e2',
         render=_render_fill,
     ),
-    Command("login copy", "put the username, password or 2FA code on this computer's clipboard", render=_render_copy),
-    Command("login code", "the current 2FA code and the seconds it has left", render=_render_code),
+    Command(
+        "login copy",
+        "put the username, password or 2FA code on this computer's clipboard",
+        example='tico login copy slack username',
+        render=_render_copy,
+    ),
+    Command(
+        "login code",
+        "the current 2FA code and the seconds it has left",
+        example='tico login code slack',
+        render=_render_code,
+    ),
 )
