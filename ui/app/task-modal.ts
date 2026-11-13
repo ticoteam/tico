@@ -346,11 +346,7 @@ function taskModalBind(d: ModalDialog, task: ModalTask, full = false) {
   });
   const unsnooze = $('[data-task-unsnooze]', d);
   if (unsnooze) unsnooze.onclick = () => change({unsnooze: true}, undefined, 'snooze');
-  const answer = $('[data-task-answer]', d);
-  if (answer) answer.onclick = async () => {
-    answer.disabled = true;
-    try { await decideOpenAsk(String(task.id), String(answer.dataset.taskAnswer)); } finally { answer.disabled = false; }
-  };
+  taskAnswerBind(d, task);
   taskRequirementsBind(d, task, fresh => { if (d.open && String(d.dataset.task) === String(task.id)) { d.liveTask = fresh; void taskModalShow(fresh, d); } });
   taskPropsBind(d, task, change);
   roadmapTaskBind(d, task, change);
@@ -1128,6 +1124,14 @@ function taskTurnLineHTML(t: ModalTask): string {
     <button type="button" class="primary tmodal-act" data-task-answer="${esc(String(turn.requirement_id))}">Answer</button></div>`
     : turn?.line ? `<p class="task-wait">${taskMarkHTML(t, {space: false})}<span>${esc(clipLine(turn.line, 400))}</span>${taskCauseLinkHTML(turn.href)}</p>` : '';
 }
+// Answer opens the ask's card; bound again whenever a refresh inserts the banner.
+function taskAnswerBind(d: ModalDialog, task: ModalTask): void {
+  const answer = $('[data-task-answer]', d);
+  if (answer) answer.onclick = async () => {
+    answer.disabled = true;
+    try { await decideOpenAsk(String(task.id), String(answer.dataset.taskAnswer)); } finally { answer.disabled = false; }
+  };
+}
 // The needs-you banner follows the turn: it goes once the task no longer waits on this reader's own ask, and appears when
 // a refresh raises one.
 function taskNeedBannerSync(d: ModalDialog, task: ModalTask | null | undefined): void {
@@ -1145,6 +1149,7 @@ function taskNeedBannerSync(d: ModalDialog, task: ModalTask | null | undefined):
   const old = $('.task-wait', d);
   if (old) old.outerHTML = html;
   else $('.task-tabs', d)?.insertAdjacentHTML('beforebegin', html);
+  taskAnswerBind(d, task);
 }
 // An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
 function taskAskSettled(taskId: string | number): void {

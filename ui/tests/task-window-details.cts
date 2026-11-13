@@ -87,6 +87,8 @@ const RID = 'spec-ok-ana';
       await win.locator('.task-need').waitFor();
       assert.match(await win.locator('.task-need').innerText(), /Ship it\?/);
       assert.equal(await win.locator('.task-need').getByRole('button', {name: 'Answer'}).count(), 1);
+      assert.equal(await win.locator('.task-need [data-task-answer]').evaluate(b => typeof (b as HTMLButtonElement).onclick), 'function', 'the refreshed Answer button is bound');
+      assert.equal(await win.locator('[data-prop-row="add-tag"] [data-prop="tags"]').count(), 1, 'no tags: a button still adds the first tag');
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -128,10 +128,10 @@ function taskPropsHTML(t: PropTask): string {
         + (r.edit && dueAt ? `<button type="button" class="prop-x" data-prop-clear="due" aria-label="Clear the due date" title="Clear">${TL_ICON.x}</button>` : '')}));
   // Tags: chips (each opens its tag) and a small +
   const chips = tagChips(t.labels || [], t.tags || [], r.links, true);
-  if (chips) rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips
-    || (r.links ? '' : '<span class="prop-v ro empty"><span class="prop-txt">None</span></span>')}${r.links
-    ? (chips ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>`
-      : `<button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Tags: none, add a tag"><span class="prop-txt">Add tags</span></button>`) : ''}</span></span></div>`);
+  if (chips) rows.push(`<div class="prop" data-prop-row="tags"><span class="prop-k" aria-hidden="true">Tags</span><span class="prop-vwrap"><span class="prop-tags tlabels" aria-label="Tags">${chips}${r.links
+    ? `<button type="button" class="prop-add" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag" title="Add a tag">${TL_ICON.plus}</button>` : ''}</span></span></div>`);
+  // No tags: the row hides, and a lone button keeps the way to the first tag.
+  else if (r.links) rows.push(`<div class="prop" data-prop-row="add-tag"><span class="prop-k" aria-hidden="true"></span><span class="prop-vwrap"><button type="button" class="prop-v empty" data-prop="tags" aria-haspopup="menu" aria-label="Add a tag"><span class="prop-txt">Add a tag</span></button></span></div>`);
   // Part of: the parent's title is a link to it. A parent is fixed when the task is filed (backend/task_relations.py).
   // Other relations are in the Related section.
   const parent = taskParent(t);
