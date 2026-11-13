@@ -34,6 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import hubdb as H, task_privacy
 from .auth import validate_identity
+from .config import DEFAULT_COMPANY_NAME
 from .health import GITHUB_HEALTH, note_github_token
 from .store import Problem, digest, encode
 from . import bot_settings as BS
@@ -489,6 +490,9 @@ class GitHubApp:
         kind = owner.get("type") if owner.get("type") in ACCOUNT_TYPES else account
         if kind == PERSONAL and owner.get("login"):
             org = str(owner["login"])
+        if not org:
+            # A personal connect names no account up front, so the conversion's owner is the only one there is.
+            raise Problem("github_exchange", "GitHub's answer did not say which account the app was made for", 502)
         secrets_blob = json.dumps(
             {
                 "pem": conversion["pem"],
@@ -1941,10 +1945,15 @@ def install_github_app(app, settings, store):
         scopes = [scope for scope, _ in found]
         return (set.intersection(*scopes) if scopes else set()), [run for _, run in found]
 
+    def app_name(name=""):
+        """The name the App is made with: the one asked for, else "<team name> Tico"."""
+        return (name or f"{settings.company_name} Tico").strip()[:34]  # GitHub's limit, as manifest() sends it
+
     def status_view(refresh=False):
         row = service.row()
         if not row:
-            return {"connected": False}
+            # The form says the name GitHub will propose; with no team name set there is none worth proposing.
+            return {"connected": False, "app_name": "" if settings.company_name == DEFAULT_COMPANY_NAME else app_name()}
         administration = service.can_create_repos(refresh=refresh)
         personal = account_kind(row) == PERSONAL
         authorized = service.user_authorized() if personal else False
@@ -1988,11 +1997,13 @@ def install_github_app(app, settings, store):
         return status_view(refresh=True)
 
     @app.get("/api/v2/github/app/manifest")
-    def manifest_form(request: Request, org: str, name: str = "", administration: bool = True, html: bool = False):
+    def manifest_form(request: Request, org: str = "", name: str = "", administration: bool = True, html: bool = False):
         """`org` is the GitHub account or organization the App is made under: GitHub says which it is, and the setup
-        page is GitHub's for that kind (a personal account's or an organization's)."""
+        page is GitHub's for that kind (a personal account's or an organization's). No `org` is a personal account:
+        GitHub makes the App for whoever is signed in there, and `save` keeps that login, so nothing is looked up."""
         who = owner(request)
-        if not ORG.match(org):
+        org = org.strip()
+        if org and not ORG.match(org):
             raise Problem(
                 "github_org", "Enter the GitHub account or organization's name (letters, digits and hyphens)", 422
             )
@@ -2003,7 +2014,7 @@ def install_github_app(app, settings, store):
         with store.read() as c:
             if service.key_lost(c):
                 raise Problem("github_key_missing", LOST_KEY, 409)
-        kind = service.account_type(org)
+        kind = service.account_type(org) if org else PERSONAL
         if kind == PERSONAL:
             # Always asked for a personal account, so one acceptance covers repository creation once it is built.
             administration = True
@@ -2014,9 +2025,7 @@ def install_github_app(app, settings, store):
                 "INSERT INTO github_app_states(nonce,actor,org,administration,created_at,account_type) VALUES(?,?,?,?,?,?)",
                 (nonce, who.actor, org, int(administration), time.time(), kind),
             )
-        body = manifest(
-            settings, (name or f"{settings.company_name} Tico").strip(), administration, personal=kind == PERSONAL
-        )
+        body = manifest(settings, app_name(name), administration, personal=kind == PERSONAL)
         base = (
             "https://github.com/settings/apps/new"
             if kind == PERSONAL
