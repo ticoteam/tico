@@ -164,10 +164,13 @@ def _job(c, message_id):
     return c.execute("SELECT state FROM jobs WHERE message_id=?", (message_id,)).fetchone()[0]
 
 
-def test_the_clean_up_takes_out_every_queued_room_notice_and_touches_nothing_else(c):
+def test_the_clean_up_takes_out_every_queued_room_notice_and_touches_nothing_else(c, monkeypatch):
     """Given undelivered "has room" notices at release (one alone, one that took in an earlier wake about its task, and
     one already delivered), when the clean-up runs, then none is left queued, the wake it took in is still queued with
     its own words, and every other message and job is as it was. Running it again changes nothing."""
+    # The notices predate the rule that a wake key starts with its task id, which now refuses them: make them as
+    # they were made then.
+    monkeypatch.setattr(task_wakes, "filed_under", lambda wake_key, task_id: True)
     alone = X.new_task(c, WRITER, "Brief", "product")
     folded = X.new_task(c, WRITER, "Second brief", "product")
     other = X.new_task(c, WATCHER, "Weekly signups", "watch")

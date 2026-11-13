@@ -9,6 +9,7 @@ was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes o
 """
 
 import json
+import logging
 from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
     import sqlite3
 
 Row = dict[str, Any]
+_log = logging.getLogger(__name__)
 # run_triggers is untyped: its functions are Any here.
 RT: Any = run_triggers
 
@@ -41,6 +43,11 @@ def _h() -> Any:
 
 def key(task_id: str, visit_id: str, level: str = "owner", try_n: int = 0) -> str:
     return f"{task_id}:{visit_id}:{level}:{try_n}"
+
+
+def filed_under(wake_key: str, task_id: str) -> bool:
+    """Whether `wake_key` starts with `task_id`, the part `message_task` reads as its run's task."""
+    return wake_key.split(":", 1)[0] == task_id
 
 
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
@@ -191,6 +198,12 @@ def add(
     if not target:
         return None
     wake_key = wake_key or key(task["id"], visit["id"], level, try_n)
+    if not filed_under(wake_key, task["id"]):
+        # The run's task is read from the key's first part (message_task): a key filed under anything else names a
+        # task that is not this one, and its run would be refused at every claim (#240, the "room:" keys). Refused
+        # here, so nothing is queued.
+        _log.warning("wake refused: key %r is not filed under task %s", wake_key, task["id"])
+        return None
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (wake_key,)).fetchone():
         return None
     if not H._actor_exists(conn, target):
