@@ -157,6 +157,27 @@ def test_a_loop_a_dependency_on_an_ended_task_and_on_itself_are_refused(c):
     assert not any(D.is_wait(w.requirement_id) for w in W.waiting_on(c, a))
 
 
+def test_a_bot_with_only_its_own_task_may_make_it_wait_on_another_owners_main_red_task(c):
+    """Nov 13: the Builder, Reviewer, QA Owner and Release Owner templates tell a bot whose checks fail only because main
+    is red to make its own task depend on the one open "Main red:" task, which another bot owns. A dependency is the
+    waiting task's alone, so that bot may write it; relating the two any other way changes the main-red task too and is
+    refused, which is why the templates say to comment on it instead."""
+    build(c)
+    fixer = X.bot(c, "release-owner")
+    main_red = X.new_task(c, X.ANA, "Main red: inboxes.cts, since #3335", "general", assignee=fixer)["id"]
+    mine = task(c, "My change")
+    assert E.task(c, mine)["owner_id"] == B and E.task(c, main_red)["owner_id"] == fixer
+    assert TR.relate(c, B, mine, main_red, "depends_on") is True
+    assert D.blocked(c, mine)
+    for other_way in (
+        lambda: TR.relate(c, B, mine, main_red, "related"),
+        lambda: TR.relate(c, B, main_red, mine, "depends_on"),
+    ):
+        with pytest.raises(H.Refused) as refused:
+            other_way()
+        assert refused.value.rule == "identity"
+
+
 def later(minutes):
     return H.shift(H.now(), minutes=minutes)
 

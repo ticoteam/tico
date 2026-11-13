@@ -34,10 +34,19 @@ carries the blocking count).
 5. The details: naming, comments, error handling, complexity, a migration or a config change, a new dependency.
 6. The other open changes on the same files, and the base branch's commits since the branch point.
 7. Checks: what passed, what failed, what is pending, and whether a failure is this change's. A check that did not run is "not
-   checked", not green. A failure that main has too is not a finding against this change: name the open `Main red:`
-   task on the page (`tico task list --q "Main red" --status open --snoozed all`: without `--snoozed all` a snoozed
-   one is hidden); file one only when none is open, never a second for the same break. Once main is fixed, the fix is the Builder's rebase and push, not a re-run: a re-run tests the
-   same merge with the old main and fails again.
+   checked", not green. A failure that main has too is not a finding against this change. When main is red:
+   - Look for the one open task first, snoozed ones included (without `--snoozed all` a snoozed one is hidden):
+     `tico task list --q "Main red" --status open --snoozed all`. Name it on the page, and say on it what it blocks:
+     `tico task comment <main-red task> "Blocks #<your task> (PR #<the pull request>): <test> fails, <run link>"`.
+     Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
+   - File one only when none is open, never a second for the same break, titled
+     `Main red: <the failing test or check>, since <the pull request or commit that broke it>`.
+   - When your stage cannot finish until main is fixed, make your task depend on it:
+     `tico task relate <your task> depends_on <main-red task>` (written on your task only, so allowed on another
+     owner's). With no task to depend on, or a refusal, snooze naming the fix pull request,
+     `waiting for #<fix pull request> to merge`. Never a guessed date.
+   - Once main is fixed, the fix is the Builder's rebase and push (`git rebase origin/<base branch>`), never re-run: a
+     re-run tests the same merge with the old main and fails again.
 
 ## 2. Check against the team's standard
 

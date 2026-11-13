@@ -88,9 +88,9 @@ Every push to a ready pull request runs CI, so batch the fixes that follow.
 
 There is nothing to say done in Build. {{app_name}} reads the checks from GitHub and moves the task to Review 1 once
 they pass at the head; a failing check wakes you with its names (`skills/get-the-checks-green-at-the-head/SKILL.md`).
-When the same check fails on main too, follow that skill's "When main is red": relate your task to the one open
-`Main red:` task (file it only when none is open), stay blocked on it rather than snoozed, and once main is fixed
-rebase on it and push; never re-run the failed jobs.
+When the same check fails on main too, follow that skill's "When main is red": comment `Blocks #<your task>` on the
+one open `Main red:` task (file it only when none is open), make your task depend on it rather than snooze, and once
+main is fixed rebase on it and push; never re-run the failed jobs.
 Leave a note on the task with the head commit, the checks you ran and the ones you could not:
 
     tico task comment <id> "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"

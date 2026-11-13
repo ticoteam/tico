@@ -25,13 +25,17 @@ re-run.
 1. **One task for the break.** Before you file anything, look for an open one, snoozed ones included (a plain list
    hides a snoozed task, and the bot fixing main may have snoozed its own while the fix waits to merge):
    `tico task list --q "Main red" --status open --snoozed all`. When one names the same failing test or check, do
-   not file another and do not open a second fix pull request: relate your task to it (`tico task relate <your task> <main-red task>`)
-   and add what you saw there (the failing test, your run link) as a comment. Only when none is open, file one
-   titled `Main red: <the failing test or check> since <the pull request that broke it>`, so the next bot finds it.
-2. **Wait on that task, not on a date.** Leave your task open and comment
-   `Blocked on <main-red task>: main is red in <test>`. Never snooze "waiting for main" to a guessed date: a task snoozed
-   for days sleeps on after main is fixed. Where {{app_name}} can mark a task blocked by another, mark it blocked by the
-   main-red task instead.
+   not file another and do not open a second fix pull request. Say on it that it blocks you, with what you saw:
+   `tico task comment <main-red task> "Blocks #<your task> (PR #<your pull request>): <test> fails, <run link>"`.
+   Any relation but the dependency in step 2 changes the other owner's task too, and {{app_name}} refuses it. Only when
+   none is open, file one titled `Main red: <the failing test or check>, since <the pull request or commit that broke it>`,
+   so the next bot finds it.
+2. **Wait on that task, not on a date.** Make your own task depend on it:
+   `tico task relate <your task> depends_on <main-red task>`. A dependency is written on the waiting task only, so you
+   may set it on another owner's main-red task; your task shows Blocked and you are woken when that task ends. When
+   there is no task to depend on (main is being fixed by a pull request with no task) or {{app_name}} refuses the
+   dependency, snooze naming the fix pull request, `waiting for #<fix pull request> to merge`: its merge wakes you.
+   Never snooze "waiting for main" to a guessed date: a task snoozed for days sleeps on after main is fixed.
 3. **After main is fixed: rebase and push, never re-run.** A re-run of the failed job tests the same merge with the
    old main and fails again on the same break. Rebase your branch on the fixed main and push, so the checks run on a
    new head:

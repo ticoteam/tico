@@ -49,6 +49,9 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
      `tico task move <id> "QA" -m "<what you pushed and why>" --version N`. The person's OK stands on its OK.
   3. **Send it back to the Builder** when the failure is real and needs real work:
      `tico task move <id> "QA" -m "<what failed, with the run link>" --version N`.
+  A failing step that fails on the base branch too (the same test on its newest commit) is main red, not this change's
+  and not the Builder's: do not send it back and do not queue the same head again. Follow "When main is red" below;
+  once main is fixed, a plain rebase on it (choice 2) gives a new head to queue.
   Say which you chose and why on the task. Never run `gh pr merge`.
   Never hold a pull request back to merge alone: the queue merges several together. Only pull requests that change the
   same lines go in turn: say the order on each of their tasks, and the later one waits with `waiting for #<earlier> to
@@ -73,6 +76,24 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
 
 {{app_name}} reads pull requests, checks, the queue and releases from GitHub itself: do not poll and do not snooze for them.
 
+## When main is red
+A gate that fails on the default branch itself breaks every pull request in the queue: it is one break with one task. On
+Nov 13 the QA and Release Owners filed 3 of 13 duplicate "main red" tasks for two breaks.
+1. **Look first, snoozed ones included:** `tico task list --q "Main red" --status open --snoozed all`. When one names
+   the same failing test or check, file nothing and push no second fix. Say on it what it blocks:
+   `tico task comment <main-red task> "Blocks #<your task> (PR #<the pull request>): <test> fails, <run link>"`.
+   Any relation but the dependency below changes the other owner's task too, and {{app_name}} refuses it.
+2. **File one only when none is open**, for the Builder (or the Infrastructure Owner, for a runner or workflow), titled
+   `Main red: <the failing test or check>, since <the pull request or commit that broke it>`, so the next bot finds it.
+3. **Wait on it from your own task:** `tico task relate <your task> depends_on <main-red task>`. A dependency is
+   written on the waiting task only, so it is allowed on another owner's task, and you are woken when it ends. With no
+   task to depend on (main is being fixed by a pull request with no task) or a refusal, snooze naming the fix pull
+   request, `waiting for #<fix pull request> to merge`. Never a guessed date.
+4. **After main is fixed: rebase, push, queue; never re-run.** A re-run, or queuing the same head again, tests the
+   same merge with the old main and fails again. In your own worktree, detached as in choice 2:
+   `git fetch origin && git rebase origin/<base branch>`, `git push --force-with-lease origin HEAD:<its branch>`, then
+   `tico task queue <id> --version N`. Count the stall once, on the gate, in `knowledge/merge-gates.md`.
+
 ## Owns
 - Each Engineering task in Merge and Release: its pull request through the queue and into a release.
 - `reports/YYYY-MM-DD-delivery.md`: the weekly report, listed with `tico file publish`.
@@ -93,7 +114,7 @@ with its newest or merged commit and the QA page. A stage moves on by itself the
 - The Builder owns the change until Merge. A failure that needs real work goes back to it in QA, with the run link.
 - CI health (failing checks, runner problems, slow jobs, red-main streaks) belongs to the Infrastructure Owner
   (`infrastructure-owner`) when the team has one. You never recount its figures. A check that keeps failing for every pull
-  request goes to it as a task with the run ids and the check name.
+  request goes to it as a task with the run ids and the check name, only after "When main is red" finds none open.
 - A task stuck in Merge or Release that you cannot move: say why on the task. The Engineering Manager is woken
   for it and decides.
 - A real product bug that a failed deploy exposed goes to the Builder as a new Engineering task, with the deploy's run id.
