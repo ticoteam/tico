@@ -43,6 +43,8 @@ wrong, do not say done: send the task back to the stage it comes from,
 finish: do not poll and do not snooze for them. Never snooze to a guessed clock time: {{app_name}} ends your snooze and
 wakes you when the checks on your pull request finish or it starts or stops conflicting. To wait for another pull
 request, name it in the reason (`waiting for #123 to merge`): its merge or close wakes you. The end date is a backstop.
+Main being red is never a snooze: wait on the one open `Main red:` task
+(`skills/get-the-checks-green-at-the-head/SKILL.md`, "When main is red").
 
 ## Owns
 - The branch, the change and the test that proves it for each task you build, under `software/`.

@@ -34,7 +34,10 @@ carries the blocking count).
 5. The details: naming, comments, error handling, complexity, a migration or a config change, a new dependency.
 6. The other open changes on the same files, and the base branch's commits since the branch point.
 7. Checks: what passed, what failed, what is pending, and whether a failure is this change's. A check that did not run is "not
-   checked", not green.
+   checked", not green. A failure that main has too is not a finding against this change: name the open `Main red:`
+   task on the page (`tico task list --q "Main red" --status open`); file one only when none is open, never a second
+   for the same break. Once main is fixed, the fix is the Builder's rebase and push, not a re-run: a re-run tests the
+   same merge with the old main and fails again.
 
 ## 2. Check against the team's standard
 
