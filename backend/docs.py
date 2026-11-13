@@ -844,8 +844,8 @@ class Docs:
 
     def target_unchanged(self, c, row, body):
         """A section or append write sent on an older version: whether what it writes to is the same now. An append
-        to the doc always is; a section is when its text is the same in the version read and the latest."""
-        if body.section is None:
+        always is, to the doc or to a section (a missing heading is still refused when it applies); a section is when its text is the same in the version read and the latest."""
+        if body.append or body.section is None:
             return True
         then = c.execute(
             "SELECT body FROM doc_versions WHERE doc_id=? AND version=?", (row["id"], body.version)

@@ -375,6 +375,16 @@ def test_a_section_write_lands_on_a_newer_version_only_if_its_section_is_unchang
     assert err and refused["error"] == "version_conflict" and refused["version"] == 4
     assert f"{usage['updated_by_name']} saved version 4 after you read version 3" in refused["detail"]
     assert call(api, "GET", "docs/" + doc["id"])["doc"]["body"] == usage["body"]
+    # A section append lands on the newer version even though that section changed.
+    err, inside = tool(
+        api,
+        "tico_doc_write",
+        {"path": "ops/guide.md", "append": True, "section": "Usage", "body": "Also this.", "base_version": 3},
+        token=token,
+    )
+    assert not err and inside["doc"]["version"] == 5
+    assert "three times" in inside["doc"]["body"] and "Also this." in inside["doc"]["body"]
+    usage = inside["doc"]
     # Append always lands on the newer version.
     err, appended = tool(
         api, "tico_doc_write", {"path": "ops/guide.md", "append": True, "body": "More.", "base_version": 3}, token=token
