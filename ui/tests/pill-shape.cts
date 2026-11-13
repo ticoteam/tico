@@ -4,7 +4,7 @@
 // height, focused or not. One line is 48px on a computer; the box stops at eight lines (160px, 176px on a phone) and
 // scrolls inside with the caret's line in view; emptied, it is one line again. Run on a computer (1440x900) and a phone
 // (390x844) for the five composers: the bot chat (a bot's DM, with the ways caret), a thread, a DM, a task's chat and
-// the ask panel's (makePill, as the Assistant page's). Every request is answered offline by the tasks page's fake.
+// the ask panel's (makePill), plus the Assistant page's makePill in #chat-composer, whose phone layout is a grid. Every request is answered offline by the tasks page's fake.
 // TICO_SCREENSHOT_DIR=<dir> saves each composer at 5 lines.
 import type * as Tasks from './tasks-page.cts';
 import type * as ThreadsFake from './support/threads-fake.cts';
@@ -24,6 +24,7 @@ interface Shape {
   text: {top: number; client: number; scroll: number; scrollTop: number; line: number; padTop: number; padBottom: number; font: number};
   send: {bottom: number; x: number; w: number; h: number} | null;
   xs: number[];
+  targets: {cls: string; w: number; h: number}[];
 }
 
 // Where the parts of one composer sit, read in the page.
@@ -39,7 +40,9 @@ const measure = (pill: Locator): Promise<Shape> => pill.evaluate((el: HTMLElemen
   return {pill: {top: r.top, bottom: r.bottom, height: r.height, radius: cs.borderTopLeftRadius, bt: parseFloat(cs.borderTopWidth), bb: parseFloat(cs.borderBottomWidth)},
     text: {top: tr.top, client: box.clientHeight, scroll: box.scrollHeight, scrollTop: box.scrollTop, line: parseFloat(tc.lineHeight),
       padTop: parseFloat(tc.paddingTop), padBottom: parseFloat(tc.paddingBottom), font: parseFloat(tc.fontSize)},
-    send: circle, xs: buttons.map(b => Math.round(b.getBoundingClientRect().left))};
+    send: circle, xs: buttons.map(b => Math.round(b.getBoundingClientRect().left)),
+    targets: [...el.querySelectorAll('.p-bot, .p-attach, .p-way, .p-send-icon')].filter(shown).map(b => {
+      const t = b.getBoundingClientRect(); return {cls: b.className, w: Math.round(t.width), h: Math.round(t.height)}; })};
 });
 
 const lines = (n: number) => Array.from({length: n}, (_, i) => `Line ${i + 1} of the plan`).join('\n');
@@ -74,6 +77,11 @@ async function check(page: Page, name: string, pill: Locator, phone: boolean) {
       assert.equal(s.text.scrollTop % row, 0, `${at}: the last line shows whole`);
     }
     if (n === 1 && !phone) near(s.pill.height, 48, `${at}: one line is 48px`);
+    // A phone keeps 44px targets (the row still takes 34px); a computer's Attach and caret are 34px squares.
+    if (n === 1) for (const t of s.targets) {
+      const want = phone || /p-send-icon/.test(t.cls) ? 44 : 34;
+      assert.ok(t.w >= want && t.h === want, `${at}: ${t.cls} is a ${want}px target (${t.w}x${t.h})`);
+    }
   }
   await box.focus();
   assert.equal((await measure(pill)).pill.radius, '9px', `${name}: the corner while focused`);
@@ -114,8 +122,12 @@ async function run(browser: Browser, phone: boolean) {
     threadMount(host('shape-thread'), {id: 't-launch', header: false});
     threadMount(host('shape-dm'), {dm: 'sam', header: false});
     host('shape-ask').append(makePill({mode: 'chat', label: 'Message the Assistant', placeholder: 'Message the Assistant'}).el);
+    // The Assistant page's: makePill with its bot inside #chat-composer, whose phone layout is a grid (chat.css).
+    const page = document.createElement('div'); page.id = 'chat-composer';
+    page.append(makePill({mode: 'chat', slug: 'engineering-manager', label: 'Message the Assistant'}).el);
+    host('shape-assistant').append(page);
   });
-  for (const name of ['bot', 'thread', 'dm', 'ask']) {
+  for (const name of ['bot', 'thread', 'dm', 'ask', 'assistant']) {
     await page.evaluate(n => { for (const el of document.querySelectorAll<HTMLElement>('[id^="shape-"]')) el.hidden = el.id !== `shape-${n}`; }, name);
     const pill = page.locator(`#shape-${name} .p-pill`);
     await pill.waitFor();
