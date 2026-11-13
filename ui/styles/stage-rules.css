@@ -6,7 +6,9 @@
 .sr-btn .tnum:empty{display:none}
 .sr-btn + .pv-play{margin-left:0}
 .pv-group-head .sr-btn{margin-left:4px}
-.pv-phone-head .sr-btn{height:44px;margin:0 0 4px;padding:0 14px}
+/* One width on a phone: the count arrives late and differs in digits between stages, and the tabs must not move
+   (fits "Rules 999"). */
+.pv-phone-head .sr-btn{box-sizing:border-box;width:96px;height:44px;margin:0 0 4px;padding:0;justify-content:center;white-space:nowrap}
 
 .sr-modal{width:min(600px,calc(100vw - 32px))}
 /* The panel has no padding of its own, so the shared dialog head sits flush rather than pulled out over it. */
