@@ -875,6 +875,43 @@ def test_a_send_back_of_the_commits_after_the_ok_asks_the_person_again_after_the
     assert E.task(c, row["id"])["stage"]["name"] != "QA"
 
 
+def test_a_page_published_again_with_no_new_commits_keeps_the_persons_ok(c, store):
+    """Live, Nov 13 (#3584): Chris OK'd the Fixes 2 page, then the Builder published the same page again with the PR's
+    head unchanged, and Chris was asked "OK Chris (version 3)" again. The OK was for that code: a new version of the
+    same page at the same commits keeps it, and nobody is asked."""
+    row, rid, done_id = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert standing.met and standing.line == "OK'd by Ben on version 1; no new commits since"
+    assert not _ben_asked(c, row)
+    _bot(c, row, done_id, WRITER, "done")
+    assert E.task(c, row["id"])["stage"]["name"] != "QA"
+
+
+def test_another_page_after_the_ok_is_asked_again(c, store):
+    """The OK carries only for the same page: another file at the same commits is a person's to OK again."""
+    row, _, _ = _oked_at_bbbbbbb(c, store)
+    _pre_release(c, store, row)  # a new file replaces the OK'd one
+    standing = _f2(c, row)
+    assert standing.state == R.WAITING and standing.line.endswith("OK someone (version 1)")
+
+
+def test_a_page_published_again_after_new_commits_is_asked_again(c, store):
+    """The OK carries only at the commits it was given at: a new version after a new commit is asked again."""
+    row, rid, _ = _oked_at_bbbbbbb(c, store)
+    fid = P.current(c, E.task(c, row["id"])["visit"]["id"], rid)["file_id"]
+    _push(c, "acme/app", 45, "ccccccc00000")
+    F.save_diff(c, "acme/app", "bbbbbbb00000", "d1")
+    F.save_diff(c, "acme/app", "ccccccc00000", "d2")
+    _bot(c, row, rid, REVIEWER, "ok", "Read ccccccc.")
+    assert _f2(c, row).met, "the reviewer's read keeps Ben's OK on version 1"
+    _pre_release(c, store, row, fid=fid)
+    standing = _f2(c, row)
+    assert (standing.state, standing.met) == (R.WAITING, False)
+    assert standing.line.endswith("OK someone (version 2)")
+
+
 def _bodies(c, row):
     return c.execute(
         "SELECT recipient_id, body FROM messages WHERE wake_key LIKE ? ORDER BY created_at, id", (row["id"] + ":%",)
