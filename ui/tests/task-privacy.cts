@@ -161,7 +161,7 @@ const BOTS = [['pm', 'PM'], ['writer', 'Writer']].map(([name, display_name]) => 
     await page.locator('#task-modal .prop-pop').getByRole('menuitem', {name: 'Activity and links'}).click();
     await page.locator('#task-modal[open][data-task="t-14"] [data-related-add]').click();
     const kinds = await page.locator('#task-modal .prop-pop [data-prop-pick]').evaluateAll(els => els.map(e => (e as HTMLElement).dataset['propPick']));
-    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up']);
+    assert.deepEqual(kinds, ['related', 'duplicate_of', 'follow_up', 'depends_on']);
     await page.keyboard.press('Escape');
 
     // A parent the reader cannot open: "a private task", no link, nothing of it in the window.
