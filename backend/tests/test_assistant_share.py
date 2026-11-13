@@ -140,3 +140,29 @@ def test_what_it_has_learned_is_shared_only_when_the_person_includes_it(api):
     assert [e["text"] for e in learned] == ["Launches matter more than hiring news"]
     put(api, "assistant/viewers/learned", {"include_learned": False}, token="ben-test")
     assert get(api, "assistant/shared/human:ben", finance)["learned"] is None
+
+
+def test_a_personal_token_cannot_choose_who_views_the_chat(api):
+    """A token may be in an outside assistant's hands: the choice is the person's own, in Tico."""
+    token = post(api, "me/tokens", {"label": "outside assistant"}, "ben-test")["token"]
+    post(api, "assistant/viewers", {"bot": "finance"}, token=token, expected=403)
+    put(api, "assistant/viewers/learned", {"include_learned": True}, token=token, expected=403)
+    assert get(api, "assistant/viewers", "ben-test") == {"bots": [], "include_learned": False}
+
+
+def test_a_person_whose_sign_in_is_off_shares_nothing_more(api):
+    finance = bot_token(api, "finance")
+    post(api, "assistant/viewers", {"bot": "finance"}, token="cara-test")
+    get(api, "assistant/shared/human:cara", finance)
+    post(api, "access/people/cara", {"sign_in": False})
+    get(api, "assistant/shared/human:cara", finance, expected=403)
+
+
+def test_removing_the_last_bot_turns_learned_sharing_back_off(api):
+    post(api, "assistant/viewers", {"bot": "finance"}, token="ben-test")
+    put(api, "assistant/viewers/learned", {"include_learned": True}, token="ben-test")
+    assert delete(api, "assistant/viewers/finance", "ben-test") == {"bots": [], "include_learned": False}
+    finance = bot_token(api, "finance")
+    post(api, "assistant/learned", {"text": "Launches first"}, token="ben-test")
+    post(api, "assistant/viewers", {"bot": "finance"}, token="ben-test")
+    assert get(api, "assistant/shared/human:ben", finance)["learned"] is None

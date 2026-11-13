@@ -36,8 +36,9 @@ CARD_FIELDS = ("id", "summary", "description", "status", "proposer", "created_at
 
 
 def _owner_only(who: "Identity", settings: "Settings") -> str:
-    """The person themselves, on their own: never a bot, nor anyone acting for them."""
-    if who.role not in ("owner", "human") or not H.is_human(who.actor) or who.via:
+    """The person themselves, on their own: never a bot, nor anyone acting for them, and not a personal API token either,
+    which may be in an outside assistant's hands (as other consent switches refuse one)."""
+    if who.role not in ("owner", "human") or not H.is_human(who.actor) or who.via or who.via_token:
         raise Problem(
             "forbidden",
             "Only you choose who can view your " + settings.assistant_name + " chat, on your own",
@@ -111,6 +112,10 @@ def remove(c: "sqlite3.Connection", who: "Identity", ref: str, settings: "Settin
     gone = c.execute("DELETE FROM assistant_shares WHERE owner=? AND bot=?", (owner, bot_id)).rowcount
     if gone:
         H.event(c, owner, "assistant.share_removed", "bot:" + bot_id)
+    if not c.execute("SELECT 1 FROM assistant_shares WHERE owner=?", (owner,)).fetchone():
+        # With nobody left on the list the switch is not drawn, so it goes back to off: a bot added later never reads
+        # the learned layer on a choice made for another.
+        c.execute("DELETE FROM assistant_share_settings WHERE owner=?", (owner,))
     return viewers(c, owner)
 
 
@@ -175,6 +180,12 @@ def read(
         raise Problem(
             "not_shared", "This person has not chosen you to view their " + settings.assistant_name + " chat", 403
         )
+    from . import auth as A
+
+    standing: Any = A.standing  # pyright: ignore[reportUnknownMemberType]
+    if standing(c, H.actor_id(owner)):
+        # A person who left or whose sign-in is off shares nothing more, as their own Assistant stops for them.
+        raise Problem("not_shared", "This person's " + settings.assistant_name + " chat is not shared now", 403)
     room = find_room(c, owner)
     page: dict[str, Any] = (
         message_page(c, room["id"], before=before, limit=max(1, min(int(limit or READ_LIMIT), READ_LIMIT)))

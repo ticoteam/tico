@@ -127,13 +127,14 @@ chat routes still refuse it (`403`).
 
 You may let bots you choose view it, read only. On **What it has learned** (your Assistant's settings), the line
 **Bots that can view this chat** says None until you add one: **Add a bot**, type part of its name, pick it. Nobody is
-on it at first, and only you change it, on your own click: not your Assistant, not BotOps acting for you, not the owner
-or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
+on it at first, and only you change it, on your own click in Tico: not your Assistant, not BotOps acting for you, not a
+personal API token, not the owner or an admin (`GET`/`POST /api/v2/assistant/viewers`, `DELETE /api/v2/assistant/viewers/{bot}`). A bot on your list
 reads your messages, the Assistant's replies and its cards (what each proposed and what became of it, never its
 request or result) with `tico assistant shared` and `tico assistant shared-read <person>` (`GET
 /api/v2/assistant/shared/{person}`). It can never post, react or act on a card there: those routes still refuse it.
 **Remove** refuses its next read at once. What it has learned about you stays out unless you also tick **Include what
-it has learned about me** (`PUT /api/v2/assistant/viewers/learned`); the company layer is never shared. Each bot's
+it has learned about me** (`PUT /api/v2/assistant/viewers/learned`), which goes back to off when you remove the last
+bot; the company layer is never shared. If you leave the team or your sign-in is turned off, every read is refused. Each bot's
 last read shows beside it, and every read is in the audit log (`assistant.shared_read`, naming the bot and you). The
 list is never shared with people or another team, and no team-wide switch shares everyone's chat. Every new team gets the assistant, BotOps, the [Librarian](librarian.md) and the [Strategy Owner](goals-and-kpis.md#the-strategy-bot) built in (all required in setup, active once a computer is enrolled),
 and none can be archived or deleted by anyone: the owner included, through Settings, the API, `tico` or BotOps
