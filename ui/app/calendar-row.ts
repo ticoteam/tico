@@ -98,6 +98,7 @@ const calOpenHref = (o: CalOccurrence) => `${CAL_ROUTE}?date=${calDay(calWhen(o.
 // One line: "Calendar", then the viewer's next event as plain text ("Sales call · in 3 min"), its name opening the event on
 // the page. › steps to the event after it and ‹ back; a new page resets it to the very next. Nothing in the next week
 // reads "Nothing scheduled". Only the viewer's own timed events: no runs, nothing due, nothing declined, no all-day ones.
+// At the sidebar's default width a name is cut with "…" (the agreed fit); hovering it shows the whole line.
 interface CalRowState { list: CalOccurrence[]; at: number; off: boolean; failed: boolean; loading: boolean; pick: string | null; live: (() => void) | null; }
 const CAL_ROW: CalRowState = {list: [], at: 0, off: false, failed: false, loading: false, pick: null, live: null};
 const CAL_ROW_EVERY = 3 * 60 * 1000;

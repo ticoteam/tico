@@ -104,6 +104,8 @@ async function oneLine(page: Page) {
       const read = reads.find(q => q.get('kinds') === 'event');
       assert.ok(read && read.get('who') === 'me', 'the row reads only the viewer\'s own events');
       assert.ok(new Date(read!.get('to')!).getTime() - NOW.getTime() >= 7 * 86400e3, 'the read covers the next 7 days');
+      // At the sidebar's default width the name is cut; hovering it shows the whole line.
+      assert.equal(await row.locator('a.cal-nx').getAttribute('title'), 'Sales call · in 3 min', 'the full name on hover');
       await shot(page, 'row-soon');
       // AC-4: the name opens that event on the Calendar page.
       assert.equal(await row.locator('a.cal-nx').getAttribute('href'), '#/calendar?date=2026-11-11&open=ev-sales', 'AC-4: the name opens the event');
@@ -135,6 +137,7 @@ async function oneLine(page: Page) {
       await page.clock.runFor(3 * 60 * 1000);
       await page.waitForFunction(() => document.querySelector('#nav-calendar .cal-nx')?.textContent?.includes('now'));
       assert.deepEqual(await says(page), {text: 'Sales call · now', back: false, fwd: true}, 'AC-8/AC-11: under way reads "now"');
+      assert.equal(await row.locator('a.cal-nx').getAttribute('title'), 'Sales call · now', 'the hover line follows the redraw');
       // The name is plain ink, not greyed out.
       const ink = await row.locator('.cal-nm').evaluate(el => [getComputedStyle(el).color, getComputedStyle(document.querySelector('#nav-calendar a.nav-link')!).color]);
       assert.equal(ink[0], ink[1], 'the name is the same ink as "Calendar"');
@@ -168,6 +171,7 @@ async function oneLine(page: Page) {
       assert.equal(await oneLine(page), true, 'AC-10: one line, arrows in the row');
       const cut = await row.locator('.cal-nm').evaluate(el => ({over: el.scrollWidth > el.clientWidth, ellipsis: getComputedStyle(el).textOverflow}));
       assert.deepEqual(cut, {over: true, ellipsis: 'ellipsis'}, 'AC-10: the name is cut with "…"');
+      assert.equal(await row.locator('a.cal-nx').getAttribute('title'), `${LONG} · in 3 min`, 'a cut name shows in full on hover');
       await shot(page, 'row-phone');
       assert.deepEqual(errors, []);
       await context.close();
