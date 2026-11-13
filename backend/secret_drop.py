@@ -64,14 +64,16 @@ def _placeholder(value: str) -> bool:
     return bool(_re(str(rules()["placeholder"]), "i").match(value))
 
 
-def _negative_full(value: str) -> bool:
-    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()["negative"]))
+def _negative_full(value: str, keyed: bool = False) -> bool:
+    """Whether `value` is wholly an ordinary shape. After a strong context word (`keyed`) only a web address, an email
+    or a path from the root still counts: a hex string, a UUID or a relative path there is a key."""
+    return any(_re(p).fullmatch(value) for p in cast("list[str]", rules()["negative_keyed" if keyed else "negative"]))
 
 
-def secretish(value: str) -> bool:
+def secretish(value: str, keyed: bool = False) -> bool:
     """A value that reads as a key, not a word: 6+ characters with a digit or a symbol, or mixed case past the first
-    letter, and no placeholder or ordinary shape (an address, an email, an id, a path)."""
-    if len(value) < 6 or _placeholder(value) or _negative_full(value):
+    letter, and no placeholder or ordinary shape (an address, an email, an id, a path; `keyed`: see _negative_full)."""
+    if len(value) < 6 or _placeholder(value) or _negative_full(value, keyed):
         return False
     digit, symbol = _has(value, "[0-9]"), _has(value, "[^A-Za-z0-9]")
     mixed = _has(value[1:], "[A-Z]") and _has(value, "[a-z]")
@@ -81,6 +83,11 @@ def secretish(value: str) -> bool:
 def _has(text: str, cls: str) -> bool:
     """Character classes are ASCII on both sides: a letter outside ASCII counts as a symbol in Python and JavaScript."""
     return bool(_re(cls).search(text))
+
+
+def _strong(name: str) -> bool:
+    word = _word(name) if name else None
+    return bool(word and word["strong"])
 
 
 def _word(name: str) -> dict[str, Any] | None:
@@ -137,15 +144,15 @@ def _certain(text: str, rule: dict[str, Any]) -> list[Item]:
             rule["type"],
         )
         named = m.group(int(rule["name_group"])) if rule.get("name_group") else ""
+        strong = _strong(m.group(int(rule["word_group"])) if rule.get("word_group") else named)
         if check == "not_placeholder" and _placeholder(value):
             continue
-        if check == "secretish" and not secretish(value):
+        if check == "secretish" and not secretish(value, strong):
             continue
         if check in ("env", "context"):
             word = _word(named)
-            if _placeholder(value) or _negative_full(value):
+            if strong and (_placeholder(value) or _negative_full(value, keyed=True)):
                 continue
-            strong = bool(word and word["strong"])
             if not strong and not secretish(value):
                 continue
             if word:
