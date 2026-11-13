@@ -64,6 +64,9 @@ def test_runs_that_only_lapse_go_to_botops_and_pause_the_task(api):
     assert start_holds.LAPSED_WHY in review["body"] and "Review the negate PR" in review["body"]
     # Worded for silence, not as SAME hand-backs that each gave a reason.
     assert f"took {execution.PRE_START_TRIES} runs" in review["body"] and "handed back" not in review["body"]
+    # The try that stopped the job says why in Runs, not that a process failed: nothing ran.
+    [last] = [t for t in get(api, "bots/ops/turns") if t["id"] == attempt["id"]]
+    assert last["end_reason"].endswith(start_holds.BOTOPS_HAS_IT) and start_holds.LAPSED_WHY in last["end_reason"]
     # Nobody is asked to fix the computer: BotOps has it, and the bot is not shown as crashed.
     line = get(api, "status?bot=ops")["status"]
     assert line["state"] == "idle"

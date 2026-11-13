@@ -172,6 +172,10 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         if not row['started_at'] and row['final_text'] in (HANDED_BACK + '.', LAPSED + '.'):
             return row['final_text'][:-1]
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
+    if row['state'] == 'failed' and not row['started_at'] and row['final_text'] and not row['result']:
+        # Failed by the server before its computer started it (execution.expire, settle_unstarted, after
+        # PRE_START_TRIES or start_holds.SAME): the text it saved says why, where a fallback would say a process failed.
+        return scrub(row['final_text'])[:500]
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
     events = c.execute(
         "SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
