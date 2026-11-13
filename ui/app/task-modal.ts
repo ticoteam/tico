@@ -81,7 +81,7 @@ interface ModalRun { run: string; bot?: string | null; started_at?: string | nul
 // "worked 14 min": a finished run's length in words; under a minute is said so.
 function taskRunLineWords(r: ModalRun): string {
   const s = Math.max(0, (Date.parse(r.finished_at || '') - Date.parse(r.started_at || '')) / 1000);
-  if (!isFinite(s)) return '';
+  if (!Number.isFinite(s)) return '';
   if (s < 60) return 'worked under a minute';
   const m = Math.round(s / 60);
   return m < 60 ? `worked ${m} min` : `worked ${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`;
@@ -1125,7 +1125,7 @@ function taskNeedBannerSync(d: ModalDialog, task: ModalTask | null | undefined):
   const banner = $('.task-need', d);
   if (!banner || !task || String(task.id) !== String(d.dataset.task)) return;
   const turn = taskFinished(task) ? null : task.turn;
-  if (!(turn?.ask && turn.requirement_id && turn.who === myActor() && String(turn.requirement_id) === (banner.querySelector<HTMLElement>('[data-task-answer]')?.dataset.taskAnswer || ''))) banner.remove();
+  if (!(turn?.ask && turn.requirement_id && turn.who === myActor() && String(turn.requirement_id) === ($('[data-task-answer]', banner)?.dataset.taskAnswer || ''))) banner.remove();
 }
 // An ask of this task was answered in the Needs you card: read the open task again so its banner goes.
 function taskAskSettled(taskId: string | number): void {

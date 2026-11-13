@@ -88,7 +88,7 @@ function snoozeMenu(d: TaskDialog, anchor: HTMLElement, save: TaskSave): void {
 }
 // The tasks whose Details the reader opened: kept across a redraw, which would shut it.
 const TASK_DETAILS_OPEN = new Set<string>();
-function taskDetailsOpen(d: HTMLElement): void { const el = $('details.task-details', d) as HTMLDetailsElement | null; if (el) el.open = true; }
+function taskDetailsOpen(d: HTMLElement): void { const el: HTMLDetailsElement | null = $('details.task-details', d); if (el) el.open = true; }
 function taskPropsHTML(t: PropTask): string {
   const r = taskPropRights(t);
   const row = (key: string, label: string, value: string, o: PropRowOptions = {}): string => {
@@ -377,7 +377,7 @@ function taskEarlierStages(t: PropTask): {id: string; name: string}[] {
 function taskPropsBind(d: TaskDialog, task: PropTask, change: PropChange): void {
   const box = $('[data-task-props]', d) as HTMLElement | null; if (!box) return;
   taskPropsMsgPaint(d);
-  const details = $('details.task-details', d) as HTMLDetailsElement | null;
+  const details: HTMLDetailsElement | null = $('details.task-details', d);
   if (details) details.addEventListener('toggle', () => { TASK_DETAILS_OPEN[details.open ? 'add' : 'delete'](String(task.id)); });
   const msg = propsMsgBox(d);
   if (msg) msg.onclick = ev => {
