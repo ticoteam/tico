@@ -538,6 +538,8 @@ def at_once(c, runner_id, start, end):
     for r in _runs(c, runner_id, start, end):
         bot = edges.setdefault(r["bot_id"].removeprefix("bot:"), [])
         bot.append((r["started_at"], 1))
+        # A turn with no end runs to the window's end, even a lease that lapsed and is not yet swept, which
+        # start_places.bot_held no longer counts: the alert may read one turn high for a sweep interval at most.
         if r["finished_at"]:
             bot.append((r["finished_at"], -1))
     peaks = {}
@@ -682,7 +684,8 @@ COLUMNS = ["ts", "cpu", "cpu_max", "mem", "mem_max", "load1", "swap", "disk_free
 
 def _shown(bots, access, limit=None):
     """`bots` with those the reader may not see folded into one unnamed row ("another bot"), which `limit` (how many
-    named bots to keep) never cuts."""
+    named bots to keep) never cuts. The row adds up their counts: their turns in all for Busiest bots, and for an
+    overload the sum of each bot's own peak, which is at most that many at once since the peaks may not coincide."""
     out, hidden = [], 0
     for b in bots:
         if access is None or (access.get(b["bot"]) or {}).get("see"):
