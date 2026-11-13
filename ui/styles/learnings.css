@@ -1,7 +1,7 @@
 /* ui/styles/learnings.css — The Learnings page (ui/app/learnings.ts): a dense rail of nights, then one night. */
-.lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:100%}
+.lrn{display:grid;grid-template-columns:200px minmax(0,1fr);min-height:calc(100% - var(--ctl) - 23px)}   /* the page header (ctl + 9px, 14px under it) sits above */
 .lrn-rail{border-right:1px solid var(--line);padding:14px 8px;display:flex;flex-direction:column;gap:2px;overflow:auto}
-.lrn-rail h3,.lrn-grp>h3{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}
+.lrn-grp>h3{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);margin:2px 8px 8px}
 .lrn-n{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:6px;color:var(--ink);text-decoration:none;font-size:var(--t-base)}
 .lrn-n:hover{background:var(--hover)}
 .lrn-n.on{background:var(--surface2)}
@@ -44,7 +44,6 @@
 @media (max-width:760px){
   .lrn{grid-template-columns:1fr}
   .lrn-rail{flex-direction:row;overflow-x:auto;border-right:0;border-bottom:1px solid var(--line);padding:8px 16px}
-  .lrn-rail h3{display:none}
   .lrn-n{min-width:120px}
   .lrn-night{padding:16px}
   .lrn-body{padding-left:4px}

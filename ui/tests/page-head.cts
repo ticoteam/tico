@@ -24,7 +24,8 @@ const SCREENS: Screen[] = [
   {name: 'Rules', hash: '#/rules', tabs: true},
   {name: 'Docs', hash: '#/docs', button: true, more: ['Import a file…', 'Add source…']},
   {name: 'Tools', hash: '#/tools', more: ['Keys', 'Settings']},
-  {name: 'Meetings', hash: '#/meetings', tabs: true, more: ['Sources', 'Settings']},
+  // Sources joins Meetings' ⋯ once a source is connected (the source tiles stand in for it before); the seeded hub has none.
+  {name: 'Meetings', hash: '#/meetings', tabs: true, more: ['Settings']},
   {name: 'Usage', hash: '#/usage', tabs: true, button: false},
   {name: 'Updates', hash: '#/updates', tabs: true, button: false, more: ['Archive']},
   {name: 'Archive', hash: '#/updates?view=archive', button: false},
@@ -139,7 +140,9 @@ const titleLeft = (page: Page) => page.evaluate(() =>
           try { await open(page, s); } catch { say(s, '1100', ['no header']); continue; }
           say(s, '1100', await page.evaluate(() => {
             const bad: string[] = [], head = document.querySelector<HTMLElement>('#main header.ph')!, r = head.getBoundingClientRect();
-            if (r.height > 41.5) bad.push(`header ${Math.round(r.height)}px high: more than one row`);
+            // One row is 41px under the top padding (.ph-pad adds 8px above, on layouts that zero #main's padding).
+            const tall = r.height - parseFloat(getComputedStyle(head).paddingTop);
+            if (tall > 41.5) bad.push(`header ${Math.round(tall)}px high under its top padding: more than one row`);
             const b = head.querySelector<HTMLElement>('.ph-act .primary');
             if (b) {
               const br = b.getBoundingClientRect();

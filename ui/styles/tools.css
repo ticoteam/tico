@@ -4,9 +4,11 @@
 
 /* The list */
 .tt{min-width:0}
-.tt-head{display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
-.tt-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
-.tt-head .spacer{flex:1}
+/* Tools' header is the one page header (ui/app/page-head.ts, hook .tt-head). Contacts and Skills still draw their own
+   .tt-head, so its old rules stay for them only (:not(.ph)). */
+.tt-head:not(.ph){display:flex;align-items:center;flex-wrap:wrap;gap:8px;min-height:48px;margin:0 0 8px}
+.tt-head:not(.ph) h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.tt-head:not(.ph) .spacer{flex:1}
 .tt-bar{display:flex;align-items:center;flex-wrap:wrap;gap:8px 12px;margin:0 0 12px;min-width:0}
 .tt-bar .theme-seg{flex-wrap:wrap;max-width:100%;min-height:var(--ctl)}
 .tt-q{flex:0 1 240px;min-width:0;margin-left:auto}
@@ -40,7 +42,7 @@
 .tt-dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .tt-chev{width:16px;color:var(--muted);text-align:right}
 .tt-add{position:relative}
-.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;min-height:var(--ctl-sm, 32px);padding:0 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-sm)}
+.tt-add>summary{list-style:none;cursor:pointer;display:inline-flex;align-items:center;box-sizing:border-box;min-height:var(--ctl, 32px);padding:0 14px;border-radius:var(--r-ctl);background:var(--accent);color:var(--accent-ink, var(--surface));font-weight:600;font-size:var(--t-base)}
 .tt-add>summary::-webkit-details-marker{display:none}
 .tt-add-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:5;display:grid;min-width:200px;max-width:calc(100vw - 32px);padding:4px;border:1px solid var(--line);border-radius:10px;background:var(--raised, var(--surface));box-shadow:0 8px 24px color-mix(in srgb,var(--ink) 14%,transparent)}
 .tt-add-menu button{all:unset;cursor:pointer;padding:8px 10px;border-radius:6px;font-size:var(--t-sm);color:var(--ink)}
@@ -60,6 +62,11 @@
 .tt-tabs a{padding:8px 0;color:var(--muted);text-decoration:none;font-weight:600;font-size:var(--t-sm);border-bottom:2px solid transparent;margin-bottom:-1px}
 .tt-tabs a:hover{color:var(--ink);text-decoration:none}
 .tt-tabs a.cur{color:var(--ink);border-bottom-color:var(--ink)}
+/* A tool's Overview / Activity are .ph-tab (the page header's one tab look); Contacts and Skills keep the underline. */
+.tt-tabs:has(>.ph-tab){gap:2px;padding:0 0 8px}
+.tt-tabs>a.ph-tab{margin:0;padding:4px 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);font-size:var(--t-base);font-weight:400;line-height:20px;white-space:nowrap}
+.tt-tabs>a.ph-tab:hover{background:var(--surface2);color:var(--ink)}
+.tt-tabs>a.ph-tab:is(.cur,[aria-current=page]){background:var(--surface2);color:var(--ink);font-weight:600}
 .tt-cols{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:0 16px;align-items:start}
 .tt-col{min-width:0}
 .tt-cols section.card>header,.ib-detail section.card>header{align-items:center}
@@ -116,7 +123,7 @@ section.card.tt-soon>header .pill{margin-left:auto}
 #mailbox-access{order:1}#inbox-sending{order:2}#inbox-waiting-to-send{order:3}#mailbox-keys{order:4}#mailbox-routines{order:5}#mailbox-recent{order:6}
 
 @media (max-width:760px){
-  .tt-head{min-height:0}
+  .tt-head:not(.ph){min-height:0}
   .tt-q{flex:1 1 100%;margin-left:0}
   .tt-cols{grid-template-columns:minmax(0,1fr)}
   /* Tables become stacked rows: each row a block, its cells wrapping under one another. */

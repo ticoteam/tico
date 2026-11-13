@@ -63,8 +63,10 @@ async function openAutomationsWith(owner: string | null, viewport: {width: numbe
       await chat.waitFor();
       assert.equal(await chat.locator('.pgc-word').innerText(), 'Chat', 'the button says Chat beside the owner\'s face');
       assert.equal(await chat.getAttribute('aria-label'), 'Chat with Automations Owner');
-      const head = await box(page, '.au-ph'), btn = await box(page, '.au-ph [data-pgc-open]');
-      assert.ok(btn.right >= head.right - 40 && btn.y < head.bottom, `Chat sits at the top right: ${JSON.stringify({btn, head})}`);
+      // Chat is one of the header's tools, on the title row, just before New listening (the filled button, last).
+      const head = await box(page, '.au-ph'), btn = await box(page, '.au-ph [data-pgc-open]'), add = await box(page, '.au-ph .au-new');
+      assert.ok(await page.locator('.au-ph > .ph-tools [data-pgc-open]').count() === 1 && btn.right <= add.x && add.x - btn.right < 40
+        && btn.y < head.bottom && Math.abs((btn.y + btn.h / 2) - (add.y + add.h / 2)) < 2, `Chat sits just before New listening: ${JSON.stringify({btn, add, head})}`);
       assert.equal(await page.locator('aside.pgc').isHidden(), true, 'closed at first');
       assert.deepEqual(dmReads, [], 'the chat loads only when opened');
       const listBefore = await box(page, '.au-c');
