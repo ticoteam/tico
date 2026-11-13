@@ -175,8 +175,8 @@ async function shot(page: Page, name: string) {
         await page.locator('[data-vis=team]').click();
         await page.locator('[data-vis=team][aria-pressed=true]').waitFor();
         assert.deepEqual(w.edits.at(-1), {id: 'm2', private: false, version: 3});
-        // ⋯ holds Delete.
-        await page.getByRole('button', {name: 'More'}).click();
+        // The meeting's own ⋯ holds Delete (the Meetings header behind it has a ⋯ of its own).
+        await page.getByRole('dialog', {name: 'Meeting details'}).getByRole('button', {name: 'More'}).click();
         await page.getByRole('menuitem', {name: 'Delete'}).waitFor();
       }
       assert.deepEqual(errors, [], where);

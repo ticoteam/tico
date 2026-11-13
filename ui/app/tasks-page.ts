@@ -108,7 +108,8 @@ function pageTasks(openId = '') {
           + '<button type="button" class="tl-ib" id="task-pipeline-edit" aria-label="Edit pipeline" title="Edit pipeline" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>'
           + `<button type="button" class="tl-ib" id="task-archive" aria-pressed="false" aria-label="Archive" title="Snoozed, Done and Closed">${TL_ICON.archive}</button>`
           + '<button type="button" class="tl-ib" id="task-play" aria-label="Catch up" title="Catch up"><svg viewBox="0 0 14 14" width="13" height="13" aria-hidden="true" focusable="false"><path d="M4 2.5v9l7-4.5z" fill="currentColor"/></svg></button>',
-        primary: '<button class="primary ph-go" type="button" id="task-new" title="New task (C)">New task</button>'})}
+        // A phone shows the + alone, in the one row of icons (task-list.css); the words stay its name.
+        primary: `<button class="primary ph-go" type="button" id="task-new" title="New task (C)"><span class="tl-new-i" aria-hidden="true">${TL_ICON.plus}</span><span class="tl-new-w">New task</span></button>`})}
       <div class="tl-bar" id="task-bar" hidden>
         <div class="tl-pair ph-seg" id="task-archives" role="group" aria-label="Archive" hidden>${TASK_ARCHIVES.map(([k, label]) =>
           `<button type="button" data-archive="${k}">${label}</button>`).join('')}</div>
