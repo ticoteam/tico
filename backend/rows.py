@@ -1831,6 +1831,7 @@ class ListeningItemRow(TypedDict):
     scored_at: str | None
     run_id: str | None
     sent_at: str | None
+    delivered: str | None  # JSON list of the step ids that delivered it, for an item not all steps took
     cost: float
     created_at: str
     updated_at: str
