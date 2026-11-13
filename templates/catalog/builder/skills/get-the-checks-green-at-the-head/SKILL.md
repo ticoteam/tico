@@ -22,9 +22,10 @@ Steps:
 A check that failed only because the base branch was broken is not yours to fix on your branch, and not fixed by a
 re-run.
 
-1. **One task for the break.** Before you file anything, look for an open one:
-   `tico task list --q "Main red" --status open`. When one names the same failing test or check, do not file another
-   and do not open a second fix pull request: relate your task to it (`tico task relate <your task> <main-red task>`)
+1. **One task for the break.** Before you file anything, look for an open one, snoozed ones included (a plain list
+   hides a snoozed task, and the bot fixing main may have snoozed its own while the fix waits to merge):
+   `tico task list --q "Main red" --status open --snoozed all`. When one names the same failing test or check, do
+   not file another and do not open a second fix pull request: relate your task to it (`tico task relate <your task> <main-red task>`)
    and add what you saw there (the failing test, your run link) as a comment. Only when none is open, file one
    titled `Main red: <the failing test or check> since <the pull request that broke it>`, so the next bot finds it.
 2. **Wait on that task, not on a date.** Leave your task open and comment
