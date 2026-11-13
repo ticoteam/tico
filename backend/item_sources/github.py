@@ -1659,8 +1659,9 @@ def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: s
 
 def queued_as_is(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
     """The task's open PRs still at the commit they were last queued at (the newest `pr_queued` row for each names it),
-    oldest link first: [{ref, head, reason, check}], `reason` and `check` from the newest removal from the queue at that
-    commit, a failed check's first (None when none was recorded). Task #344: the head the merge queue just ran."""
+    oldest link first: [{ref, head, reason, check, failed}], `reason` and `check` from the newest removal from the queue
+    at that commit, a failed check's first (None when none was recorded), and `failed` whether that removal was for a
+    failed check. Task #344: the head the merge queue just ran."""
     out: list[Row] = []
     for link in prs_of(conn, task_id):
         metadata = link["metadata"]
@@ -1676,7 +1677,8 @@ def queued_as_is(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
         if not queued or queued[0] != head:
             continue
         removal = conn.execute(
-            "SELECT json_extract(data, '$.reason'), json_extract(data, '$.check') FROM history_events "
+            "SELECT json_extract(data, '$.reason'), json_extract(data, '$.check'), "
+            "COALESCE(json_extract(data, '$.checks_failed'), 0) FROM history_events "
             "WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' AND json_valid(data) "
             "AND json_extract(data, '$.ref')=? AND json_extract(data, '$.head')=? "
             "ORDER BY COALESCE(json_extract(data, '$.checks_failed'), 0) DESC, created_at DESC, rowid DESC LIMIT 1",
@@ -1688,6 +1690,7 @@ def queued_as_is(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
                 "head": head,
                 "reason": removal[0] if removal else None,
                 "check": removal[1] if removal else None,
+                "failed": bool(removal and removal[2]),
             }
         )
     return out

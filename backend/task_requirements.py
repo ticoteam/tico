@@ -706,10 +706,12 @@ def _queued_as_is(conn: "sqlite3.Connection", task: Row, requirement: Row) -> St
     for each in still:
         at = str(each["head"])[:7] if one else f"{each['ref']} at {str(each['head'])[:7]}"
         why = ", ".join(str(word) for word in (each.get("reason"), each.get("check")) if word)
+        # "failed" only for a failed check: a removal by hand or a conflict says the run did not merge, and why.
+        outcome = "it failed" if each.get("failed") else "it did not merge"
         said.append(
-            f"Merge queue ran {at} and it failed ({why}): push a fix"
+            f"Merge queue ran {at} and {outcome} ({why}): push a fix"
             if why
-            else f"Merge queue ran {at} and it did not merge: push a fix"
+            else f"Merge queue ran {at} and {outcome}: push a fix"
         )
     # The visit it came back from: its stage's name, and the note the move back gave, so the one wake on entering
     # (task_engine._wake_turn, whose "Missing to leave" carries this line) says what the mover said.

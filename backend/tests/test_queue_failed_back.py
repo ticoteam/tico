@@ -105,7 +105,7 @@ def _ana_asked(c, eng):
     return [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
 
 
-def _merge_failed(c, numbers=(12,)):
+def _merge_failed(c, numbers=(12,), dropped=WHY):
     """#266's sequence up to the hand move: both reviews read aaa (bbb for a second PR), QA's page OK'd by Ana, Merge
     queues the PRs at those heads and GitHub takes the first one out for a failed check. Returns (task, QA page id)."""
     heads = {12: "aaa", 13: "bbb"}
@@ -123,7 +123,8 @@ def _merge_failed(c, numbers=(12,)):
     E.advance(c, eng)
     assert E.task(c, eng)["stage"]["name"] == "Merge"
     assert _queued(c, eng) == len(numbers)
-    _dropped(c, numbers[0])
+    if dropped:
+        _dropped(c, numbers[0], dropped)
     return eng, rid
 
 
@@ -229,3 +230,14 @@ def test_sent_back_with_new_commits_since_the_queue_keeps_c22(c):
     _checks(c, 12, "ccc")
     row = _back_to_qa(c, eng, "Rebased in Merge.")
     assert row["stage"]["name"] == "Merge", "same lines since the OK: C22 keeps it"
+
+
+def test_a_removal_by_hand_at_the_queued_head_does_not_say_the_run_failed(c):
+    """Taken out of the queue by hand (no check failed): the task still waits at that head, and its line says the run
+    did not merge, with GitHub's reason, never that it failed."""
+    eng, _rid = _merge_failed(c, dropped=None)
+    _dropped(c, 12, why="Taken out by hand", check=None)  # not a failed check (FAILED_CHECKS)
+    _back_to_qa(c, eng, "Taken out by hand: look at the e2e flake first.")
+    standing = _qa_page(c, eng)
+    assert (standing.state, standing.on) == (R.NOT_MET, BUILDER)
+    assert standing.line.startswith("Merge queue ran aaa and it did not merge (Taken out by hand): push a fix.")
