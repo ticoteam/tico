@@ -1016,11 +1016,16 @@ def parser():
     s.add_argument("--version", type=int, help=version_help)
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="task give")
-    s = task.add_parser("file", help="file a task this one waits on; yours unless --owner")
+    s = task.add_parser(
+        "file",
+        help="file a task this one waits on; yours unless --owner, or picked by a pipeline whose first stage picks",
+    )
     s.add_argument("title")
     s.add_argument("--parent", required=True, help="the task you work on: it waits until this one ends")
     s.add_argument("--pipeline", help="the pipeline's id; default general")
-    s.add_argument("--owner", help="who does it; default you")
+    s.add_argument(
+        "--owner", help="who does it; default you, or the stage's pick in a pipeline whose first stage picks"
+    )
     s.add_argument("--body", help="the details; default the title")
     s.add_argument("--due")
     s.add_argument("--label", dest="labels", action="append", help="a label; repeat for more")

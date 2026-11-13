@@ -5808,8 +5808,9 @@ def task_create(
         )
         # A task a bot files for itself in one of its runs starts its own run only once that run has ended
         # (execution.job_refusal): the filing run may finish it first, and the claim then cancels the wake rather than
-        # start a run that finds nothing left to do.
-        filed_in = RUN.get() if is_bot(target) and target == actor else ""
+        # start a run that finds nothing left to do. A task filed with no owner (`unassigned`) goes to whoever its stage
+        # picks, who starts at once: the filer only stands in as its requester.
+        filed_in = RUN.get() if is_bot(target) and target == actor and not unassigned else ""
         wake = {
             **({"reconcile": reconcile} if reconcile else {}),
             **({"filed_in": filed_in} if filed_in else {}),

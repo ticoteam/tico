@@ -408,6 +408,10 @@ def first_picks(conn: "sqlite3.Connection", pipeline_id: str | None) -> bool:
 
 def no_owner_refusal(conn: "sqlite3.Connection", pipeline_id: str | None) -> str:
     """Why a task with no owner is refused in a pipeline, or "" when its first stage picks one."""
+    from . import task_engine
+
+    if not task_engine.pipeline(conn, str(pipeline_id or "general")):
+        return f"No pipeline {pipeline_id}"
     if first_picks(conn, pipeline_id):
         return ""
     return (

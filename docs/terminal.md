@@ -109,7 +109,8 @@ A holder (`--holder`, `--manager`, `--person`) is a bot's slug, `bot:<id>`, `hum
 whoever the task is for. `--pick-from` (once per bot) makes the stage One of several instead: Tico picks one as each
 task arrives; `--pick turns|random`, `--limit-each N` (`--no-limit-each`), `--prefer anyone|new|family` and
 `--owns-task` (the pick becomes the task's owner) set how, and alone change a stage that picks already. `tico task
-create` and `tico task request` may leave the owner out when the pipeline's first stage picks. Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
+create`, `tico task request` and `tico task file` may leave the owner out when the pipeline's first stage picks: the
+stage picks one (`tico task file` is otherwise yours by default). Requirement kinds: `page` (a page someone OKs), `ok` (a named person's OK), `owner_done` (the
 holder says done), `linked_done` (the tasks it filed are done) and `item` (a source's condition: `--source github
 --condition pr_merged`). A requirement's kind never changes: remove it and add another.
 

@@ -845,3 +845,25 @@ def test_task_create_files_without_an_owner_and_the_command_line_needs_none(cli,
 
 def test_wait_takes_a_turn_that_waits_for_a_pick():
     assert "pick" in P.TURN_STATES
+
+
+def test_task_file_into_a_pipeline_whose_first_stage_picks_leaves_the_owner_to_the_stage():
+    api = Picking()
+    hubtools.BY_NAME["tico_task_file"]["fn"](api, {"parent": "T1", "title": "Follow up", "pipeline": "engineering"})
+    [(_, path, body)] = api.writes()
+    assert path == "tasks" and "owner" not in body and body["pipeline"] == "engineering" and body["parent"] == "T1"
+    for fields, owner in (
+        ({"pipeline": "product"}, "human:ana"),  # a first stage with one holder: yours, as before
+        ({}, "human:ana"),  # General
+        ({"pipeline": "engineering", "owner": "builder-2"}, "builder-2"),  # naming one always wins
+    ):
+        api = Picking()
+        hubtools.BY_NAME["tico_task_file"]["fn"](api, {"parent": "T1", "title": "Follow up", **fields})
+        assert api.writes()[0][2]["owner"] == owner, fields
+
+
+def test_stage_add_with_a_pick_setting_and_no_bots_asks_for_the_bots():
+    api = Api()
+    with pytest.raises(APIError, match="--pick-from") as refused:
+        P.stage_add(api, {"pipeline": "engineering", "name": "Review 2", "prefer": "new"})
+    assert "not both" not in refused.value.detail and api.writes() == []

@@ -67,3 +67,40 @@ def test_a_pipeline_whose_first_stage_does_not_pick_still_needs_an_owner(api):
     checked = post(api, "tasks/dry-run", {"title": "Add negate", "body": "x"}, token=token)
     assert checked["ok"] is False and "first stage" in checked["problems"][0]
     assert post(api, "tasks/dry-run", {"title": "Add negate", "body": "x", "pipeline": "eng"}, token=token)["ok"]
+
+
+def test_a_task_a_bot_files_with_no_owner_in_its_own_run_starts_the_picked_bot_at_once(api):
+    """The hold a bot's task for itself gets (filed_in: start once the filing run ends) is not carried to the bot the
+    stage picks: the filer only stands in as requester."""
+    import json
+
+    from backend.store import H
+
+    _engineering(api)
+    run = H.RUN.set("attempt-of-filer")
+    try:
+        with api.app.state.store.transaction() as c:
+            picked = H.task_create(
+                c, "bot:filer", "Add negate", "What to do.", "bot:filer", pipeline="eng", unassigned=True
+            )
+            own = H.task_create(c, "bot:filer", "Tidy notes", "What to do.", "bot:filer")
+    finally:
+        H.RUN.reset(run)
+    with api.app.state.store.read() as c:
+
+        def wakes(task_id):
+            rows = c.execute("SELECT recipient_id, refs FROM messages WHERE wake_key LIKE ?", (task_id + ":%",))
+            return [(r[0], json.loads(r[1] or "{}").get("filed_in")) for r in rows]
+
+        assert wakes(picked["id"]) == [("bot:builder", None)]
+        assert wakes(own["id"]) == [("bot:filer", "attempt-of-filer")]  # its own task still waits for its run
+
+
+def test_the_dry_run_with_no_owner_runs_the_other_checks_and_names_an_unknown_pipeline(api):
+    token = _engineering(api)
+    checked = post(api, "tasks/dry-run", {"title": "Add negate", "body": "x", "pipeline": "eng"}, token=token)
+    assert checked["ok"] and checked["owner"] is None
+    parent = post(api, "tasks/dry-run", {"title": "x", "body": "x", "pipeline": "eng", "parent": "nope"}, token=token)
+    assert parent["ok"] is False  # an unknown parent is still caught with no owner named
+    gone = post(api, "tasks/dry-run", {"title": "x", "body": "x", "pipeline": "nope"}, token=token)
+    assert gone["problems"][0] == "No pipeline nope"

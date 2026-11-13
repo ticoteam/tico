@@ -690,7 +690,13 @@ def pipeline_remove(api, args):
 )
 def stage_add(api, args):
     record = _record(api, args["pipeline"])
-    holder = args.get("holder") or (None if args.get("pick_from") else "assignee")
+    # Whoever the task is for, unless it picks from several, or a pick setting asks for --pick-from (_pick_fields says so).
+    picking = (
+        args.get("pick_from")
+        or any(args.get(a) not in (None, False) for a in PICK_ARGS)
+        or args.get("owns_task") is False
+    )
+    holder = args.get("holder") or (None if picking else "assignee")
     stage = _stage_fields(api, {**args, "holder": holder}, {"requirements": []})
     record["stages"] = _place(record.get("stages") or [], stage, args)
     return _save(api, record, args)

@@ -352,12 +352,16 @@ def task_dry_run(c, auth, who, body):
     # The task that files it (`parent`); other relations are notes and never a parent.
     named_parent = getattr(body, "parent", None)
     related_refs = [r.task for r in getattr(body, "relations", None) or [] if r.kind != "parent"]
-    if not body.owner:
+    # No owner: the pipeline's first stage must pick one, and the filer stands in for the rest of the checks, as the
+    # create does (app.task_create).
+    unassigned = not body.owner
+    if unassigned:
         from . import stage_pick
 
         refused = stage_pick.no_owner_refusal(c, pipeline_id)
-        return {"ok": not refused, "problems": [refused] if refused else [], "warnings": []}
-    target = H.resolve_actor(c, body.owner)
+        if refused:
+            problems.append(refused)
+    target = who.actor if unassigned else H.resolve_actor(c, body.owner)
     if target and H.is_bot(target) and not auth.bot_access(c, who, H.actor_id(target))["see"]:
         target = None  # a bot the caller cannot see is not one they can name
     if not target or target == H.KEEPER:
@@ -401,10 +405,14 @@ def task_dry_run(c, auth, who, body):
         if H.is_bot(who.actor) and H.TITLE_LINT != "off" and general:
             # plain-English titles: recorded on the task this week, refused once TICO_TITLE_LINT=refuse
             problems += [f"{p} (title lint, {H.TITLE_LINT})" for p in H.lint_title(title)]
-        dup = H._one(
-            c,
-            "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",
-            (who.actor, target, title),
+        dup = (
+            None
+            if unassigned
+            else H._one(
+                c,
+                "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",
+                (who.actor, target, title),
+            )
         )
         if (
             dup
@@ -455,4 +463,9 @@ def task_dry_run(c, auth, who, body):
             problems.append(str(exc))
     if not pipeline or pipeline.get("retired_at"):
         problems.append(f"No pipeline {pipeline_id}")
-    return {"ok": not problems, "owner": target, "problems": problems, **({"warnings": warnings} if warnings else {})}
+    return {
+        "ok": not problems,
+        "owner": None if unassigned else target,
+        "problems": problems,
+        **({"warnings": warnings} if warnings else {}),
+    }
