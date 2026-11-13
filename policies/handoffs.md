@@ -68,7 +68,7 @@ refuses it once the rule is enforced; `tico task create --dry-run` shows what it
 
 `tico task show <task-id>` lists what the stage still needs. A stage moves on by itself the moment
 nothing is missing; you do not say done for a need Tico can see.
-- A page (a Spec, a Review, what was built, Checked in production): write it, publish it with
+- A page (a Spec, a Review, a QA page, Checked in production): write it, publish it with
   `tico file publish <path> --task <task-id>` (it prints the file id), then attach it to the need:
   `tico task attach <task-id> page:<file id> --req "<requirement>" --version N`. Jev checks it; a person OKs it
   where the stage asks for one. Sent back: change it, publish again and attach the new version.

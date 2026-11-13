@@ -199,7 +199,7 @@ def _checks_pass(c, head):
 
 def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_goes_to_the_builder_once(c):
     """Acme rc.5 (Nov 11): PR #41 waited a day on its pre-release OK and the Builder rebased it after every merge to
-    main, each push unreviewed. While Fixes 2 waits on the person, the conflict is held: not met, nobody's turn, and
+    main, each push unreviewed. While QA waits on the person, the conflict is held: not met, nobody's turn, and
     the person's ask says so. Their OK hands it to the Builder once; the rebase changes the same lines, so their OK
     stands and nobody is asked again (C22, Nov 12)."""
     _product, eng = T._filed_engineering(c)
@@ -208,13 +208,13 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     _github(c, "aaa", None, action="opened")
     T._move(c, eng, "engineering-review-2")
     _met_page(c, eng, "f-rev2", {PR: "aaa"})  # the review was of aaa
-    T._move(c, eng, "engineering-fixes-2")
+    T._move(c, eng, "engineering-qa")
     T._push(c, 12, "bbb")  # the Builder's fix after the review
     _github(c, "bbb", None)
     _checks_pass(c, "bbb")
     rid = _met_page(c, eng, "f-pre", {})
     row = E.task(c, eng)
-    assert row["stage"]["name"] == "Fixes 2"
+    assert row["stage"]["name"] == "QA"
     assert [(w.state, w.who, w.ask) for w in W.of(c, row)] == [(W.PERSON, X.ANA, True)]
     visit = row["visit"]["id"]
 
@@ -237,7 +237,7 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     # Ana OKs: the conflict is the Builder's now, one wake, and the page stays OK'd.
     A.answer(c, eng, rid, X.ANA, "ok")
     row = E.task(c, eng)
-    assert row["stage"]["name"] == "Fixes 2"
+    assert row["stage"]["name"] == "QA"
     key = f"{eng}:{visit}:conflict:{PR}@bbb"
     assert _conflict_wakes(c, eng) == [(key, "bot:builder")]
     wake = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
@@ -254,7 +254,7 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
     _same_changes(c, "bbb", "ccc")
     _github(c, "ccc", None)
     row = E.task(c, eng)
-    assert PC.standing(c, row) is None and row["stage"]["name"] == "Fixes 2"
+    assert PC.standing(c, row) is None and row["stage"]["name"] == "QA"
     assert not [n for n in W.needs(c, X.ANA) if n["task_id"] == eng]
     _checks_pass(c, "ccc")
     E.advance(c, eng)
@@ -262,7 +262,7 @@ def test_a_conflict_while_the_stage_waits_on_a_persons_ok_waits_for_the_ok_then_
 
 
 def _waiting_on_the_pre_release_ok(c):
-    """Acme rc.5 run G, before the conflict: Engineering task in Fixes 2, PR 12 at aaa (the commit both reviews
+    """Acme rc.5 run G, before the conflict: Engineering task in QA, PR 12 at aaa (the commit both reviews
     read), checks green, the pre-release page met by Jev and waiting on Ana's OK."""
     _product, eng = T._filed_engineering(c)
     T._move(c, eng, "engineering-build")
@@ -270,7 +270,7 @@ def _waiting_on_the_pre_release_ok(c):
     _github(c, "aaa", None, action="opened")
     T._move(c, eng, "engineering-review-2")
     _met_page(c, eng, "f-rev2", {PR: "aaa"})
-    T._move(c, eng, "engineering-fixes-2")
+    T._move(c, eng, "engineering-qa")
     _checks_pass(c, "aaa")
     rid = _met_page(c, eng, "f-pre", {})
     return eng, rid
@@ -308,7 +308,7 @@ def test_run_g_order_the_ask_does_not_change_under_the_person_and_the_rebase_is_
 
     # Ana OKs the page she read: the conflict goes to the Builder, once.
     A.answer(c, eng, rid, X.ANA, "ok")
-    assert E.task(c, eng)["stage"]["name"] == "Fixes 2"
+    assert E.task(c, eng)["stage"]["name"] == "QA"
     assert _conflict_wakes(c, eng) == [(f"{eng}:{visit}:conflict:{PR}@aaa", "bot:builder")]
     assert not _ana_ask(c, eng)
 
@@ -340,7 +340,7 @@ def test_a_send_back_while_the_conflict_is_held_goes_to_the_builder_with_the_con
 
     A.answer(c, eng, rid, X.ANA, "no", "Say what sign(0) returns")
     row = E.task(c, eng)
-    assert row["stage"]["name"] == "Fixes 2"
+    assert row["stage"]["name"] == "QA"
     after = [(k, who) for k, who in X.wakes(c, eng) if (k, who) not in earlier]
     assert {who for _k, who in after} == {"bot:builder"}  # the send back and the conflict, both the Builder's
     assert len(after) == 2 and (f"{eng}:{visit}:conflict:{PR}@aaa", "bot:builder") in after

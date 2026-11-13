@@ -96,17 +96,17 @@ class SoftwareSim:
                     self._act(BUILDER, "link a PR", lambda c, url=url: _link(c, task, url))
             for n in self._red(task):
                 self._push(n)
-        elif bot == BUILDER and stage == "Fixes 1":
+        elif bot == BUILDER and stage in ("Fixes 1", "Fixes 2"):
             red = self._red(task)
             for n in red:
                 self._push(n)
             if not red:
                 self._act(BUILDER, "say done", lambda c: _done(r, c, task, BUILDER))
-        elif bot == BUILDER and stage == "Fixes 2":
+        elif bot == BUILDER and stage == "QA":
             for n in self._red(task):
                 self._push(n)
             if "Jev is checking" not in lines:
-                self._page(task, BUILDER, "What was built")
+                self._page(task, BUILDER, "QA")
         elif bot in (REVIEWER_1, REVIEWER_2) and stage in ("Review 1", "Review 2"):
             if "Jev is checking" not in lines:
                 self._page(task, bot, stage)

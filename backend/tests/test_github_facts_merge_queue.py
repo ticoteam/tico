@@ -531,7 +531,7 @@ def test_a_removal_wakes_the_owner_once_and_is_never_queued_again_by_tico(compan
         woken = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
         assert len(woken) == 1 and woken[0].startswith(f"{task_id}:")
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (woken[0],)).fetchone()[0]
-        assert "e2e" in body and "https://ci/9" in body and "Fixes 2" in body
+        assert "e2e" in body and "https://ci/9" in body and "QA" in body
         assert f"tico task queue {task_id}" not in body  # a check that really failed is not queued again as it is
         assert X.events(c, task_id).count("pr_queue_removed") == 1
         assert effects(c, task_id) == [("act", "done")]
@@ -613,7 +613,7 @@ def queue_removal_bodies(c, task_id):
     return [c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0] for key in keys]
 
 
-def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(company):
+def test_a_failed_checks_removal_that_names_its_leg_goes_to_qa_not_the_queue(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
@@ -622,15 +622,15 @@ def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(
     F.refresh(company, gh, later(10))
     with company.transaction() as c:
         (first,) = queue_removal_bodies(c, task_id)
-        assert REAL_LEG in first and "Fixes 2" in first and f"tico task queue {task_id}" not in first
+        assert REAL_LEG in first and "QA" in first and f"tico task queue {task_id}" not in first
         version = E.task(c, task_id)["version"]
         detail = refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
-        assert REAL_LEG in detail and "Fixes 2" in detail
+        assert REAL_LEG in detail and "QA" in detail
         assert stage(c, task_id) == "Merge"
     head = gh.push(REPO, 1)  # a fix pushed: a bot may not queue that commit, a person may
     F.refresh(company, gh, later(30))
     with company.transaction() as c:
-        assert "Fixes 2" in refused(
+        assert "QA" in refused(
             lambda: MQ.requeue(c, task_id, RM, seen_version=E.task(c, task_id)["version"]), "task_requirement"
         )
         owed = MQ.requeue(c, task_id, X.ANA, seen_version=E.task(c, task_id)["version"])
@@ -638,7 +638,7 @@ def test_a_failed_checks_removal_that_names_its_leg_goes_to_fixes_not_the_queue(
 
 
 @pytest.mark.parametrize("check", [MQ.CANCELLED_FROM_OUTSIDE, None])
-def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_fixes(company, check):
+def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to_qa(company, check):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
@@ -656,9 +656,9 @@ def test_an_outside_cancel_is_queued_once_at_a_head_and_a_second_removal_goes_to
         later_bodies = queue_removal_bodies(c, task_id)
         assert len(later_bodies) == 2
         (second,) = [body for body in later_bodies if body != first]
-        assert "Fixes 2" in second and "Queue it again" not in second
+        assert "QA" in second and "Queue it again" not in second
         version = E.task(c, task_id)["version"]
-        assert "Fixes 2" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
+        assert "QA" in refused(lambda: MQ.requeue(c, task_id, RM, seen_version=version), "task_requirement")
         assert stage(c, task_id) == "Merge"
 
 
@@ -1030,7 +1030,7 @@ def test_queue_again_refuses_until_it_can_and_then_owes_a_fresh_queue(company):
         refused(lambda: go(by=RM, v=version - 1), "task_changed")
         refused(lambda: go(by=B), "task_requirement")  # not the owner, the manager or a person
         # The new commit changes other lines than the one the person OK'd: the Release Owner sends the task back to
-        # Fixes 2, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
+        # QA, where Reviewer 2 reads them; it may not queue it as it is (an OK on an old commit never merges a
         # new one).
         assert refused(lambda: go(by=RM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
         assert refused(lambda: go(by=EM), "task_requirement") == MQ.SENT_BACK_FOR_NEW.format(ref=REF)
@@ -1332,7 +1332,7 @@ def test_the_heartbeat_steps_are_quiet_without_a_github_app():
 # Every way into a stage that queues PRs passes the stages before it (docs/pipelines-v3.md "GitHub", "Merge"): a bot
 # can't push past the person's OK, link a new PR there, move back into it, or reopen or restore a task into it.
 def preset_engineering(c):
-    """The Engineering preset with the Fixes 2 OK people-only (chris/rc3-signoffs makes the preset so)."""
+    """The Engineering preset with the QA OK people-only (chris/rc3-signoffs makes the preset so)."""
     from backend import pipeline_settings as PS
     from backend.tests.helpers.product_engineering_presets import _answers, _team
 
@@ -1342,7 +1342,7 @@ def preset_engineering(c):
     pid = c.execute("SELECT id FROM pipelines WHERE name='Engineering'").fetchone()[0]
     c.execute(
         "UPDATE requirements SET who_oks='people_only' WHERE kind='page' AND stage_id IN "
-        "(SELECT id FROM stages WHERE pipeline_id=? AND name='Fixes 2')",
+        "(SELECT id FROM stages WHERE pipeline_id=? AND name='QA')",
         (pid,),
     )
     return pid

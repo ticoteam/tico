@@ -298,7 +298,7 @@
    "department": "engineering",
    "lead": false,
    "core": false,
-   "summary": "Owns Build and the two Fixes stages of the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green and fixes what the two reviewers found. It never merges: the Merge stage queues the pull request.",
+   "summary": "Owns Build, the two Fixes stages and QA in the Engineering pipeline: builds each change on a branch with a test that proves it, opens the pull request, gets its checks green, fixes what the two reviewers found and shows it working on the QA page a person approves to ship. It never merges: the Merge stage queues the pull request.",
    "when": "Offer when GitHub is connected and the team turns tasks into code.",
    "tags": [
     "saas",

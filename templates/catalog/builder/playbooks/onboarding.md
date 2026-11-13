@@ -24,7 +24,7 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 
 1. Which repositories should I build in, and which branch do changes merge into (for example main)? Why: sets where I work. I never clone or push to a repository I was not given.
 2. How do you run the tests, and what must pass before a change can merge? Why: I run the same checks the team runs, and I say so when I could not run one.
-3. Which paths need a named person to look before a change ships? (Default: sign-in, permissions, billing and customer data.) Why: I say so on the page a person OKs in Fixes 2.
+3. Which paths need a named person to look before a change ships? (Default: sign-in, permissions, billing and customer data.) Why: I say so on the QA page a person approves before it ships.
 
 ## 4. Record
 

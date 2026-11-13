@@ -585,11 +585,16 @@ def pages_access(api, args):
 
 
 def pages_publish_path(client, args):
-    """`tico page publish <path>`: the CLI reads the .html file (inside this checkout only) and sends the bytes."""
-    from clients import bot_files as BF
+    """`tico page publish <path>`: the CLI reads the .html file (inside this checkout only) and sends the bytes. The
+    images and fonts it names from its own folder go in as data: URIs (clients/visual_embed.py): the server removes
+    every reference that would load from somewhere else, so a screenshot saved beside the page would show as nothing."""
+    from clients import bot_files as BF, visual_embed
 
+    root = BF.checkout_root()
     try:
-        name, _, data, relative = BF.read_local(BF.checkout_root(), args["path"])
+        name, _, data, relative = BF.read_local(root, args["path"])
+        if visual_embed.is_page(name):
+            data = visual_embed.embed(root, args["path"])[0]
     except BF.Refused as exc:
         return {"refused": "page", "detail": str(exc)}
     query = {"name": name, "path": relative, **_page_fields(args)}

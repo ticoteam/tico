@@ -509,6 +509,7 @@ pipeline_settings.PRESETS: dict[str, dict]                   # general (phase 1)
 pipeline_settings.preset(conn, key) -> dict                  # a preset's record for this org, manager filled in
 pipeline_settings.ensure_presets(conn) -> list[str]          # boot: makes the presets the org lacks; the ids made;
                                                              # unedited wording follows the preset (EARLIER)
+                                                             # an older Engineering gets QA once (_add_qa)
 ```
 
 General's ids are fixed: pipeline `general`, stages `general-todo`, `general-done`, `general-closed`.
@@ -601,7 +602,7 @@ page          no page attached                          not_met  owner   No page
               met, no person                             met              Jev passed it
 ```
 
-A page a person OKs that is not `at_head` (Fixes 2's Review page) is not asked of the person while a linked PR's
+A page a person OKs that is not `at_head` (the QA page) is not asked of the person while a linked PR's
 newest commit is one no bot reviewed: no met Review page (`at_head`, Jev passed or OK'd) was attached at it, and no
 bot OK'd it as below (`task_requirements._new_heads`). Once Jev has looked, it waits on the bot that attached the
 newest met Review page (`delta_reviewer`; never the task's owner now): "Review the new commits since the reviews (now
@@ -619,7 +620,7 @@ hashed by `diff_id` from the added and removed lines of each file); until both a
 the same lines". Other lines: the delta review above, its rounds counted from the OK; the reviewer's OK at the newest
 commits is met ("OK'd by <name>; <bot> read the commits since"). After its no, with no such bot, or with the rounds
 spent, the OK is gone: the ask starts "New commits since <name>'s OK." and goes to that person. Back from Merge with no
-page attached on the visit (`page_for`), the OK and page of the Fixes 2 visit before Merge count; when that OK is gone,
+page attached on the visit (`page_for`), the OK and page of the QA visit before Merge count; when that OK is gone,
 the Builder is asked to attach the page again. In Merge a bot's `requeue` of a moved head needs the same lines
 (`COMPARING` while unread, else `SENT_BACK_FOR_NEW`). Answers from before `heads` was kept stand. The Builder's wake says "not
 reviewed by a bot" only when no other bot will review them. A waiting page's `since` is when that version was
@@ -657,7 +658,7 @@ With many PRs the first unmet one, in link order, gives the line.
 
 - **Room in Spec (C10)** wakes nobody. A person's request in Ideas takes the room by itself (G5, Nov 10); a bot's
   own idea waits for a person (Nov 12: the "has room" wake was removed).
-- **The two sign-offs are people only** (Spec page, Fixes 2 Review page). A bot that may change a pipeline (its
+- **The two sign-offs are people only** (Spec page, QA page). A bot that may change a pipeline (its
   manager or owner; BotOps may not) is refused, "This change loosens the person's OK on Spec. A person must make it.",
   when its save would remove a people-only OK or its stage, move it to another stage, change its kind, open it to
   bots, name a bot on it, put a later stage before it, add or change an on-enter action at or before it, or replace

@@ -92,4 +92,4 @@ Leave a note on the task with the head commit, the checks you ran and the ones y
 
     tico task comment <id> "PR <pull request url> at <head sha>: checks run <list>; not checked <list>"
 
-Review findings come back in Fixes 1 and Fixes 2: `playbooks/fix-what-review-found.md`.
+Review findings come back in Fixes 1 and Fixes 2: `playbooks/fix-what-review-found.md`. Then QA: `playbooks/qa.md`.

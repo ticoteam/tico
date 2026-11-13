@@ -190,6 +190,40 @@ def changes(before, after, path=""):
     return [] if before == after else [f"{path}: {before!r} became {after!r}"]
 
 
+def updated(before):
+    """The company an update of the last release's means to make: `before` with each one-time change this code makes to
+    it on purpose, named here with the code that makes it. Anything else the update changes still fails the tests."""
+    after = copy.deepcopy(before)
+    engineering = after["pipelines"].get("engineering")
+    # pipeline_settings._add_qa: Engineering gets a QA stage after Fixes 2, owned by Fixes 2's owner, with Checks pass
+    # and the page a person OKs, moved from Fixes 2 as it was; Fixes 2 gets Owner says done first.
+    names = [stage[0] for stage in engineering["stages"]] if engineering else []
+    page = next(
+        (
+            r
+            for r in (engineering or {}).get("requirements", [])
+            if r["stage"] == "Fixes 2" and r["kind"] == "page" and r["who_oks"] == "people_only"
+        ),
+        None,
+    )
+    if "Fixes 2" in names and "QA" not in names and page:
+        fixes = names.index("Fixes 2")
+        engineering["stages"].insert(fixes + 1, ("QA", "work", engineering["stages"][fixes][2], 0))
+        rule = {"source": None, "condition": None, "who_oks": "none", "can_push_past": 1}
+        requirements = [r for r in engineering["requirements"] if r is not page]
+        last = max(i for i, r in enumerate(requirements) if r["stage"] == "Fixes 2")
+        first = next(i for i, r in enumerate(requirements) if r["stage"] == "Fixes 2")
+        qa = [
+            {**rule, "stage": "QA", "kind": "item", "source": "github", "condition": "checks_pass"},
+            {**page, "stage": "QA"},
+        ]
+        requirements[last + 1 : last + 1] = qa
+        if not any(r["stage"] == "Fixes 2" and r["kind"] == "owner_done" for r in requirements):
+            requirements.insert(first, {**rule, "stage": "Fixes 2", "kind": "owner_done"})
+        engineering["requirements"] = requirements
+    return after
+
+
 class Company:
     """The last release's company on disk, and this code started on it."""
 
@@ -205,7 +239,7 @@ class Company:
         self.settings.company_file_data = starter.pack(employees_file(CHARTS["0.6 hotmic"]), starter.MAX_PACKED)
         self.settings.company_file_configured = True
         self.before = seen(self.db)
-        self.expected = intended(self.before)  # what the update may change on purpose
+        self.expected = updated(intended(self.before))  # what the update may change on purpose
         # What the person had waiting on the last release, as its own page listed it.
         self.needs_you = set(json.loads((FIXTURES / f"company-{release}.json").read_text())["needs_you"])
         from backend.bookkeeper import VIEW_TITLE
@@ -280,7 +314,8 @@ def test_the_fixture_is_the_company_the_journey_needs(company):
 
 def test_a_company_updated_in_place_is_the_company_it_was(company):
     """The update: this code starts on the last release's company, and then starts again (a deploy is often followed by
-    a restart). Nothing a person set or a bot was doing changes; the only work it may add is named here."""
+    a restart). Nothing a person set or a bot was doing changes; the only work it may add is named here, and the only
+    changes it makes on purpose are named in `updated`."""
     total, titles = company.start()
     first = company.after()
     found = changes(company.expected, first)

@@ -413,7 +413,7 @@ stages"), lists them, oldest first (backend/stage_inputs.py):
 - **What is missing**: a page requirement of a stage before this one that no visit ever attached, because the task was
   pushed past it or moved over it.
 - **What a person said when they signed off filed work**: a Product task (In development while it waits, then
-  Validate) gets each OK or send back a person gave on a page or OK of an Engineering task it filed (Fixes 2's
+  Validate) gets each OK or send back a person gave on a page or OK of an Engineering task it filed (QA's
   pre-release sign-off): who, which, the notes and the page version. Left out for a filed task the reader may not name.
 
 A wake that hands on a PR says to read its checks with `gh pr checks <its link>`. When every PR the task and the work it
@@ -427,7 +427,7 @@ names (stage_inputs.repositories).
 
 A bot that lacks an input it needs does not say done. It moves the task back to the stage the input comes from, saying
 what is missing; its wake says so. A done said with nothing changed is not refused (a review with no findings needs no
-change), but the note is handed on, so the next stage and the person who OKs Fixes 2 read what was and was not done.
+change), but the note is handed on, so the next stage and the person who OKs QA read what was and was not done.
 
 ### Limits
 
@@ -757,6 +757,13 @@ the preset's requirements and every stage of the preset is there. The move is lo
 to `EARLIER`** (`backend/pipeline_settings.py`, or `backend/pipeline_presets_more.py` for the presets there), then run
 `python -m backend.tests.test_preset_texts --write`; `backend/tests/test_preset_texts.py` fails until both are done.
 
+One stage is added on an upgrade, once (`pipeline_settings._add_qa`): an Engineering pipeline made before QA had a stage
+of its own gets QA after Fixes 2, owned by Fixes 2's owner, with Checks pass and the page a person OKs moved there from
+Fixes 2 as it was set (its person, its switches, its line and check). Fixes 2 gets Owner says done. A task waiting in
+Fixes 2 on that page then waits on the Builder's done; the never-stuck check wakes it, and in QA it attaches the QA
+page, which the person is asked to OK again. A pipeline whose QA stage was removed, that has no Fixes 2 or no page a
+person OKs on it, or that already has a live stage named QA is left as it is.
+
 ### Private pipelines
 
 Every task in a private pipeline is a private task. When a task enters one (filed, filed by a stage, or restored) it is
@@ -817,7 +824,7 @@ Stages: Ideas → Spec → In development → Validate → Done · Closed
 From a task to a published release. Manager: the Engineering Manager bot. Builder is one bot, working each task in its
 own thread.
 
-Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → Merge → Release → Done · Closed
+Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → QA → Merge → Release → Done · Closed
 
 - **On deck.** Owner: Builder. No requirements. Tasks move into Build when it has room, oldest first.
 - **Build.** Owner: Builder. To leave: PR open, Checks pass. Limit 3. Expected time: 1 day.
@@ -826,8 +833,12 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
 - **Fixes 1.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours.
 - **Review 2.** Owner: Reviewer 2, a different model: Codex if the company has it, else a different Claude model. To leave: a Review page for the newest commit. Expected time: 2
   hours.
-- **Fixes 2.** Owner: Builder. To leave: Checks pass, and a Review page showing what was built, that the checks pass at
-  the newest commit, and what both reviewers found on the commit they reviewed. Jev checks it against the linked PRs'
+- **Fixes 2.** Owner: Builder. To leave: Owner says done, Checks pass. Expected time: 4 hours. When Review 2 found
+  nothing, the Builder says done at once and the task moves to QA.
+- **QA.** Owner: Builder. To leave: Checks pass, and the QA page: what changed, before and after screenshots of the
+  running app (or the output that proves a change with nothing to see), how it was checked with the checks at the
+  newest commit, what both reviewers found on the commit they reviewed, risks, and the PR with its head commit. The
+  Builder builds it with its `build-the-qa-page` skill; approving it ships the change. Jev checks it against the linked PRs'
   newest commits (any page on a task that links PRs is checked against them; a PR Tico has not read yet is left out),
   then **a person OKs it** (people only). Expected time: 4 hours. Commits pushed after Review 2's page are reviewed
   before the person is asked: Reviewer 2 (the bot that wrote the newest review) reads only those commits against what
@@ -843,7 +854,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   time: 2 hours. If GitHub takes a PR out of the queue, the owner queues it again as it is, pushes its own fix to the
   PR's branch (a rebase, a conflict, a flaky or broken test, a small code fix) and queues it again, or sends it back
   when the fault needs the Builder. A bot queues a new commit only when it changes the same lines as the one the task
-  came into Merge with; otherwise it sends the task back to Fixes 2, where Reviewer 2 reads it and the person's OK
+  came into Merge with; otherwise it sends the task back to QA, where Reviewer 2 reads it and the person's OK
   comes back with the task (C22). A person may queue any commit. Besides what ends a bot's snooze in any stage (see
   Snooze), a bot's snooze in Merge ends when GitHub takes the PR out of the queue or merges it, or its base branch
   moves (once per base commit; not while the PR is queued or its checks run, nor when the reason names a PR to wait
@@ -855,7 +866,7 @@ Stages: On deck → Build → Review 1 → Fixes 1 → Review 2 → Fixes 2 → 
   Owner cuts the release with `tico task release` (see "GitHub", Release).
 
 A review finding on a task's own PR (a bug, a security flaw, a risky path) goes back through the review: blocking on the
-Review page, or a send back in Fixes 2, so the task goes to Fixes and the Builder fixes it. It never becomes a task for
+Review page, or a send back in QA, so the task goes to Fixes and the Builder fixes it. It never becomes a task for
 a person; what only a person decides (the Spec OK, the pre-release OK) is asked on the task itself. Tico refuses
 (`review_route`) a bot that gives a person a General task linking or naming a PR an open pipeline task links, with the
 task it belongs on. Seen live: Reviewer 2 sent a real bug on its task's PR "privately" through the Engineering Manager
@@ -1126,23 +1137,23 @@ late. Nothing depends on the exact 10 seconds.
   line ("The PR has a merge conflict: Builder fixes it after your OK."), and the Builder is not woken, so the ask does
   not change under the person. When the person answers, the Builder is woken once to rebase: after an OK it is told to
   leave the OK'd page as it is, and a send back reaches it with the conflict, so one turn can fix both. A rebase that
-  changes the same lines keeps the person's OK; one that changes others is read by Reviewer 2 (Fixes 2, C22).
+  changes the same lines keeps the person's OK; one that changes others is read by Reviewer 2 (QA, C22).
 - **Merge.** Tico queues each PR at the commit that was checked (GitHub's merge queue, or auto-merge where the repo has
   none). No bot runs a merge command. A call GitHub fails is tried 3 times, 1, 5 and 15 minutes apart, then it is the
   owner's turn with GitHub's reason. When GitHub takes a PR out of the queue without merging it (a check failed, a new
   commit), Tico saves why and which check failed, PR merged says "Dropped from the merge queue: <reason>", and the
   owner is told once. Tico never queues it again by itself. The owner (the Release Owner, who may push to PR
   branches) queues it again (`tico task queue`) at the commit the task came into Merge with, or sends the task back to
-  Fixes 2 (after pushing its own fix, if one is needed). Queuing again is refused while the PR's own checks on its
+  QA (after pushing its own fix, if one is needed). Queuing again is refused while the PR's own checks on its
   newest commit are running or failing, with the reason. For a bot, it is also refused when the PR's newest commit
   changes other lines than the one the task came into Merge with ("<ref> has new changes since the person's OK. Move
-  the task back to Fixes 2, where Reviewer 2 reads them."), and while Tico has not read what it changes yet ("Try
+  the task back to QA, where Reviewer 2 reads them."), and while Tico has not read what it changes yet ("Try
   again in a minute"). Tico reads that from GitHub once per commit (its compare from where the commit branched off),
   for the PRs of a task a person OK'd or in Merge whose commits moved.
   A PR GitHub says conflicts with its base branch is never queued, by the stage or by a queue-again: Tico reads
   GitHub's `mergeable` right before it queues, and a conflict fails the queue at once while `UNKNOWN` (GitHub still
   working it out) is read again 1, 5 and 15 minutes later. Queuing again is refused while the PR's link says it
-  conflicts. The refusal, and a removal for a conflict, tell the owner to send the task back to Fixes 2, where the
+  conflicts. The refusal, and a removal for a conflict, tell the owner to send the task back to QA, where the
   Builder rebases it ("No merge conflict" before Merge).
   **An order between tasks** (backend/merge_order.py). A task may go after other tasks: `tico task after <task>
   <earlier>` (`--remove` takes it off), `--after` on `tico task file` and `tico task create`, the MCP tools'
@@ -1154,12 +1165,12 @@ late. Nothing depends on the exact 10 seconds.
   for it to merge" (PR merged says "Not queued until #40 merges"); nobody is woken and it is not Late. A bot's `tico
   task queue` is refused ("Waits for #40 to merge"); a person may queue it anyway, and its history says "Queued
   before #40 merged". When #40 merges a PR or moves on, the tasks after it are read again: one no longer held is
-  queued then, and if GitHub now says it conflicts, the owner's send-back to Fixes 2 names #40 for the Builder to
+  queued then, and if GitHub now says it conflicts, the owner's send-back to QA names #40 for the Builder to
   rebase onto. When #40 is closed without merging, the order ends and it is the owner's turn once: Tico does not
   queue it by itself. Both tasks show the order, read-only: "After #40 · Merge" and "Before #42 · Build" (to a
   reader who cannot open #40: "After a task you can't open").
 - **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise Reviewer 2
-  reads it in Fixes 2 (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
+  reads it in QA (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). Reviewer 2's OK keeps the person's; its send back goes to the Builder, who attaches the page again,
   and the person is asked after the next read. The task shows "Changed after OK" and the manager bot is told once
   (C22).
@@ -1189,7 +1200,7 @@ late. Nothing depends on the exact 10 seconds.
   `tico task release <task>` (MCP `tico_task_release`, `POST /api/v2/tasks/{tid}/release`), and the Heartbeat carries it
   out through the App, never a bot's token: the Release Owner's raw `gh workflow run`, tag and `gh release` stay
   denied. Allowed for the stage owner, the pipeline's manager or a person, only on a stage with In a release, and for
-  a bot only when a person's OK stands on the people-only sign-off before it (Fixes 2). History: `release_asked`,
+  a bot only when a person's OK stands on the people-only sign-off before it (QA). History: `release_asked`,
   `release_cut`, `release_refused`, `release_found`. One workflow run asked after a task's merge covers every task
   waiting on that repo. Never a second release: before the ask is carried out (and before `tico task release` takes
   one), Tico reads the repo's newest releases; one already published with the merge meets the requirement instead
@@ -1465,7 +1476,7 @@ Today: the Engineering and Product pipelines.
   - "Build", 3/3: spinner "Phone view shows one stage" · avatar · "58m"; no mark "Calibration export retries" · Late tag
     · avatar · "30h"; no mark "Assistant can approve a spec" · avatar · "2h".
   - "Review 1", 1: spinner "Guest checkout" · avatar · "14m".
-  - "Fixes 2", 1: amber "!" "Address lookup fix" · the person's avatar · "5h".
+  - "QA", 1: amber "!" "Address lookup fix" · the person's avatar · "5h".
   - "Merge", 1: no mark "Refund flow" · avatar · "40m".
 
 **New, search and filter** (Engineering, list view):
@@ -1473,7 +1484,7 @@ Today: the Engineering and Product pipelines.
 - **Header:** "Tasks"; "Engineering ▾". At the right: the search box holding "export"; filter (on); list (on); columns;
   +.
 - **Filter chips** under the header: "Waiting on: Sam ✕" and "Late ✕".
-- **Result:** group "Fixes 2", 1: amber "!" "Order export totals" · Late tag · the person's avatar · "2d".
+- **Result:** group "QA", 1: amber "!" "Order export totals" · Late tag · the person's avatar · "2d".
 
 Rules:
 

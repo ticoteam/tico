@@ -7,7 +7,7 @@ and 32 Marketing (lead has company and contact, campaign brief approved, landing
 pages). The page cases are real pages from the Acme test company, built as the page step builds them (attachment kind
 "page", backend/page_verdicts.py `job_of`) with the stage's shipped rubric: five `acme-*` (rc.3) and nineteen `live-*`
 (rc.4, three tasks from Spec to Validate, all good pages) and `long-spec-*` (the rc.4 spec grown to about 6,500 and
-12,000 characters, the length bots write), with `trap-*` cut from them. `nov12-*` are six Fixes 2 pages from the
+12,000 characters, the length bots write), with `trap-*` cut from them. `nov12-*` are six pre-release pages (Fixes 2's then, QA's now) from the
 Nov 12 stress run that a person OK'd (Jev had said 0.13 to 0.70 on them), and five bad ones: one with no check output,
 one without Reviewer 2 and two reporting a failed check at the newest commit, cut from them, and a real first page that
 answered Review 2 only. `--only

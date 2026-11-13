@@ -1,6 +1,6 @@
 """A PR that conflicts with its base branch is never put in the merge queue (docs/pipelines-v3.md, Merge): the queue
 reads GitHub's `mergeable` first, a queue-again is refused while the PR's link says it conflicts, and every refusal sends
-the task back to Fixes 2 for the Builder to rebase."""
+the task back to QA for the Builder to rebase."""
 
 import pytest
 
@@ -34,7 +34,7 @@ def conflict_link(c, task_id, mergeable):
     c.execute("UPDATE task_links SET state='open', mergeable=? WHERE task_id=? AND kind='pr'", (mergeable, task_id))
 
 
-def test_a_conflicting_pr_is_never_queued_and_goes_back_to_fixes_2(company):
+def test_a_conflicting_pr_is_never_queued_and_goes_back_to_qa(company):
     """Acme drill: eight PRs edited one line, the Release Owner queued them all, and GitHub showed all but one
     UNMERGEABLE. A PR GitHub says conflicts is not queued (by the stage nor by a queue-again); while GitHub is still
     working it out, the queue waits and reads it again."""
@@ -54,7 +54,7 @@ def test_a_conflicting_pr_is_never_queued_and_goes_back_to_fixes_2(company):
         assert line(c, task_id, "pr_merged") == (R.NOT_MET, RM, f"GitHub refused the merge: {MQ.CONFLICTS}")
         (key,) = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_refused:" in key]
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
-        assert "Fixes 2" in body and "Queue it again" not in body
+        assert "QA" in body and "Queue it again" not in body
         # The Release Owner (or anyone) asking to queue it as it is gets the same send-back while it conflicts.
         conflict_link(c, task_id, "conflict")
         sent_back = MQ.SENT_BACK_FOR_CONFLICT.format(ref=REF, task=task_id)
@@ -112,4 +112,4 @@ def test_a_removal_for_a_conflict_sends_the_task_back_not_into_the_queue(company
     with company.transaction() as c:
         (key,) = [key for key, _ in X.wakes(c, task_id, RM) if ":queue_removed:" in key]
         body = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
-        assert "Fixes 2" in body and "rebase" in body and "Queue it again" not in body
+        assert "QA" in body and "rebase" in body and "Queue it again" not in body

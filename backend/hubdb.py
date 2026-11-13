@@ -5425,7 +5425,7 @@ def review_finding_route(conn, actor, task_id, target):
                 "review_route",
                 f"{repo}#{number} is the pull request of the task “{own[0]}”, now in {own[1]}. A finding on it goes "
                 "back to that task's Builder through its review (blocking on the Review page, or `no` on the "
-                "reviewers' answer in Fixes 2), never to a person: put it there and close this task with a link. Only "
+                "reviewers' answer in QA), never to a person: put it there and close this task with a link. Only "
                 "what the pipeline gives a person (the spec, the OK) is theirs, asked on that task.",
             )
 

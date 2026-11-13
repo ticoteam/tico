@@ -25,7 +25,7 @@ from .world import ANA, BUILDER, PM, RELEASE, Refusal, World
 
 PRODUCT, ENGINEERING = "product", "engineering"
 PRODUCT_STAGES = ("Ideas", "Spec", "In development", "Validate")
-ENGINEERING_STAGES = ("On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "Merge", "Release")
+ENGINEERING_STAGES = ("On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "QA", "Merge", "Release")
 NOT_BUILT = "is not built yet"
 
 

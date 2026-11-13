@@ -135,9 +135,14 @@ def idea_to_done(r: SoftRig) -> None:
     r.jev()
     r.settle()
 
-    # 6. Fixes 2: what was built, Jev, then a person's OK. On to Merge, and the PRs are queued.
+    # 6. Fixes 2: Review 2 found nothing, so the Builder says done. QA: the QA page, Jev, then a person's OK.
+    # On to Merge, and the PRs are queued.
     r.at(e, "Fixes 2")
-    r.attach(e, r.page(BUILDER, "What was built: the export"), BUILDER)
+    expect(r.say_done(e, BUILDER) is not None, "the Builder could not say done in Fixes 2")
+    r.check()
+    r.at(e, "QA")
+    expect(r.owner(e) == BUILDER, f"QA's owner is {r.owner(e)}")
+    r.attach(e, r.page(BUILDER, "QA: the export"), BUILDER)
     r.jev()
     r.check()
     r.ok_page(e)
@@ -150,7 +155,7 @@ def idea_to_done(r: SoftRig) -> None:
 
     # 7. A commit after the OK (scenario 51): GitHub takes PR 2 out; the task stays in Merge, the Release Owner is
     # told once, the manager once. No bot may queue the new commit (the OK was for the old one): it goes back to
-    # Fixes 2. A person may queue it, once its checks pass.
+    # QA. A person may queue it, once its checks pass.
     r.gh.push(2)
     r.settle()
     r.at(e, "Merge")
@@ -161,7 +166,7 @@ def idea_to_done(r: SoftRig) -> None:
     changed = [w for w in r.wakes(e, EM) if w[0].startswith("changed_after_ok")]
     expect(len(changed) == 1, f"the manager was told of the change after the OK {len(changed)} times")
     out = r.queue_again(e)
-    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    expect(isinstance(out, Refusal) and "Move the task back to QA" in out.detail, f"a bot queued it: {out!r}")
     out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while checks run: {out!r}")
     expect(f"The checks on {REF_2} are still running" in out.detail, out.detail)
@@ -208,7 +213,7 @@ def idea_to_done(r: SoftRig) -> None:
 
     # 11. Every stage in order.
     expect(r.visited(p) == ["Ideas", "Spec", "In development", "Validate", "Done"], f"Product: {r.visited(p)}")
-    want = ["On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "Merge", "Release", "Done"]
+    want = ["On deck", "Build", "Review 1", "Fixes 1", "Review 2", "Fixes 2", "QA", "Merge", "Release", "Done"]
     expect(r.visited(e) == want, f"Engineering: {r.visited(e)}")
 
 
@@ -312,7 +317,7 @@ def push_past_pr_merged(r: SoftRig) -> None:
         )
         expect("Move back or close" in out.detail, f"no Move back and Close: {out.detail}")
     r.at(e, "Merge")
-    r.ok(RELEASE, lambda c: E.move(c, e, "Fixes 2", RELEASE, "Needs the Builder", r.version(e)), "Move back")
+    r.ok(RELEASE, lambda c: E.move(c, e, "QA", RELEASE, "Needs the Builder", r.version(e)), "Move back")
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "none", f"the PR stayed queued: {r.gh.state(1)}")
@@ -461,11 +466,11 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     expect(isinstance(out, Refusal) and out.rule == "task_requirement", f"queue again while red: {out!r}")
     expect(f"Checks failed on {REF_1}" in out.detail, out.detail)
     # (b) a fix is pushed: the person's OK was for the old commit, so the Release Owner may not queue it (it goes
-    # back to Fixes 2); a person may, once its checks pass.
+    # back to QA); a person may, once its checks pass.
     r.gh.push(1)
     r.settle()
     out = r.queue_again(e)
-    expect(isinstance(out, Refusal) and "Move the task back to Fixes 2" in out.detail, f"a bot queued it: {out!r}")
+    expect(isinstance(out, Refusal) and "Move the task back to QA" in out.detail, f"a bot queued it: {out!r}")
     out = r.queue_again(e, ANA)
     expect(isinstance(out, Refusal) and f"The checks on {REF_1} are still running" in out.detail, f"{out!r}")
     r.settle(r.gh.ci_s)
@@ -473,12 +478,12 @@ def queue_removed_three_choices(r: SoftRig) -> None:
     r.effects()
     r.settle()
     expect(r.gh.state(1)["queue_state"] == "queued", f"not queued again: {r.gh.state(1)}")
-    # (c) dropped again: sent back to Fixes 2, where the Builder has it.
+    # (c) dropped again: sent back to QA, where the Builder has it.
     r.gh.drop(1, "Merge conflict", None)
     r.settle()
-    r.ok(RELEASE, lambda c: E.move(c, e, "Fixes 2", RELEASE, "A conflict the Builder must fix", r.version(e)), "back")
-    r.at(e, "Fixes 2")
-    expect(r.owner(e) == BUILDER, f"Fixes 2 is {r.owner(e)}'s")
+    r.ok(RELEASE, lambda c: E.move(c, e, "QA", RELEASE, "A conflict the Builder must fix", r.version(e)), "back")
+    r.at(e, "QA")
+    expect(r.owner(e) == BUILDER, f"QA is {r.owner(e)}'s")
 
 
 @case("github-refuses-the-merge", "GitHub is down: the queue call is tried 3 times, then it is the owner's turn")

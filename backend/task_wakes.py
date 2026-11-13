@@ -100,7 +100,7 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
 
 
 def _unreviewed(conn: "sqlite3.Connection", task: Row, standings: list[R.Standing]) -> str | None:
-    """On a stage where a person OKs a page that is not a review (Fixes 2's Review page), the commits no bot reviewed
+    """On a stage where a person OKs a page that is not a review (QA's page), the commits no bot reviewed
     (task_requirements.unreviewed), so the page the bot writes says it. Not when the ask already says it, nor once the
     page is OK'd, nor while the bot that wrote the newest review is here to review them before the person is asked
     (task_requirements._new_commits)."""
