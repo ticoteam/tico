@@ -261,7 +261,7 @@ function sessionResume() {
   SESSION.reopen = null;
   if (!t || typeof taskModalShow !== 'function') return;
   get('/v2/tasks/' + encodeURIComponent(t.id))
-    .then(data => { if (data?.task && !$('#task-modal')?.open) return taskModalShow(data.task, taskModal(), {thread: !!t.thread}); })
+    .then(data => { if (data?.task && !$('#task-modal')?.open) return taskModalShow(data.task, taskModal(), {thread: !!t.thread, direct: true}); })
     .catch(() => {});
 }
 document.addEventListener('click', e => { if (e.target instanceof Element && e.target.closest('#signed-out button')) signInAgain(); });

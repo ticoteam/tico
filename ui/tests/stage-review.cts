@@ -198,8 +198,10 @@ async function phonePolish(browser: Browser) {
     await page.evaluate(`document.documentElement.style.setProperty('--chat-viewport-height', '${PHONE.height}px')`);
     await shot(page, '3-review');
     await page.locator('#need-card [data-dc="close"]').click();
-    // On a pipeline's board a card opens at its conversation (pipeline-ask.ts); Details shows the rest.
-    await page.locator('.pv-rows .tk-row').first().click();
+    // On a pipeline's board a card opens at its conversation (pipeline-ask.ts); Details shows the rest. A task with no
+    // ask of Ana's opens so (one that waits on her ask opens the ask, ask-screen-open-task.cts).
+    await page.locator('.pv-tab[data-pv-tab="build"]').click();
+    await page.locator('.pv-rows .tk-row', {hasText: 'Rounding in the API'}).click();
     await page.locator('#task-modal[open] .tthread-title').waitFor();
     await page.waitForTimeout(300);
     r = await smallTargets(page, '#task-modal');
