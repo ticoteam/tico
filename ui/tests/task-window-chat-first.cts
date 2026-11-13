@@ -11,6 +11,7 @@ import type {Page} from 'playwright';
 // - A page row is its icon and name and opens the page.
 // - A phone at 390 px: Chat, Pages and Info tabs, open on Chat, the box at the foot of the window.
 // - No links, runs or meetings: none of those sections show; ⋯ › Activity and links opens them.
+declare function liveEmit(topic: string, data: unknown): void;
 const {chromium} = require('playwright') as typeof import('playwright');
 const assert: typeof import('node:assert/strict') = require('node:assert/strict');
 const {open, task} = require('./tasks-page.cts') as Tasks.Api;
@@ -31,9 +32,22 @@ const events = [
   ev('e7', 613, 'woken_again', {new: 'bot:writer'}),
 ];
 const PAGE = {file_id: 'file-spec', title: 'Task window spec', version: 3, replaced_by_id: null, archived: false};
-const tasks = () => [task('t-1', 'Chat first in the task window', 'spec', {owner_id: 'bot:writer'})];
-const pages = (page: Page) => page.route(url => url.pathname.startsWith('/api/v2/places/'), route =>
-  route.fulfill({contentType: 'application/json', body: JSON.stringify({can_link: true, pins: [{id: 'pin-1', size: 'medium', can_unpin: true, page: PAGE}]})}));
+const tasks = () => [task('t-1', 'Chat first in the task window', 'spec', {owner_id: 'bot:writer'}), task('t-2', 'A task the reader cannot add pages to', 'spec', {owner_id: 'bot:writer'})];
+// Each task's pages (GET /api/v2/places/task:<id>) and its Make page request (GET and POST /api/v2/tasks/<id>/make-page).
+const PIN = {id: 'pin-1', size: 'medium', can_unpin: true, page: PAGE};
+const PLACES: Record<string, {can_link: boolean; pins: unknown[]}> = {};
+let making: string | null = null;
+const pages = async (page: Page) => {
+  PLACES['t-1'] = {can_link: true, pins: [PIN]}; PLACES['t-2'] = {can_link: false, pins: [PIN]}; making = null;
+  await page.route(url => url.pathname.startsWith('/api/v2/places/'), route => {
+    const id = decodeURIComponent(new URL(route.request().url()).pathname.split('/').pop()!).replace(/^task:/, '');
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify(PLACES[id] || {can_link: false, pins: []})});
+  });
+  await page.route(url => url.pathname.endsWith('/make-page'), route => {
+    if (route.request().method() === 'POST') { making = 'made'; return route.fulfill({contentType: 'application/json', body: JSON.stringify({message: {conversation_id: 'c-make'}})}); }
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify({make_page: making ? {state: making, conversation_id: 'c-make'} : null})});
+  });
+};
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
@@ -123,7 +137,13 @@ const pages = (page: Page) => page.route(url => url.pathname.startsWith('/api/v2
       assert.equal(await pagesBox.getByRole('textbox', {name: 'Describe the page'}).isVisible(), false);
       await pagesBox.getByRole('button', {name: 'Add a page'}).click();
       await pagesBox.getByRole('button', {name: 'Make page', exact: true}).click();
-      await pagesBox.getByRole('textbox', {name: 'Describe the page'}).waitFor();
+      const describe = pagesBox.getByRole('textbox', {name: 'Describe the page'});
+      await describe.waitFor();
+      // Sent and made: the Describe box folds back to "+".
+      await describe.fill('A map of the flow');
+      await describe.press('Enter');
+      await describe.waitFor({state: 'hidden'});
+      assert.equal(making, 'made', 'the request was sent');
 
       // 8. No links, runs or meetings: none of those sections show until ⋯ › Activity and links.
       for (const sel of ['.task-links', '[data-task-runs]', '[data-task-meetings]'])
@@ -159,6 +179,17 @@ const pages = (page: Page) => page.route(url => url.pathname.startsWith('/api/v2
       await win.locator('[data-prop-row="visible"]').waitFor({state: 'visible'});
       assert.equal(await win.locator('[data-task-pages]').isVisible(), false);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth) <= 390, 'nothing scrolls sideways');
+      // A task whose reader cannot link pages: its last page goes while the Pages tab is shown, so the tab hides and
+      // the window goes back to Chat instead of an empty body.
+      await page.evaluate(() => { location.hash = '#/task/t-2'; });
+      const other = page.locator('#task-modal[open][data-task="t-2"]');
+      await other.getByRole('tab', {name: /Pages/}).click();
+      await other.locator('[data-task-pages] .tp-row').waitFor();
+      PLACES['t-2'] = {can_link: false, pins: []};
+      await page.evaluate(() => liveEmit('tasks', {id: 't-2', kind: 'update', kinds: ['files']}));
+      await other.locator('[data-task-tab="pages"]').waitFor({state: 'hidden'});
+      assert.equal(await other.getByRole('tab', {name: 'Chat'}).getAttribute('aria-selected'), 'true', 'back on Chat');
+      assert.ok(await other.locator('.task-chat').isVisible(), 'the chat shows');
       assert.deepEqual(errors, []);
       await page.close();
     }

@@ -598,7 +598,11 @@ async function taskPagesLoad(d: TaskPagesHost) {
     slot.hidden = !r.can_link && !pins.length;
     // A phone's Pages tab goes with the section: no pages and none to link, no tab that opens empty.
     const tab = d.querySelector<HTMLElement>('[data-task-tab="pages"]');
-    if (tab) tab.hidden = slot.hidden;
+    if (tab) {
+      tab.hidden = slot.hidden;
+      // The last page went while its tab was shown: back to Chat rather than an empty body.
+      if (tab.hidden && tab.getAttribute('aria-selected') === 'true') d.querySelector<HTMLElement>('[data-task-tab="chat"]')?.click();
+    }
     $('[data-tp-add]', slot).hidden = !r.can_link;
     slot.tpCanLink = !!r.can_link;
     taskPageMakeShow(slot);
