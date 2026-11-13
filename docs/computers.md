@@ -456,7 +456,11 @@ logins](credential-vault.md#website-logins)): a Chrome profile per account, kept
 and people watch or take control of from the tool's page. An admin picks it with the **Browser host** switch in that
 computer's pop-up; one per company.
 
-- It needs Google Chrome installed; Tico does not install it. On Linux without a display Chrome runs headless.
+- It needs Chrome: Google Chrome on a Mac; on Linux `google-chrome`, else `chromium`, on its PATH. The runner image
+  (Docker, amd64 and arm64) ships Debian's Chromium, since Google publishes no Linux arm64 Chrome; elsewhere Tico does
+  not install it. On Linux without a display it runs headless. In the runner container Chromium starts without its own
+  sandbox, which needs a user namespace that Docker's default seccomp profile refuses; it runs there as the runner's
+  user with no capabilities, and bot code, which runs as another user, cannot read its profiles.
 - It runs no bots of its own: placing a bot there is refused while it is the browser host.
 - It is online when it asked for website commands within the last 40 seconds; a running computer asks continuously.
   Health shows "Browser host offline" or "Chrome missing on <computer>" when it is not ready.

@@ -1,9 +1,11 @@
-//! Finding and starting Google Chrome: the copy Google installs and updates (`/Applications/Google Chrome.app` on a
-//! Mac, `google-chrome` on a Linux PATH), never one the runner downloads. Each account has its own profile, with CDP only
+//! Finding and starting Chrome: the copy the system installs and updates (`/Applications/Google Chrome.app` on a
+//! Mac; on a Linux PATH `google-chrome`, else Debian's `chromium`, which the runner image installs because Google
+//! publishes no Linux arm64 Chrome), never one the runner downloads. Each account has its own profile, with CDP only
 //! over the pipe (`--remote-debugging-pipe`), and the computer's own language, time zone and user agent. Linux uses
 //! headless mode when no display is available; other sessions have a window.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -13,12 +15,12 @@ use super::cdp;
 use crate::util::text_of;
 
 pub const MAC_CHROME: &str = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const LINUX_NAMES: &[&str] = &["google-chrome", "google-chrome-stable"];
+const LINUX_NAMES: &[&str] = &["google-chrome", "google-chrome-stable", "chromium"];
 pub const WIDTH: u32 = 1440;
 pub const HEIGHT: u32 = 900;
 
-/// Google Chrome on this computer, if it can show a window here: the app on a Mac; on Linux the command on PATH and
-/// no display is required (Chrome uses headless mode when it is absent).
+/// Chrome on this computer: Google Chrome's app on a Mac; on Linux the first of `LINUX_NAMES` on PATH, and no
+/// display is required (it uses headless mode when there is none).
 pub fn chrome() -> Option<PathBuf> {
     match std::env::consts::OS {
         "macos" => Some(PathBuf::from(MAC_CHROME)).filter(|p| p.is_file()),
@@ -79,8 +81,28 @@ fn plist_version(text: &str) -> Option<String> {
 
 /// The Chrome command line after the executable. `proxy` is the turn's Browse-through proxy for a session on the
 /// bot's own computer; the browser host never has one.
-pub fn flags(profile: &Path, proxy: Option<&str>) -> Vec<String> {
-    flags_for(profile, proxy, std::env::consts::OS, display().is_some())
+pub fn flags(exe: &Path, profile: &Path, proxy: Option<&str>) -> Vec<String> {
+    let headless = std::env::consts::OS == "linux" && display().is_none();
+    let version = if headless { version(exe) } else { None };
+    flags_for(
+        profile,
+        proxy,
+        std::env::consts::OS,
+        !headless,
+        version.as_deref(),
+    )
+}
+
+/// The user agent a windowed Chrome `version` sends on Linux. Headless mode sends "HeadlessChrome/..." instead,
+/// which sign-in pages take for a robot; its client hints already name Chromium alone.
+fn linux_user_agent(version: &str) -> Option<String> {
+    let major = version
+        .split('.')
+        .next()
+        .filter(|m| !m.is_empty() && m.len() <= 4 && m.bytes().all(|b| b.is_ascii_digit()))?;
+    Some(format!(
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{major}.0.0.0 Safari/537.36"
+    ))
 }
 
 fn flags_for(
@@ -88,6 +110,7 @@ fn flags_for(
     proxy: Option<&str>,
     platform: &str,
     has_display: bool,
+    version: Option<&str>,
 ) -> Vec<String> {
     let mut f = vec![
         format!("--user-data-dir={}", profile.display()),
@@ -106,6 +129,9 @@ fn flags_for(
     if platform == "linux" {
         if !has_display {
             f.push("--headless=new".into());
+            if let Some(ua) = version.and_then(linux_user_agent) {
+                f.push(format!("--user-agent={ua}"));
+            }
         }
         f.push("--password-store=basic".into());
         f.push("--disable-dev-shm-usage".into());
@@ -335,26 +361,85 @@ fn tail(lines: &Mutex<std::collections::VecDeque<String>>) -> String {
         .join(" | ")
 }
 
+/// What Chromium prints, and then exits, when it finds no sandbox it can use.
+const NO_SANDBOX_SAID: &str = "No usable sandbox";
+
+/// The executables that refused to start sandboxed on this computer (see `launch`).
+fn unsandboxed() -> &'static Mutex<std::collections::HashSet<PathBuf>> {
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<PathBuf>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
 /// Start Chrome on `profile` and wait until it answers over the pipe.
+///
+/// Chrome's sandbox stays on wherever it can start. On Linux it needs a user namespace (or Google Chrome's setuid
+/// helper), and the runner container has neither: Docker's default seccomp profile refuses `unshare`/`clone` of a
+/// user namespace to a process without CAP_SYS_ADMIN, and `no-new-privileges` (docker/runner.compose.yaml) makes
+/// a setuid helper useless. Chromium then prints "No usable sandbox!" and exits, so only after it said so, the same
+/// executable starts with `--no-sandbox` from then on. Granting the container CAP_SYS_ADMIN or a custom seccomp
+/// profile would loosen it for bot code too. What still holds there: Chrome runs as the runner's user with no
+/// capabilities (the ambient ones the supervisor holds are cleared before exec) and `no_new_privs`; bot code runs
+/// as another user, who cannot enter the profiles (`browsers/` in the runner's state directory and each profile in
+/// it are 0700, `private_dir`); and a bot opens only the website tool's own sites, and a login value is typed only
+/// there.
 pub async fn launch(exe: &Path, profile: &Path, proxy: Option<&str>) -> Result<Launched, String> {
-    use std::os::fd::AsRawFd;
     private_dir(profile).map_err(|e| format!("cannot make the profile directory ({e})"))?;
     // It may wait seconds for an orphan to end: off the async threads.
     let held = profile.to_path_buf();
     let _ = tokio::task::spawn_blocking(move || clear_orphan(&held)).await;
     fix_prefs(profile).map_err(|e| format!("cannot prepare the profile ({e})"))?;
-    let (chrome_reads, we_write) = pipe().map_err(|e| e.to_string())?;
-    let (we_read, chrome_writes) = pipe().map_err(|e| e.to_string())?;
+    let known = unsandboxed().lock().unwrap().contains(exe);
+    match start(exe, profile, proxy, known).await {
+        Err(Refused::NoSandbox(_)) if !known => {
+            crate::util::log(&format!(
+                "browser: {} has no usable sandbox here; starting it with --no-sandbox",
+                exe.display()
+            ));
+            unsandboxed().lock().unwrap().insert(exe.to_path_buf());
+            start(exe, profile, proxy, true)
+                .await
+                .map_err(Refused::text)
+        }
+        r => r.map_err(Refused::text),
+    }
+}
+
+enum Refused {
+    NoSandbox(String),
+    Other(String),
+}
+
+impl Refused {
+    fn text(self) -> String {
+        match self {
+            Refused::NoSandbox(t) | Refused::Other(t) => t,
+        }
+    }
+}
+
+async fn start(
+    exe: &Path,
+    profile: &Path,
+    proxy: Option<&str>,
+    no_sandbox: bool,
+) -> Result<Launched, Refused> {
+    use std::os::fd::AsRawFd;
+    let other = |e: std::io::Error| Refused::Other(e.to_string());
+    let (chrome_reads, we_write) = pipe().map_err(other)?;
+    let (we_read, chrome_writes) = pipe().map_err(other)?;
     let (child_in, child_out) = (
-        high(&chrome_reads).map_err(|e| e.to_string())?,
-        high(&chrome_writes).map_err(|e| e.to_string())?,
+        high(&chrome_reads).map_err(other)?,
+        high(&chrome_writes).map_err(other)?,
     );
     drop((chrome_reads, chrome_writes));
     let (fd_in, fd_out) = (child_in.as_raw_fd(), child_out.as_raw_fd());
 
     let mut cmd = tokio::process::Command::new(exe);
     // No page named: Chrome reopens the last one (the session the profile kept), or a new tab.
-    cmd.args(flags(profile, proxy));
+    cmd.args(flags(exe, profile, proxy));
+    if no_sandbox {
+        cmd.arg("--no-sandbox");
+    }
     cmd.env_clear();
     for k in KEPT_ENV {
         if let Ok(v) = std::env::var(k) {
@@ -382,33 +467,46 @@ pub async fn launch(exe: &Path, profile: &Path, proxy: Option<&str>) -> Result<L
                 // A runner that dies takes its browsers with it; on a Mac the next start ends an orphan instead
                 // (clear_orphan).
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                // The container's supervisor holds ambient capabilities (DAC_OVERRIDE, SETUID, ...) to drop bot
+                // code to another user; Chrome gets none of them. A kernel without ambient capabilities has none
+                // to clear.
+                libc::prctl(
+                    libc::PR_CAP_AMBIENT,
+                    libc::PR_CAP_AMBIENT_CLEAR_ALL as libc::c_ulong,
+                    0,
+                    0,
+                    0,
+                );
             }
             Ok(())
         });
     }
     let mut child = cmd
         .spawn()
-        .map_err(|e| format!("cannot start Chrome ({e})"))?;
+        .map_err(|e| Refused::Other(format!("cannot start Chrome ({e})")))?;
     drop((child_in, child_out));
     let stderr = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let sandbox_said = Arc::new(AtomicBool::new(false));
+    let mut reader = None;
     if let Some(err) = child.stderr.take() {
-        let keep = stderr.clone();
-        tokio::spawn(async move {
+        let (keep, said) = (stderr.clone(), sandbox_said.clone());
+        reader = Some(tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let mut lines = tokio::io::BufReader::new(err).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                if line.contains(NO_SANDBOX_SAID) {
+                    said.store(true, Ordering::SeqCst);
+                }
                 let mut k = keep.lock().unwrap();
                 if k.len() == 20 {
                     k.pop_front();
                 }
                 k.push_back(line.chars().take(300).collect::<String>());
             }
-        });
+        }));
     }
-    let to_chrome =
-        tokio::net::unix::pipe::Sender::from_owned_fd(we_write).map_err(|e| e.to_string())?;
-    let from_chrome =
-        tokio::net::unix::pipe::Receiver::from_owned_fd(we_read).map_err(|e| e.to_string())?;
+    let to_chrome = tokio::net::unix::pipe::Sender::from_owned_fd(we_write).map_err(other)?;
+    let from_chrome = tokio::net::unix::pipe::Receiver::from_owned_fd(we_read).map_err(other)?;
     let browser = cdp::Browser::start(to_chrome, from_chrome);
     let version = match browser
         .call_within(
@@ -420,16 +518,26 @@ pub async fn launch(exe: &Path, profile: &Path, proxy: Option<&str>) -> Result<L
         .await
     {
         Ok(v) => text_of(&v["product"])
+            .trim_start_matches("HeadlessChrome/")
             .trim_start_matches("Chrome/")
             .to_string(),
         Err(e) => {
             let _ = child.start_kill();
             let _ = child.wait().await;
-            return Err(format!("Chrome did not start ({e}) {}", tail(&stderr))
+            // The whole of stderr, so a message that came just before the exit is seen.
+            if let Some(r) = reader {
+                let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
+            }
+            let text: String = format!("Chrome did not start ({e}) {}", tail(&stderr))
                 .trim()
                 .chars()
                 .take(280)
-                .collect());
+                .collect();
+            return Err(if sandbox_said.load(Ordering::SeqCst) {
+                Refused::NoSandbox(text)
+            } else {
+                Refused::Other(text)
+            });
         }
     };
     Ok(Launched {
@@ -461,7 +569,13 @@ mod tests {
 
     #[test]
     fn chrome_uses_a_pipe_and_linux_without_a_display_uses_headless() {
-        let f = flags(Path::new("/state/browsers/c1/profile"), None);
+        let f = flags_for(
+            Path::new("/state/browsers/c1/profile"),
+            None,
+            std::env::consts::OS,
+            true,
+            Some("156.0.8078.79"),
+        );
         for wanted in [
             "--user-data-dir=/state/browsers/c1/profile",
             "--remote-debugging-pipe",
@@ -483,20 +597,53 @@ mod tests {
         ] {
             assert!(!f.iter().any(|a| a.contains(banned)), "{banned}");
         }
-        let bare = flags_for(Path::new("/tmp/profile"), None, "linux", false);
+        let bare = flags_for(
+            Path::new("/tmp/profile"),
+            None,
+            "linux",
+            false,
+            Some("156.0.8078.79"),
+        );
         assert!(bare.iter().any(|s| s == "--headless=new"));
-        assert!(!flags_for(Path::new("/tmp/profile"), None, "linux", true)
-            .iter()
-            .any(|s| s.starts_with("--headless")));
+        assert!(
+            bare.iter().any(|s| s == "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"),
+            "headless sends a windowed Chrome's user agent"
+        );
+        assert!(!flags_for(
+            Path::new("/tmp/profile"),
+            None,
+            "linux",
+            false,
+            Some("unknown")
+        )
+        .iter()
+        .any(|s| s.contains("user-agent")));
+        assert!(!flags_for(
+            Path::new("/tmp/profile"),
+            None,
+            "linux",
+            true,
+            Some("156.0.8078.79")
+        )
+        .iter()
+        .any(|s| s.starts_with("--headless") || s.contains("user-agent")));
         let linux = f.iter().any(|a| a == "--password-store=basic");
         assert_eq!(linux, std::env::consts::OS == "linux");
-        let proxied = flags(Path::new("/p"), Some("http://127.0.0.1:21001"));
+        let proxied = flags_for(
+            Path::new("/p"),
+            Some("http://127.0.0.1:21001"),
+            "macos",
+            true,
+            None,
+        );
         assert!(proxied
             .iter()
             .any(|a| a == "--proxy-server=http://127.0.0.1:21001"));
-        assert!(!flags(Path::new("/p"), Some("http://a b"))
-            .iter()
-            .any(|a| a.starts_with("--proxy-server")));
+        assert!(
+            !flags_for(Path::new("/p"), Some("http://a b"), "macos", true, None)
+                .iter()
+                .any(|a| a.starts_with("--proxy-server"))
+        );
     }
 
     #[test]
@@ -547,6 +694,60 @@ mod tests {
         let plist = "<dict>\n\t<key>CFBundleName</key>\n\t<string>Chrome</string>\n\t<key>CFBundleShortVersionString</key>\n\t<string>142.0.7444.60</string>\n</dict>";
         assert_eq!(plist_version(plist).as_deref(), Some("142.0.7444.60"));
         assert_eq!(plist_version("<dict></dict>"), None);
+    }
+
+    #[tokio::test]
+    async fn a_chromium_without_a_usable_sandbox_starts_again_unsandboxed_and_stays_so() {
+        let dir = std::env::temp_dir().join(format!("tico-nosb-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (exe, runs) = (dir.join("chromium"), dir.join("runs"));
+        // Chromium where no sandbox can start: it says so and exits, unless told --no-sandbox (then it exits anyway:
+        // this one speaks no CDP).
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh\ncase \"$*\" in *--no-sandbox*) echo unsandboxed >> {runs} ;; *) echo sandboxed >> {runs}; \
+                 echo '[1:1:FATAL:zygote_host_impl_linux.cc(128)] No usable sandbox! See the docs.' >&2 ;; esac\nexit 1\n",
+                runs = runs.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let profile = dir.join("profile");
+        let first = launch(&exe, &profile, None).await.err().unwrap();
+        assert!(
+            !first.contains("No usable sandbox"),
+            "the second start's error: {first}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap(),
+            "sandboxed\nunsandboxed\n"
+        );
+        let _ = launch(&exe, &profile, None).await;
+        assert_eq!(
+            std::fs::read_to_string(&runs).unwrap(),
+            "sandboxed\nunsandboxed\nunsandboxed\n",
+            "the next start goes straight to --no-sandbox"
+        );
+
+        // A Chrome that fails for another reason is never started without its sandbox.
+        let other = dir.join("google-chrome");
+        std::fs::write(
+            &other,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> {}\nexit 1\n",
+                dir.join("other").display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&other, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        assert!(launch(&other, &dir.join("p2"), None).await.is_err());
+        let args = std::fs::read_to_string(dir.join("other")).unwrap();
+        assert_eq!(args.lines().count(), 1);
+        assert!(!args.contains("--no-sandbox"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

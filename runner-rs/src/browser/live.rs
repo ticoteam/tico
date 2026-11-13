@@ -1,4 +1,5 @@
-//! A run against the real Google Chrome on this computer and a page served here: not run by default (`--ignored`).
+//! A run against the real Chrome on this computer (`launch::chrome`) and a page served here: not run by default
+//! (`--ignored`).
 
 use std::io::{Read, Write};
 use std::time::Duration;
@@ -94,6 +95,9 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
             .map(|f| f.code),
         Some("not_on_site")
     );
+    let ua = s.eval("navigator.userAgent", true).await.unwrap();
+    let ua = ua["value"].as_str().unwrap_or_default();
+    assert!(ua.contains(" Chrome/") && !ua.contains("Headless"), "{ua}");
     let text = s.read().await.unwrap().text.unwrap();
     eprintln!("{text}");
     assert!(text.starts_with(&format!("Practice sign-in — http://127.0.0.1:{port}/login")));
@@ -161,14 +165,19 @@ async fn a_real_chrome_opens_reads_types_fills_and_refuses_the_wrong_site() {
         "{signed}"
     );
 
-    // The same page under another host name is not the tool's site: nothing is typed.
+    // The same page under another host name is not the tool's site: nothing is typed. (A name without a dot is
+    // never a site; Chrome resolves `*.localhost` to this computer.)
     let both = vec![
         format!("http://127.0.0.1:{port}"),
-        format!("http://localhost:{port}"),
+        format!("http://practice.localhost:{port}"),
     ];
-    s.open(&format!("http://localhost:{port}/login"), &both, false)
-        .await
-        .unwrap();
+    s.open(
+        &format!("http://practice.localhost:{port}/login"),
+        &both,
+        false,
+    )
+    .await
+    .unwrap();
     let text = s.read().await.unwrap().text.unwrap();
     let pw = ref_of(&text, "Password");
     let refused = fill::fill(&mut s, &here, "password", Some(&pw), "pw-canary-9").await;

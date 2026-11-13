@@ -2,8 +2,9 @@
 //! commands (backend/browser_commands.py); this computer holds `GET runner-browser-commands` open on a task of its
 //! own, runs each command in the Chrome of the account it names, and reports the result.
 //!
-//! - One real Google Chrome per account (its profile under the runner's state directory), headful, started on the
-//!   account's first command and closed cleanly after 15 minutes idle; at most `host::MOST_OPEN` at once.
+//! - One real Chrome per account (Google Chrome, or Chromium on Linux; its profile under the runner's state directory),
+//!   with a window where there is a display, started on the account's first command and closed cleanly after 15
+//!   minutes idle; at most `host::MOST_OPEN` at once.
 //! - The runner drives it over the DevTools pipe only (`cdp`): bots get verbs, never the protocol, a port or cookies.
 //! - A login value arrives in a `fill` or `copy` command, is typed or put on the clipboard, and is masked in every
 //!   running turn's output here (`crate::redact::hide_everywhere`) and in what the session reports back.
@@ -21,7 +22,7 @@ use serde_json::{json, Value};
 
 pub const CAPABILITY: &str = "browser_v1";
 
-/// Whether this computer can run browser sessions: Google Chrome is installed; Linux can use headless mode without a display.
+/// Whether this computer can run browser sessions: Chrome is installed; Linux can use headless mode without a display.
 pub fn offers() -> bool {
     launch::chrome().is_some()
 }

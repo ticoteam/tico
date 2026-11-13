@@ -835,7 +835,7 @@ def health_problem(c: sqlite3.Connection) -> str | None:
     if not _online(found):
         return f"Browser host offline: {label} is not polling for browser commands, so website tools that run centrally wait."
     if not _has_browser(found):
-        return f"Chrome missing on {label}: install Google Chrome there so website tools can run."
+        return f"Chrome missing on {label}: install Google Chrome (Chromium on Linux) there so website tools can run."
     return None
 
 

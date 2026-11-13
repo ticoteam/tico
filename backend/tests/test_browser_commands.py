@@ -418,7 +418,8 @@ def test_health_says_when_chrome_is_missing_and_a_removed_host_is_forgotten(setu
     post(s.api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": []}, token=s.host["token"])
     with s.api.app.state.store.read() as c:
         assert (
-            bc.health_problem(c) == "Chrome missing on Host Mac: install Google Chrome there so website tools can run."
+            bc.health_problem(c)
+            == "Chrome missing on Host Mac: install Google Chrome (Chromium on Linux) there so website tools can run."
         )
     from backend import computers
 

@@ -95,7 +95,7 @@ to do next. `--json` prints the answer as JSON. Exit 0 is done, 2 refused, 1 whe
 - A password box reads with no value, even after a fill.
 - "No account" means nobody shared one with you: ask a person on your task to share an account or add yours.
 - The browser host offline means wait, or ask a person to start it. On your own computer the browser needs Google
-  Chrome installed.
+  Chrome (or Chromium on Linux) installed.
 - Screenshots and downloads are saved on the computer you run on; a download never overwrites a file of the same name
   (it gets `-1`, `-2`).
 
