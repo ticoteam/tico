@@ -126,3 +126,55 @@ def test_the_first_bot_cost_run_reaches_back_a_year_and_later_runs_only_three_mo
     assert later["written"] == 1
     rows = {r["month"]: r["bot_cost"] for r in get(api, "growth/cohorts?channel=referrals")["cohorts"]}
     assert rows.get(edge) == 1.5 and rows.get(old) is None
+
+
+def test_a_bot_cost_run_clears_the_amounts_it_wrote_that_no_longer_apply(api):
+    """AC-16: after ownership changes, or a month's cost falls to zero, a month's cost sits on one channel or on
+    Unknown, never both."""
+    bot(api, "ops")
+    bot(api, "cpo")
+    post(api, "growth/channels", {"slug": "referrals", "name": "Referrals", "owner_ref": "bot:ops"})
+    post(api, "growth/channels", {"slug": "search-ads", "name": "Search", "owner_ref": "bot:cpo"})
+    post(api, "growth/channels", {"slug": "events", "name": "Events", "owner_ref": "bot:cpo"})
+    src = post(
+        api,
+        "growth/sources",
+        {"truth_for": "bot cost", "system": "Bot run cost", "sync_kind": "bot_cost", "sync_map": {"fields": {}}},
+        token="ana-test",
+    )
+    at = f"{LAST}-10T12:00:00Z"
+    with api.app.state.store.transaction() as c:
+        for who, usd in (("ops", 4.0), ("cpo", 2.0)):
+            usage_facts.record_run(
+                c, {"id": H.new_id(), "bot": who, "task_id": None, "started_at": at}, {"est_cost_usd": usd}, at
+            )
+    sync = lambda: post(api, f"growth/sources/{src['id']}/sync", {}, token="ana-test")  # noqa: E731
+    assert sync()["written"] == 2
+    assert cohorts(api, "referrals")[0]["bot_cost"] == 4.0 and cohorts(api, "unknown")[0]["bot_cost"] == 2.0
+
+    # ops gets a second channel: its $4.00 moves to Unknown and leaves Referrals.
+    post(api, "growth/channels", {"slug": "podcast", "name": "Podcast", "owner_ref": "bot:ops"})
+    sync()
+    assert cohorts(api, "referrals")[0]["bot_cost"] == 0
+    assert cohorts(api, "unknown")[0]["bot_cost"] == 6.0
+
+    # Events is retired: cpo owns one channel again, so its $2.00 moves from Unknown to Search.
+    post(api, "growth/channels/events/retire", {})
+    sync()
+    assert cohorts(api, "search-ads")[0]["bot_cost"] == 2.0 and cohorts(api, "unknown")[0]["bot_cost"] == 4.0
+
+    # Podcast is retired: ops owns one channel again, so its cost goes back to Referrals and Unknown is cleared.
+    post(api, "growth/channels/podcast/retire", {})
+    sync()
+    assert cohorts(api, "referrals")[0]["bot_cost"] == 4.0
+    assert cohorts(api, "unknown")[0]["bot_cost"] == 0
+    rows = {r["channel"]: r["bot_cost"] for r in get(api, f"growth/cohorts?month={LAST}")["cohorts"]}
+    assert sum(v or 0 for v in rows.values()) == 6.0
+
+    # Every cost falls to zero (run cost is append-only, so the run is given no rows): nothing it wrote is left.
+    with api.app.state.store.transaction() as c:
+        source = c.execute("SELECT * FROM gtm_sources WHERE id=?", (src["id"],)).fetchone()
+        result = GS.run(c, H.KEEPER, dict(source), rows=[])
+    assert result["ok"] and result["written"] == 2
+    rows = {r["channel"]: r["bot_cost"] for r in get(api, f"growth/cohorts?month={LAST}")["cohorts"]}
+    assert sum(v or 0 for v in rows.values()) == 0

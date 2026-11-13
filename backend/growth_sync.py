@@ -551,6 +551,8 @@ def run(
             if len(rows) > ROWS_MAX:
                 raise RunFailed(f"Over {ROWS_MAX} rows")
             plan = _plan(c, source, rows, at)
+            if source.get("sync_kind") == "bot_cost":
+                _clear_stale(c, source, plan["cells"], at)
             written, held = _write(c, source, run_id, actor, plan["cells"])
             result.update(
                 ok=True,
@@ -635,6 +637,22 @@ def bot_cost_rows(c: Any, first: bool = False, at: datetime | None = None) -> tu
         cost[(channel, str(month))] = cost.get((channel, str(month)), 0.0) + float(total)
     rows = [{"month": m, "channel": ch, "bot_cost": round(v, 2)} for (ch, m), v in sorted(cost.items())]
     return rows, sorted(notes)
+
+
+def _clear_stale(c: Any, source: dict[str, Any], cells: dict[tuple[str, str], dict[str, Any]], at: datetime) -> None:
+    """Add a 0 for each bot cost this source wrote earlier in the run's months that today's rows no longer cover, so a
+    month's cost never sits on both its old channel and its new one (a bot given a second channel, a channel retired or
+    handed to another bot, a month whose cost fell to zero). Only numbers this source still owns are cleared: a typed
+    one, or one another source wrote, is left alone. Keyed by channel id, so a retired channel's number clears too."""
+    oldest, newest = window(not source.get("last_good_run_at"), at)
+    for channel_id, month in c.execute(
+        "SELECT coalesce(g.channel_id,''), g.month FROM growth_cohorts g JOIN growth_origins o ON o.cohort_id=g.id "
+        "WHERE o.field='bot_cost' AND o.origin='synced' AND o.source_id=? AND g.month BETWEEN ? AND ? "
+        "AND g.bot_cost IS NOT NULL AND g.bot_cost != 0",
+        (source["id"], oldest, newest),
+    ).fetchall():
+        if "bot_cost" not in cells.get((str(channel_id), str(month)), {}):
+            cells.setdefault((str(channel_id), str(month)), {})["bot_cost"] = 0.0
 
 
 # ----------------------------------------------------------------------------- typing and conflicts
