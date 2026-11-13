@@ -232,8 +232,10 @@
    "app/goals-kpi-views.ts",
    "app/growth-charts.ts",
    "app/growth-page.ts",
+   "app/growth-retention.ts",
    "app/brand-page.ts",
    "app/growth-channels.ts",
+   "app/growth-start.ts",
    "app/growth-sources.ts"
   ],
   "deps": [],
@@ -521,6 +523,7 @@
    "taskThreadOpen"
   ],
   "idle": [
+   "taskAskSettled",
    "taskChatStop",
    "taskModalRouteClose"
   ]

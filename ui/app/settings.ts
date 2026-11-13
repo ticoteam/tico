@@ -99,11 +99,6 @@ function settingsMachinesRefresh() {
   return SETTINGS_PRESENCE.pending;
 }
 const harnessesWith = (test: (caps: HarnessCaps) => unknown) => HARNESS_ROWS.filter(row => row.capabilities && test(row.capabilities));
-// Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
-// can't see opens General with a line saying so; an unknown name just opens General.
-// Health has no tab: General's Health line opens it (Details), and its address still works.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history',
-  'health', 'billing'];
 // Repositories is a card on General (owners and admins): its old tab's addresses scroll to it once drawn.
 const SETTINGS_REPOS_CARD = '#set-repos[data-drawn]';
 // The Gateway card once drawn (renderSettingsProviders marks it), so a link to the old Gateway page lands on it filled in.

@@ -161,6 +161,13 @@ function messagingParams(): {bot: string; source: string} {
 }
 
 // app/settings.ts
+// Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
+// can't see opens General with a line saying so; an unknown name just opens General.
+// Health has no tab: General's Health line opens it (Details), and its address still works.
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'tasks', 'contacts', 'security', 'history',
+  'health', 'billing'];
+
+// app/settings.ts
 // ----------------------------------------------------------------- settings
 // People stay deliberately compact. Bot ownership, model, and physical placement are separate
 // controls because changing who can use a bot must never silently move its runtime (or vice versa).
@@ -339,6 +346,10 @@ const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
 
 // app/org-rules.ts
 const RULES_ROUTE = '#/rules';
+// Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
+// The shell keeps it (and SETTINGS_TABS), since a "Page → Tab" phrase in Needs you reads it before either page is opened.
+const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
+  ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
 // A refusal in one line: a 403 is about permission, the rest say what the server said (the Rules page and a stage's
 // rules panel, ui/app/stage-rules.ts).
 const ruError = (e: unknown) => errorStatus(e) === 403 ? "You can't change this." : errorMessage(e, 'Something went wrong.');

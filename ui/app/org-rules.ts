@@ -16,9 +16,6 @@
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// Every kind of rule, in the page's order (Stage rules spec, The Rules page): each tab's count comes from /rule-groups.
-const RU_TABS: [RuleTab, string][] = [['internal', 'Company'], ['external', 'Outside'], ['stages', 'Pipelines and stages'], ['due', 'Due'],
-  ['wakes', 'Wakes'], ['automations', 'Automations on tasks'], ['builtin', 'Built in'], ['suggested', 'Suggested']];
 const RU_REPEATS: [string, string][] = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const RU_STATUS: Record<string, [string, string]> = {overdue: ['Overdue', 'fail'], due_soon: ['Due soon', 'ready'], upcoming: ['Upcoming', ''], satisfied: ['Satisfied', 'ok']};
 const RU_KINDS: [string, string][] = [['vendor', 'Vendor'], ['customer', 'Customer'], ['government', 'Government'], ['other', 'Other']];
