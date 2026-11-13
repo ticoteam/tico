@@ -3212,6 +3212,11 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
+# How long a queued job waits before it is claimed ahead of task rank, oldest first. Rank alone let a job with no
+# task (a plain message to the bot) wait behind every newer task job: on Nov 13 a bot at its turns-at-once limit left
+# four such messages queued 97+ minutes while task work kept arriving.
+QUEUE_STARVE_S = 30 * 60
+
 # How long a task a bot filed for itself waits for the turn that filed it. Long enough for that turn to finish or
 # drop it (on Oct 22 that took 9 s); short enough that work it meant to run beside itself is not held behind a long
 # build or a login wait.
@@ -4574,17 +4579,20 @@ class Execution:
             +
             # A redirect first (it replaces a turn just stopped); then a person's chat; then the bot holding the
             # fewest turns here, so a freed turn goes to another bot's waiting job before the busy bot's next one;
-            # then task rank, then the longest waiting.
+            # then a job waiting past QUEUE_STARVE_S, oldest first, so rank cannot starve it; then task rank, then
+            # the longest waiting.
             "ORDER BY j.redirect DESC,CASE WHEN "
             + H.in_person_name_sql()
             + " THEN 0 ELSE 1 END,"
             f"CASE j.bot_id {' '.join('WHEN ? THEN ?' for _ in bots)} ELSE 0 END,"
+            "CASE WHEN j.created_at<? THEN j.created_at ELSE '~' END,"
             "(qt.rank IS NULL),qt.rank,j.created_at,j.id",
             (
                 *bots,
                 who.runner_id,
                 *((job_id,) if job_id is not None else ()),
                 *(v for bot in bots for v in (bot, held.get(bot, 0))),
+                H.shift(H.now(), seconds=-QUEUE_STARVE_S),
             ),
         )
         candidates = candidates.fetchall()

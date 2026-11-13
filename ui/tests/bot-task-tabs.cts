@@ -74,6 +74,14 @@ const normalized = (tab: Tab): Tab => tab.builtin && tab.builtin !== 'done' && !
 const WIDGETS: Widget[] = ['tasks', 'updates', 'files'].map(id => ({id, hidden: false, height: null}));
 const PAGES: Record<string, PageFixture> = {'page:f1': {file_id: 'f1', title: 'Weekly numbers', bot: 'lead', updated_at: ago(90), archived: false},
   'page:f2': {file_id: 'f2', title: 'Release plan', bot: 'lead', updated_at: ago(30), archived: false}};
+// Built-in cards pinned to the sidebar: what GET /api/v2/places/bot:<slug> answers for a `card:<id>` widget (backend/cards.py).
+const CARDS: Record<string, unknown> = {
+  'card:c1': {id: 'c1', template: 'my_tasks', title: '', heading: 'My tasks', name: 'My tasks', team_name: '', hidden: false, settings: {},
+    data: {count: 8, tasks: [{id: 't1', title: 'Ship the release', due_at: null}]}},
+  'card:c2': {id: 'c2', template: 'updates', title: '', heading: 'Updates', name: 'Updates', team_name: '', hidden: false, settings: {},
+    data: {unread: 0, updates: []}},
+  'card:c3': {id: 'c3', template: 'spend', title: '', heading: 'Spend', name: 'Spend', team_name: '', hidden: false, settings: {},
+    data: {spent: 1240, budget: 2000, month: 'Nov'}}};
 // The server's filter, for the fields these fixtures use; Ana is the viewer.
 const matches = (bot: string, tab: Tab, t: Task): boolean => (t.owner_id === 'bot:' + bot || t.requester_id === 'bot:' + bot) && tab.conditions!.every(({field, value}) => {
   const who = value === 'this_bot' ? 'bot:' + bot : value === 'me' ? 'human:ana' : value;
@@ -150,7 +158,8 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     // The sidebar's pages (backend/cards.py): what GET /api/v2/places/bot:<slug> answers for the saved widgets.
     const pinned = decodeURIComponent(p).match(/^\/api\/v2\/places\/bot:([^/]+)$/);
     if (pinned) return json({place: 'bot:' + pinned[1], kind: 'bot', saved: true, can_edit: pinned[1] === 'lead',
-      pins: ((server.layouts[pinned[1]!] || ({} as Partial<Layout>)).widgets || []).filter(w => PAGES[w.id]).map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', page: PAGES[w.id]}))});
+      pins: ((server.layouts[pinned[1]!] || ({} as Partial<Layout>)).widgets || []).filter(w => PAGES[w.id] || CARDS[w.id])
+        .map((w, i) => ({id: 'p' + i, item: w.id, position: i, size: 'medium', ...(PAGES[w.id] ? {page: PAGES[w.id]} : {card: CARDS[w.id]})}))});
     if (p === '/api/v2/cards/choices') return json({templates: [], teams: [], kpis: [], pages: Object.values(PAGES)});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     return json(unrouted(p));
@@ -480,6 +489,20 @@ async function open(browser: Browser, viewport: ViewportSize, colorScheme: strin
     assert.deepEqual(await shown(), ['page:f2']);
     assert.deepEqual(paged.errors, []);
     await paged.context.close();
+    // A card in the sidebar (#355): its count in the rail header's own count style, none at 0; its figures 16px at most.
+    const carded = await open(browser, {width: 1280, height: 900}, 'light', {puts: [], page: 200, layouts: {lead: {tabs: DEFAULT,
+      widgets: ['card:c1', 'card:c2', 'card:c3'].map(id => ({id, hidden: false, height: null}))}}});
+    await carded.page.goto('https://tico-ui.test/#/bot/lead');
+    const crail = carded.page.locator('#pane-tasks');
+    await crail.locator('.bot-w[data-widget="card:c3"] .dash-big').waitFor();
+    const head = (id: string) => crail.locator(`.bot-w[data-widget="${id}"] .bot-pin > h2.rail-h`);
+    assert.equal(await head('card:c1').textContent(), 'My tasks 8', 'shown as MY TASKS 8, in the rail header\'s small caps');
+    assert.equal(await head('card:c1').locator('.cnt').innerText(), '8');
+    assert.equal(await crail.locator('.bot-w[data-widget="card:c1"] .dash-big').count(), 0, 'no figure under the header');
+    assert.equal(await head('card:c2').locator('.cnt').count(), 0, 'no count at 0');
+    assert.equal(await crail.locator('.bot-w[data-widget="card:c3"] .dash-big strong').evaluate(el => getComputedStyle(el).fontSize), '16px');
+    assert.deepEqual(carded.errors, []);
+    await carded.context.close();
     console.log('bot-task-tabs: ok');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

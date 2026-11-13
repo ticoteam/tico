@@ -210,3 +210,54 @@ def test_an_older_runner_advertising_retired_assignment_capabilities_still_heart
     )
     post(api, "chat/ops", {"text": "Still there?"})
     assert claim(api, machine)["bot"] == "ops"
+
+
+def _bot_chat(api, text, minutes_ago=0):
+    """A queued message to ops with no task, not in a person's name (so no chat priority), queued `minutes_ago`."""
+    post(api, "chat/ops", {"text": text})
+    with api.app.state.store.transaction() as c:
+        job = c.execute(
+            "SELECT id,message_id FROM jobs WHERE bot_id='ops' AND state='queued' ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()
+        c.execute("UPDATE messages SET sender_id='finance' WHERE id=?", (job["message_id"],))
+        c.execute("UPDATE jobs SET created_at=? WHERE id=?", (H.shift(H.now(), minutes=-minutes_ago), job["id"]))
+
+
+def _more_places(api, machine, capacity):
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": capacity,
+            "readiness": {"ops": True},
+            "capabilities": ["task_lanes_v2"],
+        },
+        token=machine["token"],
+    )
+
+
+def test_a_message_with_no_task_waiting_long_is_claimed_ahead_of_newer_task_work(api):
+    """Nov 13: a bot at its limit left task-less messages queued 97+ minutes while newer task jobs took every freed
+    turn, since a job with no task sorts last by rank. Past QUEUE_STARVE_S it goes first."""
+    machine = task_bot(api, lanes=True, capacity=1)
+    new_task(api, "first"), new_task(api, "second")
+    assert [claim(api, machine)["bot"] for _ in range(2)] == ["ops"] * 2
+    _bot_chat(api, "Did the export finish?", minutes_ago=97)
+    third = new_task(api, "third")
+    new_task(api, "fourth")
+    assert claim(api, machine) is None  # at its limit
+    _more_places(api, machine, 2)  # a turn frees
+    assert claim(api, machine)["lane"] == "main"
+    assert claim(api, machine)["lane"] == "task:" + third["id"]
+
+
+def test_a_fresh_message_with_no_task_still_waits_behind_task_work(api):
+    machine = task_bot(api, lanes=True, capacity=1)
+    new_task(api, "first"), new_task(api, "second")
+    assert [claim(api, machine)["bot"] for _ in range(2)] == ["ops"] * 2
+    _bot_chat(api, "Did the export finish?")
+    third = new_task(api, "third")
+    _more_places(api, machine, 2)
+    assert claim(api, machine)["lane"] == "task:" + third["id"]

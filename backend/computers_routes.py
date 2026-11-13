@@ -10,7 +10,6 @@ from . import (
     models as M,
     providers as Providers,
     runner_versions,
-    task_privacy as privacy,
     views,
 )
 from .auth import Identity, validate_identity
@@ -63,11 +62,10 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 return execution.heartbeat(c, request.state.identity, body, live_tasks=selected if unchanged else None)
 
             result = mutate(request, body, work)
-        # The roster, providers and repositories behind the assignments are read from a snapshot after the commit,
-        # not under the write lock: a heartbeat keeps no receipt (store.is_poll), so nothing replays them.
-        with store.read_transaction() as c:
-            result["assignments"] = execution.assigned(c, request.state.identity)
-            privacy.require_payload(c, request.state.identity, {"assignments": result["assignments"]})
+        # No bot list: every runner the server accepts (0.4.0 on) reads its bots from GET runners/assignments when a
+        # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
+        # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
+        result["assignments"] = []
         return result
 
     @app.get("/api/v2/runners/desired")

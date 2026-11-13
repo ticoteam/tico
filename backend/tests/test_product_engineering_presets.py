@@ -1073,3 +1073,52 @@ def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
     assert SR.sweep_owners(c) == [eng["id"]]
     row = E.task(c, eng["id"])
     assert (row["owner_id"], row["assignee_id"]) == (None, None)
+
+
+def _engineering_at_release(c):
+    """A Product task in Spec, with Engineering set as the release migration sets it: On deck and Build pick from two
+    Builders (the pick becomes the task's owner), the two Reviews from two Reviewers."""
+    import importlib
+
+    _role_bot(c, "builder-2", "builder")
+    row = _product_task(c)
+    _seat(c, "Builder 2", "builder", "builder-2")
+    X.github_installed(c)  # Build needs a repository: with no App it would wait on Connect GitHub
+    importlib.import_module("backend.migrations.20261113033639_engineering_picks_at_release").up(c)
+    return row
+
+
+BUILDERS, REVIEWERS = ("bot:builder", "bot:builder-2"), ("bot:rev-a", "bot:rev-b")
+
+
+def test_a_handoff_into_picking_stages_gets_a_builder_and_review_1_a_reviewer(c):
+    """#387: a hand-off from Product arrives in On deck with a Builder, keeps it in Build, and Review 1 picks a
+    Reviewer as the task enters it; nobody is left without an owner for a person's Stuck card."""
+    row = _engineering_at_release(c)
+    E.move(c, row["id"], "product-in-development", ANA, "The spec is OK'd")
+    eng = E.task(c, _filed(c, row["id"])[0][0])
+    assert eng["stage_id"] == "engineering-on-deck"
+    assert eng["owner_id"] in BUILDERS and eng["assignee_id"] == eng["owner_id"]
+    built = E.advance(c, eng["id"])
+    assert (built["stage_id"], built["owner_id"]) == ("engineering-build", eng["owner_id"])
+    reviewed = E.move(c, eng["id"], "engineering-review-1", ANA, "The PR is green")
+    assert reviewed["owner_id"] in REVIEWERS and reviewed["assignee_id"] == eng["owner_id"]
+    assert _picks(c, eng["id"])[-1].startswith("Review 1 given to rev-")
+
+
+def test_a_product_owner_filing_straight_into_build_gets_a_builder(c):
+    """#387: the Product Owner files a task with no owner into Engineering's Build: the stage picks a Builder."""
+    _engineering_at_release(c)
+    eng = H.task_create(
+        c,
+        "bot:pm",
+        "Saved carts",
+        "Keep a cart.",
+        "bot:pm",
+        pipeline="engineering",
+        stage="engineering-build",
+        unassigned=True,
+        lint=False,
+    )
+    assert eng["stage_id"] == "engineering-build"
+    assert eng["owner_id"] in BUILDERS and eng["assignee_id"] == eng["owner_id"]

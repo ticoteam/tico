@@ -65,8 +65,13 @@ UPGRADE_TESTS = (
 # - RELEASE_SHOTS runs scripts/screenshots/index.cts --list-pages, which lists every tracked ui/ file through git: a new
 #   ui/ file that no PAGES, SHARED or UNSHOWN entry names fails it (#3335 ui/app/browser-view.ts), and a gone one can
 #   leave a glob that matches no file. A ui/ file added or gone, outside the folders the harness ignores, picks it.
+# - CLI_SPEC parses every CLI command's example through hubcli.parser(): an example that names a file it reads
+#   (`--file signups.csv`) fails it when the test writes no stand-in for that kind of file (#3598, fixed by #3684).
+#   A change under clients/commands/ picks it.
 ROWS_SCHEMA = "backend/tests/test_rows_schema.py"
 RELEASE_SHOTS = "scripts/tests/test_release_shots.py"
+CLI_SPEC = "clients/tests/test_cli_spec.py"
+CLI_COMMANDS = "clients/commands/"
 SCHEMA_LINE = re.compile(
     r"\b(?:CREATE|ALTER|DROP)\s+TABLE\b|\b(?:ADD|DROP|RENAME)\s+COLUMN\b|\b(?:TEXT|INTEGER|REAL|BLOB|NUMERIC)\b"
 )
@@ -1248,7 +1253,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a file under MIGRATIONS, or a backend module whose diff from `base`
        to `head` changes a schema line (schema_changes), runs ROWS_SCHEMA; a ui/ file the release-shot harness lists
-       that is added or gone runs RELEASE_SHOTS.
+       that is added or gone runs RELEASE_SHOTS; a file under CLI_COMMANDS runs CLI_SPEC.
 
     `added` names the new files (None: any changed file may be new) and `core` the core browser scripts (None: read from
     scripts/ui-tests.cts).
@@ -1449,6 +1454,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     if any(shot_listed(n) and (n in added or n in gone) for n in names) and (root / RELEASE_SHOTS).is_file():
         guards.add(RELEASE_SHOTS)
         notes.append("rule 9: a new or gone ui/ file runs the release-shot table test")
+    if any(n.startswith(CLI_COMMANDS) for n in names) and (root / CLI_SPEC).is_file():
+        guards.add(CLI_SPEC)
+        notes.append("rule 9: a CLI command change runs the CLI spec test")
     python |= guards
     if any(n in CI_INPUTS for n in names) and not browser:
         browser.add(SMOKE_SCRIPT)
