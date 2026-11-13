@@ -2878,6 +2878,76 @@ async fn an_old_bot_repository_is_brought_to_agents_md_in_one_pushed_commit() {
     assert!(crate::instructions::present(&seed));
 }
 
+/// An old repository whose AGENT.md still has the old template's state.md steps: the move rewrites them to the new
+/// template's steps in its one commit and keeps the bot's own lines. A repository already moved (AGENTS.md with Tico's
+/// section, the steps still there) gets the same rewrite on its next turn.
+#[tokio::test]
+async fn the_old_templates_state_md_steps_go_in_the_move_and_the_bots_own_lines_stay() {
+    const OLD_TEXT: &str = "# Builder\n\n## First message: setup\nIf `state.md` says setup has not finished, do this before any other work:\n3. Record each answer in `state.md` the moment it arrives, dated, and write `knowledge/standards.md`.\n\n## Starting a run\n1. Read `state.md`, then the task with `tico task show <id>`, including its conversation, its version and what is missing.\n\n## Ending a run\n1. Rewrite `state.md`, record durable decisions in `memory/decisions.md`, add any repeated mistake to\n   `knowledge/patterns.md`, and commit this repository.\n\nOur own rule: the owner keeps a copy of state.md in the wiki.\n";
+    for moved in [false, true] {
+        let tmp = Tmp::new();
+        let (bare, seed) = remote(&tmp.0, "bot-builder");
+        if moved {
+            sh(&seed, &["mv", "AGENT.md", "AGENTS.md"]);
+            let text = crate::instructions::with_section(
+                OLD_TEXT,
+                &crate::instructions::section("Tico", false),
+            );
+            std::fs::write(seed.join("AGENTS.md"), text).unwrap();
+            sh(&seed, &["add", "-A"]);
+            sh(&seed, &["commit", "-qm", "moved before the rewrite"]);
+            sh(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        } else {
+            commit_and_push(&seed, "AGENT.md", OLD_TEXT);
+        }
+        commit_and_push(&seed, "state.md", "Working on #256.\n");
+        let main = tmp.0.join("bot-builder");
+        sh(
+            &tmp.0,
+            &[
+                "clone",
+                "-q",
+                bare.to_str().unwrap(),
+                main.to_str().unwrap(),
+            ],
+        );
+        let home = tmp.0.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let env = turn_env(&home, &[]);
+        let before = sh(&main, &["rev-parse", "HEAD"]);
+        assert!(crate::instructions::ensure(&main, &env, "Tico", false)
+            .await
+            .unwrap());
+        let agents = std::fs::read_to_string(main.join("AGENTS.md")).unwrap();
+        for line in [
+            "If setup has not finished (Tico marks you Needs setup), do this before any other work:",
+            "3. Record each answer in `knowledge/` the moment it arrives, dated, and write `knowledge/standards.md`.",
+            "1. Read the task with `tico task show <id>`, including its conversation, its version and what is missing.",
+            "1. Note progress on the task, record durable decisions in `memory/decisions.md`, add any repeated mistake to",
+            "Our own rule: the owner keeps a copy of state.md in the wiki.",
+        ] {
+            assert!(agents.contains(line), "{moved}: {line}\n{agents}");
+        }
+        assert_eq!(agents.matches("state.md").count(), 1, "{moved}: {agents}");
+        assert_eq!(sh(&main, &["status", "--porcelain"]), "", "{moved}");
+        assert_eq!(
+            sh(
+                &main,
+                &["rev-list", "--count", &format!("{}..HEAD", before.trim())]
+            )
+            .trim(),
+            "1",
+            "{moved}: one commit"
+        );
+        assert!(
+            !crate::instructions::ensure(&main, &env, "Tico", false)
+                .await
+                .unwrap(),
+            "{moved}: nothing left to change"
+        );
+    }
+}
+
 /// A repository from the employee template links AGENTS.md and CLAUDE.md to AGENT.md: AGENTS.md becomes the file
 /// itself and the CLAUDE.md link goes, so Claude Code reads the instructions once.
 #[tokio::test]
