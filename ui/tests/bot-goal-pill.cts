@@ -111,6 +111,20 @@ const at = (page: Page, width: number): Promise<Shot> => page.evaluate(async (wi
       await page.evaluate(() => { (window as unknown as {goalFlips: number}).goalFlips = 0; });
       for (const w of [edge + 10, edge, edge - 10, edge + 2, edge + 10, edge - 3, edge + 10, edge]) await at(page, w);
       assert((await page.evaluate(() => (window as unknown as {goalFlips: number}).goalFlips)) <= 1, `${scheme}: one flip around ${edge}px`);
+      // The thread's actions fill in after the header is drawn, without resizing it: the goal re-measures and leaves.
+      assert((await at(page, edge + 30)).shown, scheme + ': shown just above the switch point');
+      const afterActs = await page.evaluate(async () => {
+        const acts = document.querySelector('#bot-top-acts') as HTMLElement;
+        acts.hidden = false;
+        const wide = document.createElement('span');
+        wide.id = 'wide-act'; wide.style.cssText = 'display:inline-block;width:80px;height:20px';
+        acts.append(wide);
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+        const shownNow = (document.querySelector('#bot-goal .bot-goal-main') as HTMLElement).getClientRects().length > 0;
+        wide.remove();
+        return shownNow;
+      });
+      assert.equal(afterActs, false, scheme + ': wider actions drop the goal without a header resize');
       // Back with room to spare, the goal returns to its pill and the Goals card goes home.
       assert((await at(page, 1200)).shown, scheme + ': the goal returns');
       const home = await page.evaluate(() => (document.querySelector('#bot-goals-card') as HTMLElement).previousElementSibling?.id);
