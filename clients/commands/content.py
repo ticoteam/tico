@@ -759,9 +759,14 @@ def docs_write(api, args):
                     404,
                 )
             return api.post("docs", {"path": path, "title": title, "body": text, "note": note}, key=_key(args))
-        fields = {"version": int(base) if base is not None else current["version"], "body": text, "note": note}
-        if base is None:
-            fields["own_version_only"] = True
+        # Always sent, so the server can tell a write on the version read (False) from an older client's write that
+        # sends neither (backend/docs.py bot_write).
+        fields = {
+            "version": int(base) if base is not None else current["version"],
+            "body": text,
+            "note": note,
+            "own_version_only": base is None,
+        }
         if args.get("title"):
             fields["title"] = args["title"]
         return api.patch("docs/" + current["id"], fields, key=_key(args))

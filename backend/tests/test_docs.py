@@ -253,6 +253,22 @@ def test_without_a_base_version_a_bot_replaces_only_its_own_latest_version(api):
     assert actor == "bot:ops" and detail["code"] == "base_version_required" and detail["base_version"] is False
 
 
+def test_an_older_clients_bot_write_is_recorded_as_sent_without_a_base_version(api):
+    """An older `tico doc write` sends the version current at write time and no own_version_only: it still lands
+    (people's API writes look the same), but its event must not count as a write on the version the bot read."""
+    from backend.tests.helpers.api import headers
+
+    token = bot_token(api)
+    doc = make(api, "On-call runbook", "Call 555-0100.", who=CARA, path="ops/runbook.md")
+    fixed = edit(api, doc, who=CARA, body="Call 555-0199.")["doc"]
+    r = api.patch(
+        "/api/v2/docs/" + doc["id"], json={"version": fixed["version"], "body": "old"}, headers=headers(token)
+    )
+    assert r.status_code == 200, r.text
+    [(actor, _target, detail)] = doc_events(api, "docs.updated")[-1:]
+    assert actor == "bot:ops" and detail["base_version"] is False and detail["refused"] is False
+
+
 def test_a_bot_create_never_turns_into_an_overwrite_of_a_doc_made_meanwhile(api):
     from backend.tests.helpers.mcp import call as tool
 

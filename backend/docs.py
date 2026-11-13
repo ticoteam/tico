@@ -499,7 +499,10 @@ def bot_write(who, body, refused):
     whether it was refused. Empty for a person's write or a change that sends no text."""
     if not H.is_bot(who.actor) or getattr(body, "body", None) is None:
         return {}
-    return {"base_version": not getattr(body, "own_version_only", True), "mode": "whole", "refused": refused}
+    # Only today's tool sends own_version_only, and sends it on every edit (False when it carries the version read). A
+    # write without it (a create, or an older client sending the version current at write time) did not send a base.
+    sent = "own_version_only" in getattr(body, "model_fields_set", ()) and not getattr(body, "own_version_only", True)
+    return {"base_version": sent, "mode": "whole", "refused": refused}
 
 
 def link_row(c, link_id):
