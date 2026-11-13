@@ -25,13 +25,25 @@ const bigText = (page: Page) => page.evaluate(() => [...document.querySelectorAl
     for (const phone of [false, true]) {
       const page = await pageAs(browser, hub, 'dana', {phone});
       try {
+        // Home's default cards are count cards; pin totals too (Spend, Done per week), so a big total is caught here.
+        if (!phone) {
+          for (const template of ['spend', 'done_per_week']) {
+            const status = await page.evaluate(async t => (await fetch('/api/v2/cards', {method: 'POST', headers: {'Content-Type': 'application/json', 'Idempotency-Key': 'nb-' + t},
+              body: JSON.stringify({place: 'person:me', template: t, settings: {}, size: 'medium'})})).status, template);
+            assert.equal(status, 200, `pinned ${template} on Home`);
+          }
+          await page.reload();
+        }
         const errors: string[] = [];
         page.on('pageerror', e => errors.push(e.message));
         for (const [route, ready] of [['#/home', '#dash-grid .dash-pin-body > *'], ['#/growth', '#main h1'], ['#/usage', '#main h1'], ['#/finance', '#main h1']] as const) {
           await page.evaluate(to => { location.hash = to; }, route);
           await page.locator(ready).first().waitFor({timeout: t(20000)});
-          await page.waitForLoadState('networkidle');
+          // Home keeps a live stream open, so it never goes network-idle: wait for its totals instead.
+          if (route === '#/home') await page.locator('#dash-grid .dash-big strong').nth(1).waitFor({timeout: t(20000)});
+          else await page.waitForLoadState('networkidle');
           assert.deepEqual(await bigText(page), [], `nothing above 16px on ${route} at ${phone ? 390 : 1440}px`);
+          if (route === '#/home') assert.ok(await page.locator('#dash-grid .dash-big strong').count() >= 2, 'Home shows the totals it checks');
         }
         assert.deepEqual(errors, []);
       } finally {

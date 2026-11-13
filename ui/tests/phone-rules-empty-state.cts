@@ -12,9 +12,12 @@ const {audit} = require('./support/phone-rules.cts') as import('./support/phone-
     const page = await browser.newPage({viewport: {width: 400, height: 844}, isMobile: true, hasTouch: true});
     await page.setContent(`<meta name="viewport" content="width=device-width, initial-scale=1">
       <main><section class="card"><p class="muted">Nothing waiting on you</p></section>
+        <section class="card"><p class="muted">Nothing in Sales waits on you</p></section>
+        <section class="card"><p>Nothing runs while the bot is paused</p></section>
         <section class="card"><p>Waiting on the builder's review</p></section></main>`);
     const found = (await page.evaluate(audit, 'as the screen opens')).filter(b => b.rule === 3).map(b => b.element);
-    assert.deepEqual(found, ['p "Waiting on the builder\'s review"'], 'only the real wait is a dead end');
+    assert.deepEqual(found, ['p "Nothing runs while the bot is paused"', 'p "Waiting on the builder\'s review"'],
+      'only the real waits are dead ends, a "Nothing ..." one included');
     console.log('phone-rules-empty-state: an empty state is not a dead end; a wait with no way forward still is');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });
