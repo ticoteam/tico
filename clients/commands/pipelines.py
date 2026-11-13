@@ -30,6 +30,7 @@ from clients.tico import APIError
 PIPELINE = _s("The pipeline: its id or its name, any case (product, Engineering)")
 STAGE = _s("The stage's id (product-spec, engineering-review-1), from `pipeline show`")
 WHOEVER = "whoever the task is for"  # a stage held by `assignee`: each task's own owner holds it
+PICK = "pick"  # a stage whose owner is "One of several": Tico picks one of `pick.bots` as a task arrives (backend/stage_pick.py)
 
 
 # ----------------------------------------------------------------------------- reading the pipelines
@@ -66,10 +67,18 @@ def _pipeline(api, ref):
     return _find(rows, ref), actors
 
 
+def _picks_from(stage):
+    """The bots a stage that picks its owner picks from, or () for a stage with one owner."""
+    pick = stage.get("pick") if stage.get("owner") == PICK else None
+    return tuple((pick or {}).get("bots") or ()) if isinstance(pick, dict) else ()
+
+
 def _holder(stage, actors):
     owner = stage.get("owner") or ""
     if owner == "assignee":
         return WHOEVER
+    if owner == PICK:
+        return "One of several: " + ", ".join(actors.get(b) or b for b in _picks_from(stage))
     return stage.get("owner_name") or actors.get(owner) or owner
 
 
@@ -92,6 +101,7 @@ def _stage(stage, actors):
         "name": stage.get("name"),
         "held_by": stage.get("owner"),
         "held_by_name": _holder(stage, actors),
+        **_pick_shown(stage, actors),
         "by_hand": bool(stage.get("by_hand")),
         "task_limit": stage.get("task_limit"),
         "to_leave": [
@@ -106,6 +116,17 @@ def _stage(stage, actors):
             for r in stage.get("requirements") or []
         ],
     }
+
+
+def _pick_shown(stage, actors):
+    """A stage's "One of several" as the API gives it (the bots, Take turns or Random, Limit each, Prefer, whether the
+    pick becomes the task's owner, each bot's model family) with the bots' names, and `pick_next`: who gets the next
+    task, in one sentence. Nothing for a stage with one owner."""
+    if not _picks_from(stage):
+        return {}
+    pick = dict(stage["pick"])
+    pick["bot_names"] = [actors.get(b) or b for b in pick.get("bots") or []]
+    return {"pick": pick, "pick_next": stage.get("pick_next") or ""}
 
 
 def _shape(row, actors):
@@ -223,7 +244,8 @@ def company_show(api, args):
     holds = {}
     for p in pipelines:
         for s in p["stages"]:
-            holds.setdefault(s["held_by"], []).append(s["id"])
+            for who in (s.get("pick") or {}).get("bots") or [s["held_by"]]:
+                holds.setdefault(who, []).append(s["id"])
         holds.setdefault(p["manager"], []).append(f"{p['id']} (manager)")
     return {
         "company": {
@@ -255,7 +277,8 @@ def company_show(api, args):
 @tool(
     "tico_task_request",
     "File a request into a pipeline: a task that starts in the pipeline's first stage, given to whoever holds that "
-    "stage (a stage held by whoever the task is for needs `owner`). Product requests go to product. Prints the task "
+    "stage (a stage held by whoever the task is for needs `owner`; a stage that picks from several picks one, unless "
+    "`owner` names one). Product requests go to product. Prints the task "
     "with its id and version; watch it with `tico task wait <id>`. A person or a bot may file one. "
     'Example: tico task request product "Add a negate(x) function" --body "Why and what done looks like"',
     {
@@ -273,9 +296,12 @@ def task_request(api, args):
     stages = row.get("stages") or []
     holder = (stages[0].get("owner") if stages else None) or ""
     owner = args.get("owner") or (holder if ":" in holder else None)
-    if not owner:
+    if not owner and holder != PICK:
         raise ValueError(f"{row.get('name')}'s first stage is held by {WHOEVER}: add --owner <bot or person>")
-    fields = {"owner": owner, "title": args["title"], "body": args.get("body") or args["title"], "pipeline": row["id"]}
+    # A first stage that picks from several picks the owner as the task arrives; naming one always wins.
+    fields = {"title": args["title"], "body": args.get("body") or args["title"], "pipeline": row["id"]}
+    if owner:
+        fields["owner"] = owner
     for name in ("private", "operation_id"):
         if args.get(name) is not None:
             fields[name] = args[name]
@@ -401,11 +427,20 @@ def _actor(api, value):
 def _save(api, record, args, made=False):
     """Save the whole record; the answer is the record as saved."""
     body = {k: v for k, v in record.items() if k not in ("may_change", "retired_at", "settings_version")}
+    body["stages"] = [_stage_sent(s) for s in body.get("stages") or []]
     if not made:
         body["settings_version"] = (
             args.get("version") if args.get("version") is not None else record.get("settings_version")
         )
     return api.post(f"pipelines/{quote(str(record['id']), safe='')}", body, key=_key(args))
+
+
+def _stage_sent(stage):
+    """A stage as a save sends it: without what the server adds to a read (`pick_next`, each bot's model family)."""
+    stage = {k: v for k, v in stage.items() if k != "pick_next"}
+    if isinstance(stage.get("pick"), dict):
+        stage["pick"] = {k: v for k, v in stage["pick"].items() if k not in ("families", "bot_names")}
+    return stage
 
 
 def _taken(api, pipeline_id):
@@ -423,8 +458,7 @@ def _stage_fields(api, args, stage):
     for arg, field in (("name", "name"), ("purpose", "purpose")):
         if args.get(arg) is not None:
             stage[field] = args[arg]
-    if args.get("holder"):
-        stage["owner"] = _actor(api, args["holder"])
+    _pick_fields(api, args, stage)
     if args.get("by_hand") is not None:
         stage["by_hand"] = bool(args["by_hand"])
     if args.get("no_limit"):
@@ -434,6 +468,52 @@ def _stage_fields(api, args, stage):
     if args.get("expected_minutes") is not None:
         stage["expected_minutes"] = args["expected_minutes"] or None
     return stage
+
+
+PICK_ARGS = ("pick", "limit_each", "no_limit_each", "prefer", "owns_task")
+
+
+def _pick_fields(api, args, stage):
+    """Who holds the stage: one holder, or "One of several" (`pick_from` and its settings, the API's `pick`). A holder
+    takes the stage back to one owner; the settings alone change the pick a stage has."""
+    bots = [b for b in args.get("pick_from") or [] if str(b or "").strip()]
+    settings = [a for a in PICK_ARGS if args.get(a) not in (None, False)] + (
+        ["owns_task"] if args.get("owns_task") is False else []
+    )
+    if args.get("holder") and (bots or settings):
+        raise APIError("usage", "A stage has one holder or picks from several: give --holder or --pick-from, not both")
+    if args.get("holder"):
+        stage["owner"] = _actor(api, args["holder"])
+        stage.pop("pick", None)
+        stage.pop("pick_next", None)
+        return
+    if not bots and not settings:
+        return
+    if not bots and stage.get("owner") != PICK:
+        raise APIError(
+            "usage",
+            "--pick, --limit-each, --prefer and --owns-task are for a stage that picks from "
+            "several: add --pick-from <bot> for each bot it picks from",
+        )
+    had = stage.get("pick") if stage.get("owner") == PICK and isinstance(stage.get("pick"), dict) else {}
+    pick = {
+        "bots": [_actor(api, b) for b in bots] if bots else list(had.get("bots") or []),
+        "how": had.get("how") or "turns",
+        "limit_each": had.get("limit_each"),
+        "prefer": had.get("prefer") or "anyone",
+        "owns_task": bool(had.get("owns_task")),
+    }
+    if args.get("pick"):
+        pick["how"] = args["pick"]
+    if args.get("no_limit_each"):
+        pick["limit_each"] = None
+    elif args.get("limit_each") is not None:
+        pick["limit_each"] = args["limit_each"]
+    if args.get("prefer"):
+        pick["prefer"] = args["prefer"]
+    if args.get("owns_task") is not None:
+        pick["owns_task"] = bool(args["owns_task"])
+    stage["owner"], stage["pick"] = PICK, pick
 
 
 def _place(stages, stage, args):
@@ -452,6 +532,30 @@ def _place(stages, stage, args):
 STAGE_FIELDS = {
     "purpose": _s("What the stage is for, in a sentence"),
     "holder": HOLDER,
+    "pick_from": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "One of several: the bots it picks the owner from as a task arrives (slugs or bot:<id>); "
+        "replaces its holder",
+    },
+    "pick": {"type": "string", "enum": ["turns", "random"], "description": "One of several: take turns or random"},
+    "limit_each": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "One of several: at most this many of its tasks each; when all are full a task waits",
+    },
+    "no_limit_each": {"type": "boolean", "description": "One of several: take Limit each off"},
+    "prefer": {
+        "type": "string",
+        "enum": ["anyone", "new", "family"],
+        "description": "One of several: anyone, one new to the task, or one of a different model family from "
+        "everyone who worked on it",
+    },
+    "owns_task": {
+        "type": "boolean",
+        "description": "One of several: the pick becomes the task's owner (Build); off, it holds only this stage "
+        "(Review)",
+    },
     "by_hand": {"type": "boolean", "description": "Tasks leave it only when someone moves them"},
     "limit": {
         "type": "integer",
@@ -586,15 +690,18 @@ def pipeline_remove(api, args):
 )
 def stage_add(api, args):
     record = _record(api, args["pipeline"])
-    stage = _stage_fields(api, {**args, "holder": args.get("holder") or "assignee"}, {"requirements": []})
+    holder = args.get("holder") or (None if args.get("pick_from") else "assignee")
+    stage = _stage_fields(api, {**args, "holder": holder}, {"requirements": []})
     record["stages"] = _place(record.get("stages") or [], stage, args)
     return _save(api, record, args)
 
 
 @tool(
     "tico_stage_update",
-    "Change a stage: its name, purpose, who holds it, whether tasks leave it by hand, its task limit, its expected "
-    "time. Who may change the pipeline. Example: tico stage update product-ideas --no-by-hand",
+    "Change a stage: its name, purpose, who holds it (one holder, or One of several with `pick_from`, `pick`, "
+    "`limit_each`, `prefer` and `owns_task`; only a person changes who a stage picks from), whether tasks leave it "
+    "by hand, its task limit, its expected time. Who may change the pipeline. "
+    "Example: tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new",
     {
         "stage": STAGE,
         "name": _s("A new name"),
@@ -763,7 +870,7 @@ def requirement_remove(api, args):
 
 
 # ----------------------------------------------------------------------------- tico task wait (a shell's, not a tool)
-TURN_STATES = ("snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "by_hand")
+TURN_STATES = ("snoozed", "person", "paused", "bot", "jev", "source", "tasks", "room", "pick", "by_hand")
 # The CLI's exit codes (clients/cli_plumbing.py, docs/cli.md), and one of the waiter's own: the task ended without it.
 EXIT_MET, EXIT_ENDED, EXIT_TIMEOUT = cli_plumbing.EXIT_OK, 6, cli_plumbing.EXIT_TIMEOUT
 TREE_MAX = 20  # with --tree, at most this many tasks are watched
@@ -1082,14 +1189,20 @@ CLI = (
     Command(
         "stage add",
         "add a stage to a pipeline: last, first, or after a stage" + CHANGERS,
-        args=(_FIRST, _either("by_hand")),
+        args=(_FIRST, _either("by_hand"), _either("owns_task"), Arg("no_limit_each", default=None)),
         example='tico stage add engineering "Security review" --after engineering-review-2 --holder reviewer-2',
     ),
     Command(
         "stage update",
-        "change a stage: name, purpose, holder, by hand, task limit, expected time" + CHANGERS,
-        args=(_either("by_hand"), Arg("no_limit", default=None)),
-        example="tico stage update product-ideas --no-by-hand",
+        "change a stage: name, purpose, holder or the bots it picks from, by hand, task limit, expected time"
+        + CHANGERS,
+        args=(
+            _either("by_hand"),
+            Arg("no_limit", default=None),
+            _either("owns_task"),
+            Arg("no_limit_each", default=None),
+        ),
+        example="tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new",
     ),
     Command(
         "stage move",

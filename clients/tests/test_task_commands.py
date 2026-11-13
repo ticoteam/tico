@@ -513,3 +513,32 @@ def test_unlink_finds_the_link_by_its_url_and_says_so_when_there_is_none():
     assert api.writes() == [("DELETE", "tasks/T1/links/L1", {})]
     with pytest.raises(ValueError, match="No link to https://github.com/acme/app/pull/9"):
         hubtools.BY_NAME["tico_task_unlink"]["fn"](Links(), {"id": "T1", "link": "https://github.com/acme/app/pull/9"})
+
+
+def test_task_show_says_it_waits_for_a_free_bot_and_who_each_pick_gave_it_to():
+    """One of several (backend/stage_pick.py): a task nobody is free for waits with state `pick`, its `who` the stage;
+    every pick is a history event of field `pick` whose note is the line."""
+    task = {
+        "id": "T1",
+        "title": "Add negate",
+        "version": 4,
+        "stage": {"name": "Review 2"},
+        "pipeline": {"name": "Engineering"},
+        "turn": {"state": "pick", "who": "engineering-review-2", "line": "Waiting for a free Reviewer"},
+        "to_leave": [],
+    }
+    events = [
+        {"field": "move", "new": "engineering-build", "note": ""},
+        {"field": "pick", "new": "bot:builder-2", "note": "Build given to Builder 2 · took turns"},
+        {"field": "pick", "new": None, "note": "Review 2: Waiting for a free Reviewer"},
+    ]
+    text = hubtools.task_text(task, {}, events)
+    assert "Turn: Waiting for a free Reviewer" in text and "engineering-review-2" not in text
+    assert "Picked: Build given to Builder 2 · took turns" in text.splitlines()
+    assert "Picked: Review 2: Waiting for a free Reviewer" in text.splitlines()
+
+    class Shown(Recorder):
+        def get(self, path, **query):
+            return {"task": task, "events": events, "actors": {}}
+
+    assert "Picked: Build given to Builder 2" in hubtools.BY_NAME["tico_task_show"]["fn"](Shown(), {"id": "T1"})["text"]
