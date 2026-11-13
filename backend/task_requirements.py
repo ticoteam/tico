@@ -396,11 +396,10 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     exact version when the requirement names one or is people only. An answer counts only for the page version it was given on,
     except a person's OK of an earlier version of the same page at the same commits (`_same_code_ok`), which stays.
     Jev's send back is the owner's turn; on a page a person OKs anyway, the next send back on the same visit is that
-    person's to decide. Jev unsure on a stage a bot holds goes to bots first (two sign-offs rule, Nov 11; `_unsure_to_bots`): back to that bot
-    once, then to the pipeline's manager bot; when Jev could not check, straight to the manager bot. Otherwise a person
-    decides, once per visit:
-    after a person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's
-    list. On a page a person OKs that is not a review (QA's), commits pushed after the reviews are a bot's to
+    person's to decide. Jev unsure, or unable to check, on a stage a bot holds goes straight to the pipeline's manager bot
+    for one look per version (`_unsure_to_bots`); the page's own bot is not woken to rewrite. On a stage a person OKs,
+    an unsure shows the person nothing from Jev. With no manager bot to look, a person decides once per visit: after a
+    person decided one such page, the next one goes back to the owner, so a noisy rubric never fills a person's list. On a page a person OKs that is not a review (QA's), commits pushed after the reviews are a bot's to
     review before the person is asked (`_new_commits`). The person's OK is for the commits it was given at: new ones
     since keep it when they change the same lines, or once a bot read and OK'd them (`_after_ok`); and it comes back
     with the task from Merge (`page_for`)."""
