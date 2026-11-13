@@ -106,6 +106,7 @@ function gsrcSync(s: GrSource) {
 }
 // The numbers a synced source can fill, in the order Growth shows them.
 const GSRC_FIELDS = ['spend', 'bot_cost', 'new_customers', 'revenue_month', 'margin_pct', 'kept_d30', 'kept_d90', 'kept_d180'];
+const GSRC_FILE_MAX = 1_000_000;   // characters of CSV one run takes (backend/growth_sync.py PAYLOAD_MAX)
 interface GsrcRun { ok?: boolean; error?: string | null; written?: number; held?: number; not_written?: Array<{row?: number; channel?: string; month?: string; reason?: string}>; not_written_count?: number }
 // A CSV's first line, as column names (quotes taken off).
 const gsrcHeader = (text: string) => (text.split(/\r?\n/, 1)[0] || '').split(',').map(c => c.trim().replace(/^"(.*)"$/, '$1').trim()).filter(Boolean);
@@ -129,6 +130,8 @@ function gsrcConnect(state: GrState, s: GrSource | null = null) {
     ${s?.has_file ? '<button type="button" class="ghost small" data-src-run>Run its last file again</button>' : ''}
     ${s ? '<button type="button" class="ghost danger gr-retire" data-retire>Retire</button>' : ''}`;
   const label = s ? 'Save' : 'Connect and fill 12 months';
+  // Once Connect has made the source, a retry (its file refused, say) changes that source rather than making another.
+  let made: GrSource | null = s;
   const dlg = grDialog(s ? s.system : 'Connect a source', body, label, async form => {
     const el = form.elements as HTMLFormControlsCollection & Record<string, HTMLInputElement>;
     const v = (n: string) => String(el[n]?.value || '').trim();
@@ -137,15 +140,24 @@ function gsrcConnect(state: GrState, s: GrSource | null = null) {
     if (!v('system')) throw new Error('A name');
     if (!Object.keys(mapped).length) throw new Error('Name the column for at least one number');
     const file = el.file?.files?.[0];
-    if (!s && !file) throw new Error('A CSV file to fill from');
+    if (!made && !file) throw new Error('A CSV file to fill from');
     const text = file ? await file.text() : null;
+    if (text != null && text.length > GSRC_FILE_MAX) throw new Error('That file is over 1 MB: send at most 1,000,000 characters, or split it by months');
     const out = {system: v('system'), truth_for: grList(Object.keys(mapped).map(grFieldWord)).slice(0, 80), owner_ref: v('owner_ref') || null,
       sync_map: {month: v('col_month') || 'month', channel: v('col_channel') || 'channel', fields: mapped}};
-    const saved = s ? await patch(`/v2/growth/sources/${encodeURIComponent(s.id)}`, out) as GrSource
+    const saved = made ? await patch(`/v2/growth/sources/${encodeURIComponent(made.id)}`, out) as GrSource
       : await post('/v2/growth/sources', {...out, sync_kind: 'file'}) as GrSource;
+    made = saved;
     void gsrcRead(state);
     if (text == null) { toast('Saved'); return; }
-    gsrcResult(saved.system || out.system, await post(`/v2/growth/sources/${encodeURIComponent(saved.id)}/rows`, {csv: text}) as GsrcRun);
+    let run: GsrcRun;
+    try { run = await post(`/v2/growth/sources/${encodeURIComponent(saved.id)}/rows`, {csv: text}) as GsrcRun; }
+    catch (e) {
+      const save = dlg.querySelector<HTMLButtonElement>('[type=submit]');
+      if (save) save.textContent = 'Save and run';
+      throw new Error(`${saved.system || out.system} is connected, but its file was not taken: ${errorMessage(e, 'refused')}. Pick another file and save again.`);
+    }
+    gsrcResult(saved.system || out.system, run);
     void gsrcRead(state);
   });
   // A picked file offers its columns and fills each blank one whose name matches.

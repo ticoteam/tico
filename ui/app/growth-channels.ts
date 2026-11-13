@@ -42,7 +42,7 @@ interface GrowthOrigin {
   origin: 'synced' | 'typed'; quality: string; source_id: string | null; source: string | null; at: string | null; by: string | null;
   conflict: { value: number | null; source_id: string | null; source: string | null; at: string | null } | null;
 }
-interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; kind?: string | null; }
+interface GrowthSource { id: string; system: string; truth_for: string; retired_at?: string | null; kind?: string | null; fills?: string[]; }
 interface GrowthKpi { id: string; name: string; }
 /** The form's fields by name, as the dialogs read them (grDialog hands the form element); K is the names the dialog reads. */
 type GrowthFormFields<K extends string> = HTMLFormControlsCollection & Record<K, { value: string }>;
@@ -97,12 +97,12 @@ async function gcSettings(state: GrowthState) {
 
 // A channel's months, newest first, each with its retention and an Edit; + Month adds one.
 async function gcMonths(state: GrowthState, ch: ChannelRef) {
-  let cohorts: GrowthCohort[], live: Set<string>;
+  let cohorts: GrowthCohort[], live: Map<string, string[]>;
   try {
     const [rows, sources] = await Promise.all([get<{cohorts?: GrowthCohort[]}>('/v2/growth/cohorts?channel=' + encodeURIComponent(ch.slug), {fresh: true}).then(r => r.cohorts || []),
       get<{sources?: GrowthSource[]}>('/v2/growth/sources', {fresh: true}).then(r => r.sources || []).catch((): GrowthSource[] => [])]);
     cohorts = rows;
-    live = new Set(sources.filter(x => x.kind && !x.retired_at).map(x => x.id));
+    live = new Map(sources.filter(x => x.kind && !x.retired_at).map(x => [x.id, x.fills || []]));
   } catch (e) { toast(errorMessage(e, 'Did not load'), true); return; }
   if (GR !== state) return;
   cohorts.sort((a, b) => String(b.month).localeCompare(String(a.month)));
@@ -136,12 +136,13 @@ function gcOriginHint(ch: ChannelRef, month: string, field: string, c: Partial<G
 }
 
 // One month's numbers for a channel; `fresh` picks the month in the form.
-// A number a live synced source filled is locked: that source owns it (typing it is refused, naming the source). Only
+// A number a live synced source filled and still fills is locked: that source owns it (typing it is refused, naming the
+// source; growth_sync.live_owner). A remap that drops the number hands it back to typing. Only
 // the numbers changed are sent, so a month with synced numbers still saves its typed ones.
 const GC_NUMBERS = ['spend', 'bot_cost', 'new_customers', 'kept_d30', 'kept_d90', 'kept_d180', 'revenue_month', 'margin_pct'] as const;
-function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCohort>, fresh = false, live: Set<string> = new Set()) {
+function gcCohortDialog(state: GrowthState, ch: ChannelRef, c: Partial<GrowthCohort>, fresh = false, live: Map<string, string[]> = new Map()) {
   const origins = c.origins || {}, month = c.month ?? '';
-  const locked = (name: string) => { const o = origins[name]; return !!o && o.origin === 'synced' && !!o.source_id && live.has(o.source_id); };
+  const locked = (name: string) => { const o = origins[name]; return !!o && o.origin === 'synced' && !!o.source_id && !!live.get(o.source_id)?.includes(name); };
   const n = (name: string, label: string, v: number | null | undefined) => grField(label, `<input name="${name}" inputmode="decimal" value="${esc(v ?? '')}"${locked(name)
     ? ` disabled title="${esc(`${origins[name]?.source || 'A source'} syncs this number: change it there, or retire that source to type it`)}"` : ''}>${fresh ? '' : gcOriginHint(ch, month, name, c, origins[name])}`);
   const srcs: GrowthCohortSources = c.sources || {};

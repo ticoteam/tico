@@ -235,7 +235,7 @@ DASH_PLACES.growth = {
     if (!root) return;   // G: the grid is there before a place is wired
     root.querySelector('[data-gr-settings]')?.addEventListener('click', () => { if (GR) void gcSettings(GR); });
     if (GR) grStartMount(GR, root);   // the Get started panel under the head while setup is not done
-    // A stale or failing source is said once, over the cards (grHealthRead).
+    // A stale or failing source is said once, right under the head and over every other panel (grHealthRead).
     root.querySelector('.dash-head')?.insertAdjacentHTML('afterend', '<div class="gr-banner gr-amber gr-health" data-gr-health role="status" hidden></div>');
     grResolveWire(root);
     const sel = root.querySelector<HTMLSelectElement>('[data-gr-month]');
@@ -329,6 +329,8 @@ function grOriginLine(o: GrOrigin | null | undefined) {
     const who = `${t.by ? ` by ${esc(grWho(t.by))}` : ''}${t.at ? `, ${esc(grDay(t.at))}` : ''}`;
     parts.push(`<span class="gr-o-typed">${t.count > 1 ? `${t.count} typed${o.synced.length ? '' : `, newest${who}`}` : `typed${o.synced.length ? '' : who}`} · ${t.quality === 'estimate' ? 'estimate' : 'actual'}</span>`);
   }
+  // A synced number is always actual (AC-10); with typed ones beside it, their quality is said instead.
+  if (!t) parts.push('<span class="gr-o-q">actual</span>');
   const made = o.fields.length ? `Worked out from ${grList(o.fields.map(grFieldWord))}` : '';
   return `<div class="gr-origin muted" data-gr-origin${made ? ` title="${esc(made)}"` : ''}>${made ? '<span class="gr-o-from">from</span> ' : ''}${parts.join('<span aria-hidden="true"> · </span>')}</div>`;
 }
@@ -346,7 +348,7 @@ function grConflicts(o: GrOrigin | null | undefined) {
   const only = o.conflict_count === 1 ? o.conflicts[0] : undefined;
   if (only) return `<div class="gr-conflict" data-gr-conflict>${grConflictLine(only, true)}</div>`;
   return `<div class="gr-conflict" data-gr-conflict><span>${o.conflict_count} numbers differ from their source</span>
-    <button type="button" class="ghost small" data-gr-conflicts="${esc(JSON.stringify(o.conflicts))}">Choose</button></div>`;
+    <button type="button" class="ghost small" data-gr-conflicts="${esc(JSON.stringify(o.conflicts))}" data-gr-more="${o.conflict_count - o.conflicts.length}">Choose</button></div>`;
 }
 // Keep or Use, on a card or in the list: the source's owner or an admin chooses (the server checks), then the cards read again.
 function grResolveWire(root: HTMLElement) {
@@ -356,8 +358,10 @@ function grResolveWire(root: HTMLElement) {
     if (list) {
       let rows: GrConflict[] = [];
       try { rows = JSON.parse(list.dataset.grConflicts || '[]') as GrConflict[]; } catch { /* none */ }
+      const more = Number(list.dataset.grMore) || 0;
       const dlg = grDialog('Numbers that differ from their source', `<p class="muted gr-note">A source never writes over a number someone typed as actual. Keep the typed number, or use the source's.</p>
-        <ul class="gr-conflicts">${rows.map(c => `<li class="gr-conflict">${grConflictLine(c, true)}</li>`).join('')}</ul>`, '', null);
+        <ul class="gr-conflicts">${rows.map(c => `<li class="gr-conflict">${grConflictLine(c, true)}</li>`).join('')}</ul>
+        ${more > 0 ? `<p class="muted gr-note" data-gr-conflicts-more>And ${more} more, shown here once these are chosen.</p>` : ''}`, '', null);
       grResolveWire(dlg);
       return;
     }
