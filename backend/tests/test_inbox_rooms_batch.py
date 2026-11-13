@@ -15,7 +15,9 @@ URL = "/api/v2/messages?unread=1"
 
 
 def _one_by_one(monkeypatch):
-    """The path before P04: each room's task read on its own, with its tags, and no meeting provenance primed."""
+    """The reads before P04: each room's task read on its own, with its tags, and no meeting provenance primed. The
+    loop that checks the rooms is today's in both runs: its early stop is pinned by
+    test_rooms_are_checked_only_as_far_as_the_answer_reads, and its answer against main's was compared in review."""
     monkeypatch.setattr(task_privacy, "prime_rooms", lambda c, cids: H.prime_conversations(c, cids))
     monkeypatch.setattr(H, "task_untagged", H.task)
 
@@ -186,3 +188,53 @@ def test_unread_rooms_are_checked_in_a_fixed_number_of_statements(api):
     )
     per_room = [s for s in counts[300, "cold"] if one.search(s)]
     assert per_room == [], per_room[:3]
+
+
+def test_rooms_are_checked_only_as_far_as_the_answer_reads(api, monkeypatch):
+    """300 unread messages, one in each of 300 task rooms the bot owns: rooms are checked newest first only as far as
+    the part of messages that holds the 100 sent and the one that sets `more_messages`, not every room on the page."""
+    store = api.app.state.store
+    _, msg, attempt = setup_attempt(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Seed", "body": "Seed room."})
+    task_id = task["id"] if "id" in task else task["task"]["id"]
+    with store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+        room = dict(c.execute("SELECT * FROM conversations WHERE task_id=? LIMIT 1", (task_id,)).fetchone())
+        first = dict(c.execute("SELECT * FROM messages WHERE id=?", (msg["id"],)).fetchone())
+        ids = [uuid.uuid4().hex for _ in range(300)]
+        cids = [uuid.uuid4().hex for _ in ids]
+        clone(
+            c, "tasks", {**row, "pipeline_id": None, "stage_id": None}, 300, id=lambda i: ids[i], number=lambda i: None
+        )
+        clone(
+            c,
+            "conversations",
+            room,
+            300,
+            id=lambda i: cids[i],
+            task_id=lambda i: ids[i],
+            room_key=lambda i: None,
+            root_id=lambda i: None,
+            path=lambda i: None,
+        )
+        clone(
+            c,
+            "messages",
+            {**first, "recipient_id": "bot:ops", "read_at": None, "delivered_at": None, "wake_key": None},
+            300,
+            conversation_id=lambda i: cids[i],
+            created_at=lambda i: H.shift(first["created_at"], seconds=i + 1),
+        )
+    auth = api.app.state.auth
+    checked, real = [], auth.conversation
+
+    def counting(c, who, conversation_id, **k):
+        checked.append(conversation_id)
+        return real(c, who, conversation_id, **k)
+
+    monkeypatch.setattr(auth, "conversation", counting)
+    inbox = api.get(URL, headers=headers(attempt["token"])).json()
+    assert len(inbox["messages"]) == 100 and inbox["more_messages"] is True
+    # Messages in open rooms are primed INBOX_LIMIT at a time, so the one that sets the flag comes with the next part:
+    # the newest 200 rooms are checked, never the rest (before: all 300).
+    assert set(checked) == set(cids[-2 * 100 :]), len(set(checked))
