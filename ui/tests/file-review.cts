@@ -110,7 +110,7 @@ const frv = 'dialog.frv[open]';
       const card = page.locator('#bot-files');
       await card.locator('.bf-row').first().waitFor();
       await page.evaluate(() => { document.querySelector<HTMLElement>('#bot-files')!.dataset.kept = '1'; });
-      await card.locator('a.bf-name', {hasText: 'Launch plan'}).click();
+      await card.locator('a.bf-row', {hasText: 'Launch plan'}).click();
       await page.waitForSelector(frv);
       assert.equal(new URL(page.url()).hash, '#/file/' + MD, 'the address is the file\'s');
       await page.locator(`${frv} .frv-preview .md`, {hasText: 'New line'}).waitFor();
@@ -167,7 +167,7 @@ const frv = 'dialog.frv[open]';
       assert.equal(await page.locator('#bot-files').getAttribute('data-kept'), '1', 'the page under it was not drawn again');
 
       // ---- a Word file: drawn in a sandboxed frame, stripped of what could act or reach out
-      await card.locator('a.bf-name', {hasText: 'Pricing memo'}).click();
+      await card.locator('a.bf-row', {hasText: 'Pricing memo'}).click();
       const frame = page.locator(`${frv} .frv-preview iframe.html-view`);
       await frame.waitFor({timeout: 15000});
       assert.equal(await frame.getAttribute('sandbox'), 'allow-popups allow-popups-to-escape-sandbox', 'no scripts, its own origin');
@@ -191,7 +191,7 @@ const frv = 'dialog.frv[open]';
       await page.waitForSelector('dialog.frv', {state: 'detached'});
 
       // ---- a Google file: Google's own preview, and Open in Google
-      await card.locator('a.bf-name', {hasText: 'Q4 brief'}).click();
+      await card.locator('a.bf-row', {hasText: 'Q4 brief'}).click();
       const g = page.locator(`${frv} iframe.frv-google`);
       await g.waitFor();
       assert.equal(await g.getAttribute('src'), 'https://docs.google.com/document/d/1AbCdEfGhIjKlMnOp/preview');

@@ -129,6 +129,10 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
 .rail-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
+/* Under a section: More (when the text folds) and a link on one line, such as Updates' "All updates". */
+.rail-foot{display:flex;align-items:center;gap:12px;padding-top:2px}
+.rail-foot a.rail-more{color:var(--muted);text-decoration:none}
+.rail-foot a.rail-more:hover{color:var(--ink)}
 .bot-rail a{color:var(--link-quiet)}
 .bot-rail a:hover{color:var(--ink)}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
@@ -142,6 +146,9 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
    most it grows to, scrolling inside past that. Tasks stops at 500px unless set, and a short list stays short. */
 #pane-tasks{position:relative}
 .bot-w>.rail-sec{border-top:1px solid var(--line)}
+/* Pinned pages drawn as rows (pageCard's .pg-row) one after another stack as one list: no hairline or gap between. */
+#pane-tasks:not(.editing)>.bot-w:has(>.bot-pin>.pg-row)+.bot-w:has(>.bot-pin>.pg-row)>.rail-sec{border-top:0;padding-top:0}
+#pane-tasks:not(.editing)>.bot-w:has(>.bot-pin>.pg-row):has(+.bot-w>.bot-pin>.pg-row)>.rail-sec{padding-bottom:0}
 #pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden])):not(#pane-tasks>.bot-w:not([data-off]):has(>.rail-sec:not([hidden]))~.bot-w)>.rail-sec{border-top:0}
 #pane-tasks:not(.editing)>.bot-w[data-off],#pane-tasks[data-loading]>.bot-w{display:none}
 .bot-w[data-h]>.rail-sec{max-height:var(--w-max);overflow-y:auto;overscroll-behavior:contain}

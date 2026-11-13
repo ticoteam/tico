@@ -2,7 +2,7 @@
 // an older one, a launch plan on Dana's task and a signup funnel CSV (seed `pages`). Library › Files lists them, a kind
 // filter and a search narrow it, a page opens full size with Tico's status line, a replaced page links on, the task
 // shows the pages pinned to it at the top, the search box finds a file by its words, and the owner deletes a page for good. This hub
-// has no visual address, so pages are Open cards; one framed page (its address faked) takes the height it reports in
+// has no visual address, so pages are plain rows; one framed page (its address faked) takes the height it reports in
 // the full view, and a card holds its size's fixed height and fades the cut. Phone, then desktop.
 import type {Page} from 'playwright';
 import type * as R from './support/redesign-e2e.cts';
@@ -220,9 +220,9 @@ run('redesign-e2e-pages', ['org', 'toured', 'groups', 'pages'], async ({hub, bro
   await cards.first().waitFor({timeout: t(10000)})
     .catch(() => assert.fail(`${tag}: a page card on the task (${JSON.stringify(page.errors)})`));
   assert.deepEqual(await cards.locator('.pg-open-title').allInnerTexts(), ['Launch plan']);
-  // Its status line is inside the card, under the page's title, not loose under the task's.
-  assert.match(await cards.locator('.pg-open .pg-status').innerText(), /^Updated .+ by Engineering Lead · v1$/, `${tag}: status in the card`);
-  assert.equal(await cards.locator(':scope > .pg-status').count(), 0, `${tag}: no loose status line`);
+  // With no framed preview it is one row, the page's mark and title: no status line, version or Open button.
+  assert.equal(await cards.locator('.pg-status, .pg-open-btn').count(), 0, `${tag}: a plain row`);
+  assert.equal(await cards.locator('a.pg-open').getAttribute('title'), 'Launch plan', `${tag}: the title as its tooltip`);
   await shot(page, `${tag}-04-task`);
   await cards.locator('a.pg-open', {hasText: 'Launch plan'}).click();
   await page.waitForFunction((id: string) => location.hash === '#/page/' + id, launch.file_id, {timeout: t(5000)});

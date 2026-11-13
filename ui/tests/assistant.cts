@@ -13,7 +13,7 @@ type Card = {id: string; summary: string; method: string; path: string; status: 
   description: string; diff: {field: string; new: string; routine?: boolean}[]; body: Record<string, unknown>; proposed_via: string; proposer?: string};
 type Msg = {id: string; sender_id: string; body: string; refs: Record<string, unknown>; created_at: string; kind: string};
 type AsstState = {reads: number; sent: string[]; decided: string[][]; messages: Msg[]; card: Card | null; bulk: Card; enrol: Card; routine: Card;
-  fail?: boolean; turnedOn?: number; view: () => unknown; reply: () => {message: Msg}; tasks?: number; taskReads?: URL[]};
+  fail?: boolean; turnedOn?: number; view: () => unknown; reply: () => {message: Msg}; tasks?: number; taskReads?: URL[]; latest?: Record<string, unknown>};
 declare const S: {route: string};
 declare const V2C: {rendered: boolean; stick: {atBottom: boolean}; messages: Msg[]};
 declare function v2ChatRender(conv: unknown): void;
@@ -39,7 +39,7 @@ async function open(browser: import('playwright').Browser, viewport: {width: num
     if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [], schedules: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/goals') return json({goals: [], chain: [], reports: [], company: []});
-    if (p === '/api/v2/updates') return json({updates: [], missed: [], unread: 0, next_before: null, today: {}});
+    if (p === '/api/v2/updates') return json({updates: url.searchParams.get('bot') === 'assistant' && state.latest ? [state.latest] : [], missed: [], unread: 0, next_before: null, today: {}});
     if (p === '/api/v2/tasks') {
       // The Assistant's open tasks, in queue order, a page as backend/task_list_routes.py cuts it.
       (state.taskReads ||= []).push(url);
@@ -236,8 +236,15 @@ function fixture(): AsstState {
       const state = fixture();
       for (let i = 0; i < 24; i++) state.messages.push(msg('h' + i, i % 2 ? 'bot:assistant' : 'human:ana', `Line ${i}. ` + 'Some words to fill the line. '.repeat(10)));
       state.tasks = 503;
+      state.latest = {id: 'u1', bot: 'assistant', kind: 'daily', day: '2026-11-12', read: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), body: 'Filed two tasks.'};
       const {page, errors} = await open(browser, {width: 1280, height: 900}, state);
       await page.goto('https://tico-ui.test/#/assistant');
+      // Updates: a plain header, no icon, and "All updates" under the text, to the updates feed.
+      const latest = page.locator('#asst-latest');
+      await latest.locator('[data-latest-all]').waitFor();
+      assert.equal(await latest.locator('.rail-head :is(a, .nav-icon, .rail-ico)').count(), 0, 'rail: Updates has a plain header');
+      assert.equal(await latest.locator('[data-latest-all]').getAttribute('href'), '#/updates');
+      assert.equal(await latest.locator('[data-latest-all]').innerText(), 'All updates');
       // The rail's Active list reads on past its first page with More.
       const rail = page.locator('#asst-active');
       await rail.locator('[data-asst-more]').waitFor({state: 'attached'});

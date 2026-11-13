@@ -71,8 +71,8 @@ function pageFrame(p: import('../types/api').Page, src: string, height: number, 
   f.src = pageViewSrc(src, size);
   return f;
 }
-// pageCard(page, {size}): one card holding the page's status line and the framed page (or an Open card, the status
-// under its title, when there is no address). A card is a widget: the page at its own height up to the card's size,
+// pageCard(page, {size}): one card holding the page's status line and the framed page (or, when there is no address,
+// one row: a page mark and the title, the whole row a link). A card is a widget: the page at its own height up to the card's size,
 // faded at the bottom when the page runs on, and the whole card one tap that opens the page full size, as its expand icon does.
 // `full` is that full size, where the status line sits under the view's own title. `page` is GET
 // /api/v2/pages/{id}'s page.
@@ -83,12 +83,25 @@ window.pageCard = function pageCard(page: import('../types/api').Page, {size = '
   el.dataset.page = page.file_id;
   const src = pageSrc(page);
   if (!src) {
-    const open = document.createElement(full ? 'div' : 'a');
-    open.className = 'pg-open';
-    if (!full && open instanceof HTMLAnchorElement) open.href = pageHref(page.file_id);
-    open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${esc(page.title || 'Page')}</span>${full ? '' : pageStatusHTML(page, {link: false})}</div>${full ? '' : '<span class="pg-open-btn">Open</span>'}`;
-    if (full) el.innerHTML = pageStatusHTML(page);
-    el.append(open);
+    const title = esc(page.title || 'Page');
+    if (full) {
+      const open = document.createElement('div');
+      open.className = 'pg-open';
+      open.innerHTML = `<span class="nav-icon" aria-hidden="true">article</span><div class="pg-open-text"><span class="pg-open-title">${title}</span></div>`;
+      el.innerHTML = pageStatusHTML(page);
+      el.append(open);
+    } else {
+      // One quiet row, as the rail's other rows: a mark (the page icon, or a lock when restricted) and the title, the
+      // whole row the link. No status line, version or Open button: the page says those when it opens.
+      el.classList.add('pg-row');
+      const open = document.createElement('a');
+      open.className = 'pg-open';
+      open.href = pageHref(page.file_id);
+      open.title = page.title || 'Page';
+      const mark = page.restricted ? '<span class="nav-icon pg-lock" role="img" aria-label="Restricted">lock</span>' : '<span class="nav-icon" aria-hidden="true">article</span>';
+      open.innerHTML = `<span class="pg-mark">${mark}</span><span class="pg-open-title">${title}</span>`;
+      el.append(open);
+    }
     el.pageData = page; el.pageSize = size;     // drawn as its frame once the desktop app trusts it (nativeVisualRepaint)
     return el;
   }

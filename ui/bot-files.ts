@@ -1,6 +1,6 @@
 /* The Files section of a bot's right rail (docs/files.md): what the bot created, revised or delivered,
-   newest activity first, as a plain list of names. Three rows; a small "+N" opens the rest inline, a
-   page at a time, and "Less" folds them back. No files, no section. A stored file and a Google file open in Tico's review view
+   newest activity first, one row each: a small mark (its kind's icon, or an image's thumbnail) and its name without
+   the extension. Three rows; "N more" opens the rest inline, a page at a time, and "Less" folds them back. No files, no section. A stored file and a Google file open in Tico's review view
    (deps.openFile, ui/app/file-review.ts), any other linked document at its provider in a new tab (the provider decides
    who may open it). Adding a link, promoting and removing
    are the API and the bot's own tools (PATCH /api/v2/files/{id}), not buttons here.
@@ -32,13 +32,37 @@ interface Window {
 (function () {
   const SHORT = 3, PAGE = 20;
 
+  // The mark for each kind of file (clients/bot_files.py KINDS), a page and a link; anything else is a plain file.
+  const BF_ICONS: Record<string, string> = {html: 'article', document: 'description', spreadsheet: 'table_chart', image: 'image',
+    video: 'movie', audio: 'graphic_eq', remote_link: 'link'};
+
+  // One row as the rail's page row (ui/styles/pages.css .pg-row): 32px, a 24px mark, the name on one line.
   const css = `
-.bot-files .bf-row{display:block;padding:0;min-height:24px;font-size:13px;line-height:18px}
-.bot-files .bf-name{min-width:0;display:block;padding:3px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
-.bot-files a.bf-name{color:var(--link-quiet)}
-.bot-files a.bf-name:hover{color:var(--link);text-decoration:underline}
-.bot-files .bf-foot{display:flex;gap:10px;align-items:center;padding-top:2px}
-.bot-files .bf-err{color:var(--fail);font-size:12.5px}`;
+.bot-files .bf-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:0 6px;margin:0 -6px;border-radius:6px;font-size:13px;line-height:18px;color:var(--ink);text-decoration:none}
+.bot-files a.bf-row:hover{background:var(--hover);color:var(--ink);text-decoration:none}
+.bot-files a.bf-row:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.bot-files .bf-mark{flex:none;display:inline-grid;place-items:center;width:24px;height:24px}
+.bot-files .bf-mark .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted)}
+.bot-files .bf-thumb{display:block;width:24px;height:24px;object-fit:cover;border-radius:4px;box-shadow:inset 0 0 0 1px var(--line)}
+.bot-files .bf-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.bot-files .bf-foot{display:flex;gap:12px;align-items:center;padding-top:2px}
+.bot-files .bf-err{color:var(--fail);font-size:12.5px}
+@media (max-width:760px){.bot-files .bf-row{min-height:44px}}`;
+
+  // The name a row shows: a link's title as written; a stored file's title without its folder when the title is the
+  // stored file's path, and without its extension when that is the stored file's own (reports/ticket-topics.csv named
+  // ticket-topics.csv reads "ticket-topics"). A title a bot gave ("Q3 plan / draft") is never split at its slash.
+  const shownName = (f: import('./types/api').BotFile): string => {
+    const title = String(f.title || f.name || '');
+    if (f.locator === 'remote_link') return title;
+    const name = String(f.name || ''), dot = name.lastIndexOf('.');
+    const base = name && title.endsWith('/' + name) ? name : title;
+    const ext = dot > 0 ? name.slice(dot).toLowerCase() : '';
+    return ext && base.toLowerCase().endsWith(ext) && base.length > ext.length ? base.slice(0, -ext.length) : base;
+  };
+  const markKey = (f: import('./types/api').BotFile): string => f.locator === 'remote_link' ? 'remote_link'
+    : (f.mime || '').split(';')[0]!.trim().toLowerCase() === 'text/html' || /\.html?$/i.test(f.name || '') ? 'html' : f.kind;
+  const iconHTML = (name: string) => `<span class="nav-icon" aria-hidden="true">${name}</span>`;
 
   const GOOGLE_FILE = /^https:\/\/(docs|drive)\.google\.com\//;
   const httpsOnly = (url: unknown): string => { try { const text = String(url); return new URL(text).protocol === 'https:' ? text : ''; } catch { return ''; } };
@@ -70,26 +94,42 @@ interface Window {
     function row(f: import('./types/api').BotFile): string {
       const link = f.locator === 'remote_link';
       const url = link ? httpsOnly(f.open?.url) : f.open?.url;
-      const name = esc(f.title);
-      // A file that never synced has nothing to open: its name is plain text.
-      const label = !url ? `<span class="bf-name" title="${esc(f.title)}">${name}</span>` : link
-        ? `<a class="bf-name" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-bf-open="external"${GOOGLE_FILE.test(String(url)) ? ` data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.title)}"` : ''} title="${esc(f.title)}">${name}</a>`
-        : `<a class="bf-name" href="${esc(url)}" data-bf-open="tico" data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.name || f.title)}" title="${esc(f.title)}">${name}</a>`;
-      return `<div class="bf-row" data-file="${esc(f.id)}">${label}</div>`;
+      const icon = BF_ICONS[markKey(f)] || 'draft';
+      const mark = f.kind === 'image' && f.thumb_blob_id && !link
+        ? `<img class="bf-thumb" alt="" src="/api/v2/files/${encodeURIComponent(f.id)}/thumb?v=${encodeURIComponent(String(f.version))}">`
+        : iconHTML(icon);
+      const inner = `<span class="bf-mark" data-bf-icon="${icon}">${mark}</span><span class="bf-name">${esc(shownName(f))}</span>`;
+      const tip = `data-file="${esc(f.id)}" title="${esc(f.title)}"`;
+      // A file that never synced has nothing to open: a plain row.
+      return !url ? `<div class="bf-row" ${tip}>${inner}</div>` : link
+        ? `<a class="bf-row" ${tip} href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-bf-open="external"${GOOGLE_FILE.test(String(url)) ? ` data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.title)}"` : ''}>${inner}</a>`
+        : `<a class="bf-row" ${tip} href="${esc(url)}" data-bf-open="tico" data-bf-id="${esc(f.id)}" data-bf-file="${esc(f.name || f.title)}">${inner}</a>`;
     }
 
+    let drawn = '';
     const render = (): void => {
       const shown = state.expanded ? state.rows : state.rows.slice(0, SHORT);
       const hasMore = state.expanded && state.cursor;
       const left = Math.max(0, state.total - shown.length);
       // Nothing to list is no section at all; an error still says so.
       host.hidden = !shown.length && !state.error;
-      host.innerHTML = `<h2 class="rail-h">Files</h2>
+      const html = `<h2 class="rail-h">Files</h2>
         ${state.error ? `<div class="bf-err" role="alert">${esc(state.error)}</div>` : ''}
         ${shown.map(row).join('')}
         ${state.total > SHORT || hasMore ? `<div class="bf-foot">${state.expanded
-          ? `${hasMore ? `<button class="rail-more" type="button" data-bf-more aria-label="Show ${left} more">+${left}</button>` : ''}<button class="rail-more" type="button" data-bf-less aria-label="Show fewer">Less</button>`
-          : `<button class="rail-more" type="button" data-bf-all aria-label="Show all ${state.total}">+${left}</button>`}</div>` : ''}`;
+          ? `${hasMore ? `<button class="rail-more" type="button" data-bf-more>${left} more</button>` : ''}<button class="rail-more" type="button" data-bf-less>Less</button>`
+          : `<button class="rail-more" type="button" data-bf-all>${left} more</button>`}</div>` : ''}`;
+      // The minute's reload draws only what changed, so a thumbnail is not asked for again each time
+      // (its route answers private, no-store).
+      if (html === drawn) return;
+      drawn = html;
+      host.innerHTML = html;
+      // A thumbnail that does not load (gone, 404) shows its kind's icon instead.
+      for (const img of host.querySelectorAll<HTMLImageElement>('img.bf-thumb')) {
+        const fallback = () => { img.replaceWith(document.createRange().createContextualFragment(iconHTML('image'))); };
+        img.addEventListener('error', fallback, {once: true});
+        if (img.complete && !img.naturalWidth) fallback();
+      }
     };
 
     host.onclick = async event => {

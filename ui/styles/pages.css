@@ -6,14 +6,18 @@
 .pg-status a{color:var(--link-quiet)}
 .pg-box{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#fff}
 .page-frame{display:block;width:100%;border:0;background:#fff}
+/* No address to frame: the full view's placeholder, and elsewhere (a pin, a task's pages) one row like the rail's
+   other rows (ui/bot-files.ts .bf-row): a 24px mark and the title on one line, the whole row the link. */
 .pg-open{display:flex;align-items:center;gap:10px;min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink);text-decoration:none}
-a.pg-open:hover{background:var(--hover);text-decoration:none}
 .pg-open .nav-icon{flex:none;color:var(--muted)}
 .pg-open-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
 .pg-open-title{min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-/* An Open card reads as a widget placeholder: one-line title, the status line at most two lines. */
-.pg-open .pg-status{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;overflow:hidden;overflow-wrap:anywhere}
-.pg-open-btn{flex:none;color:var(--link-quiet);font-size:var(--t-sm)}
+.pg-row>.pg-open{gap:8px;min-height:32px;padding:0 6px;margin:0 -6px;border:0;border-radius:6px;background:none;font-size:13px;line-height:18px}
+.pg-row>.pg-open:hover{background:var(--hover);text-decoration:none}
+.pg-row>.pg-open:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
+.pg-mark{flex:none;display:inline-grid;place-items:center;width:24px;height:24px}
+.pg-mark .nav-icon{font-size:16px;width:16px;height:16px;color:var(--muted);vertical-align:0}
+.pg-row .pg-open-title{flex:1;color:var(--ink)}
 /* A framed card is a widget: a one-line status bar, then the page at its own height up to the size, with nothing
    scrolling inside, a fade at the bottom when the page runs on (pg-cut, from its reported height), one tap target
    over the whole card and an expand icon in its corner. */
@@ -160,6 +164,7 @@ a.pg-open:hover{background:var(--hover);text-decoration:none}
 
 @media (max-width:760px){
   .pg-view{padding:8px 16px 40px}
+  .pg-row>.pg-open{min-height:44px}
   .lf{padding:0 0 40px;--lf-grid:18px minmax(0,1fr)}   /* #main already keeps the 12px gutter */
   .lf-head{gap:8px}
   .lf-search{flex:1 1 auto;margin-left:0}
