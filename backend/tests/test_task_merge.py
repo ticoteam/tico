@@ -225,3 +225,26 @@ def test_a_bot_and_a_person_who_cannot_change_both_are_refused(api):
     seen = api.get(f"/api/v2/tasks/{hers['id']}/merge?into={mine['id']}", headers=headers("cara-test"))
     assert seen.status_code in (403, 404), seen.text
     get(api, f"tasks/{mine['id']}/merge?into={hers['id']}", token=bot, expected=403)
+
+
+def test_whoever_cannot_read_the_kept_task_neither_follows_it_nor_is_listed(api):
+    kept = task(api, "Payroll fix", owner="cara", token="cara-test", private=True)
+    dup = task(api, "Payroll bug", owner="cara", private=True)  # ana asked for it and may read it, not the kept one
+    r = api.get(f"/api/v2/tasks/{kept['id']}", headers=headers())
+    assert r.status_code in (403, 404), "ana cannot read the kept task"
+    post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]}, token="cara-test")
+
+    def check(c):
+        from backend import task_followers as F
+
+        tid = F.thread_id(c, H.task(c, kept["id"]))
+        assert tid, "the kept task has its own thread, so a follow could be written"
+        # The stored rows, not F.listed: a listing hides non-readers, so a follow written for them would not show.
+        assert not c.execute(
+            "SELECT 1 FROM thread_followers WHERE thread_id=? AND actor='human:ana' AND following=1", (tid,)
+        ).fetchone()
+        assert not c.execute(
+            "SELECT 1 FROM task_requesters WHERE task_id=? AND actor='human:ana'", (kept["id"],)
+        ).fetchone()
+
+    read(api, check)
