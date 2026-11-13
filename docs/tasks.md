@@ -138,7 +138,8 @@ there." Reopening it brings it back; what moved stays on the other task.
 
 ## When a bot stops early
 
-A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, or closed.
+A bot's run must leave its task done with the stage, asking a person, waiting on a task it filed, snoozed, closed, or
+blocked on another task (depends_on; never a snooze). While its own pull request's checks run, the turn is GitHub's.
 Anything else is "stopped early". The never-stuck check then wakes the bot again after 2 minutes, 15 minutes and 50
 minutes (inside the hour its session stays cached); then its manager bot, three tries more; then one person, once, in
 Needs you, with Try again, Reassign, Move back, Close and Snooze. Any change to the task starts the count again. See

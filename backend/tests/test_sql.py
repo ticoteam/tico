@@ -310,6 +310,7 @@ def test_owner_sees_everything_but_other_peoples_rooms(api, world):
         "roadmaps_copies_cleared_by_field",
         "roadmaps_explicit_public_text",
         "rules.asks_to_a_person",
+        "stage_rules_snooze_sweep",
         "strategy-bot",
         "task_session_default",
         "threads-migration",

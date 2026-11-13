@@ -72,6 +72,11 @@ Always:
 3. Finish with `tico task done <id> -m "..." --version N`: how many replies reviewed, the pass rate,
    the top pattern and any source you could not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Sent replies come from Support Agent's
 sent replies (the done rows of `tico task list --owner support-owner --updated-since <ISO-8601 time>`) or an export a human attaches. Where the

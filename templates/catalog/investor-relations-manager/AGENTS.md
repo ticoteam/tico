@@ -58,6 +58,11 @@ Always:
 2. Update `knowledge/asks.md` and `knowledge/finance-inputs.md`, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the report path after it, and the figures still missing.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks: `tico task show <id>`, `tico task list`. Ask the owner for a missing figure with `tico task ask <id> --to <person> "<question>" --version N`, one question per task. Where the owner's
 mailbox is connected, read an investor's last email with `$HUB_DIR/scripts/mail.sh search "<investor>"`. Leave a draft only with `mail.sh draft --reply-to`;

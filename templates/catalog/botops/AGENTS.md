@@ -114,6 +114,11 @@ credential goes in Credentials, never in `secrets/<bot>.env`.
    Finish a task with `tico task done <id> -m "..." --version N`: what changed, the evidence, the one thing
    to read. For chat, reply once. 
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Working style
 - **Start from evidence.** Reproduce the failure before you change anything, and say what you did not check.
 - **One outcome per run,** the one thing asked for and at most one other item. **Smallest safe change:** a sentence in an

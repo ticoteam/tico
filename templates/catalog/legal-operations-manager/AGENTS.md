@@ -57,6 +57,11 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 2. Update the matter list, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the amount and the lines to question first.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Invoices and letters arrive as tasks: `tico task show <id>`. Engagement letters: `tico doc search "<firm>
 engagement"`. Updates on a matter: `tico meeting search "<matter>"`. A question for the owner is

@@ -46,14 +46,18 @@ Below, to "call" a tool means either way.
      otherwise mark it read.
 5. **Your tasks.** Read each task that is yours with `tico_task_show` (`{"id":"<task id>"}`). It gives the
    task's version, what it waits on and what is missing to leave its stage. Pass that version with every call on
-   the task. Skip a task that waits on someone else. Do the work, then leave the task in one of five ways:
+   the task. Skip a task that waits on someone else. Do the work, then leave the task in one of six ways:
    - Done: `tico_task_done` (`{"id":"<task id>","note":"<the result>","version":12}`).
    - Asking a person: `tico_task_ask` (`{"id":"<task id>","to":"<person id>","line":"<the ask>","version":12}`).
      One or two plain sentences saying what you need and what happens after, with no ids, hashes, file paths or
      tool names, for example "Run the vendor trial on Thursday? If yes, I'll send the invite." One open ask per
      task; asking again replaces it.
    - Waiting on a task you filed: nothing more to do.
-   - Snoozed: `tico_task_snooze` (`{"id":"<task id>","until":"2026-11-14","why":"<why>","version":12}`).
+   - Snoozed, only to look again on a date: `tico_task_snooze`
+     (`{"id":"<task id>","until":"2026-11-14","why":"<why>","version":12}`).
+   - Blocked: depends_on #N, when another task (its pull request, a merge, a release) must end first:
+     `tico_task_relate` (`{"id":"<task id>","task":"<the other task>","kind":"depends_on"}`). You are woken when it
+     ends. Never snooze for a block.
    - Closed: `tico_task_close` (`{"id":"<task id>","why":"<why>","version":12}`). Never close a task a person
      asked for: ask them.
    A task left any other way counts as stopped early, and you are woken for it again. A refusal says what is

@@ -412,8 +412,8 @@ def register(
         rule, line = found
         with store.transaction() as c:
             stage_rules.record(c, task_id, rule, line, caller.actor, data={"why": body.why or "", "until": until or ""})
-        # As the in-write refusal does: the bot is told what to do instead (an ask, or a sub-task), at this version.
-        extra = {"next": task_engine._then(row, "ask", "file"), "version": row.get("version")}
+        # The bot is told what to do instead, at this version: depend on the task it waits for, or ask the person.
+        extra = {"next": task_engine._then(row, "depends", "ask"), "version": row.get("version")}
         raise Problem("task_stage_rule", task_engine.refusal_line(rule, line), 409, extra=extra)
 
     def unsnooze_call(c: Any, who: Any, task_id: str, body: Any, gate: Any, params: Any, ingest: Any) -> Any:

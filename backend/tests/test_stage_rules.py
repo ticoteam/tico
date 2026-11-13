@@ -1,6 +1,7 @@
-"""Stage rules (backend/stage_rules.py): Snooze only for a real wait, judged by Jev once per bot snooze and failing
-open; a fixed-condition Block inside the write; a bot's rule is only a suggestion. Owner on the team's tests are with
-the Engineering preset's (test_product_engineering_presets.py).
+"""Stage rules (backend/stage_rules.py): Snooze only for a real wait (a snooze is only "look again on a date"; a wait
+on another task is depends_on, on a person an ask), judged by Jev once per bot snooze and failing open; a
+fixed-condition Block inside the write; a bot's rule is only a suggestion. Owner on the team's tests are with the
+Engineering preset's (test_product_engineering_presets.py).
 
 Synthetic rows only (backend/tests/helpers/engine.py); Jev is a fake that counts its calls.
 """
@@ -16,11 +17,14 @@ from backend.tests.helpers.api import post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.tasks_board import bot_token
 
 ANA = X.ANA
-BLOCKED_WORDS = ("read-only", "no access", "credential", "decide")
+# What Jev reads as a block in a snooze's why: a task, a PR, a merge, a release, main or checks, or a person.
+BLOCKED_WORDS = ("#", "rc.", "merge", " pr ", " pr.", "main", "checks", "read-only", "no access", "customer", "decide")
+LOOK_AGAIN = "couldn't reproduce, try again Nov 16"
 
 
 class FakeJev:
-    """Jev as stage_rules asks it: a p for each question. A why that names a lack is blocked; anything else waits."""
+    """Jev as stage_rules asks it: a p for each question. A why that names what it waits on (another task, a release,
+    a person) is blocked; one that only means to look again later is not."""
 
     def __init__(self, fail=False):
         self.calls, self.fail = [], fail
@@ -30,7 +34,7 @@ class FakeJev:
         if self.fail:
             raise RuntimeError("Jev is down")
         why = state["event"]["why"].lower()
-        p = 0.95 if any(word in why for word in BLOCKED_WORDS) else 0.05
+        p = 0.95 if (any(word in why for word in BLOCKED_WORDS) or " pr" in why.replace("production", "")) else 0.05
         return {"answers": {q: {"noul": p} for q in questions}}
 
 
@@ -53,21 +57,53 @@ def _task(c):
     return X.new_task(c, ANA, "Ship the release notes", assignee="bot:ops")
 
 
-def test_a_bots_snooze_while_blocked_is_refused_and_a_real_wait_goes(c, jev):
+def test_a_bots_snooze_on_another_task_or_a_release_is_refused_and_look_again_on_a_date_goes(c, jev):
+    """The spec's own cases: a snooze that waits on a task or a release is told to depend on it; one that only looks
+    again on a date goes. Each snooze is one Jev call, asked the rule's question."""
     row = _task(c)
-    blocked = SR.judge_snooze(c, row, "bot:ops", "ticoteam/tico is read-only for me", None)
-    assert blocked is not None
-    rule, line = blocked
-    assert rule["id"] == SR.REAL_WAIT
-    assert line == "Rule Snooze only for a real wait: " + SR.BLOCKED
-    assert E.refusal_line(rule, line).startswith("Rule Snooze only for a real wait: You're blocked, not waiting.")
-    assert SR.judge_snooze(c, row, "bot:ops", "waiting for v0.6.0-rc.11", "2099-01-05T08:00:00Z") is None
-    assert [call[2] for call in jev.calls] == ["stage-rule@1", "stage-rule@1"]
+    for why in ("waiting for #304 to push its PR", "waiting for rc.23"):
+        blocked = SR.judge_snooze(c, row, "bot:ops", why, None)
+        assert blocked is not None, why
+        rule, line = blocked
+        assert rule["id"] == SR.REAL_WAIT
+        assert line == "Rule Snooze only for a real wait: " + SR.BLOCKED
+        assert "Blocked? tico task relate <id> depends_on #N." in E.refusal_line(rule, line)
+    assert SR.judge_snooze(c, row, "bot:ops", LOOK_AGAIN, "2099-11-16T08:00:00Z") is None
+    why = "look again on 2099-11-16: read the version production runs"
+    assert SR.judge_snooze(c, row, "bot:ops", why, "2099-11-16T08:00:00Z") is None
+    assert len(jev.calls) == 4
+    assert [call[2] for call in jev.calls] == ["stage-rule@1"] * 4
+    assert all([q["instructions"]["question"] for q in call[1].values()] == [SR.REAL_WAIT_JEV] for call in jev.calls)
+
+
+def test_a_bots_snooze_on_a_person_is_told_to_ask_them(c, jev):
+    rule, line = SR.judge_snooze(c, _task(c), "bot:ops", "waiting for the customer to decide", None)
+    assert "Ask them on the task." in E.refusal_line(rule, line)
+    assert len(jev.calls) == 1
+
+
+def test_a_stored_default_in_its_earlier_words_is_brought_up_to_date_and_an_edited_one_is_not(company):
+    """Companies that have the default stored from before: their rule asks today's question at the next start, unless
+    someone there changed its words."""
+    old_jev, old_reason = SR.EARLIER[SR.REAL_WAIT]["jev"][0], SR.EARLIER[SR.REAL_WAIT]["reason"][0]
+    with company.transaction() as c:
+        SR.ensure_defaults(c)
+        c.execute("UPDATE stage_rules SET jev=?, reason=? WHERE id=?", (old_jev, old_reason, SR.REAL_WAIT))
+        assert SR.ensure_defaults(c) == []
+        rule = SR.get(c, SR.REAL_WAIT)
+        assert (rule["jev"], rule["reason"]) == (SR.REAL_WAIT_JEV, SR.BLOCKED)
+        c.execute("UPDATE stage_rules SET jev=?, reason=? WHERE id=?", (old_jev, "Ours: ask Ana.", SR.REAL_WAIT))
+        SR.ensure_defaults(c)
+        rule = SR.get(c, SR.REAL_WAIT)
+        assert (rule["jev"], rule["reason"]) == (SR.REAL_WAIT_JEV, "Ours: ask Ana.")
+        revision = rule["revision"]
+        SR.ensure_defaults(c)
+        assert SR.get(c, SR.REAL_WAIT)["revision"] == revision  # nothing to bring: nothing written
 
 
 def test_a_persons_snooze_is_not_judged(c, jev):
     row = _task(c)
-    assert SR.judge_snooze(c, row, ANA, "ticoteam/tico is read-only for me", None) is None
+    assert SR.judge_snooze(c, row, ANA, "waiting for #304 to push its PR", None) is None
     assert jev.calls == []
 
 
@@ -171,8 +207,9 @@ def test_the_snooze_route_refuses_a_blocked_bot_and_writes_the_rule_on_the_histo
         token,
         expected=409,
     )
-    assert "You're blocked, not waiting" in str(refused)
+    assert "Blocked? tico task relate <id> depends_on #N." in str(refused)
     assert "(rule sr_real_wait)" in str(refused)
+    assert refused["next"][0] == f"tico task relate {task['id']} depends_on <task>"
     assert any("tico task ask" in step for step in refused["next"])
     with api.app.state.store.read() as c:
         assert E.task(c, task["id"]).get("snooze") is None
@@ -186,7 +223,7 @@ def test_the_snooze_route_refuses_a_blocked_bot_and_writes_the_rule_on_the_histo
     post(
         api,
         f"tasks/{task['id']}/snooze",
-        {"version": version, "why": "waiting for v0.6.0-rc.11", "until": "2099-01-05"},
+        {"version": version, "why": LOOK_AGAIN, "until": "2099-01-05"},
         token,
     )
     assert len(fake.calls) == 2
@@ -201,7 +238,7 @@ def test_once_at_release_blocked_bot_snoozes_end_and_each_manager_gets_one_wake(
         c.execute("UPDATE pipelines SET manager_id='bot:lead' WHERE id='general'")
         SR.ensure_defaults(c)
         tasks = [X.new_task(c, ANA, title, assignee="bot:ops") for title in ("One", "Two", "Three", "Four")]
-        whys = ("ticoteam/tico is read-only for me", "no access to the board", "waiting for v0.6.0-rc.11", "")
+        whys = ("ticoteam/tico is read-only for me", "waiting for #304 to merge", LOOK_AGAIN, "")
         for row, why in zip(tasks[:3], whys):
             E.snooze(c, row["id"], "bot:ops", why, "2099-01-05T08:00:00.000000Z", row["version"])
         E.snooze(c, tasks[3]["id"], ANA, "After the offsite", "2099-01-05T08:00:00.000000Z", tasks[3]["version"])
@@ -305,3 +342,24 @@ def test_a_suggestion_of_the_refused_shape_saved_before_is_not_accepted(c):
     assert SR.get(c, "sr_sg_old")["status"] == "suggested"
     # It can still be skipped.
     assert SR.skip(c, ANA, "sr_sg_old")["retired_at"]
+
+
+def test_a_start_never_sweeps_open_snoozes_with_the_depends_on_question(company, jev):
+    """No sweep at release (the spec): a company whose one-off sweep never ran (no bot snooze at its first start) keeps
+    a bot's 'waiting for rc.23' snooze across later starts, and Jev is not asked."""
+    with company.transaction() as c:
+        X.bot(c, "ops")
+        SR.ensure_defaults(c)
+    SR.install(company)
+    with company.transaction() as c:
+        row = X.new_task(c, ANA, "One", assignee="bot:ops")
+        E.snooze(c, row["id"], "bot:ops", "waiting for rc.23", "2099-01-05T08:00:00.000000Z", row["version"])
+    SR.install(company)
+    import threading
+
+    for thread in threading.enumerate():
+        if thread.name == "stage-rules-sweep":
+            thread.join(10)
+    with company.read() as c:
+        assert E.task(c, row["id"]).get("snooze")
+    assert jev.calls == []

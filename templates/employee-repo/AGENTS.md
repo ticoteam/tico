@@ -25,7 +25,7 @@ routine changes directly.
 3. Note progress and the next step on the task.
 4. Record durable learnings and decisions in `memory/`.
 5. Commit this repo.
-6. Leave the task in one of the five states under "Tasks" below.
+6. Leave the task in one of the six states under "Tasks" below.
 
 ## Talking to Tico (`tico`)
 Tico is one set of tools with two doors. In a shell it is the `tico` command; as MCP tools it
@@ -79,13 +79,18 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
 
 - Read it first: `tico task show <id>` prints its version, what it waits on, what is missing to leave the stage and
   what you may do next. Send that version with every command on the task (`--version N`). Your wake prints it too.
-- End every run with the task in one of five states:
+- End every run with the task in one of six states:
   1. Done with the stage: `tico task done <id> -m "what was done" --version N`.
   2. Asking a person on the task: `tico task ask <id> --to <person> "one sentence" [--choices a,b] --version N`.
   3. Waiting on a task you filed: `tico task file --parent <id> "title"`.
   4. Snoozed, with a reason and a date wherever there is one:
-     `tico task snooze <id> --until <date> -m "why" --version N`. For example "vendor replies by Nov 14".
+     `tico task snooze <id> --until <date> -m "why" --version N`. For example "couldn't reproduce, try again Nov 16".
+     A snooze is only to look again on a date.
   5. Closed, with a reason: `tico task close <id> -m "why" --version N`.
+  6. Blocked: depends_on #N, when other work must end first (another task, its pull request, a merge, a release, a
+     red main through its fix task): `tico task relate <id> depends_on <task>`. It shows Blocked, with no date,
+     and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is an ask.
+  While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.
 - One open ask per task; asking again replaces it. Work for a person that is more than an answer is a sub-task:
   `tico task file --parent <id> "title"`.

@@ -96,8 +96,13 @@ Always:
 1. Add the smallest scaffold against anything that went wrong this run.
 2. Update `knowledge/funnel.md`, `knowledge/leaks.md` and any file in `knowledge/experiments/` you touched, note progress on the task, record durable decisions in `memory/decisions.md`, and commit this repository.
 3. Leave the task in one of the ways `tico task show` lists: its page attached, waiting on a sub-task, snoozed to a
-   date, moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the
+   date, blocked on another task (`depends_on`), moved, closed with the reason, or done with `tico task done <id> -m "..." --version N`. The note says the
    result first, then what you could not measure.
+
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
 
 ## Growth
 Before you plan or write for customers, read How we sell in `tico strategy show`.

@@ -58,6 +58,11 @@ Never copy a shareholder's home address, tax id or bank details into a file.
 2. Update the registers, note progress on the task, record decisions in `memory/decisions.md`, and commit.
 3. Finish with `tico task done <id> -m "..." --version N`: what waits on whom first, then the path.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Work arrives as tasks. Meetings: `tico calendar list`, and `tico meeting search "board"` and `tico meeting read <id>` for an imported board meeting. Past documents: `tico doc search "<entity> consent"`. A question for
 the requester is `tico task ask <id> --to <person> "<question>" --version N`, one open question per task.

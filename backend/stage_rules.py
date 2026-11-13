@@ -21,7 +21,8 @@ and published as `stage_rule.refused` / `stage_rule.told` / `stage_rule.moved_ba
 other rule.
 
 The default rules (`DEFAULTS`) are ordinary rows: read, edit, retire. `ensure_defaults` seeds each once by id, so a
-retired one stays retired. A bot's new rule or change is `suggested` until a person accepts or skips it.
+retired one stays retired, and brings a stored default still in words it shipped with before (`EARLIER`) up to date.
+A bot's new rule or change is `suggested` until a person accepts or skips it.
 """
 
 import json
@@ -67,7 +68,29 @@ _installed_store = None
 OWNER_ON_TEAM = "sr_owner_on_team"
 REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
-BLOCKED = "You're blocked, not waiting. Ask a person on the task, or file a sub-task to whoever can unblock it."
+# What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
+# person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
+BLOCKED = "Blocked? tico task relate <id> depends_on #N. Waiting on a person or a decision? Ask them on the task."
+REAL_WAIT_JEV = (
+    "The bot is setting the task aside for something other than looking again on a date. Its reason names a task, a "
+    "pull request, a merge, a release (such as rc.23), main or checks that it waits on; a person, a reply or a "
+    "decision it waits for; or something it lacks that someone must give (access, a tool, a credential). It is false "
+    "when the bot only means to try again later or on a date (\"couldn't reproduce, try again Nov 16\")."
+)
+# The words a default rule shipped with before, by rule id and column: a stored default still holding one of them is
+# brought up to date at the next start (`ensure_defaults`); one a company edited keeps its own.
+EARLIER: dict[str, dict[str, tuple[str, ...]]] = {
+    REAL_WAIT: {
+        "jev": (
+            "The bot is blocked, not waiting: it cannot go on because of something it lacks or that it must ask for "
+            "(no access, a missing tool or credential, a decision someone must make), rather than waiting on something "
+            "outside that will come by itself (a date, a release, a merge, a customer, another task).",
+        ),
+        "reason": (
+            "You're blocked, not waiting. Ask a person on the task, or file a sub-task to whoever can unblock it.",
+        ),
+    },
+}
 DEFAULTS: list[dict[str, Any]] = [
     {
         "id": OWNER_ON_TEAM,
@@ -91,11 +114,7 @@ DEFAULTS: list[dict[str, Any]] = [
         "event": "bot_snoozes",
         "timer": {},
         "cond": {},
-        "jev": (
-            "The bot is blocked, not waiting: it cannot go on because of something it lacks or that it must ask for "
-            "(no access, a missing tool or credential, a decision someone must make), rather than waiting on something "
-            "outside that will come by itself (a date, a release, a merge, a customer, another task)."
-        ),
+        "jev": REAL_WAIT_JEV,
         "then": "block",
         "then_params": {},
         "reason": BLOCKED,
@@ -555,15 +574,17 @@ def judge_snooze(
 
 # ----------------------------------------------------------------------------- defaults and the release sweep
 def ensure_defaults(conn: Any) -> list[str]:
-    """Seed each default rule once, by id (a retired or edited one is left as it is). A default whose pipeline the
-    company does not have is not made; its stages are those the pipeline has. Returns the ids made. The first time
-    Owner on the team is made, the release sweep clears the owners it refuses on open tasks (`sweep_owners`)."""
+    """Seed each default rule once, by id (a retired or edited one is left as it is; one still in words it shipped
+    with before takes today's, `_bring_up_to_date`). A default whose pipeline the company does not have is not made;
+    its stages are those the pipeline has. Returns the ids made. The first time Owner on the team is made, the release
+    sweep clears the owners it refuses on open tasks (`sweep_owners`)."""
     if not has_table(conn):
         return []
     made: list[str] = []
     H = _h()
     for rule in DEFAULTS:
         if conn.execute("SELECT 1 FROM stage_rules WHERE id=?", (rule["id"],)).fetchone():
+            _bring_up_to_date(conn, rule)
             continue
         stages = list(rule["stages"])
         if rule["pipeline_id"]:
@@ -600,6 +621,17 @@ def ensure_defaults(conn: Any) -> list[str]:
     if OWNER_ON_TEAM in made:
         sweep_owners(conn)
     return made
+
+
+def _bring_up_to_date(conn: Any, rule: dict[str, Any]) -> None:
+    """A stored default whose words are still ones it shipped with before (`EARLIER`) takes today's; words a company
+    edited are its own and stay."""
+    for column, earlier in EARLIER.get(rule["id"], {}).items():
+        conn.execute(
+            f"UPDATE stage_rules SET {column}=?, updated_at=?, revision=revision+1 "
+            f"WHERE id=? AND {column} IN ({','.join('?' * len(earlier))})",
+            (rule[column], _h().now(), rule["id"], *earlier),
+        )
 
 
 def sweep_owners(conn: Any) -> list[str]:
@@ -659,7 +691,8 @@ SWEPT = "stage_rules_snooze_sweep"
 
 
 def sweep_snoozes(store: Any) -> list[str]:
-    """Snooze only for a real wait over the open bot snoozes, once at release: each one its rules refuse ends now
+    """Snooze only for a real wait over the open bot snoozes, once (no start runs it since the depends_on question:
+    `install` only records it as done): each one its rules refuse ends now
     (the task is the bot's again), the history names the rule, and each pipeline manager gets ONE wake listing them.
     Jev is asked with no write open, one call per snooze. Returns the task ids unsnoozed; [] once it has run."""
     from . import task_engine as _E_mod
@@ -868,27 +901,14 @@ def skip(conn: Any, person: str, rule_id: str) -> dict[str, Any]:
 
 
 def install(store: Any) -> None:
-    """The store Jev's calls are counted on (server start), and the release sweep of bot snoozes, once, in the
-    background: it asks Jev, so it never holds up the start."""
-    import threading
-
+    """The store Jev's calls are counted on (server start). The one-off release sweep of bot snoozes is not run at a
+    start any more: with the depends_on question it would end every open snooze that names a task or a release, and
+    the spec leaves those to their owners to re-file. A company where it never ran records it as done."""
     global _installed_store
     _installed_store = store
-
-    def sweep() -> None:
-        try:
-            sweep_snoozes(store)
-        except Exception:  # noqa: BLE001 - the sweep is a one-off tidy; a start never fails on it
-            log.warning("stage rules: the snooze sweep failed", exc_info=True)
-
     try:
-        with store.read() as c:
-            waiting = has_table(c) and not c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (SWEPT,)).fetchone()
-            waiting = (
-                waiting
-                and c.execute("SELECT 1 FROM snoozes WHERE ended_at IS NULL AND by_id LIKE 'bot:%' LIMIT 1").fetchone()
-            )
-    except Exception:  # noqa: BLE001 - a store with no tables yet has nothing to sweep
-        waiting = None
-    if waiting:
-        threading.Thread(target=sweep, name="stage-rules-sweep", daemon=True).start()
+        with store.transaction() as c:
+            if has_table(c):
+                c.execute("INSERT OR IGNORE INTO registry_metadata (key, value) VALUES (?, ?)", (SWEPT, _h().now()))
+    except Exception:  # noqa: BLE001 - a store with no tables yet has nothing to record
+        log.debug("stage rules: no snooze sweep mark recorded", exc_info=True)

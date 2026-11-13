@@ -80,6 +80,11 @@ Always:
 2. Update the logs, note progress on the task, log decisions in `memory/decisions.md`, commit.
 3. Finish with `tico task done <id> -m "..." --version N`: the headline and what is still missing.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Evidence requests go to control owners as tasks (`tico task create --owner <human>`) when ready. Read policies and evidence
 folders with `tico doc search` and `tico doc read`; read repository settings with read-only `gh` where GitHub is connected.

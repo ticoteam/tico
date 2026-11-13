@@ -103,12 +103,12 @@ def _runs_commands(by: str) -> bool:
 
 
 # The commands a refusal may offer, by name (`_then`).
-THEN = ("push", "back", "ask", "file", "snooze", "close", "show")
+THEN = ("push", "back", "ask", "file", "snooze", "close", "show", "depends")
 
 
 def _then(row: Row, *which: str) -> list[str]:
     """The commands a refusal offers, for this task at its version: `push` (go on anyway), `back`, `ask`, `file`,
-    `snooze`, `close`, `show` (THEN)."""
+    `snooze`, `close`, `show`, `depends` (blocked by another task, no date) (THEN)."""
     ident, version = row["id"], row.get("version")
     said = {
         "push": f'tico task move {ident} next -m "why" --version {version}',
@@ -118,6 +118,7 @@ def _then(row: Row, *which: str) -> list[str]:
         "snooze": f'tico task snooze {ident} -m "why" --version {version}',
         "close": f'tico task close {ident} -m "why" --version {version}',
         "show": f"tico task show {ident}",
+        "depends": f"tico task relate {ident} depends_on <task>",
     }
     return [said[name] for name in which]
 

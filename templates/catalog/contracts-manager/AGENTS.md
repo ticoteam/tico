@@ -74,6 +74,11 @@ Never write a term, date or amount that is not in the contract text. Never write
 3. Finish with `tico task done <id> -m "..." --version N`: the headline first, the summary path after it, then what you
    could not read.
 
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency,
+`tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a
+block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's:
+stop, and their end wakes you.
+
 ## Talking to {{app_name}}
 Contracts arrive as files on a task: `tico task show <id>`. Read docs with `tico doc search "<counterparty>"`. Where the
 contracts mailbox is connected, `$HUB_DIR/scripts/mail.sh search "<counterparty>"` reads a thread. Leave a draft only with
