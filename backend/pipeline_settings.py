@@ -1327,18 +1327,20 @@ def save(conn: "sqlite3.Connection", by: str, record: Row, seen_version: int | s
                 _refuse(conn, by, "task_settings", f"Only a person changes who {stage['name']} picks from.")
         # The bot that holds a stage reads the pipeline's private tasks while it holds it (task_engine.names): on a
         # pipeline that holds one, who holds a stage is a person's to change, and their change is in its history.
-        owners = (
-            {str(s["id"]): s.get("owner") for s in task_engine.stages(conn, str(existing["id"]))} if existing else {}
-        )
-        for stage in parsed["stages"]:
-            sid = str(stage.get("id") or "")
-            if sid in owners and stage.get("owner") != owners[sid] and _holds_private(conn, str(existing["id"])):
-                _refuse(
-                    conn,
-                    by,
-                    "task_settings",
-                    f"Only a person changes who holds {stage['name']} while {existing['name']} holds a private task.",
-                )
+        if existing and _holds_private(conn, str(existing["id"])):
+            owners: dict[str, object] = {
+                str(s["id"]): s.get("owner") for s in task_engine.stages(conn, str(existing["id"]))
+            }
+            for stage in parsed["stages"]:
+                sid = str(stage.get("id") or "")
+                if sid in owners and stage.get("owner") != owners[sid]:
+                    _refuse(
+                        conn,
+                        by,
+                        "task_settings",
+                        f"Only a person changes who holds {stage['name']} while {existing['name']} holds a private "
+                        "task.",
+                    )
     before = read(conn, existing["id"]) if existing else None
     ts = _h().now()
     pid = _write_pipeline(conn, parsed, existing, ts)
