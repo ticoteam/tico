@@ -258,7 +258,11 @@ const unsigned = (body: unknown) => String(body || '').replace(/\n*_?— [^\s_]+
 async function v2Get<T = UntypedJson>(path: string, opts?: {fresh?: boolean}): Promise<T | null> { try { return await get<T>(path, opts); } catch { return null; } }
 
 async function v2Refresh() {
-  const [st, needs] = await Promise.all([v2Get<V2StatusReply>('/v2/status'), v2NeedsRead()]);
+  const needsRead = v2NeedsRead();
+  // The first live stream names the Needs you version it starts at; it waits for the list to be read (live.ts), so the
+  // two can be compared (the Threads rail's first connect, threads.ts) even when another first read started it early.
+  liveProbe(needsRead);
+  const [st, needs] = await Promise.all([v2Get<V2StatusReply>('/v2/status'), needsRead]);
   S.v2.on = !!st;
   if (st) S.v2.status = Object.fromEntries((st.bots || []).map(b => [b.bot, b]));
   // when Tico is updating itself, say so at the top of the sidebar

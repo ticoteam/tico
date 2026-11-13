@@ -137,7 +137,8 @@ function calRowKeep(on: boolean): void {
 }
 // Called on every route (router.ts) and on focus: reads when the last read is older than the refresh.
 function calRowSync(): void {
-  if (Date.now() - CAL_ROW.at >= CAL_ROW_EVERY) void calRowLoad();
+  // The first read may add the `calendar` topic: the first live stream waits for it (live.ts liveProbe).
+  if (Date.now() - CAL_ROW.at >= CAL_ROW_EVERY) { const read = calRowLoad(); if (!CAL_ROW.at) liveProbe(read); }
 }
 
 function calRowDraw(): void {

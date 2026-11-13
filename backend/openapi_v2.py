@@ -9908,7 +9908,13 @@ SCHEMAS.update(
                 "unread": items(ref("ThreadRailUnread")),
                 "dms": ref("ThreadDmCounts"),
                 "next_cursor": "n",
-            }
+                "seq": {
+                    "type": "integer",
+                    "description": "The live change number this first page is as of (first page only): a stream that "
+                    "resumes from it (`GET /api/v2/events?after=`) carries every change since",
+                },
+            },
+            ["pinned", "threads", "catch_up", "catch_up_ids", "dms", "next_cursor"],
         ),
         "ThreadRailUnread": {
             **obj(

@@ -138,6 +138,8 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
     assert dm["id"] not in listed_ids and home["id"] not in listed_ids and zeta["id"] not in listed_ids
     assert dm["id"] in rail["catch_up_ids"]  # the DM's unread is Catch up's, not a rail row
     assert rail["dms"] == {"human:ana": 1} and rail["catch_up"] == len(rail["catch_up_ids"])
+    # The first page says the change number it is as of: a stream resuming there misses nothing; later pages leave it out.
+    assert rail["seq"] == cursor(api)
     followed = api.put(f"/api/v2/threads/{zeta['id']}/follow", json={}, headers=headers("ben-test"))
     assert followed.status_code == 200, followed.text
     seen, page = [], listed(api, "rail", "ben-test", limit=1)
@@ -147,6 +149,7 @@ def test_the_rail_is_the_threads_one_is_in_by_title_and_never_a_one_to_one_dm_or
             break
         page = listed(api, "rail", "ben-test", limit=1, cursor=page["next_cursor"])
         assert page["pinned"] == [] and page["catch_up"] is None and page["catch_up_ids"] == [] and page["dms"] == {}
+        assert "seq" not in page
     assert seen == [alpha["id"], beta["id"], gamma["id"], zeta["id"]]
     assert api.get("/api/v2/threads/rail", params={"cursor": "nope"}, headers=headers("ben-test")).status_code == 422
 

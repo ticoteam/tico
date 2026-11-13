@@ -29,11 +29,23 @@ interface LiveState {
   taskKey: string;
   urlTopics?: string[];
   readyTopics?: string[];
+  waiting: boolean;
 }
 interface ThrottleEntry { at: number; timer: number; hidden: boolean; fn?: () => void; ms?: number; }
 const LIVE_TOPICS = ['tasks', 'messages', 'runs', 'bots', 'needs', 'letters'];
 const LIVE: LiveState = {es: null, after: null, started: false, connected: false, opened: 0, tries: 0, timer: 0, restart: 0,
-              handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: ''};
+              handlers: new Map(), conversations: new Map(), threads: new Map(), taskKey: '', waiting: false};
+// The first reads that may add a topic (liveTopicAdd), still on their way: the first stream waits for them, up to
+// LIVE_PROBE_WAIT_MS, so it opens once with every topic rather than once without and again with. A read that hangs
+// holds the first stream (and every live update) for that long; if it is the rail, the stream then opens from now, not
+// from the rail's seq, and the rail's late liveTopicAdd('threads') reconnects it once more, as before probes.
+const LIVE_PROBES = new Set<Promise<unknown>>();
+const LIVE_PROBE_WAIT_MS = 5000;
+function liveProbe(read: Promise<unknown>): void {
+  if (LIVE.started && !LIVE.waiting) return;
+  LIVE_PROBES.add(read);
+  void read.catch(() => {}).finally(() => LIVE_PROBES.delete(read));
+}
 const liveAvailable = () => typeof EventSource !== 'undefined';
 const liveConnected = () => LIVE.connected;
 // `fn(data)` for each event of `topic` (one of LIVE_TOPICS, or `reset`, `status` and `needs-list`); returns the unsubscribe.
@@ -88,9 +100,13 @@ function liveFollowThread(id: string | number | null | undefined): () => void {
 }
 // A topic only some servers send (`threads`, once the server answers GET /v2/threads): asking an older server for it
 // would fail the whole stream (422), so it joins only when the server has shown it has it.
-function liveTopicAdd(topic: string): void {
+// `seq`: the change number the read that showed it is as of (GET /v2/threads/rail `seq`). Before the first stream opens,
+// that stream resumes from it, so it carries the topic over from that read (`carried` on its `needs` connect) and replays
+// whatever changed since, in every topic, rather than starting from now and leaving a gap after the read.
+function liveTopicAdd(topic: string, seq?: number | null): void {
   if (LIVE_TOPICS.includes(topic)) return;
   LIVE_TOPICS.push(topic);
+  if (seq != null && Number.isFinite(seq) && !LIVE.es && LIVE.after == null) { LIVE.after = seq; LIVE.readyTopics = [topic]; }
   // Threads keep the sidebar live on every install, cloud or not.
   if (LIVE.started) liveRestart(); else liveStart();
 }
@@ -127,10 +143,13 @@ document.addEventListener('visibilitychange', () => {
 function liveStart(): void {
   if (LIVE.started || !liveAvailable()) return;
   LIVE.started = true;
-  liveEventsConnect();
+  if (!LIVE_PROBES.size) { liveEventsConnect(); return; }
+  LIVE.waiting = true;
+  const waited = new Promise(resolve => setTimeout(resolve, LIVE_PROBE_WAIT_MS));
+  void Promise.race([Promise.allSettled([...LIVE_PROBES]), waited]).then(() => { LIVE.waiting = false; liveEventsConnect(); });
 }
 function liveRestart(): void {
-  if (!LIVE.started) return;
+  if (!LIVE.started || LIVE.waiting) return;              // the first stream, still waiting, opens with what is asked by then
   clearTimeout(LIVE.restart);
   LIVE.restart = setTimeout(liveEventsConnect, 30);       // several views following at once reconnect once
 }
@@ -181,6 +200,7 @@ function liveAdvance(seq: number | string | undefined): void {
   if (Number.isFinite(seq) && seq > 0 && (LIVE.after == null || seq > LIVE.after)) LIVE.after = seq;
 }
 function liveEventsConnect(): void {
+  if (LIVE.waiting) return;                               // the first stream opens once its first reads are in (liveStart)
   clearTimeout(LIVE.timer); clearTimeout(LIVE.restart);
   if (SESSION.out) return;                                // signed out: nothing reconnects until the person signs in
   try { LIVE.es?.close(); } catch {}

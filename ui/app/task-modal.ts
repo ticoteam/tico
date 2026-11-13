@@ -166,7 +166,7 @@ function taskModalLoadFailed(id: string, error: unknown, d?: ModalDialog) {
 // `opts` as taskModalShow takes them: a pipeline's board on a phone opens a task at its conversation, asking its owner;
 // `direct`: the task page itself, even when the task waits on the person's answer (Open task ↗ on the ask screen).
 async function taskModalOpen(id: string, d?: ModalDialog, opts: {thread?: boolean; ask?: boolean; direct?: boolean} = {}) {
-  const from = S.route, load = ++TASK_MODAL_LOAD;
+  const from = S.route, load = ++TASK_MODAL_LOAD, after = LIVE.after;
   let detail: ModalDetail | null;
   try { detail = await get<ModalDetail>(`/v2/tasks/${encodeURIComponent(id)}`); }
   catch (error) {
@@ -174,7 +174,7 @@ async function taskModalOpen(id: string, d?: ModalDialog, opts: {thread?: boolea
     return;
   }
   if (S.route !== from || load !== TASK_MODAL_LOAD || !detail?.task) return;
-  void taskModalShow(detail.task, d, {...opts, detail});
+  void taskModalShow(detail.task, d, {...opts, detail, after});
 }
 // The runs section drawn for the open task, held across a redraw of that task (taskModalShow).
 const taskModalRuns = new WeakMap<ModalDialog, HTMLElement>();
@@ -185,7 +185,8 @@ function taskModalRunsKeep(d: ModalDialog, keep: TaskChatState | null) {
 // The one way a task opens in full: from a list, from a link, from a chat card.
 // `opts.thread`: just the task's own conversation, as a bot's chat opens it (taskThreadShow); Details shows the rest.
 // `opts.ask`: its box asks the task's owner ("Ask Product Owner about this task…"), as a pipeline's board on a phone opens it.
-async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail; direct?: boolean} = {}) {
+// `opts.after`: the live change number from before `opts.detail` was read (taskLiveStart resumes the task's stream there).
+async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts: {thread?: boolean; ask?: boolean; detail?: ModalDetail; direct?: boolean; after?: number | null} = {}) {
   // A task opened (not redrawn) while it waits on the person's own answer opens on that ask, from wherever it was opened
   // (the board, a list, a #/task/ link, a link in chat, a bot's page); its Open task ↗ comes back here with `direct`. The
   // task's conversation asked for by name (opts.thread, as a bot's chat opens it) opens as it is; a phone board's card
@@ -236,6 +237,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   // even when Tasks is the first page opened), read once.
   // A read that fails is kept, so the window that closes for it says why (taskModalLoadFailed).
   let readFailed: unknown = null;
+  const after = opts.detail ? opts.after ?? null : LIVE.after;
   const reading = Promise.all([opts.detail || get(`/v2/tasks/${encodeURIComponent(task.id)}`).catch((error: unknown) => { readFailed = error; return null; })]);
   // A previous close's Back navigation must settle before a new dialog takes its place in history.
   if (TASK_MODAL_BACK) await new Promise(resolve => window.addEventListener('popstate', resolve, {once: true}));
@@ -293,7 +295,7 @@ async function taskModalShow(task: ModalTask, d: ModalDialog = taskModal(), opts
   taskModalBind(d, full, true);
   if (keep) $(keep, d)?.focus({preventScroll: true});
   taskPropFocus(d); d.focusProp = ''; taskLiveFocusRestore(d); taskFormRestore(d, fullForm);
-  taskLiveEdited(d, detail); taskLiveStart(d); d.scrollTop = scroll;
+  taskLiveEdited(d, detail); taskLiveStart(d, after); d.scrollTop = scroll;
   void taskRailLoad(d, full, detail);
   if (kept && TASK_CHAT === kept && d.contains(kept.host)) taskCommentsRender(kept, detail);
   else void taskChatLoad(task.id, d, detail);

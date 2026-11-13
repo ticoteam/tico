@@ -112,6 +112,35 @@ def source_map(ui_dir: "PathArg", name: str) -> Path:
     return path
 
 
+def minified_entries(ui_dir: "PathArg") -> dict[str, dict[str, Any]]:
+    """The manifest's "min": each bundled file's minified copy and map, by the file's path under ui/."""
+    try:
+        return json.loads(manifest_path(ui_dir).read_text()).get("min", {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
+def minified(ui_dir: "PathArg", name: str, entries: dict[str, Any] | None = None) -> tuple[Path, Path] | None:
+    """The minified copy of ui/<name> (a file index.html bundles) and its source map, both under build/ui/min, while
+    the manifest's "min" matches the source, the copy and the map; None otherwise (built before an edit, or never).
+    `entries` is the manifest's "min", read once by a caller asking for many files."""
+    ui_dir = Path(ui_dir)
+    entry: dict[str, Any] = (minified_entries(ui_dir) if entries is None else entries).get(name) or {}
+    if not entry:
+        return None
+    output = out_dir(ui_dir) / "min" / (name[:-3] + ".js" if name.endswith(".ts") else name)
+    map_path = output.with_name(output.name + ".map")
+    try:
+        fresh = (
+            entry.get("source") == _sha(ui_dir / name)
+            and entry.get("output") == _sha(output)
+            and entry.get("map") == _sha(map_path)
+        )
+    except OSError:
+        fresh = False
+    return (output, map_path) if fresh else None
+
+
 def without_map_line(data: bytes) -> bytes:
     """Compiled JavaScript without the line naming its source map."""
     return MAP_LINE.sub(b"\n", data)
