@@ -1657,6 +1657,42 @@ def failed_checks_removals(conn: "sqlite3.Connection", task_id: str, visit_id: s
     return [cast(Row, json.loads(row[0])) for row in found]
 
 
+def queued_as_is(conn: "sqlite3.Connection", task_id: str) -> list[Row]:
+    """The task's open PRs still at the commit they were last queued at (the newest `pr_queued` row for each names it),
+    oldest link first: [{ref, head, reason, check}], `reason` and `check` from the newest removal from the queue at that
+    commit, a failed check's first (None when none was recorded). Task #344: the head the merge queue just ran."""
+    out: list[Row] = []
+    for link in prs_of(conn, task_id):
+        metadata = link["metadata"]
+        if not metadata or metadata["state"] != "open" or not metadata.get("head_sha"):
+            continue
+        ref, head = pr_ref(str(link["repo"]), int(link["number"])), str(metadata["head_sha"])
+        queued = conn.execute(
+            "SELECT json_extract(data, '$.head') FROM history_events WHERE subject_type='task' AND subject_id=? "
+            "AND kind='pr_queued' AND json_valid(data) AND json_extract(data, '$.ref')=? "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (task_id, ref),
+        ).fetchone()
+        if not queued or queued[0] != head:
+            continue
+        removal = conn.execute(
+            "SELECT json_extract(data, '$.reason'), json_extract(data, '$.check') FROM history_events "
+            "WHERE subject_type='task' AND subject_id=? AND kind='pr_queue_removed' AND json_valid(data) "
+            "AND json_extract(data, '$.ref')=? AND json_extract(data, '$.head')=? "
+            "ORDER BY COALESCE(json_extract(data, '$.checks_failed'), 0) DESC, created_at DESC, rowid DESC LIMIT 1",
+            (task_id, ref, head),
+        ).fetchone()
+        out.append(
+            {
+                "ref": ref,
+                "head": head,
+                "reason": removal[0] if removal else None,
+                "check": removal[1] if removal else None,
+            }
+        )
+    return out
+
+
 def _up_the_ladder(conn: "sqlite3.Connection", task_id: str, drops: int, why: str) -> None:
     """The DROPS-th removal in a visit: the never-stuck ladder's next level has the task instead of the stage owner,
     the pipeline's manager bot on its 3 tries (else a person). Any removal after that: a person, so a PR that keeps

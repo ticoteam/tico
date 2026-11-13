@@ -417,6 +417,8 @@ def _page(conn: "sqlite3.Connection", task: Row, requirement: Row, answer: Row |
     answer = answer or carried
     if answer and (answer.get("page_version") != page["version"] or answer["created_at"] < page["created_at"]):
         answer = None  # given on an earlier page
+    if signoff and carried and answer is carried and (held := _queued_as_is(conn, task, requirement)):
+        return held  # back from Merge at the commits the queue just ran: the OK waits for a fix (task #344)
     lapsed, lapsed_by, since_ok = "", None, None
     if signoff and answer and answer["answer"] == "ok" and _moved_since(conn, task, answer):
         # The OK was for the commits the person was shown. New ones that change the same lines keep it; others keep it
@@ -683,6 +685,44 @@ def _carried_ok(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Row 
     if not ok or ok["answer"] != "ok" or not ok.get("heads") or not str(ok["by_id"]).startswith("human:"):
         return None
     return ok
+
+
+# The end of the line when a task came back from the stage that queues its PRs at the commits the queue ran (task #344).
+QUEUED_AS_IS = "The OK from before {stage} comes back once there are new commits"
+
+
+def _queued_as_is(conn: "sqlite3.Connection", task: Row, requirement: Row) -> Standing | None:
+    """The person's OK carried back from Merge (`page_for`) does not count while a linked PR is still at the commit it
+    was last queued at: the queue ran that commit and it did not merge, so the task waits for the Builder's fix instead
+    of going straight back to be queued as it is (Tico Team, Nov 12-13: four bounces, a queue run each). Once every PR
+    has new commits, C22 decides (`_after_ok`). None when no PR is at its queued commit."""
+    from .item_sources import github as F
+
+    still = F.queued_as_is(conn, task["id"])
+    if not still:
+        return None
+    one = len(heads_now(conn, task)) == 1
+    said: list[str] = []
+    for each in still:
+        at = str(each["head"])[:7] if one else f"{each['ref']} at {str(each['head'])[:7]}"
+        why = ", ".join(str(word) for word in (each.get("reason"), each.get("check")) if word)
+        said.append(
+            f"Merge queue ran {at} and it failed ({why}): push a fix"
+            if why
+            else f"Merge queue ran {at} and it did not merge: push a fix"
+        )
+    # The visit it came back from: its stage's name, and the note the move back gave, so the one wake on entering
+    # (task_engine._wake_turn, whose "Missing to leave" carries this line) says what the mover said.
+    found = conn.execute(
+        "SELECT s.name, v.how, v.why FROM visits v JOIN stages s ON s.id = v.stage_id WHERE v.task_id=? "
+        "ORDER BY v.entered_at DESC, v.rowid DESC LIMIT 1 OFFSET 1",
+        (task["id"],),
+    ).fetchone()
+    stage = str(found[0]) if found and found[0] else "Merge"
+    note = " ".join(str(found[2] or "").split()) if found and found[1] == "back" else ""
+    if note:
+        said.append(f"Sent back from {stage}: {note}")
+    return Standing(requirement, NOT_MET, task.get("owner_id"), sentences(*said, QUEUED_AS_IS.format(stage=stage)))
 
 
 def _after_ok(conn: "sqlite3.Connection", task: Row, requirement: Row, ok: Row) -> tuple[Standing | None, list[Row]]:
