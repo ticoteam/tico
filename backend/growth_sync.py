@@ -24,6 +24,11 @@ Rules, from the spec:
   automation (`automation` in the map) whose bot turn runs `tico growth source run <id>` on that bot's computer: the
   query runs there through `tico db` and its rows, or the error it ended with (wrong column, timeout, login refused),
   are posted to the same `run`. The server never holds the connection string.
+- Customers: a source whose mapping has `shape: customers` posts customer rows, not numbers. Each run is a load of
+  backend/growth_customers.py under the source's own id (`growth_customers.source_key`), so it replaces only that
+  source's customers; a load the privacy rules refuse fails the run, naming the rule and column. It fills no typed
+  number, so any number of customers sources may be live. Retiring it, stopping its sync or remapping it to numbers
+  deletes its customers and its stored file at once (`forget_customers`).
 - Health: `fresh`, `stale` (no good run in twice `refresh_hours`), `failing` (its last run failed, with the reason) or
   `waiting` (connected, never run). `not_synced` for a source that only names a system. The source's owner gets one
   notice when it starts failing and one when it recovers.
@@ -37,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
 from . import growth_finance as GF
+from . import growth_customers as GC
 from .store import H as _H
 from .store import Problem
 
@@ -90,6 +96,11 @@ def window(first: bool, at: datetime | None = None) -> tuple[str, str]:
 def sync_map(row: dict[str, Any]) -> dict[str, Any]:
     raw: Any = json.loads(row.get("sync_map") or "{}")
     return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+
+
+def is_customers(row: dict[str, Any]) -> bool:
+    """A synced source that posts customer rows."""
+    return bool(row.get("sync_kind")) and sync_map(row).get("shape") == "customers"
 
 
 def fills(row: dict[str, Any]) -> list[str]:
@@ -153,6 +164,10 @@ def check_map(c: Any, kind: str | None, mapping: dict[str, Any] | None, sid: str
     given: dict[str, Any] = dict(mapping or {})
     if kind == GF.KIND:
         given = GF.check_map(given)
+    if given.get("shape") == "customers":
+        if given.get("fields") or given.get("month") or given.get("channel"):
+            raise Problem("validation", "A customers source maps no numbers: its rows are customers", 422)
+        return {"shape": "customers"}
     raw: Any = given.get("fields") or {}
     if not isinstance(raw, dict) or not raw:
         raise Problem("validation", "A synced source fills at least one number: map FIELD=COLUMN", 422)
@@ -436,6 +451,31 @@ def _write(
     return written, held
 
 
+def _load_customers(
+    c: Any, actor: str, rows: list[dict[str, Any]] | None, csv_text: str | None, source: dict[str, Any]
+) -> int:
+    """One customers run: a load under the source's own id. Returns the customers it holds now."""
+    try:
+        if csv_text is not None:
+            headers, table = GC.parse_csv(csv_text)
+        elif rows is None:
+            raise RunFailed("No rows were given")
+        else:
+            names: list[str] = list(dict.fromkeys(k for row in rows for k in row))
+            headers, table = list[GC.Cell](names), [[row.get(h) for h in names] for row in rows]
+        loaded = GC.load(c, actor, headers, table, source=GC.source_key(str(source["id"])))
+    except Problem as refused:
+        raise RunFailed(refused.detail) from None
+    return int(loaded["customers"])
+
+
+def forget_customers(c: Any, actor: str, source: dict[str, Any]) -> None:
+    """A customers source that is retired, stops syncing or maps numbers instead: its customers and its stored file go
+    at once (spec privacy rules)."""
+    GC.delete_all(c, actor, GC.source_key(str(source["id"])))
+    c.execute("UPDATE gtm_sources SET last_payload=NULL WHERE id=?", (source["id"],))
+
+
 def _notify(c: Any, source: dict[str, Any], text: str) -> None:
     owner = source.get("owner_ref")
     if owner:
@@ -470,21 +510,24 @@ def run(
     try:
         if error:
             raise RunFailed(" ".join(error.split())[:ERROR_CHARS])
-        if csv_text is not None:
-            rows = read_csv(csv_text)
-        if rows is None:
-            raise RunFailed("No rows were given")
-        if len(rows) > ROWS_MAX:
-            raise RunFailed(f"Over {ROWS_MAX} rows")
-        plan = _plan(c, source, rows, at)
-        written, held = _write(c, source, run_id, actor, plan["cells"])
-        result.update(
-            ok=True,
-            written=written,
-            held=held,
-            not_written=plan["not_written"][:NOT_WRITTEN_MAX],
-            not_written_count=len(plan["not_written"]),
-        )
+        if is_customers(source):  # its file keeps up to growth_customers.ROWS_MAX customers, not this module's cap
+            result.update(ok=True, written=_load_customers(c, actor, rows, csv_text, source))
+        else:
+            if csv_text is not None:
+                rows = read_csv(csv_text)
+            if rows is None:
+                raise RunFailed("No rows were given")
+            if len(rows) > ROWS_MAX:
+                raise RunFailed(f"Over {ROWS_MAX} rows")
+            plan = _plan(c, source, rows, at)
+            written, held = _write(c, source, run_id, actor, plan["cells"])
+            result.update(
+                ok=True,
+                written=written,
+                held=held,
+                not_written=plan["not_written"][:NOT_WRITTEN_MAX],
+                not_written_count=len(plan["not_written"]),
+            )
     except RunFailed as failed:
         result["error"] = str(failed)[:ERROR_CHARS]
     c.execute(

@@ -50,6 +50,13 @@ H: Any = _hubdb_untyped
 admin = cast("Callable[[Any, Any], bool]", _brand_untyped.admin)
 
 UPLOAD = "upload"  # the source of a CSV loaded in Growth
+
+
+def source_key(source_id: str) -> str:
+    """The `source` a synced source's customer rows are stored under."""
+    return "source:" + source_id
+
+
 ROWS_MAX = 200_000
 KEY_MAX = 100
 LABEL_MAX = 40

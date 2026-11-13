@@ -108,6 +108,12 @@ the first row's churned date. A customer counts where they were when they became
 them to another channel, segment or plan does not move them between cohorts. Only the owner and admins load or delete
 customer facts (`tico growth customers delete` deletes them all; the figures go back to typed values).
 
+**From a synced source.** A source connected with `--sync file --map customers` takes the same columns: each file you
+push (`tico growth source push ID --file customers.csv`) is a load of that source's customers only, so an upload in
+Growth and two sources never replace each other's. A file the rules refuse fails the run, with the rule, and leaves its
+last customers as they were. Retiring the source, stopping its sync or mapping it to numbers deletes its customers and
+its stored file at once.
+
 **What is refused.** Nothing loads when any of these hold, and the message names the rule and the column, never a value:
 a column outside the list; a customer key that looks like an email address or a phone number; a segment or plan longer
 than 40 characters; a segment or plan column with more than 50 different values or more than one per two rows (a name
@@ -306,6 +312,7 @@ tico growth source push ID --file FILE.csv | sync ID | run ID
 tico growth source push ID --file FILE.csv | sync ID
 tico growth source campaigns [--months N]  Finance's ad campaigns and their keys, to map
 tico growth source add --truth-for spend --system NAME --sync finance_ad_spend --campaign KEY=CHANNEL
+tico growth source add --truth-for customers --system NAME --sync file --map customers
 tico growth cohort resolve --channel SLUG --month YYYY-MM --field NUMBER --keep typed|source
 tico growth cohort list [--channel SLUG] [--month YYYY-MM]
 tico growth cohort list --by channel|segment|plan|all [--grain week|month] [--week YYYY-MM-DD]

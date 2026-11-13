@@ -440,7 +440,8 @@ SOURCE_PROPS = {
         "type": "array",
         "items": {"type": "string"},
         "description": "With sync_kind: NUMBER=COLUMN for each number it fills (new_customers=signups), and "
-        "month=COLUMN or channel=COLUMN when those columns have other names",
+        "month=COLUMN or channel=COLUMN when those columns have other names; or the one word customers for a source "
+        "whose rows are customers (customer key, became customer, channel...), which computes retention",
     },
     "database": _s("With sync_kind db_query: the database, as tico db names it"),
     "query": _s(
@@ -464,12 +465,14 @@ def _source_body(api, args):
         body["owner_ref"] = _target(api, args["owner"]) if args["owner"] else None
     if args.get("sync_kind") is not None:
         body["sync_kind"] = None if args["sync_kind"] == "none" else args["sync_kind"]
-    if args.get("map"):
+    if args.get("map") == ["customers"]:
+        body["sync_map"] = {"shape": "customers"}
+    elif args.get("map"):
         mapping = {"fields": {}}
         for pair in args["map"]:
             name, sep, column = pair.partition("=")
             if not sep or not name.strip() or not column.strip():
-                raise APIError("map", "--map is NUMBER=COLUMN, month=COLUMN or channel=COLUMN")
+                raise APIError("map", "--map is NUMBER=COLUMN, month=COLUMN, channel=COLUMN or customers")
             if name.strip() in ("month", "channel"):
                 mapping[name.strip()] = column.strip()
             else:
