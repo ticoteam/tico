@@ -161,3 +161,17 @@ def test_letting_in_someone_an_ask_in_this_stage_waits_on_keeps_the_task_and_mak
 
 def _stage_id(c, name):
     return c.execute("SELECT id FROM stages WHERE pipeline_id='eng' AND name=?", (name,)).fetchone()[0]
+
+
+def test_a_company_task_that_turns_private_at_the_next_step_offers_no_reader_button(c):
+    """A company task has no readers to add, so the card must not offer a press the server always refuses."""
+    from backend import bot_settings as BS
+
+    BS.write(c, "reviewer", {**BS.read(c, "reviewer"), "private_tasks_default": True})
+    X.requirement(c, _stage_id(c, "Review 1"), "ok", person="bot:other", line="OK it", position=1)
+    row = H.task_create(c, ANA, "Fix the card", "x", BUILDER, pipeline="eng", private=False, lint=False)
+    H.task_done(c, BUILDER, row["id"], "Built.", H.task(c, row["id"])["version"])
+    assert not H.task_private(c, H.task(c, row["id"]))
+    _to_person(c, row["id"])
+    turn = H.task_view(c, row["id"], ANA)["turn"]
+    assert not turn.get("share"), turn

@@ -527,8 +527,10 @@ def of(
             sharer = person_for(conn, row)
             by = str(H.actor_name(conn, sharer)) if sharer else "someone who can see it"
             line = f"Waits on {by}: {held['cause']}"
-            shut = shut or tuple(held["whom"])
-        share = tuple(held["whom"]) if held else None
+            # A company task turning private has no reader to add (a company task is seen by everyone): no share button.
+            if H.task_private(conn, row):
+                shut = shut or tuple(held["whom"])
+        share = tuple(held["whom"]) if held and H.task_private(conn, row) else None
         out.append(Wait(ROOM, ahead["id"] if ahead else None, line, None, entered, share=share))
     if visit.get("level") == "person" and not by_hand:
         # The ladder or Late brought the task to a person. It is in their list whatever else it waits on, and the
